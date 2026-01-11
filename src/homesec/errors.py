@@ -5,7 +5,7 @@ from __future__ import annotations
 
 class PipelineError(Exception):
     """Base exception for all pipeline errors.
-    
+
     Compatible with error-as-value pattern: instances can be returned as values
     instead of raised. Preserves stack traces via exception chaining.
     """
@@ -23,9 +23,7 @@ class PipelineError(Exception):
 class UploadError(PipelineError):
     """Storage upload failed."""
 
-    def __init__(
-        self, clip_id: str, storage_uri: str | None, cause: Exception
-    ) -> None:
+    def __init__(self, clip_id: str, storage_uri: str | None, cause: Exception) -> None:
         super().__init__(
             f"Upload failed for {clip_id}", stage="upload", clip_id=clip_id, cause=cause
         )

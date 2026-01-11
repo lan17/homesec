@@ -19,7 +19,6 @@ from homesec.telemetry.db.log_table import logs
 from homesec.telemetry.db.log_table import metadata as db_metadata
 from homesec.telemetry.postgres_settings import PostgresConfig
 
-
 _STANDARD_LOGRECORD_ATTRS = {
     "name",
     "msg",
@@ -168,7 +167,9 @@ class AsyncPostgresJsonLogHandler(logging.Handler):
                     pass
             self._drop_count += 1
             if self._drop_count % 100 == 1:
-                sys.stderr.write(f"[db-log] queue full; dropping logs (dropped={self._drop_count})\n")
+                sys.stderr.write(
+                    f"[db-log] queue full; dropping logs (dropped={self._drop_count})\n"
+                )
 
     def _drain_batch(self) -> list[_DbRow]:
         batch: list[_DbRow] = []

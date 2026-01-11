@@ -10,10 +10,10 @@ from collections import defaultdict
 
 import aiohttp
 
+from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
 from homesec.models.config import SendGridEmailConfig
 from homesec.models.vlm import SequenceAnalysis
-from homesec.interfaces import Notifier
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,7 @@ class SendGridEmailNotifier(Notifier):
         async with session.post(url, json=payload, headers=headers) as response:
             if response.status >= 400:
                 details = await response.text()
-                raise RuntimeError(
-                    f"SendGrid email send failed ({response.status}): {details}"
-                )
+                raise RuntimeError(f"SendGrid email send failed ({response.status}): {details}")
 
         logger.info(
             "Sent SendGrid email alert: to=%s clip_id=%s",
@@ -181,9 +179,7 @@ class SendGridEmailNotifier(Notifier):
         items = []
         for key, value in mapping.items():
             rendered_value = self._render_value_html(value)
-            items.append(
-                f"<li><strong>{html.escape(str(key))}:</strong> {rendered_value}</li>"
-            )
+            items.append(f"<li><strong>{html.escape(str(key))}:</strong> {rendered_value}</li>")
         return "<ul>" + "".join(items) + "</ul>"
 
     def _render_list_html(self, items: list[object]) -> str:
@@ -203,9 +199,11 @@ class SendGridEmailNotifier(Notifier):
 
 # Plugin registration
 from typing import cast
+
 from pydantic import BaseModel
-from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
+
 from homesec.interfaces import Notifier
+from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
 
 
 @notifier_plugin(name="sendgrid_email")

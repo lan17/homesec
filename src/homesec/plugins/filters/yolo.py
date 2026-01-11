@@ -5,16 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Callable, cast
+from typing import cast
 
 import cv2
 import torch
 from ultralytics import YOLO  # type: ignore[attr-defined]
 
-from homesec.models.filter import FilterConfig, FilterOverrides, FilterResult, YoloFilterSettings
 from homesec.interfaces import ObjectFilter
+from homesec.models.filter import FilterConfig, FilterOverrides, FilterResult, YoloFilterSettings
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ def _get_model(model_path: str, device: str) -> YOLO:
 
 class YOLOv8Filter(ObjectFilter):
     """YOLO-based object detection filter.
-    
+
     Uses ProcessPoolExecutor internally for CPU/GPU-bound inference.
     Supports frame sampling and early exit on detection.
     Bare model filenames resolve under ./yolo_cache and auto-download if missing.
@@ -108,10 +109,10 @@ class YOLOv8Filter(ObjectFilter):
 
     def __init__(self, config: FilterConfig) -> None:
         """Initialize YOLO filter with config validation.
-        
+
         Required config:
             model_path: Path to .pt model file
-            
+
         Optional config:
             classes: List of class names to detect (default: person)
             min_confidence: Minimum confidence threshold (default: 0.5)
@@ -131,11 +132,11 @@ class YOLOv8Filter(ObjectFilter):
             raise FileNotFoundError(f"Model not found: {self.model_path}")
 
         self._class_id_cache: dict[tuple[str, ...], list[int]] = {}
-        
+
         # Initialize executor
         self._executor = ProcessPoolExecutor(max_workers=config.max_workers)
         self._shutdown_called = False
-        
+
         logger.info(
             "YOLOv8Filter initialized: model=%s, classes=%s, confidence=%.2f",
             self.model_path,
@@ -149,13 +150,13 @@ class YOLOv8Filter(ObjectFilter):
         overrides: FilterOverrides | None = None,
     ) -> FilterResult:
         """Detect objects in video clip.
-        
+
         Runs inference in ProcessPoolExecutor to avoid blocking event loop.
         Samples frames at configured rate and exits early on first detection.
         """
         if self._shutdown_called:
             raise RuntimeError("Filter has been shut down")
-        
+
         # Run blocking work in executor
         loop = asyncio.get_running_loop()
         effective = self._apply_overrides(overrides)
@@ -172,7 +173,7 @@ class YOLOv8Filter(ObjectFilter):
             float(effective.min_box_h_ratio),
             int(effective.min_hits),
         )
-        
+
         return result
 
     async def shutdown(self, timeout: float | None = None) -> None:
@@ -180,7 +181,7 @@ class YOLOv8Filter(ObjectFilter):
         _ = timeout
         if self._shutdown_called:
             return
-        
+
         self._shutdown_called = True
         logger.info("Shutting down YOLOv8Filter...")
         self._executor.shutdown(wait=True, cancel_futures=False)
@@ -197,10 +198,7 @@ class YOLOv8Filter(ObjectFilter):
         cached = self._class_id_cache.get(key)
         if cached is not None:
             return cached
-        target_class_ids = [
-            cid for cid, name in HUMAN_ANIMAL_CLASSES.items()
-            if name in classes
-        ]
+        target_class_ids = [cid for cid, name in HUMAN_ANIMAL_CLASSES.items() if name in classes]
         if not target_class_ids:
             raise ValueError(f"No valid classes found in config: {classes}")
         self._class_id_cache[key] = target_class_ids
@@ -217,7 +215,7 @@ def _detect_worker(
     min_hits: int,
 ) -> FilterResult:
     """Worker function for video analysis (must be at module level for pickling).
-    
+
     This runs in a separate process, so it needs to load the model fresh.
     """
     # Determine device
@@ -228,51 +226,51 @@ def _detect_worker(
         if torch.cuda.is_available()
         else "cpu"
     )
-    
+
     # Load model (cached per process)
     model = _get_model(model_path, device)
-    
+
     # Open video
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     min_box_h = frame_h * min_box_h_ratio
-    
+
     detected_classes: list[str] = []
     max_confidence = 0.0
     sampled_frames = 0
-    
+
     frame_idx = 0
     while frame_idx < total_frames:
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
         if not ret:
             break
-        
+
         sampled_frames += 1
-        
+
         # Run inference
         results = model(frame, verbose=False, conf=min_confidence, classes=target_class_ids)
-        
+
         for result in results:
             for box in result.boxes:
                 cls = int(box.cls[0])
                 class_name = HUMAN_ANIMAL_CLASSES.get(cls)
                 if not class_name:
                     continue
-                
+
                 # Check box height
                 xyxy = box.xyxy[0].tolist()
                 box_h = xyxy[3] - xyxy[1]
                 if box_h < min_box_h:
                     continue
-                
+
                 # Track detection
                 confidence = float(box.conf[0])
                 if class_name not in detected_classes:
                     detected_classes.append(class_name)
                 max_confidence = max(max_confidence, confidence)
-                
+
                 # Early exit if we have enough hits
                 if len(detected_classes) >= min_hits:
                     cap.release()
@@ -282,11 +280,11 @@ def _detect_worker(
                         model=Path(model_path).name,
                         sampled_frames=sampled_frames,
                     )
-        
+
         frame_idx += sample_fps
-    
+
     cap.release()
-    
+
     return FilterResult(
         detected_classes=detected_classes,
         confidence=max_confidence if detected_classes else 0.0,

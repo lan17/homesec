@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine
+from typing import Any
 
-from homesec.models.alert import Alert
 from homesec.interfaces import Notifier
+from homesec.models.alert import Alert
 
 logger = logging.getLogger(__name__)
 

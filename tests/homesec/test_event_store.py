@@ -137,7 +137,7 @@ async def test_get_events_after_id(postgres_dsn: str, clean_test_db: None) -> No
     assert isinstance(event_store, PostgresEventStore)
 
     clip_id = "test-clip-002"
-    
+
     # Create state first (foreign key requirement)
     state = ClipStateData(
         camera_name="front_door",
@@ -145,7 +145,7 @@ async def test_get_events_after_id(postgres_dsn: str, clean_test_db: None) -> No
         local_path="/tmp/test.mp4",
     )
     await state_store.upsert(clip_id, state)
-    
+
     events = [
         ClipRecordedEvent(
             clip_id=clip_id,

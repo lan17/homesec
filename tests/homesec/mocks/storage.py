@@ -11,7 +11,7 @@ from homesec.models.storage import StorageUploadResult
 
 class MockStorage:
     """Mock implementation of StorageBackend interface for testing.
-    
+
     Stores files in memory dict for test assertions.
     Supports configurable failure injection and delays.
     """
@@ -22,7 +22,7 @@ class MockStorage:
         delay_s: float = 0.0,
     ) -> None:
         """Initialize mock storage.
-        
+
         Args:
             simulate_failure: If True, put/get operations raise UploadError
             delay_s: Artificial delay before returning

@@ -12,7 +12,7 @@ from homesec.models.vlm import AnalysisResult, VLMConfig
 
 class MockVLM:
     """Mock implementation of VLMAnalyzer interface for testing.
-    
+
     Supports configurable failure injection and delays to test
     concurrency and error handling scenarios.
     """
@@ -24,7 +24,7 @@ class MockVLM:
         result: AnalysisResult | None = None,
     ) -> None:
         """Initialize mock VLM analyzer.
-        
+
         Args:
             simulate_failure: If True, analyze() raises VLMError
             delay_s: Artificial delay before returning result

@@ -83,8 +83,9 @@ class DefaultAlertPolicy(AlertPolicy):
 
 # Plugin registration
 from pydantic import BaseModel
-from homesec.plugins.alert_policies import AlertPolicyPlugin, alert_policy_plugin
+
 from homesec.interfaces import AlertPolicy
+from homesec.plugins.alert_policies import AlertPolicyPlugin, alert_policy_plugin
 
 
 @alert_policy_plugin(name="default")
@@ -94,7 +95,7 @@ def default_alert_policy_plugin() -> AlertPolicyPlugin:
     Returns:
         AlertPolicyPlugin for default risk-based alert policy
     """
-    from homesec.models.config import AlertPolicyOverrides, DefaultAlertPolicySettings
+    from homesec.models.config import DefaultAlertPolicySettings
 
     def factory(
         cfg: BaseModel,

@@ -32,7 +32,6 @@ async def test_new_file_is_emitted(tmp_path: Path, postgres_dsn: str, clean_test
     detected_clips = []
     source.register_callback(lambda clip: detected_clips.append(clip))
 
-
     # When: Starting source and adding a new file
     await source.start()
     try:

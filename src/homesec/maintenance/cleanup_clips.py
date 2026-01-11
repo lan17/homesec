@@ -62,7 +62,7 @@ class _Counts:
     delete_errors: int = 0
     state_errors: int = 0
 
-    def __add__(self, other: "_Counts") -> "_Counts":
+    def __add__(self, other: _Counts) -> _Counts:
         return _Counts(
             scanned_rows=self.scanned_rows + other.scanned_rows,
             candidates=self.candidates + other.candidates,
@@ -206,8 +206,7 @@ async def run_cleanup(opts: CleanupOptions) -> None:
             candidates: list[tuple[str, ClipStateData, datetime]] = [
                 (clip_id, state, created_at)
                 for clip_id, state, created_at in rows
-                if state.filter_result is not None
-                and not state.filter_result.detected_classes
+                if state.filter_result is not None and not state.filter_result.detected_classes
             ]
             totals = totals + _Counts(candidates=len(candidates))
 

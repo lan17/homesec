@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel
 
@@ -88,9 +89,7 @@ def create_storage(config: StorageConfig) -> StorageBackend:
 
     if backend_name not in STORAGE_REGISTRY:
         available = ", ".join(sorted(STORAGE_REGISTRY.keys()))
-        raise RuntimeError(
-            f"Unknown storage backend: '{backend_name}'. Available: {available}"
-        )
+        raise RuntimeError(f"Unknown storage backend: '{backend_name}'. Available: {available}")
 
     plugin = STORAGE_REGISTRY[backend_name]
 

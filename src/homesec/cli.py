@@ -12,13 +12,13 @@ load_dotenv()
 
 import fire  # type: ignore[import-untyped]
 
-from homesec.logging_setup import configure_logging
 from homesec.app import Application
 from homesec.config import ConfigError, load_config
 from homesec.config.validation import validate_camera_references, validate_plugin_names
+from homesec.logging_setup import configure_logging
 from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
-from homesec.plugins.analyzers import VLM_REGISTRY
 from homesec.plugins.alert_policies import ALERT_POLICY_REGISTRY
+from homesec.plugins.analyzers import VLM_REGISTRY
 from homesec.plugins.filters import FILTER_REGISTRY
 from homesec.plugins.notifiers import NOTIFIER_REGISTRY
 from homesec.plugins.storage import STORAGE_REGISTRY
@@ -34,17 +34,17 @@ class HomeSec:
 
     def run(self, config: str, log_level: str = "INFO") -> None:
         """Run the HomeSec pipeline.
-        
+
         Args:
             config: Path to YAML config file
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
         """
         setup_logging(log_level)
-        
+
         config_path = Path(config)
-        
+
         app = Application(config_path)
-        
+
         try:
             asyncio.run(app.run())
         except ConfigError as e:
@@ -55,12 +55,12 @@ class HomeSec:
 
     def validate(self, config: str) -> None:
         """Validate config file without running.
-        
+
         Args:
             config: Path to YAML config file
         """
         config_path = Path(config)
-        
+
         try:
             cfg = load_config(config_path)
 
@@ -79,13 +79,12 @@ class HomeSec:
                 valid_notifiers=sorted(NOTIFIER_REGISTRY.keys()),
                 valid_alert_policies=sorted(ALERT_POLICY_REGISTRY.keys()),
             )
-            
+
             print(f"✓ Config valid: {config_path}")
             camera_names = [camera.name for camera in cfg.cameras]
             print(f"  Cameras: {camera_names}")
             notifier_backends = [
-                f"{notifier.backend} (enabled={notifier.enabled})"
-                for notifier in cfg.notifiers
+                f"{notifier.backend} (enabled={notifier.enabled})" for notifier in cfg.notifiers
             ]
             print(f"  Storage backend: {cfg.storage.backend}")
             print(f"  Notifiers: {notifier_backends}")

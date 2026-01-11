@@ -11,7 +11,7 @@ from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
 # Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://telemetry:telemetry@localhost:5432/telemetry"
+DEFAULT_DSN = "postgresql://homesec:homesec@localhost:5432/homesec"
 
 
 def get_test_dsn() -> str:
@@ -35,9 +35,7 @@ async def state_store() -> PostgresStateStore:
     # Cleanup: drop test data
     if store._engine is not None:
         async with store._engine.begin() as conn:
-            await conn.execute(
-                delete(ClipState).where(ClipState.clip_id.like("test_%"))
-            )
+            await conn.execute(delete(ClipState).where(ClipState.clip_id.like("test_%")))
     await store.shutdown()
 
 

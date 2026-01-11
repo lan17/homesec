@@ -63,9 +63,7 @@ class TestExternalPluginDiscovery:
     """Test external plugin discovery via entry points."""
 
     @patch("homesec.plugins.iter_entry_points")
-    def test_external_plugin_entry_points_queried(
-        self, mock_iter_eps: MagicMock
-    ) -> None:
+    def test_external_plugin_entry_points_queried(self, mock_iter_eps: MagicMock) -> None:
         """Discovery queries the homesec.plugins entry point group."""
         # Given: No external plugins
         mock_iter_eps.return_value = []
@@ -377,9 +375,7 @@ class TestThirdPartyPluginConfigValidation:
             assert cfg.llm.api_key == "secret123"
             return mock_vlm
 
-        plugin = VLMPlugin(
-            name="custom_vlm", config_model=CustomVLMConfig, factory=custom_factory
-        )
+        plugin = VLMPlugin(name="custom_vlm", config_model=CustomVLMConfig, factory=custom_factory)
 
         # Register the plugin
         VLM_REGISTRY.clear()

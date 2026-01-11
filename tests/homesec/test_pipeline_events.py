@@ -10,10 +10,10 @@ import pytest
 from homesec.models.clip import Clip
 from homesec.models.config import (
     AlertPolicyConfig,
-    DefaultAlertPolicySettings,
     CameraConfig,
     CameraSourceConfig,
     Config,
+    DefaultAlertPolicySettings,
     DropboxStorageConfig,
     NotifierConfig,
     RetryConfig,

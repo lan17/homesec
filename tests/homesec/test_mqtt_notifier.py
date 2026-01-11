@@ -33,7 +33,9 @@ class _FakeClient:
         self.username = username
         self.password = password
 
-    def connect(self, _host: str, _port: int, _keepalive: int | None = None, **_kwargs: Any) -> None:
+    def connect(
+        self, _host: str, _port: int, _keepalive: int | None = None, **_kwargs: Any
+    ) -> None:
         self.connected = True
         if self.on_connect is not None:
             self.on_connect(self, None, {}, 0)
@@ -58,7 +60,9 @@ class _FakeClient:
 
 
 class _FakeClientNoConnect(_FakeClient):
-    def connect(self, _host: str, _port: int, _keepalive: int | None = None, **_kwargs: Any) -> None:
+    def connect(
+        self, _host: str, _port: int, _keepalive: int | None = None, **_kwargs: Any
+    ) -> None:
         self.connected = False
 
 

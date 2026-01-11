@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
@@ -17,9 +18,12 @@ from homesec.config import (
     validate_plugin_names,
 )
 from homesec.health import HealthServer
+from homesec.interfaces import EventStore
+from homesec.models.config import NotifierConfig
+from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSPSourceConfig
 from homesec.pipeline import ClipPipeline
-from homesec.plugins.analyzers import VLM_REGISTRY, load_vlm_plugin
 from homesec.plugins.alert_policies import ALERT_POLICY_REGISTRY
+from homesec.plugins.analyzers import VLM_REGISTRY, load_vlm_plugin
 from homesec.plugins.filters import FILTER_REGISTRY, load_filter_plugin
 from homesec.plugins.notifiers import (
     NOTIFIER_REGISTRY,
@@ -28,15 +32,11 @@ from homesec.plugins.notifiers import (
     NotifierPlugin,
 )
 from homesec.plugins.storage import STORAGE_REGISTRY, create_storage
-from homesec.sources import FtpSource, LocalFolderSource, RTSPSource
-from homesec.models.config import NotifierConfig
-from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSPSourceConfig
-from homesec.interfaces import EventStore
 from homesec.repository import ClipRepository
+from homesec.sources import FtpSource, LocalFolderSource, RTSPSource
 from homesec.state import NoopEventStore, NoopStateStore, PostgresStateStore
 
 if TYPE_CHECKING:
-    from homesec.models.config import Config
     from homesec.interfaces import (
         AlertPolicy,
         ClipSource,
@@ -46,25 +46,26 @@ if TYPE_CHECKING:
         StorageBackend,
         VLMAnalyzer,
     )
+    from homesec.models.config import Config
 
 logger = logging.getLogger(__name__)
 
 
 class Application:
     """Main application that orchestrates all components.
-    
+
     Handles component creation, lifecycle, and graceful shutdown.
     """
 
     def __init__(self, config_path: Path) -> None:
         """Initialize application with config file path.
-        
+
         Args:
             config_path: Path to YAML config file
         """
         self._config_path = config_path
         self._config: Config | None = None
-        
+
         # Components (created in _create_components)
         self._storage: StorageBackend | None = None
         self._state_store: StateStore = NoopStateStore()
@@ -77,41 +78,41 @@ class Application:
         self._sources: list[ClipSource] = []
         self._pipeline: ClipPipeline | None = None
         self._health_server: HealthServer | None = None
-        
+
         # Shutdown state
         self._shutdown_event = asyncio.Event()
         self._shutdown_started = False
 
     async def run(self) -> None:
         """Run the application.
-        
+
         Loads config, creates components, and runs until shutdown signal.
         """
         logger.info("Starting HomeSec application...")
-        
+
         # Load config
         self._config = load_config(self._config_path)
         logger.info("Config loaded from %s", self._config_path)
-        
+
         # Create components
         await self._create_components()
-        
+
         # Set up signal handlers
         self._setup_signal_handlers()
-        
+
         # Start health server
         if self._health_server:
             await self._health_server.start()
-        
+
         # Start sources
         for source in self._sources:
             await source.start()
-        
+
         logger.info("Application started. Waiting for clips...")
-        
+
         # Wait for shutdown signal
         await self._shutdown_event.wait()
-        
+
         # Graceful shutdown
         await self.shutdown()
 
@@ -152,7 +153,7 @@ class Application:
         self._filter = filter_plugin
         self._vlm = vlm_plugin
         alert_policy = self._create_alert_policy(config)
-        
+
         # Create pipeline
         self._pipeline = ClipPipeline(
             config=config,
@@ -166,12 +167,12 @@ class Application:
         )
         # Set event loop for thread-safe callbacks from sources
         self._pipeline.set_event_loop(asyncio.get_running_loop())
-        
+
         # Create sources and register callback
         self._sources = self._create_sources(config)
         for source in self._sources:
             source.register_callback(self._pipeline.on_new_clip)
-        
+
         # Create health server
         health_cfg = config.health
         self._health_server = HealthServer(
@@ -185,7 +186,7 @@ class Application:
             sources=self._sources,
             mqtt_is_critical=health_cfg.mqtt_is_critical,
         )
-        
+
         logger.info("All components created")
 
     def _create_storage(self, config: Config) -> StorageBackend:
@@ -237,10 +238,7 @@ class Application:
         if not self._notifier_entries:
             return
 
-        tasks = [
-            asyncio.create_task(entry.notifier.ping())
-            for entry in self._notifier_entries
-        ]
+        tasks = [asyncio.create_task(entry.notifier.ping()) for entry in self._notifier_entries]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for entry, result in zip(self._notifier_entries, results, strict=True):
@@ -339,7 +337,7 @@ class Application:
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
         loop = asyncio.get_running_loop()
-        
+
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._handle_signal, sig)
 
@@ -348,7 +346,7 @@ class Application:
         if self._shutdown_started:
             logger.warning("Shutdown already in progress, ignoring signal")
             return
-        
+
         logger.info("Received signal %s, initiating shutdown...", sig.name)
         self._shutdown_started = True
         self._shutdown_event.set()
@@ -356,18 +354,18 @@ class Application:
     async def shutdown(self) -> None:
         """Graceful shutdown of all components."""
         logger.info("Shutting down application...")
-        
+
         # Stop sources first
         if self._sources:
             await asyncio.gather(
                 *(source.shutdown() for source in self._sources),
                 return_exceptions=True,
             )
-        
+
         # Shutdown pipeline (waits for in-flight clips)
         if self._pipeline:
             await self._pipeline.shutdown()
-        
+
         # Stop health server
         if self._health_server:
             await self._health_server.stop()
@@ -381,13 +379,13 @@ class Application:
         # Close state store
         if self._state_store:
             await self._state_store.shutdown()
-        
+
         # Close storage
         if self._storage:
             await self._storage.shutdown()
-        
+
         # Close notifier
         if self._notifier:
             await self._notifier.shutdown()
-        
+
         logger.info("Application shutdown complete")

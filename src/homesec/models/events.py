@@ -12,6 +12,7 @@ from homesec.models.filter import FilterResult
 
 class ClipEvent(BaseModel):
     """Base class for all clip lifecycle events."""
+
     id: int | None = None
     clip_id: str
     timestamp: datetime
@@ -53,6 +54,7 @@ class ClipRecheckedEvent(ClipEvent):
 
 class UploadStartedEvent(ClipEvent):
     """Upload to storage backend started."""
+
     event_type: Literal["upload_started"] = "upload_started"
     dest_key: str
     attempt: int
@@ -60,6 +62,7 @@ class UploadStartedEvent(ClipEvent):
 
 class UploadCompletedEvent(ClipEvent):
     """Upload to storage backend completed successfully."""
+
     event_type: Literal["upload_completed"] = "upload_completed"
     storage_uri: str
     view_url: str | None
@@ -69,6 +72,7 @@ class UploadCompletedEvent(ClipEvent):
 
 class UploadFailedEvent(ClipEvent):
     """Upload to storage backend failed."""
+
     event_type: Literal["upload_failed"] = "upload_failed"
     attempt: int
     error_message: str
@@ -78,12 +82,14 @@ class UploadFailedEvent(ClipEvent):
 
 class FilterStartedEvent(ClipEvent):
     """Object detection filter started."""
+
     event_type: Literal["filter_started"] = "filter_started"
     attempt: int
 
 
 class FilterCompletedEvent(ClipEvent):
     """Object detection filter completed."""
+
     event_type: Literal["filter_completed"] = "filter_completed"
     detected_classes: list[str]
     confidence: float
@@ -95,6 +101,7 @@ class FilterCompletedEvent(ClipEvent):
 
 class FilterFailedEvent(ClipEvent):
     """Object detection filter failed."""
+
     event_type: Literal["filter_failed"] = "filter_failed"
     attempt: int
     error_message: str
@@ -104,12 +111,14 @@ class FilterFailedEvent(ClipEvent):
 
 class VLMStartedEvent(ClipEvent):
     """VLM analysis started."""
+
     event_type: Literal["vlm_started"] = "vlm_started"
     attempt: int
 
 
 class VLMCompletedEvent(ClipEvent):
     """VLM analysis completed."""
+
     event_type: Literal["vlm_completed"] = "vlm_completed"
     risk_level: str
     activity_type: str
@@ -123,6 +132,7 @@ class VLMCompletedEvent(ClipEvent):
 
 class VLMFailedEvent(ClipEvent):
     """VLM analysis failed."""
+
     event_type: Literal["vlm_failed"] = "vlm_failed"
     attempt: int
     error_message: str
@@ -132,12 +142,14 @@ class VLMFailedEvent(ClipEvent):
 
 class VLMSkippedEvent(ClipEvent):
     """VLM analysis skipped (no trigger classes detected)."""
+
     event_type: Literal["vlm_skipped"] = "vlm_skipped"
     reason: str
 
 
 class AlertDecisionMadeEvent(ClipEvent):
     """Alert policy decision made."""
+
     event_type: Literal["alert_decision_made"] = "alert_decision_made"
     should_notify: bool
     reason: str
@@ -147,6 +159,7 @@ class AlertDecisionMadeEvent(ClipEvent):
 
 class NotificationSentEvent(ClipEvent):
     """Notification sent successfully."""
+
     event_type: Literal["notification_sent"] = "notification_sent"
     notifier_name: str
     dedupe_key: str
@@ -155,6 +168,7 @@ class NotificationSentEvent(ClipEvent):
 
 class NotificationFailedEvent(ClipEvent):
     """Notification send failed."""
+
     event_type: Literal["notification_failed"] = "notification_failed"
     notifier_name: str
     error_message: str

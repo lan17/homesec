@@ -10,9 +10,9 @@ import yaml
 from homesec.interfaces import ObjectFilter
 from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
 from homesec.models.clip import ClipStateData
+from homesec.models.config import LocalStorageConfig
 from homesec.models.filter import FilterOverrides, FilterResult
 from homesec.plugins.storage.local import LocalStorage
-from homesec.models.config import LocalStorageConfig
 from homesec.state.postgres import PostgresStateStore
 
 

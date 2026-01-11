@@ -7,10 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from homesec.models.alert import AlertDecision
 from homesec.models.clip import Clip
-from homesec.models.filter import FilterResult
 from homesec.models.events import ClipRecheckedEvent
+from homesec.models.filter import FilterResult
 from homesec.models.vlm import (
     AnalysisResult,
     SequenceAnalysis,
@@ -56,7 +55,9 @@ async def test_initialize_clip(postgres_dsn: str, tmp_path: Path, clean_test_db:
 
 
 @pytest.mark.asyncio
-async def test_record_upload_completed(postgres_dsn: str, tmp_path: Path, clean_test_db: None) -> None:
+async def test_record_upload_completed(
+    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+) -> None:
     # Given: A clip that's been initialized
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
@@ -100,7 +101,9 @@ async def test_record_upload_completed(postgres_dsn: str, tmp_path: Path, clean_
 
 
 @pytest.mark.asyncio
-async def test_record_filter_completed(postgres_dsn: str, tmp_path: Path, clean_test_db: None) -> None:
+async def test_record_filter_completed(
+    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+) -> None:
     # Given: A clip that's been initialized
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
@@ -263,7 +266,9 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
 
 
 @pytest.mark.asyncio
-async def test_record_notification_sent(postgres_dsn: str, tmp_path: Path, clean_test_db: None) -> None:
+async def test_record_notification_sent(
+    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+) -> None:
     # Given: A clip that's been analyzed
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()

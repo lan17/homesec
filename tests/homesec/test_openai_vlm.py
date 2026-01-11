@@ -51,10 +51,14 @@ async def test_analyze_builds_payload_and_parses_response(
     frames = [("ZmFrZQ==", "00:00:00.00"), ("ZmFrZQ==", "00:00:01.00")]
     captured_payload: dict[str, object] = {}
 
-    async def _fake_extract_frames_async(*_args: object, **_kwargs: object) -> list[tuple[str, str]]:
+    async def _fake_extract_frames_async(
+        *_args: object, **_kwargs: object
+    ) -> list[tuple[str, str]]:
         return frames
 
-    async def _fake_call_api(payload: dict[str, object], _headers: dict[str, str]) -> dict[str, object]:
+    async def _fake_call_api(
+        payload: dict[str, object], _headers: dict[str, str]
+    ) -> dict[str, object]:
         captured_payload.update(payload)
         return {
             "choices": [{"message": {"content": json.dumps(_analysis_payload())}}],
@@ -98,7 +102,9 @@ async def test_analyze_raises_on_empty_frames(
     config = _make_config()
     analyzer = OpenAIVLM(config)
 
-    async def _fake_extract_frames_async(*_args: object, **_kwargs: object) -> list[tuple[str, str]]:
+    async def _fake_extract_frames_async(
+        *_args: object, **_kwargs: object
+    ) -> list[tuple[str, str]]:
         return []
 
     monkeypatch.setattr(analyzer, "_extract_frames_async", _fake_extract_frames_async)
@@ -128,10 +134,14 @@ async def test_analyze_raises_on_invalid_api_response(
     config = _make_config()
     analyzer = OpenAIVLM(config)
 
-    async def _fake_extract_frames_async(*_args: object, **_kwargs: object) -> list[tuple[str, str]]:
+    async def _fake_extract_frames_async(
+        *_args: object, **_kwargs: object
+    ) -> list[tuple[str, str]]:
         return [("ZmFrZQ==", "00:00:00.00")]
 
-    async def _fake_call_api(_payload: dict[str, object], _headers: dict[str, str]) -> dict[str, object]:
+    async def _fake_call_api(
+        _payload: dict[str, object], _headers: dict[str, str]
+    ) -> dict[str, object]:
         return {"choices": []}
 
     monkeypatch.setattr(analyzer, "_extract_frames_async", _fake_extract_frames_async)

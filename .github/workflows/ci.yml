@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: homesec
+          POSTGRES_USER: homesec
+          POSTGRES_PASSWORD: homesec
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd="pg_isready -U homesec -d homesec"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DB_DSN: postgresql+asyncpg://homesec:homesec@localhost:5432/homesec
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv and Python
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+
+      - name: Show versions
+        run: |
+          uv --version
+          python --version
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Run migrations
+        run: uv run alembic -c alembic.ini upgrade head
+
+      - name: Lint
+        run: make lint
+
+      - name: Type check
+        run: make typecheck
+
+      - name: Test
+        run: make test

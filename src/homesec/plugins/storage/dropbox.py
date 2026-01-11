@@ -7,11 +7,12 @@ import logging
 import os
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
+
 import dropbox  # type: ignore
 
+from homesec.interfaces import StorageBackend
 from homesec.models.config import DropboxStorageConfig
 from homesec.models.storage import StorageUploadResult
-from homesec.interfaces import StorageBackend
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +21,10 @@ CHUNK_SIZE = 4 * 1024 * 1024
 
 class DropboxStorage(StorageBackend):
     """Dropbox storage backend.
-    
+
     Uses dropbox SDK for file operations.
     Implements idempotent uploads with overwrite mode.
-    
+
     Supports two auth modes:
     1. Simple token: Set DROPBOX_TOKEN env var
     2. Refresh token flow: Set DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN
@@ -31,10 +32,10 @@ class DropboxStorage(StorageBackend):
 
     def __init__(self, config: DropboxStorageConfig) -> None:
         """Initialize Dropbox storage with config validation.
-        
+
         Required config:
             root: Root path in Dropbox (e.g., /homecam)
-            
+
         Optional config:
             token_env: Env var name for simple token auth (default: DROPBOX_TOKEN)
             app_key_env: Env var name for app key (default: DROPBOX_APP_KEY)
@@ -44,16 +45,16 @@ class DropboxStorage(StorageBackend):
         """
         self.root = str(config.root).rstrip("/")
         self.web_url_prefix = str(config.web_url_prefix)
-        
+
         # Initialize Dropbox client using env vars
         self.client = self._create_client(config)
         self._shutdown_called = False
-        
+
         logger.info("DropboxStorage initialized: root=%s", self.root)
 
     def _create_client(self, config: DropboxStorageConfig) -> dropbox.Dropbox:
         """Create Dropbox client from env vars.
-        
+
         Tries simple token first, then falls back to refresh token flow.
         """
         # Try simple token auth first
@@ -62,16 +63,16 @@ class DropboxStorage(StorageBackend):
         if token:
             logger.info("Using Dropbox simple token auth")
             return dropbox.Dropbox(token)
-        
+
         # Try refresh token flow
         app_key_var = str(config.app_key_env)
         app_secret_var = str(config.app_secret_env)
         refresh_token_var = str(config.refresh_token_env)
-        
+
         app_key = os.getenv(app_key_var)
         app_secret = os.getenv(app_secret_var)
         refresh_token = os.getenv(refresh_token_var)
-        
+
         if app_key and app_secret and refresh_token:
             logger.info("Using Dropbox refresh token auth")
             return dropbox.Dropbox(
@@ -79,7 +80,7 @@ class DropboxStorage(StorageBackend):
                 app_secret=app_secret,
                 oauth2_refresh_token=refresh_token,
             )
-        
+
         raise ValueError(
             f"Missing Dropbox credentials. Set {token_var} or "
             f"({app_key_var}, {app_secret_var}, {refresh_token_var})."
@@ -150,13 +151,13 @@ class DropboxStorage(StorageBackend):
     async def get(self, storage_uri: str, local_path: Path) -> None:
         """Download file from Dropbox."""
         self._ensure_open()
-        
+
         # Parse storage_uri
         if not storage_uri.startswith("dropbox:"):
             raise ValueError(f"Invalid storage_uri: {storage_uri}")
-        
+
         remote_path = storage_uri[8:]  # Strip "dropbox:"
-        
+
         # Run blocking download in executor
         await asyncio.to_thread(self._download_file, remote_path, local_path)
 
@@ -227,7 +228,7 @@ class DropboxStorage(StorageBackend):
         _ = timeout
         if self._shutdown_called:
             return
-        
+
         self._shutdown_called = True
         logger.info("DropboxStorage closed")
 
@@ -247,9 +248,11 @@ class DropboxStorage(StorageBackend):
 
 # Plugin registration
 from typing import cast
+
 from pydantic import BaseModel
-from homesec.plugins.storage import StoragePlugin, storage_plugin
+
 from homesec.interfaces import StorageBackend
+from homesec.plugins.storage import StoragePlugin, storage_plugin
 
 
 @storage_plugin(name="dropbox")

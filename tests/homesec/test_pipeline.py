@@ -8,16 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.homesec.mocks import (
-    MockEventStore,
-    MockFilter,
-    MockNotifier,
-    MockStateStore,
-    MockStorage,
-    MockVLM,
-)
-from homesec.models.clip import Clip, ClipStateData
 from homesec.errors import NotifyError
+from homesec.models.clip import Clip, ClipStateData
 from homesec.models.config import (
     AlertPolicyConfig,
     AlertPolicyOverrides,
@@ -41,6 +33,14 @@ from homesec.models.vlm import AnalysisResult, OpenAILLMConfig, VLMConfig
 from homesec.pipeline import ClipPipeline
 from homesec.plugins.alert_policies.default import DefaultAlertPolicy
 from homesec.repository import ClipRepository
+from tests.homesec.mocks import (
+    MockEventStore,
+    MockFilter,
+    MockNotifier,
+    MockStateStore,
+    MockStorage,
+    MockVLM,
+)
 
 
 @dataclass
@@ -336,7 +336,9 @@ class TestClipPipelineErrorHandling:
         pipeline = ClipPipeline(
             config=base_config,
             storage=mocks.storage,
-            repository=ClipRepository(FailingStateStore(), mocks.event_store, retry=base_config.retry),
+            repository=ClipRepository(
+                FailingStateStore(), mocks.event_store, retry=base_config.retry
+            ),
             filter_plugin=mocks.filter,
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
@@ -871,9 +873,7 @@ class TestClipPipelineConcurrency:
         assert len(notifier.sent_alerts) == 3
 
     @pytest.mark.asyncio
-    async def test_vlm_overlaps_upload(
-        self, base_config: Config, sample_clip: Clip
-    ) -> None:
+    async def test_vlm_overlaps_upload(self, base_config: Config, sample_clip: Clip) -> None:
         """VLM should start while upload is still in progress."""
         # Given an upload that blocks and a VLM that signals start
         upload_started = asyncio.Event()
@@ -972,15 +972,13 @@ class TestClipPipelineSemaphores:
 
         # Given a global clip limit of 1
         base_config.concurrency.max_clips_in_flight = 1
-        
+
         # Given a filter that blocks until released
         block_event = asyncio.Event()
         start_event = asyncio.Event()
 
         class BlockingMockFilter(MockFilter):
-            async def detect(
-                self, video_path: Path, overrides: FilterOverrides | None = None
-            ):
+            async def detect(self, video_path: Path, overrides: FilterOverrides | None = None):
                 start_event.set()
                 await block_event.wait()
                 return await super().detect(video_path, overrides=overrides)
@@ -1000,17 +998,27 @@ class TestClipPipelineSemaphores:
 
         # Given two clips
         clip1 = Clip(
-            clip_id="c1", camera_name="cam", local_path=tmp_path / "c1",
-            start_ts=datetime.now(), end_ts=datetime.now(), duration_s=1, source_type="test"
+            clip_id="c1",
+            camera_name="cam",
+            local_path=tmp_path / "c1",
+            start_ts=datetime.now(),
+            end_ts=datetime.now(),
+            duration_s=1,
+            source_type="test",
         )
         clip2 = Clip(
-            clip_id="c2", camera_name="cam", local_path=tmp_path / "c2",
-            start_ts=datetime.now(), end_ts=datetime.now(), duration_s=1, source_type="test"
+            clip_id="c2",
+            camera_name="cam",
+            local_path=tmp_path / "c2",
+            start_ts=datetime.now(),
+            end_ts=datetime.now(),
+            duration_s=1,
+            source_type="test",
         )
 
         # When clip 1 starts processing
         pipeline.on_new_clip(clip1)
-        
+
         await asyncio.wait_for(start_event.wait(), timeout=1.0)
         start_event.clear()
 
@@ -1023,10 +1031,10 @@ class TestClipPipelineSemaphores:
 
         # When clip 1 is released
         block_event.set()
-        
+
         # Then clip 2 begins
         await asyncio.wait_for(start_event.wait(), timeout=1.0)
-        
+
         await pipeline.shutdown()
 
     @pytest.mark.asyncio
@@ -1043,13 +1051,13 @@ class TestClipPipelineSemaphores:
         # Given storage that blocks uploads
         block_event = asyncio.Event()
         start_event = asyncio.Event()
-        
+
         class BlockingMockStorage(MockStorage):
             async def put_file(self, *args, **kwargs):
                 start_event.set()
                 await block_event.wait()
                 return await super().put_file(*args, **kwargs)
-                
+
         blocking_storage = BlockingMockStorage()
 
         pipeline = ClipPipeline(
@@ -1064,12 +1072,22 @@ class TestClipPipelineSemaphores:
 
         # Given two clips
         clip1 = Clip(
-            clip_id="c1", camera_name="cam", local_path=tmp_path / "c1",
-            start_ts=datetime.now(), end_ts=datetime.now(), duration_s=1, source_type="test"
+            clip_id="c1",
+            camera_name="cam",
+            local_path=tmp_path / "c1",
+            start_ts=datetime.now(),
+            end_ts=datetime.now(),
+            duration_s=1,
+            source_type="test",
         )
         clip2 = Clip(
-            clip_id="c2", camera_name="cam", local_path=tmp_path / "c2",
-            start_ts=datetime.now(), end_ts=datetime.now(), duration_s=1, source_type="test"
+            clip_id="c2",
+            camera_name="cam",
+            local_path=tmp_path / "c2",
+            start_ts=datetime.now(),
+            end_ts=datetime.now(),
+            duration_s=1,
+            source_type="test",
         )
 
         # When clip 1 starts uploading
@@ -1087,5 +1105,5 @@ class TestClipPipelineSemaphores:
         # When clip 1 upload is released
         block_event.set()
         await asyncio.wait_for(start_event.wait(), timeout=1.0)
-        
+
         await pipeline.shutdown()

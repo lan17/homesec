@@ -10,7 +10,7 @@ from homesec.models.alert import Alert
 
 class MockNotifier:
     """Mock implementation of Notifier interface for testing.
-    
+
     Tracks all sent alerts in a list for test assertions.
     Supports configurable failure injection and delays.
     """
@@ -21,7 +21,7 @@ class MockNotifier:
         delay_s: float = 0.0,
     ) -> None:
         """Initialize mock notifier.
-        
+
         Args:
             simulate_failure: If True, send() raises NotifyError
             delay_s: Artificial delay before returning

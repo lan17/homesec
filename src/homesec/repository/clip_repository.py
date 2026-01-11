@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Awaitable, Callable, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from homesec.models.clip import Clip, ClipStateData
 from homesec.models.config import RetryConfig
 from homesec.models.events import (
     AlertDecisionMadeEvent,
     ClipDeletedEvent,
-    ClipRecheckedEvent,
     ClipLifecycleEvent,
+    ClipRecheckedEvent,
     ClipRecordedEvent,
     FilterCompletedEvent,
     FilterFailedEvent,
@@ -25,16 +26,16 @@ from homesec.models.events import (
     UploadStartedEvent,
     VLMCompletedEvent,
     VLMFailedEvent,
-    VLMStartedEvent,
     VLMSkippedEvent,
+    VLMStartedEvent,
 )
 from homesec.state.postgres import is_retryable_pg_error
 
 if TYPE_CHECKING:
+    from homesec.interfaces import EventStore, StateStore
     from homesec.models.alert import AlertDecision
     from homesec.models.filter import FilterResult
     from homesec.models.vlm import AnalysisResult
-    from homesec.interfaces import EventStore, StateStore
 
 logger = logging.getLogger(__name__)
 

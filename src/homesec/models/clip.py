@@ -64,8 +64,15 @@ class ClipStateData(BaseModel):
 # Resolve forward references after imports are available
 def _resolve_forward_refs() -> None:
     """Resolve forward references in ClipStateData."""
+    # Explicitly import types to make them available for model_rebuild
     from homesec.models.alert import AlertDecision
     from homesec.models.filter import FilterResult
     from homesec.models.vlm import AnalysisResult
 
-    ClipStateData.model_rebuild()
+    ClipStateData.model_rebuild(
+        _types_namespace={
+            "FilterResult": FilterResult,
+            "AnalysisResult": AnalysisResult,
+            "AlertDecision": AlertDecision,
+        }
+    )

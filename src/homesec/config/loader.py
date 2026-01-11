@@ -22,13 +22,13 @@ class ConfigError(Exception):
 
 def load_config(path: Path) -> Config:
     """Load and validate configuration from YAML file.
-    
+
     Args:
         path: Path to YAML config file
-        
+
     Returns:
         Validated Config instance
-        
+
     Raises:
         ConfigError: If file not found, YAML invalid, or validation fails
     """
@@ -55,13 +55,13 @@ def load_config(path: Path) -> Config:
 
 def load_config_from_dict(data: dict[str, Any]) -> Config:
     """Load and validate configuration from a dict (useful for testing).
-    
+
     Args:
         data: Configuration dictionary
-        
+
     Returns:
         Validated Config instance
-        
+
     Raises:
         ConfigError: If validation fails
     """
@@ -73,14 +73,14 @@ def load_config_from_dict(data: dict[str, Any]) -> Config:
 
 def resolve_env_var(env_var_name: str, required: bool = True) -> str | None:
     """Resolve environment variable by name.
-    
+
     Args:
         env_var_name: Name of the environment variable
         required: If True, raise if not found
-        
+
     Returns:
         Environment variable value, or None if not required and not found
-        
+
     Raises:
         ConfigError: If required and not found
     """
@@ -92,11 +92,11 @@ def resolve_env_var(env_var_name: str, required: bool = True) -> str | None:
 
 def format_validation_error(e: ValidationError, path: Path | None = None) -> str:
     """Format Pydantic validation error for human readability.
-    
+
     Args:
         e: Pydantic ValidationError
         path: Optional config file path for context
-        
+
     Returns:
         Human-readable error message
     """

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel
 
@@ -14,9 +15,7 @@ from homesec.models.config import AlertPolicyOverrides
 logger = logging.getLogger(__name__)
 
 
-AlertPolicyFactory = Callable[
-    [BaseModel, dict[str, AlertPolicyOverrides], list[str]], AlertPolicy
-]
+AlertPolicyFactory = Callable[[BaseModel, dict[str, AlertPolicyOverrides], list[str]], AlertPolicy]
 
 
 @dataclass(frozen=True)

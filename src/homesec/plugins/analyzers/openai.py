@@ -14,6 +14,7 @@ import cv2
 from PIL import Image
 from pydantic import BaseModel
 
+from homesec.interfaces import VLMAnalyzer
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import (
     AnalysisResult,
@@ -22,7 +23,6 @@ from homesec.models.vlm import (
     VLMConfig,
     VLMPreprocessConfig,
 )
-from homesec.interfaces import VLMAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +61,18 @@ def _create_json_schema_format(
 
 class OpenAIVLM(VLMAnalyzer):
     """OpenAI-compatible VLM analyzer plugin.
-    
+
     Uses aiohttp for async HTTP calls to OpenAI API.
     Supports structured output with Pydantic schemas.
     """
 
     def __init__(self, config: VLMConfig) -> None:
         """Initialize OpenAI VLM with config validation.
-        
+
         Required config:
             llm.api_key_env: Env var name with API key
             llm.model: Model name (e.g., gpt-4o)
-            
+
         Optional config:
             llm.base_url: API base URL (default: https://api.openai.com/v1)
             llm.token_param: max_tokens or max_completion_tokens
@@ -86,13 +86,13 @@ class OpenAIVLM(VLMAnalyzer):
             raise ValueError("OpenAIVLM requires llm=OpenAILLMConfig")
         llm = config.llm
         preprocess = config.preprocessing
-        
+
         # Get API key from env
         self._api_key_env = llm.api_key_env
         self.api_key = os.getenv(self._api_key_env)
         if not self.api_key:
             raise ValueError(f"API key not found in env: {self._api_key_env}")
-        
+
         self.model = llm.model
         self.base_url = llm.base_url
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
@@ -100,11 +100,11 @@ class OpenAIVLM(VLMAnalyzer):
         self.token_param = llm.token_param
         self.max_tokens = self._resolve_token_limit(llm)
         self.request_timeout = float(llm.request_timeout)
-        
+
         # Create HTTP session
         self._session: aiohttp.ClientSession | None = None
         self._shutdown_called = False
-        
+
         logger.info(
             "OpenAIVLM initialized: model=%s, max_frames=%d, token_param=%s, temperature=%s",
             self.model,
@@ -127,18 +127,18 @@ class OpenAIVLM(VLMAnalyzer):
         config: VLMConfig,
     ) -> AnalysisResult:
         """Analyze video clip using OpenAI VLM.
-        
+
         Extracts frames, encodes as base64, and calls OpenAI API
         with structured output schema.
         """
         if self._shutdown_called:
             raise RuntimeError("VLM has been shut down")
-        
+
         start_time = asyncio.get_running_loop().time()
 
         # Extract frames
         frames = await self._extract_frames_async(video_path, config.preprocessing)
-        
+
         if not frames:
             raise ValueError(f"No frames extracted from {video_path}")
 
@@ -154,10 +154,8 @@ class OpenAIVLM(VLMAnalyzer):
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
         prompt_token_count = prompt_tokens if isinstance(prompt_tokens, int) else None
-        completion_token_count = (
-            completion_tokens if isinstance(completion_tokens, int) else None
-        )
-        
+        completion_token_count = completion_tokens if isinstance(completion_tokens, int) else None
+
         # Parse response
         content = self._extract_content(data)
         analysis = self._parse_sequence_analysis(content)
@@ -236,9 +234,7 @@ class OpenAIVLM(VLMAnalyzer):
         payload: dict[str, object] = {
             "model": self.model,
             "messages": messages,
-            "response_format": _create_json_schema_format(
-                SequenceAnalysis, "sequence_analysis"
-            ),
+            "response_format": _create_json_schema_format(SequenceAnalysis, "sequence_analysis"),
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
@@ -260,18 +256,14 @@ class OpenAIVLM(VLMAnalyzer):
         async with session.post(url, json=payload, headers=headers) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
-                raise RuntimeError(
-                    f"OpenAI API error {resp.status}: {error_text}"
-                )
+                raise RuntimeError(f"OpenAI API error {resp.status}: {error_text}")
 
             data = await resp.json()
             if not isinstance(data, dict):
                 raise TypeError("OpenAI API response is not a JSON object")
             return data
 
-    def _log_usage(
-        self, usage: dict[str, object], start_time: float, video_path: Path
-    ) -> None:
+    def _log_usage(self, usage: dict[str, object], start_time: float, video_path: Path) -> None:
         elapsed_s = asyncio.get_running_loop().time() - start_time
         logger.info(
             "VLM token usage",
@@ -317,8 +309,7 @@ class OpenAIVLM(VLMAnalyzer):
             ) from e
         except ValueError as e:
             raise ValueError(
-                f"VLM response does not match SequenceAnalysis schema: {e}. "
-                f"Raw response: {content}"
+                f"VLM response does not match SequenceAnalysis schema: {e}. Raw response: {content}"
             ) from e
 
     def _resolve_token_limit(self, llm: OpenAILLMConfig) -> int:
@@ -336,25 +327,25 @@ class OpenAIVLM(VLMAnalyzer):
         quality: int,
     ) -> list[tuple[str, str]]:
         """Extract and encode frames from video.
-        
+
         Returns list of (base64 JPEG, timestamp) tuples.
         """
         cap = cv2.VideoCapture(str(video_path))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
+
         if total_frames == 0:
             cap.release()
             return []
-        
+
         # Calculate frame indices to sample
         if total_frames <= max_frames:
             frame_indices = list(range(total_frames))
         else:
             step = total_frames / max_frames
             frame_indices = [int(i * step) for i in range(max_frames)]
-        
+
         frames_b64: list[tuple[str, str]] = []
-        
+
         for idx in frame_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
@@ -363,25 +354,26 @@ class OpenAIVLM(VLMAnalyzer):
 
             timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             timestamp = self._format_timestamp(timestamp_ms)
-            
+
             # Convert to PIL Image
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb_frame)
-            
+
             # Resize if needed
             if max(pil_img.size) > max_size:
                 pil_img = self._resize_image(pil_img, max_size)
-            
+
             # Encode as JPEG
             import io
+
             buffer = io.BytesIO()
             pil_img.save(buffer, format="JPEG", quality=quality)
             frame_bytes = buffer.getvalue()
-            
+
             # Base64 encode
             frame_b64 = base64.b64encode(frame_bytes).decode("utf-8")
             frames_b64.append((frame_b64, timestamp))
-        
+
         cap.release()
         return frames_b64
 
@@ -394,17 +386,17 @@ class OpenAIVLM(VLMAnalyzer):
     def _resize_image(self, img: Image.Image, max_size: int) -> Image.Image:
         """Resize image maintaining aspect ratio."""
         width, height = img.size
-        
+
         if width <= max_size and height <= max_size:
             return img
-        
+
         if width > height:
             new_width = max_size
             new_height = int(height * (max_size / width))
         else:
             new_height = max_size
             new_width = int(width * (max_size / height))
-        
+
         return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
     async def shutdown(self, timeout: float | None = None) -> None:
@@ -412,10 +404,10 @@ class OpenAIVLM(VLMAnalyzer):
         _ = timeout
         if self._shutdown_called:
             return
-        
+
         self._shutdown_called = True
         logger.info("Shutting down OpenAIVLM...")
-        
+
         if self._session:
             await self._session.close()
 
@@ -433,8 +425,7 @@ def openai_vlm_plugin() -> VLMPlugin:
     Returns:
         VLMPlugin for OpenAI vision-language model
     """
-    from homesec.models.vlm import OpenAILLMConfig, VLMConfig
-    from homesec.interfaces import VLMAnalyzer
+    from homesec.models.vlm import OpenAILLMConfig
 
     def factory(cfg: VLMConfig) -> VLMAnalyzer:
         return OpenAIVLM(cfg)

@@ -19,33 +19,36 @@ from sqlalchemy import (
     or_,
     select,
 )
-from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from homesec.interfaces import EventStore, StateStore
 from homesec.models.clip import ClipStateData
 from homesec.models.events import (
+    AlertDecisionMadeEvent,
     ClipDeletedEvent,
-    ClipRecheckedEvent,
-    ClipEvent as ClipEventModel,
     ClipLifecycleEvent,
+    ClipRecheckedEvent,
     ClipRecordedEvent,
-    UploadStartedEvent,
-    UploadCompletedEvent,
-    UploadFailedEvent,
-    FilterStartedEvent,
     FilterCompletedEvent,
     FilterFailedEvent,
-    VLMStartedEvent,
+    FilterStartedEvent,
+    NotificationFailedEvent,
+    NotificationSentEvent,
+    UploadCompletedEvent,
+    UploadFailedEvent,
+    UploadStartedEvent,
     VLMCompletedEvent,
     VLMFailedEvent,
     VLMSkippedEvent,
-    AlertDecisionMadeEvent,
-    NotificationSentEvent,
-    NotificationFailedEvent,
+    VLMStartedEvent,
 )
-from homesec.interfaces import EventStore, StateStore
+from homesec.models.events import (
+    ClipEvent as ClipEventModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,7 @@ class Base(DeclarativeBase):
 
 class ClipState(Base):
     """Current state snapshot (lightweight, fast queries)."""
+
     __tablename__ = "clip_states"
 
     clip_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -99,6 +103,7 @@ class ClipState(Base):
 
 class ClipEvent(Base):
     """Event history (append-only audit log)."""
+
     __tablename__ = "clip_events"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -122,7 +127,6 @@ class ClipEvent(Base):
     )
 
 
-
 def _normalize_async_dsn(dsn: str) -> str:
     if "+asyncpg" in dsn:
         return dsn
@@ -135,14 +139,14 @@ def _normalize_async_dsn(dsn: str) -> str:
 
 class PostgresStateStore(StateStore):
     """Postgres implementation of StateStore interface.
-    
+
     Implements graceful degradation: operations return None/False
     instead of raising when DB is unavailable.
     """
 
     def __init__(self, dsn: str) -> None:
         """Initialize state store.
-        
+
         Args:
             dsn: Postgres connection string (e.g., "postgresql+asyncpg://user:pass@host/db")
         """
@@ -170,9 +174,7 @@ class PostgresStateStore(StateStore):
             logger.info("PostgresStateStore initialized successfully")
             return True
         except Exception as e:
-            logger.error(
-                "Failed to initialize PostgresStateStore: %s", e, exc_info=True
-            )
+            logger.error("Failed to initialize PostgresStateStore: %s", e, exc_info=True)
             if self._engine is not None:
                 await self._engine.dispose()
             self._engine = None
@@ -180,7 +182,7 @@ class PostgresStateStore(StateStore):
 
     async def upsert(self, clip_id: str, data: ClipStateData) -> None:
         """Insert or update clip state.
-        
+
         Raises on execution errors so callers can retry/log appropriately.
         """
         if self._engine is None:
@@ -263,8 +265,7 @@ class PostgresStateStore(StateStore):
             conditions.append(camera_expr == camera_name)
         if older_than_days is not None:
             conditions.append(
-                ClipState.created_at
-                < func.now() - func.make_interval(days=int(older_than_days))
+                ClipState.created_at < func.now() - func.make_interval(days=int(older_than_days))
             )
 
         if cursor is not None:
@@ -310,7 +311,7 @@ class PostgresStateStore(StateStore):
 
     async def ping(self) -> bool:
         """Health check.
-        
+
         Returns True if database is reachable, False otherwise.
         """
         if self._engine is None:
@@ -337,7 +338,7 @@ class PostgresStateStore(StateStore):
         """Parse JSONB payload from SQLAlchemy into a dict."""
         return _parse_jsonb_payload(raw)
 
-    def create_event_store(self) -> "PostgresEventStore | NoopEventStore":
+    def create_event_store(self) -> PostgresEventStore | NoopEventStore:
         """Create a Postgres-backed event store or a no-op fallback."""
         if self._engine is None:
             return NoopEventStore()
@@ -426,9 +427,8 @@ class PostgresEventStore(EventStore):
     ) -> list[ClipLifecycleEvent]:
         """Get all events for a clip, optionally after an event id."""
         try:
-            query = (
-                select(ClipEvent.id, ClipEvent.event_type, ClipEvent.event_data)
-                .where(ClipEvent.clip_id == clip_id)
+            query = select(ClipEvent.id, ClipEvent.event_type, ClipEvent.event_data).where(
+                ClipEvent.clip_id == clip_id
             )
             if after_id is not None:
                 query = query.where(ClipEvent.id > after_id)

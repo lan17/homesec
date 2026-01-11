@@ -35,16 +35,17 @@ _STANDARD_LOGRECORD_ATTRS = {
     "taskName",
 }
 
+
 class _CameraNameFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if not hasattr(record, "camera_name") or getattr(record, "camera_name") in (None, ""):
+        if not hasattr(record, "camera_name") or record.camera_name in (None, ""):
             record.camera_name = _CURRENT_CAMERA_NAME
         return True
 
 
 class _RecordingIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if not hasattr(record, "recording_id") or getattr(record, "recording_id") in (None, ""):
+        if not hasattr(record, "recording_id") or record.recording_id in (None, ""):
             record.recording_id = _CURRENT_RECORDING_ID
         return True
 
@@ -86,6 +87,7 @@ def set_camera_name(name: str | None) -> None:
     global _CURRENT_CAMERA_NAME
     _CURRENT_CAMERA_NAME = name or "-"
 
+
 def set_recording_id(recording_id: str | None) -> None:
     """Set the `recording_id` value injected into log records."""
     global _CURRENT_RECORDING_ID
@@ -98,6 +100,7 @@ def _install_camera_filter() -> None:
         if any(isinstance(f, _CameraNameFilter) for f in handler.filters):
             continue
         handler.addFilter(_CameraNameFilter())
+
 
 def _install_recording_filter() -> None:
     root = logging.getLogger()
@@ -115,8 +118,7 @@ def configure_logging(*, log_level: str = "INFO", camera_name: str | None = None
     """
     console_level_name = str(log_level).upper()
     default_console_fmt = (
-        "%(asctime)s %(levelname)s [%(camera_name)s] "
-        "%(module)s %(pathname)s:%(lineno)d %(message)s"
+        "%(asctime)s %(levelname)s [%(camera_name)s] %(module)s %(pathname)s:%(lineno)d %(message)s"
     )
     console_fmt = os.getenv("CONSOLE_LOG_FORMAT", default_console_fmt)
 
@@ -160,7 +162,9 @@ def configure_logging(*, log_level: str = "INFO", camera_name: str | None = None
         from homesec.telemetry.db_log_handler import AsyncPostgresJsonLogHandler
     except Exception as exc:
         # Keep the app running even if DB logging deps aren't installed.
-        logging.getLogger(__name__).warning("DB_DSN is set but DB log handler failed to import: %s", exc)
+        logging.getLogger(__name__).warning(
+            "DB_DSN is set but DB log handler failed to import: %s", exc
+        )
         return
 
     for handler in list(root.handlers):

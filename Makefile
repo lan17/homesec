@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test typecheck check db-migrate db-migration publish
+.PHONY: help up down docker-build docker-push run db test typecheck lint check db-migrate db-migration publish
 
 help:
 	@echo "Targets:"
@@ -17,7 +17,8 @@ help:
 	@echo "    make db            Start just Postgres"
 	@echo "    make test          Run tests"
 	@echo "    make typecheck     Run mypy"
-	@echo "    make check         Run test + typecheck"
+	@echo "    make lint          Run ruff linter"
+	@echo "    make check         Run lint + typecheck + test"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make db-migrate    Run migrations"
@@ -68,7 +69,15 @@ test:
 typecheck:
 	uv run mypy --package homesec --strict
 
-check: typecheck test
+lint:
+	uv run ruff check src tests
+	uv run ruff format --check src tests
+
+lint-fix:
+	uv run ruff check --fix src tests
+	uv run ruff format src tests
+
+check: lint typecheck test
 
 # Database
 db-migrate:

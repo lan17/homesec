@@ -70,15 +70,17 @@ def sample_clip() -> Clip:
 def postgres_dsn() -> str:
     """Return test Postgres DSN (requires local DB running)."""
     import os
-    return os.getenv("TEST_DB_DSN", "postgresql://telemetry:telemetry@localhost:5432/telemetry")
+
+    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
 
 
 @pytest.fixture
 async def clean_test_db(postgres_dsn: str) -> None:
     """Clean up test data after each test."""
     from sqlalchemy import delete
-    from homesec.state.postgres import Base, ClipState, ClipEvent, PostgresStateStore
-    
+
+    from homesec.state.postgres import Base, ClipEvent, ClipState, PostgresStateStore
+
     store = PostgresStateStore(postgres_dsn)
     await store.initialize()
     if store._engine is not None:
@@ -87,7 +89,7 @@ async def clean_test_db(postgres_dsn: str) -> None:
             await conn.run_sync(Base.metadata.create_all)
 
     yield  # Run the test first
-    
+
     # Cleanup after test
     if store._engine:
         async with store._engine.begin() as conn:

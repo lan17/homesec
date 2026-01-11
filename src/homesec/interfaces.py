@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from homesec.models.alert import Alert, AlertDecision
@@ -73,7 +74,7 @@ class StorageBackend(Shutdownable, ABC):
     """Stores raw clips and derived artifacts."""
 
     @abstractmethod
-    async def put_file(self, local_path: Path, dest_path: str) -> "StorageUploadResult":
+    async def put_file(self, local_path: Path, dest_path: str) -> StorageUploadResult:
         """Upload file to storage. Returns storage result."""
         raise NotImplementedError
 
@@ -143,7 +144,7 @@ class EventStore(ABC):
     @abstractmethod
     async def append(self, event: ClipLifecycleEvent) -> None:
         """Append a lifecycle event.
-        
+
         Events are appended with database-assigned ids.
         Raises on database errors (should be retried by caller).
         """
@@ -156,7 +157,7 @@ class EventStore(ABC):
         after_id: int | None = None,
     ) -> list[ClipLifecycleEvent]:
         """Get all events for a clip, optionally after an event id.
-        
+
         Returns events ordered by id. Returns empty list on error.
         """
         raise NotImplementedError
@@ -174,6 +175,7 @@ class Notifier(Shutdownable, ABC):
     async def ping(self) -> bool:
         """Health check. Returns True if notifier is reachable."""
         raise NotImplementedError
+
 
 class AlertPolicy(ABC):
     """Decides whether to notify based on analysis results."""
@@ -197,7 +199,7 @@ class AlertPolicy(ABC):
         camera_name: str,
         filter_result: FilterResult | None,
         analysis: AnalysisResult | None,
-    ) -> "AlertDecision":
+    ) -> AlertDecision:
         """Build an AlertDecision from should_notify output."""
         from homesec.models.alert import AlertDecision
 
@@ -209,7 +211,9 @@ class ObjectFilter(Shutdownable, ABC):
     """Plugin interface for object detection in video clips."""
 
     @abstractmethod
-    async def detect(self, video_path: Path, overrides: FilterOverrides | None = None) -> FilterResult:
+    async def detect(
+        self, video_path: Path, overrides: FilterOverrides | None = None
+    ) -> FilterResult:
         """Detect objects in video clip.
 
         Implementation notes:
@@ -224,6 +228,7 @@ class ObjectFilter(Shutdownable, ABC):
             FilterResult with detected_classes, confidence, sampled_frames, model name
         """
         raise NotImplementedError
+
 
 class VLMAnalyzer(Shutdownable, ABC):
     """Plugin interface for VLM-based clip analysis."""
