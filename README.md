@@ -25,18 +25,48 @@ best-effort, and non-critical stages can fail without losing the alert.
 
 ```mermaid
 flowchart LR
-    A[ClipSource] --> B[ClipPipeline]
-    B --> C1[Upload]
-    B --> C2[Filter]
-    C1 --> D[Storage Backend]
-    C2 --> E[Object Filter]
-    E --> F{Trigger Classes?}
-    F -->|Yes| G[VLM Analyzer]
-    F -->|No| H[Skip VLM]
-    G --> I[Alert Policy]
-    H --> I
-    I --> J[Notifiers]
-    B -.-> K[Postgres state and events]
+    subgraph Sources
+        S1[RTSP]
+        S2[FTP]
+        S3[Local Folder]
+    end
+
+    S1 --> P[Clip Pipeline]
+    S2 --> P
+    S3 --> P
+
+    P --> U[Upload]
+    P --> F[Filter]
+
+    subgraph Storage Backends
+        D1[Dropbox]
+        D2[Local Disk]
+        D3[Custom]
+    end
+    D1 -.-> SB[Storage Backend]
+    D2 -.-> SB
+    D3 -.-> SB
+    U --> SB
+
+    F --> OF[Object Filter]
+    OF --> T{Trigger Classes?}
+    T -->|Yes| V[VLM Analyzer]
+    T -->|No| SK[Skip VLM]
+    V --> AP[Alert Policy]
+    SK --> AP
+
+    AP --> N[Notifier Fanout]
+
+    subgraph Notifiers
+        N1[MQTT]
+        N2[SendGrid Email]
+        N3[Custom]
+    end
+    N --> N1
+    N --> N2
+    N --> N3
+
+    P -.-> DB[Postgres state and events]
 ```
 
 ```
