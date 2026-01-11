@@ -6,29 +6,8 @@ on:
   pull_request:
 
 jobs:
-  lint:
+  ci:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup uv and Python
-        uses: astral-sh/setup-uv@v3
-        with:
-          python-version: "3.12"
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: Lint
-        run: make lint
-
-      - name: Type check
-        run: make typecheck
-
-  test:
-    runs-on: ubuntu-latest
-    needs: lint
     services:
       postgres:
         image: postgres:16-alpine
@@ -38,11 +17,7 @@ jobs:
           POSTGRES_PASSWORD: homesec
         ports:
           - "5432:5432"
-        options: >-
-          --health-cmd="pg_isready -U homesec -d homesec"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
+        # No health check options - let Postgres boot while lint/typecheck run
 
     env:
       DB_DSN: postgresql+asyncpg://homesec:homesec@localhost:5432/homesec
@@ -55,9 +30,26 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.12"
+          enable-cache: true
 
       - name: Sync dependencies
         run: uv sync
+
+      # Lint and typecheck run while Postgres boots in parallel
+      - name: Lint
+        run: make lint
+
+      - name: Type check
+        run: make typecheck
+
+      # Wait for Postgres before migrations
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U homesec && break
+            echo "Waiting for Postgres..."
+            sleep 1
+          done
 
       - name: Run migrations
         run: uv run alembic -c alembic.ini upgrade head
