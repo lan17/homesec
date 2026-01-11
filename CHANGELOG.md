@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.2 (2026-01-11)
+
+### Bug Fixes
+
+- CI and release workflow improvements ([#3](https://github.com/lan17/homesec/pull/3),
+  [`ab61e47`](https://github.com/lan17/homesec/commit/ab61e47c7c16c79e8472807c07e4974e31a13c29))
+
+
 ## v1.0.1 (2026-01-11)
 
 ### Bug Fixes
