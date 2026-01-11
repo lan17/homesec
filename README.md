@@ -35,8 +35,8 @@ flowchart LR
     F -->|No| H[Skip VLM]
     G --> I[Alert Policy]
     H --> I
-    I --> J[Notifier(s)]
-    B -.-> K[(Postgres state + events)]
+    I --> J[Notifiers]
+    B -.-> K[Postgres state and events]
 ```
 
 ```
