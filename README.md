@@ -2,11 +2,11 @@
 
 <p align="center">
   <img src="logo.svg" alt="HomeSec Logo" width="200">
+  <br><br>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python: 3.10+"></a>
+  <a href="https://peps.python.org/pep-0561/"><img src="https://img.shields.io/badge/typing-typed-2b825b" alt="Typing: Typed"></a>
 </p>
-
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 
 HomeSec is a pluggable, async pipeline for home security cameras. It records
 short clips, runs object detection, optionally calls a vision-language model
