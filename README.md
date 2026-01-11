@@ -1,18 +1,12 @@
 # HomeSec
 
-<p align="center">
-  <img src="logo.svg" alt="HomeSec Logo" width="200">
-  <br><br>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python: 3.10+"></a>
-  <a href="https://peps.python.org/pep-0561/"><img src="https://img.shields.io/badge/typing-typed-2b825b" alt="Typing: Typed"></a>
-</p>
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 
-HomeSec is a pluggable, async pipeline for home security cameras. It records
-short clips, runs object detection, optionally calls a vision-language model
-(VLM) for a structured summary, and sends alerts via MQTT or email. The design
-leans toward reliability: clips land on disk first, state/event writes are
-best-effort, and non-critical stages can fail without losing the alert.
+HomeSec is a self-hosted, extensible network video recorder that puts you in control. Store clips wherever you want, analyze them with AI, and get smart notifications—all while keeping your footage private and off third-party clouds.
+
+Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model (VLM) for a structured summary, and sends alerts via MQTT or email. The design leans toward reliability: clips land on disk first, state/event writes are best-effort, and non-critical stages can fail without losing the alert.
 
 ## Highlights
 
@@ -39,28 +33,41 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 
 ### Requirements
 
-- Python 3.10+ (3.12 or 3.13 recommended)
-- ffmpeg in PATH (required for RTSP source)
-- Postgres for state/events (`make db-up` starts a local instance). The pipeline
-  continues if the DB is down, but a DSN is still required.
+- Docker and Docker Compose
 - Optional: MQTT broker, Dropbox credentials, OpenAI-compatible API key
 
 ### Setup
 
-1. Install dependencies:
-   `uv sync`
-2. Create a config file:
-   - Start from `config/example.yaml` or `config/sample.yaml`
-3. Set environment variables (use `.env.example` as a template):
-   `cp .env.example .env`
-4. Start Postgres:
-   `make db-up`
-5. Validate config:
-   `uv run python -m homesec.cli validate --config config/example.yaml`
-6. Run:
-   `uv run python -m homesec.cli run --config config/example.yaml --log_level INFO`
+1. Create a config file:
+   ```bash
+   cp config/example.yaml config/production.yaml
+   ```
+2. Set environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+3. Start HomeSec + Postgres:
+   ```bash
+   make docker-up
+   ```
+4. Check logs:
+   ```bash
+   make docker-logs
+   ```
+5. Stop:
+   ```bash
+   make docker-down
+   ```
 
-Tip: `make homesec` loads `.env` and runs `config/production.yaml`.
+### Running without Docker
+
+If you prefer to run locally:
+
+1. Install Python 3.10+ and ffmpeg
+2. `uv sync`
+3. `make db-up` (starts Postgres)
+4. `make homesec`
 
 ## Configuration
 

@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+ENV
+env
+
+# Development
+.env
+.env.*
+.mypy_cache
+.pytest_cache
+.ruff_cache
+*.egg-info
+dist
+build
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Tests
+tests
+pytest.ini
+
+# Documentation
+docs
+DESIGN.md
+CLAUDE.md
+
+# Local data (should be mounted as volumes)
+recordings
+storage
+*.mp4
+*.avi
+*.mov
+
+# Notebooks
+notebooks
+*.ipynb
+
+# Config examples (actual config mounted at runtime)
+config/*.yaml
+!config/example.yaml
