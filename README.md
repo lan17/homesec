@@ -6,12 +6,12 @@
 
 HomeSec is a self-hosted, extensible network video recorder that puts you in control. Store clips wherever you want, analyze them with AI, and get smart notifications—all while keeping your footage private and off third-party clouds.
 
-Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model (VLM) for a structured summary, and sends alerts via MQTT or email. The design leans toward reliability: clips land on disk first, state/event writes are best-effort, and non-critical stages can fail without losing the alert.
+Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model ([VLM](https://en.wikipedia.org/wiki/Vision%E2%80%93language_model)) for a structured summary, and sends alerts via [MQTT](https://en.wikipedia.org/wiki/MQTT) or email. The design is built for reliability: clips land on disk first, state/event writes are best-effort, and non-critical stages can fail without losing the alert.
 
 ## Highlights
 
-- Bring your own input: RTSP motion detection, FTP uploads, or a watched folder
-- Parallel upload + filter (YOLOv8) with frame sampling and early exit
+- Bring your own input: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
+- Parallel upload + filter ([YOLOv8](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
 - OpenAI-compatible VLM analysis with structured output
 - Policy-driven alerts with per-camera overrides
 - Fan-out notifiers (MQTT for Home Assistant, SendGrid email)
