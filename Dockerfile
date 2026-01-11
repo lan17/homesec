@@ -69,13 +69,17 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/alembic /app/alembic
 COPY --from=builder /app/alembic.ini /app/alembic.ini
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+
 # Set up environment
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-# Create directories for volume mounts
-RUN mkdir -p /config /data/recordings /data/storage /app/yolo_cache \
+# Create directories for volume mounts and make entrypoint executable
+RUN chmod +x /app/docker-entrypoint.sh \
+    && mkdir -p /config /data/recordings /data/storage /app/yolo_cache \
     && chown -R homesec:homesec /config /data /app
 
 # Switch to non-root user
@@ -86,8 +90,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
 
-# Default command
+# Entrypoint runs migrations then starts app
 # Config and env are expected to be mounted at /config/
-# Override with: docker run ... homesec run --config /path/to/config.yaml
-ENTRYPOINT ["python", "-m", "homesec.cli"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["run", "--config", "/config/config.yaml", "--log_level", "INFO"]

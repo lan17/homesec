@@ -6,6 +6,10 @@ import asyncio
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import fire  # type: ignore[import-untyped]
 
 from homesec.logging_setup import configure_logging

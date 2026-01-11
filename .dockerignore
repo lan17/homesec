@@ -44,6 +44,9 @@ storage
 *.mp4
 *.avi
 *.mov
+video_cache
+yolo_cache
+ftp_incoming
 
 # Notebooks
 notebooks

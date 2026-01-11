@@ -6,6 +6,10 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -15,14 +19,21 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from homesec.telemetry.db.log_table import metadata  # noqa: E402
+from sqlalchemy import MetaData  # noqa: E402
+from homesec.telemetry.db.log_table import metadata as telemetry_metadata  # noqa: E402
+from homesec.state.postgres import Base as StateBase  # noqa: E402
+
+# Combine all metadata into one for alembic
+target_metadata = MetaData()
+for table in telemetry_metadata.tables.values():
+    table.to_metadata(target_metadata)
+for table in StateBase.metadata.tables.values():
+    table.to_metadata(target_metadata)
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
-
-target_metadata = metadata
 
 
 def _get_url() -> str:

@@ -150,8 +150,10 @@ class PostgresStateStore(StateStore):
         self._engine: AsyncEngine | None = None
 
     async def initialize(self) -> bool:
-        """Initialize connection pool and create table if not exists.
-        
+        """Initialize connection pool.
+
+        Note: Tables are created via alembic migrations, not here.
+
         Returns:
             True if initialization succeeded, False otherwise
         """
@@ -162,8 +164,9 @@ class PostgresStateStore(StateStore):
                 pool_size=5,
                 max_overflow=0,
             )
-            async with self._engine.begin() as conn:
-                await self._create_tables(conn)
+            # Verify connection works
+            async with self._engine.connect() as conn:
+                await conn.execute(select(1))
             logger.info("PostgresStateStore initialized successfully")
             return True
         except Exception as e:
@@ -174,10 +177,6 @@ class PostgresStateStore(StateStore):
                 await self._engine.dispose()
             self._engine = None
             return False
-
-    async def _create_tables(self, conn: AsyncConnection) -> None:
-        """Create all tables (clip_states + clip_events)."""
-        await conn.run_sync(Base.metadata.create_all)
 
     async def upsert(self, clip_id: str, data: ClipStateData) -> None:
         """Insert or update clip state.

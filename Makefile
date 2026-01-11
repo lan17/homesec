@@ -1,80 +1,44 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help homesec test typecheck check
-.PHONY: db-up db-down db-logs db-migrate db-migrate-homesec
-.PHONY: pypi-clean pypi-build pypi-check pypi-publish
-.PHONY: docker-build docker-push docker-run docker-up docker-down docker-logs
+.PHONY: help up down docker-build docker-push run db test typecheck check db-migrate db-migration publish
 
 help:
 	@echo "Targets:"
-	@echo "  make homesec    Run HomeSec pipeline (RTSP motion detection + YOLO + Dropbox)"
-	@echo "  make test       Run tests"
-	@echo "  make typecheck  Run mypy strict type checking"
-	@echo "  make check      Run both test + typecheck"
-	@echo "  make db-up      Start local Postgres (telemetry)"
-	@echo "  make db-down    Stop local Postgres (telemetry)"
-	@echo "  make db-logs    Tail Postgres logs (telemetry)"
-	@echo "  make db-migrate Run alembic migrations (telemetry + clip state/events)"
-	@echo "  make db-migrate-homesec Run alembic migrations (clip state/events)"
-	@echo "  make pypi-clean    Remove local build artifacts (dist/, build/)"
-	@echo "  make pypi-build    Build sdist/wheel for PyPI"
-	@echo "  make pypi-check    Validate dist artifacts with twine"
-	@echo "  make pypi-publish  Build, check, and upload to PyPI"
-	@echo "  make docker-build  Build Docker image"
-	@echo "  make docker-push   Push Docker image to DockerHub"
-	@echo "  make docker-run    Run Docker container locally (standalone)"
-	@echo "  make docker-up     Start HomeSec + Postgres via docker-compose"
-	@echo "  make docker-down   Stop docker-compose services"
-	@echo "  make docker-logs   Tail docker-compose logs"
-	@echo "  DB_DSN=$${DB_DSN:-}"
+	@echo ""
+	@echo "  Docker:"
+	@echo "    make up            Start HomeSec + Postgres"
+	@echo "    make down          Stop all services"
+	@echo "    make docker-build  Build Docker image"
+	@echo "    make docker-push   Push to DockerHub"
+	@echo ""
+	@echo "  Local dev:"
+	@echo "    make run           Run HomeSec locally (requires Postgres)"
+	@echo "    make db            Start just Postgres"
+	@echo "    make test          Run tests"
+	@echo "    make typecheck     Run mypy"
+	@echo "    make check         Run test + typecheck"
+	@echo ""
+	@echo "  Database:"
+	@echo "    make db-migrate    Run migrations"
+	@echo "    make db-migration m=\"description\"  Generate new migration"
+	@echo ""
+	@echo "  Release:"
+	@echo "    make publish       Build and upload to PyPI"
 
+# Config
 HOMESEC_CONFIG ?= config/production.yaml
 HOMESEC_LOG_LEVEL ?= INFO
-
-test:
-	uv run pytest tests/homesec/ -v
-
-typecheck:
-	uv run mypy --package homesec --strict
-
-check: typecheck test
-
-homesec:
-	@set -a && source .env 2>/dev/null; set +a; \
-	uv run python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
-
-db-up:
-	docker compose up -d postgres
-
-db-down:
-	docker compose down postgres
-
-db-logs:
-	docker compose logs -f postgres
-
-db-migrate:
-	uv run --with alembic --with sqlalchemy --with asyncpg alembic -c alembic.ini upgrade head
-
-db-migrate-homesec:
-	$(MAKE) db-migrate
-
-pypi-clean:
-	rm -rf dist build
-
-pypi-build: pypi-clean check
-	uv run --with build python -m build
-
-pypi-check:
-	uv run --with twine python -m twine check dist/*
-
-pypi-publish: pypi-build pypi-check
-	uv run --with twine python -m twine upload dist/*
-
-# Docker
 DOCKER_IMAGE ?= homesec
 DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
+
+# Docker
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down
 
 docker-build:
 	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
@@ -89,21 +53,37 @@ docker-push: docker-build
 	docker push $(DOCKERHUB_USER)/$(DOCKER_IMAGE):$(DOCKER_TAG)
 	docker push $(DOCKERHUB_USER)/$(DOCKER_IMAGE):latest
 
-docker-run:
-	docker run --rm -it \
-		-v $$(pwd)/config/example.yaml:/config/config.yaml \
-		-v $$(pwd)/.env:/config/.env \
-		-v $$(pwd)/recordings:/data/recordings \
-		-v $$(pwd)/storage:/data/storage \
-		-v $$(pwd)/yolo_cache:/app/yolo_cache \
-		-p 8080:8080 \
-		$(DOCKER_IMAGE):$(DOCKER_TAG)
+# Local dev
+run:
+	@echo "Running database migrations..."
+	@uv run alembic -c alembic.ini upgrade head
+	uv run python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
 
-docker-up:
-	docker compose up -d --build
+db:
+	docker compose up -d postgres
 
-docker-down:
-	docker compose down
+test:
+	uv run pytest tests/homesec/ -v
 
-docker-logs:
-	docker compose logs -f
+typecheck:
+	uv run mypy --package homesec --strict
+
+check: typecheck test
+
+# Database
+db-migrate:
+	uv run --with alembic --with sqlalchemy --with asyncpg --with python-dotenv alembic -c alembic.ini upgrade head
+
+db-migration:
+	@if [ -z "$(m)" ]; then \
+		echo "Error: message required. Run: make db-migration m=\"your description\""; \
+		exit 1; \
+	fi
+	uv run --with alembic --with sqlalchemy --with asyncpg --with python-dotenv alembic -c alembic.ini revision --autogenerate -m "$(m)"
+
+# Release
+publish: check
+	rm -rf dist build
+	uv run --with build python -m build
+	uv run --with twine python -m twine check dist/*
+	uv run --with twine python -m twine upload dist/*

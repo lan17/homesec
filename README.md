@@ -49,15 +49,11 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
    ```
 3. Start HomeSec + Postgres:
    ```bash
-   make docker-up
+   make up
    ```
-4. Check logs:
+4. Stop:
    ```bash
-   make docker-logs
-   ```
-5. Stop:
-   ```bash
-   make docker-down
+   make down
    ```
 
 ### Running without Docker
@@ -66,8 +62,8 @@ If you prefer to run locally:
 
 1. Install Python 3.10+ and ffmpeg
 2. `uv sync`
-3. `make db-up` (starts Postgres)
-4. `make homesec`
+3. `make db` (starts Postgres)
+4. `make run`
 
 ## Configuration
 
@@ -225,7 +221,7 @@ my_filters = "my_package.filters.custom"
 
 - Health endpoint: `GET /health` (configurable in `health.host`/`health.port`)
 - Optional telemetry logs to Postgres when `DB_DSN` is set:
-  - Start local DB: `make db-up`
+  - Start local DB: `make db`
   - Run migrations: `make db-migrate`
 
 ## Development
