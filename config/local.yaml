@@ -1,0 +1,68 @@
+# HomeSec Local Config
+#
+# Usage:
+#   uv run python -m homesec.cli run --config config/local.yaml --log_level DEBUG
+
+version: 1
+
+cameras:
+  - name: local_camera
+    source:
+      type: local_folder
+      config:
+        watch_dir: recordings
+        poll_interval: 1.0
+
+storage:
+  backend: dropbox
+  dropbox:
+    root: "/homecam"
+    token_env: DROPBOX_TOKEN
+    app_key_env: DROPBOX_APP_KEY
+    app_secret_env: DROPBOX_APP_SECRET
+    refresh_token_env: DROPBOX_REFRESH_TOKEN
+    web_url_prefix: "https://www.dropbox.com/home"
+
+state_store:
+  dsn_env: DB_DSN
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: "localhost"
+      port: 1883
+      auth:
+        username_env: MQTT_USERNAME
+        password_env: MQTT_PASSWORD
+      topic_template: "homecam/alerts/{camera_name}"
+      qos: 1
+      retain: false
+
+filter:
+  plugin: yolo
+  max_workers: 4
+  config:
+    # model_path defaults to yolo11n.pt (cached under ./yolo_cache)
+    classes: ["person", "animal"]
+    min_confidence: 0.5
+    sample_fps: 2
+
+vlm:
+  backend: openai
+  trigger_classes: ["person"]
+  max_workers: 2
+  llm:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+  preprocessing:
+    max_frames: 10
+    max_size: 1024
+    quality: 85
+
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: medium
+    notify_on_activity_types: []
+    notify_on_motion: false

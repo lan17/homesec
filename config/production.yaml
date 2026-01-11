@@ -1,0 +1,113 @@
+# HomeSec Production Config
+# Based on existing record.sh and clean_up.sh settings
+#
+# Usage:
+#   uv run python -m homesec.cli run --config config/production.yaml
+#
+# Required env vars (see .env.example):
+#   - FRONT_DOOR_RTSP_URL
+#   - DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN
+#   - Or DROPBOX_TOKEN for simple auth
+#   - OPENAI_API_KEY (for VLM analysis)
+#   - SENDGRID_API_KEY (for email notifier)
+#   - Optional: DB_DSN for Postgres state store
+
+version: 1
+
+cameras:
+  - name: front_door
+    source:
+      type: rtsp
+      config:
+        rtsp_url_env: FRONT_DOOR_RTSP_URL
+        output_dir: "./recordings"
+        pixel_threshold: 45
+        min_changed_pct: 1.0
+        blur_kernel: 5
+        stop_delay: 10
+        max_recording_s: 60
+        frame_timeout_s: 2.0
+        reconnect_backoff_s: 1.0
+  - name: ftp_ingest
+    source:
+      type: ftp
+      config:
+        host: "0.0.0.0"
+        port: 2121
+        root_dir: "./ftp_incoming"
+        anonymous: true
+
+storage:
+  backend: dropbox
+  dropbox:
+    root: "/front_door_camera_snapshots"
+    token_env: DROPBOX_TOKEN
+    app_key_env: DROPBOX_APP_KEY
+    app_secret_env: DROPBOX_APP_SECRET
+    refresh_token_env: DROPBOX_REFRESH_TOKEN
+    web_url_prefix: "https://www.dropbox.com/home/Apps/home_assistant_uploads"
+
+state_store:
+  dsn_env: DB_DSN
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: "192.168.0.86"
+      port: 1883
+      auth:
+        username_env: MQTT_USERNAME
+        password_env: MQTT_PASSWORD
+      topic_template: "homecam/alerts/{camera_name}"
+      qos: 1
+      retain: false
+  - backend: sendgrid_email
+    config:
+      api_key_env: SENDGRID_API_KEY
+      from_email: "homesec@levai.me"
+      from_name: "HomeSec"
+      to_emails: ["green.entheogen@gmail.com"]
+
+filter:
+  plugin: "yolo"
+  max_workers: 2
+  config:
+    # model_path defaults to yolo11n.pt (cached under ./yolo_cache)
+    classes: ["person", "cat", "dog", "bird"]
+    min_confidence: 0.5
+    sample_fps: 5
+    min_box_h_ratio: 0.03
+
+vlm:
+  backend: "openai"
+  trigger_classes: ["person"]
+  max_workers: 1
+  llm:
+    api_key_env: "OPENAI_API_KEY"
+    model: "gpt-5-mini"
+    temperature: null
+    #model: "qwen/qwen3-vl-30b"
+    #base_url: "http://192.168.0.35:1234/v1"
+  preprocessing:
+    max_size: 768
+    quality: 100
+
+retry:
+  max_attempts: 3
+  backoff_s: 1.0
+
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: "medium"
+    notify_on_activity_types: ["person_at_door", "delivery", "suspicious"]
+    notify_on_motion: false
+
+per_camera_alert:
+  front_door:
+    min_risk_level: "low"
+    notify_on_activity_types: ["person_at_door", "delivery", "suspicious", "animal"]
+  ftp_ingest:
+    min_risk_level: "low"
+    notify_on_activity_types: ["person_at_door", "delivery", "suspicious", "animal"]

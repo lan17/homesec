@@ -1,0 +1,6 @@
+video_cache/
+*.pt
+.env
+__pycache__/
+dist
+.idea
