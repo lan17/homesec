@@ -4,3 +4,6 @@ video_cache/
 __pycache__/
 dist
 .idea
+recordings
+video_cache
+yolo_cache
