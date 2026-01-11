@@ -6,7 +6,7 @@ on:
       dry_run:
         description: 'Dry run (no actual release)'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 jobs:
@@ -30,38 +30,41 @@ jobs:
       - name: Install python-semantic-release
         run: pip install python-semantic-release
 
-      - name: Semantic Release (dry run)
-        if: ${{ inputs.dry_run == 'true' }}
-        run: semantic-release version --noop
-
-      - name: Semantic Release
-        if: ${{ inputs.dry_run != 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Semantic Release (dry run)
+        if: inputs.dry_run
+        run: semantic-release version --print
+
+      - name: Semantic Release
+        if: ${{ !inputs.dry_run }}
+        id: semrel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           semantic-release version
+          echo "version=$(grep 'version = ' pyproject.toml | head -1 | cut -d'\"' -f2)" >> $GITHUB_OUTPUT
 
       - name: Build Package
-        if: ${{ inputs.dry_run != 'true' }}
+        if: ${{ !inputs.dry_run }}
         run: |
           pip install build
           python -m build
 
       - name: Publish to PyPI
-        if: ${{ inputs.dry_run != 'true' }}
+        if: ${{ !inputs.dry_run }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           verbose: true
 
-      - name: Create GitHub Release
-        if: ${{ inputs.dry_run != 'true' }}
+      - name: Upload to GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep 'version = ' pyproject.toml | head -1 | cut -d'"' -f2)
-          gh release create "v$VERSION" \
-            --title "v$VERSION" \
-            --generate-notes \
-            dist/*
+          VERSION=${{ steps.semrel.outputs.version }}
+          # Upload dist files to the release that semantic-release created
+          gh release upload "v$VERSION" dist/* --clobber || true

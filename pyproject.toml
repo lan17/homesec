@@ -120,8 +120,9 @@ version_toml = ["pyproject.toml:project.version"]
 version_source = "tag"
 commit_message = "chore(release): v{version}"
 branch = "main"
+major_on_zero = false  # Don't bump to 1.0.0 on breaking changes while in 0.x
 
 [tool.semantic_release.commit_parser_options]
 # feat = minor, fix/perf/chore/docs/style/refactor = patch
-# BREAKING CHANGE = major
+# BREAKING CHANGE = major (but blocked by major_on_zero while in 0.x)
 patch_tags = ["fix", "perf", "chore", "docs", "style", "refactor"]
