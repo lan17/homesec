@@ -114,3 +114,14 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["homesec"]
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+version_source = "tag"
+commit_message = "chore(release): v{version}"
+branch = "main"
+
+[tool.semantic_release.commit_parser_options]
+# feat = minor, fix/perf/chore/docs/style/refactor = patch
+# BREAKING CHANGE = major
+patch_tags = ["fix", "perf", "chore", "docs", "style", "refactor"]
