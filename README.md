@@ -23,6 +23,22 @@ best-effort, and non-critical stages can fail without losing the alert.
 
 ## Pipeline at a glance
 
+```mermaid
+flowchart LR
+    A[ClipSource] --> B[ClipPipeline]
+    B --> C1[Upload]
+    B --> C2[Filter]
+    C1 --> D[Storage Backend]
+    C2 --> E[Object Filter]
+    E --> F{Trigger Classes?}
+    F -->|Yes| G[VLM Analyzer]
+    F -->|No| H[Skip VLM]
+    G --> I[Alert Policy]
+    H --> I
+    I --> J[Notifier(s)]
+    B -.-> K[(Postgres state + events)]
+```
+
 ```
 ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 ```
@@ -155,6 +171,18 @@ Extension points (all pluggable):
 - VLM analyzers: OpenAI-compatible APIs or local models
 - Alert policies: per-camera rules and thresholds
 - Notifiers: MQTT, email, or anything else you can send from Python
+
+```mermaid
+flowchart LR
+    EP[Entry points] --> REG[Plugin registry]
+    BI[Built-in plugins] --> REG
+    CFG[config.yaml] --> REG
+    REG --> F1[Filter factory] --> IF1[ObjectFilter]
+    REG --> F2[VLM factory] --> IF2[VLMAnalyzer]
+    REG --> F3[Storage factory] --> IF3[StorageBackend]
+    REG --> F4[Notifier factory] --> IF4[Notifier]
+    REG --> F5[Alert policy factory] --> IF5[AlertPolicy]
+```
 
 ## CLI
 
