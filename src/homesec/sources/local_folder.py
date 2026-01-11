@@ -6,9 +6,10 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from anyio import Path as AsyncPath
 
@@ -34,7 +35,7 @@ class LocalFolderSource(AsyncClipSource):
         self,
         config: LocalFolderSourceConfig,
         camera_name: str = "local",
-        state_store: "StateStore | None" = None,
+        state_store: StateStore | None = None,
     ) -> None:
         """Initialize folder watcher.
 
@@ -61,8 +62,11 @@ class LocalFolderSource(AsyncClipSource):
         self._seen_files: OrderedDict[str, None] = OrderedDict()
         self._max_seen_files = 10000
 
-        logger.info("LocalFolderSource initialized: watch_dir=%s, has_state_store=%s",
-                   self.watch_dir, state_store is not None)
+        logger.info(
+            "LocalFolderSource initialized: watch_dir=%s, has_state_store=%s",
+            self.watch_dir,
+            state_store is not None,
+        )
 
     def register_callback(self, callback: Callable[[Clip], None]) -> None:
         """Register callback to be invoked when new clip is ready."""
@@ -163,9 +167,7 @@ class LocalFolderSource(AsyncClipSource):
 
             # Sleep before next poll
             try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=self.poll_interval
-                )
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval)
             except asyncio.TimeoutError:
                 pass  # Normal - just means poll_interval elapsed
 

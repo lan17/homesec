@@ -75,7 +75,9 @@ class _FakeDropboxClient:
         self.session_started = True
         return _FakeSession(session_id="session_1")
 
-    def files_upload_session_append_v2(self, chunk: bytes, cursor: _FakeUploadSessionCursor) -> None:
+    def files_upload_session_append_v2(
+        self, chunk: bytes, cursor: _FakeUploadSessionCursor
+    ) -> None:
         self.session_appends += 1
         cursor.offset += len(chunk)
 

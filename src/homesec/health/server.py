@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class HealthServer:
     """HTTP server for health checks.
-    
+
     Provides /health endpoint returning component status.
     """
 
@@ -26,26 +26,26 @@ class HealthServer:
         port: int = 8080,
     ) -> None:
         """Initialize health server.
-        
+
         Args:
             host: Host to bind to
             port: Port to bind to
         """
         self.host = host
         self.port = port
-        
+
         # Components to check (set via set_components)
         self._state_store: StateStore | None = None
         self._storage: StorageBackend | None = None
         self._notifier: Notifier | None = None
         self._sources: list[ClipSource] = []
         self._mqtt_is_critical = False
-        
+
         # Server state
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
-        
+
         logger.info("HealthServer initialized: %s:%d", host, port)
 
     def set_components(
@@ -58,7 +58,7 @@ class HealthServer:
         mqtt_is_critical: bool = False,
     ) -> None:
         """Set components to check.
-        
+
         Args:
             state_store: State store to ping
             storage: Storage backend to ping
@@ -76,24 +76,24 @@ class HealthServer:
         """Start HTTP server."""
         self._app = web.Application()
         self._app.router.add_get("/health", self._health_handler)
-        
+
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
-        
+
         self._site = web.TCPSite(self._runner, self.host, self.port)
         await self._site.start()
-        
+
         logger.info("HealthServer started: http://%s:%d/health", self.host, self.port)
 
     async def stop(self) -> None:
         """Stop HTTP server."""
         if self._runner:
             await self._runner.cleanup()
-        
+
         self._app = None
         self._runner = None
         self._site = None
-        
+
         logger.info("HealthServer stopped")
 
     async def _health_handler(self, request: web.Request) -> web.Response:
@@ -145,7 +145,7 @@ class HealthServer:
         """Check if all clip sources are healthy."""
         if not self._sources:
             return True  # No sources configured
-        
+
         # All sources must be healthy
         return all(source.is_healthy() for source in self._sources)
 
@@ -159,12 +159,14 @@ class HealthServer:
         for source in self._sources:
             camera_name = getattr(source, "camera_name", "unknown")
             last_heartbeat = source.last_heartbeat()
-            details.append({
-                "name": camera_name,
-                "healthy": source.is_healthy(),
-                "last_heartbeat": last_heartbeat,
-                "last_heartbeat_age_s": round(current_time - last_heartbeat, 3),
-            })
+            details.append(
+                {
+                    "name": camera_name,
+                    "healthy": source.is_healthy(),
+                    "last_heartbeat": last_heartbeat,
+                    "last_heartbeat_age_s": round(current_time - last_heartbeat, 3),
+                }
+            )
         return details
 
     async def _check_component(
@@ -183,38 +185,38 @@ class HealthServer:
 
     def _compute_status(self, checks: dict[str, bool]) -> str:
         """Compute overall health status.
-        
+
         Args:
             checks: Dict of component check results
-            
+
         Returns:
             "healthy", "degraded", or "unhealthy"
         """
         # Critical checks (unhealthy if fail)
         if not checks["sources"]:
             return "unhealthy"
-        
+
         if not checks["storage"]:
             return "unhealthy"
-        
+
         # MQTT can be critical (configurable)
         if not checks["mqtt"] and self._mqtt_is_critical:
             return "unhealthy"
-        
+
         # Non-critical checks (degraded if fail)
         if not checks["db"] or not checks["mqtt"]:
             return "degraded"
-        
+
         return "healthy"
 
     def _compute_warnings(self) -> list[str]:
         """Generate warnings for stale heartbeats.
-        
+
         Returns:
             List of warning messages
         """
         warnings: list[str] = []
-        
+
         # Check source heartbeats (warn if > 2 minutes)
         current_time = time.monotonic()
         for source in self._sources:
@@ -222,5 +224,5 @@ class HealthServer:
             if heartbeat_age > 120:  # 2 minutes
                 camera_name = getattr(source, "camera_name", "unknown")
                 warnings.append(f"source_{camera_name}_heartbeat_stale")
-        
+
         return warnings

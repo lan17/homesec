@@ -54,8 +54,7 @@ def minimal_config() -> dict[str, object]:
         "filter": {
             "plugin": "yolo",
             "max_workers": 1,
-            "config": {
-            },
+            "config": {},
         },
         "vlm": {
             "backend": "openai",

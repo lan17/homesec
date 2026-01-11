@@ -4,11 +4,9 @@
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 
-HomeSec is a pluggable, async pipeline for home security cameras. It records
-short clips, runs object detection, optionally calls a vision-language model
-(VLM) for a structured summary, and sends alerts via MQTT or email. The design
-leans toward reliability: clips land on disk first, state/event writes are
-best-effort, and non-critical stages can fail without losing the alert.
+HomeSec is a self-hosted, extensible network video recorder that puts you in control. Store clips wherever you want, analyze them with AI, and get smart notifications—all while keeping your footage private and off third-party clouds.
+
+Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model (VLM) for a structured summary, and sends alerts via MQTT or email. The design leans toward reliability: clips land on disk first, state/event writes are best-effort, and non-critical stages can fail without losing the alert.
 
 ## Highlights
 
@@ -35,32 +33,42 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 
 ### Requirements
 
-- Python 3.10+ (newest available is best; 3.14 is fine if your deps support it)
-- ffmpeg in PATH (required for RTSP source)
-- Postgres for state/events (`make db-up` starts a local instance). The pipeline
-  continues if the DB is down, but a DSN is still required.
+- Docker and Docker Compose
 - Optional: MQTT broker, Dropbox credentials, OpenAI-compatible API key
 
 ### Setup
 
-1. Install dependencies:
-   `uv sync`
-2. Create a config file:
-   - Start from `config/example.yaml` or `config/sample.yaml`
-3. Set environment variables (use `.env.example` as a template):
-   `cp .env.example .env`
-4. Start Postgres:
-   `make db-up`
-5. Validate config:
-   `uv run python -m homesec.cli validate --config config/example.yaml`
-6. Run:
-   `uv run python -m homesec.cli run --config config/example.yaml --log_level INFO`
+1. Create a config file:
+   ```bash
+   cp config/example.yaml config/config.yaml
+   # Edit config/config.yaml with your settings
+   ```
+2. Set environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+3. Start HomeSec + Postgres:
+   ```bash
+   make up
+   ```
+4. Stop:
+   ```bash
+   make down
+   ```
 
-Tip: `make homesec` loads `.env` and runs `config/production.yaml`.
+### Running without Docker
+
+If you prefer to run locally:
+
+1. Install Python 3.10+ and ffmpeg
+2. `uv sync`
+3. `make db` (starts Postgres)
+4. `make run`
 
 ## Configuration
 
-Configs are YAML and validated with Pydantic. Start with any file in `config/`.
+Configs are YAML and validated with Pydantic. See `config/example.yaml` for all options.
 
 Minimal example (RTSP + Dropbox + MQTT):
 
@@ -120,8 +128,8 @@ per_camera_alert:
 A few things worth knowing:
 - Secrets never go in YAML. Use env var names (`*_env`) and set values in your shell or `.env`.
 - At least one notifier must be enabled (`mqtt` or `sendgrid_email`).
-- Built-in YOLO classes: `person`, `bird`, `cat`, `dog`, `horse`, `sheep`, `cow`,
-  `elephant`, `bear`, `zebra`, `giraffe`.
+- Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`,
+  `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
 - Local storage for development:
 
 ```yaml
@@ -159,11 +167,11 @@ Extension points (all pluggable):
 ## CLI
 
 - Run the pipeline:
-  `uv run python -m homesec.cli run --config config/example.yaml --log_level INFO`
+  `uv run python -m homesec.cli run --config config/config.yaml --log_level INFO`
 - Validate config:
-  `uv run python -m homesec.cli validate --config config/example.yaml`
+  `uv run python -m homesec.cli validate --config config/config.yaml`
 - Cleanup (reanalyze and optionally delete empty clips):
-  `uv run python -m homesec.cli cleanup --config config/example.yaml --older_than_days 7 --dry_run True`
+  `uv run python -m homesec.cli cleanup --config config/config.yaml --older_than_days 7 --dry_run True`
 
 ## Built-in plugins
 
@@ -214,7 +222,7 @@ my_filters = "my_package.filters.custom"
 
 - Health endpoint: `GET /health` (configurable in `health.host`/`health.port`)
 - Optional telemetry logs to Postgres when `DB_DSN` is set:
-  - Start local DB: `make db-up`
+  - Start local DB: `make db`
   - Run migrations: `make db-migrate`
 
 ## Development

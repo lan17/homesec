@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel
 
@@ -93,9 +94,7 @@ def load_vlm_plugin(config: VLMConfig) -> VLMAnalyzer:
 
     if plugin_name not in VLM_REGISTRY:
         available = ", ".join(sorted(VLM_REGISTRY.keys()))
-        raise ValueError(
-            f"Unknown VLM plugin: '{plugin_name}'. Available: {available}"
-        )
+        raise ValueError(f"Unknown VLM plugin: '{plugin_name}'. Available: {available}")
 
     plugin = VLM_REGISTRY[plugin_name]
 

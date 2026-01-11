@@ -9,10 +9,8 @@ from pydantic import BaseModel, Field, model_validator
 from homesec.models.filter import FilterConfig
 from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSPSourceConfig
 from homesec.models.vlm import (
-    OpenAILLMConfig,
     RiskLevel,
     VLMConfig,
-    VLMPreprocessConfig,
 )
 
 
@@ -40,7 +38,7 @@ class AlertPolicyConfig(BaseModel):
     config: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_alert_policy(self) -> "AlertPolicyConfig":
+    def _validate_alert_policy(self) -> AlertPolicyConfig:
         if self.backend == "default":
             DefaultAlertPolicySettings.model_validate(self.config)
         return self
@@ -86,7 +84,7 @@ class StorageConfig(BaseModel):
     paths: StoragePathsConfig = Field(default_factory=StoragePathsConfig)
 
     @model_validator(mode="after")
-    def _validate_builtin_backends(self) -> "StorageConfig":
+    def _validate_builtin_backends(self) -> StorageConfig:
         """Validate that built-in backends have their required config.
 
         Third-party backends are validated later in create_storage().
@@ -117,7 +115,7 @@ class StateStoreConfig(BaseModel):
     dsn: str | None = None
 
     @model_validator(mode="after")
-    def _validate_backend(self) -> "StateStoreConfig":
+    def _validate_backend(self) -> StateStoreConfig:
         if not (self.dsn_env or self.dsn):
             raise ValueError("state_store.dsn_env or state_store.dsn required for postgres")
         return self
@@ -174,7 +172,7 @@ class SendGridEmailConfig(BaseModel):
         "<p><strong>Activity:</strong> {activity_type}</p>"
         "<p><strong>Reason:</strong> {notify_reason}</p>"
         "<p><strong>Summary:</strong> {summary}</p>"
-        "<p><strong>View:</strong> <a href=\"{view_url}\">{view_url}</a></p>"
+        '<p><strong>View:</strong> <a href="{view_url}">{view_url}</a></p>'
         "<p><strong>Storage:</strong> {storage_uri}</p>"
         "<p><strong>Time:</strong> {ts}</p>"
         "<p><strong>Upload failed:</strong> {upload_failed}</p>"
@@ -186,7 +184,7 @@ class SendGridEmailConfig(BaseModel):
     api_base: str = "https://api.sendgrid.com/v3"
 
     @model_validator(mode="after")
-    def _validate_templates(self) -> "SendGridEmailConfig":
+    def _validate_templates(self) -> SendGridEmailConfig:
         if not self.text_template and not self.html_template:
             raise ValueError("sendgrid_email requires at least one of text_template/html_template")
         return self
@@ -245,9 +243,7 @@ class CameraSourceConfig(BaseModel):
             return data
         source_type = data.get("type")
         raw_config = data.get("config")
-        if isinstance(
-            raw_config, (RTSPSourceConfig, LocalFolderSourceConfig, FtpSourceConfig)
-        ):
+        if isinstance(raw_config, (RTSPSourceConfig, LocalFolderSourceConfig, FtpSourceConfig)):
             return data
 
         config_data = raw_config or {}
@@ -262,7 +258,7 @@ class CameraSourceConfig(BaseModel):
         return updated
 
     @model_validator(mode="after")
-    def _validate_source_config(self) -> "CameraSourceConfig":
+    def _validate_source_config(self) -> CameraSourceConfig:
         match self.type:
             case "rtsp":
                 if not isinstance(self.config, RTSPSourceConfig):
@@ -308,13 +304,13 @@ class Config(BaseModel):
     per_camera_alert: dict[str, AlertPolicyOverrides] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_notifiers(self) -> "Config":
+    def _validate_notifiers(self) -> Config:
         if not self.notifiers:
             raise ValueError("notifiers must include at least one notifier")
         return self
 
     @model_validator(mode="after")
-    def _validate_builtin_plugin_configs(self) -> "Config":
+    def _validate_builtin_plugin_configs(self) -> Config:
         """Validate built-in plugin configs for early error detection.
 
         Third-party plugin configs are validated later during plugin loading.

@@ -83,9 +83,11 @@ class LocalStorage(StorageBackend):
 
 # Plugin registration
 from typing import cast
+
 from pydantic import BaseModel
-from homesec.plugins.storage import StoragePlugin, storage_plugin
+
 from homesec.interfaces import StorageBackend
+from homesec.plugins.storage import StoragePlugin, storage_plugin
 
 
 @storage_plugin(name="local")

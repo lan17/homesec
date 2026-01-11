@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: homesec
+          POSTGRES_USER: homesec
+          POSTGRES_PASSWORD: homesec
+        ports:
+          - "5432:5432"
+        # No health check - Postgres boots while lint/typecheck run
+
+    env:
+      DB_DSN: postgresql+asyncpg://homesec:homesec@localhost:5432/homesec
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv and Python
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock') }}
+
+      - name: Sync dependencies
+        run: uv sync
+
+      # Lint and typecheck run while Postgres boots
+      - name: Lint
+        run: make lint
+
+      - name: Type check
+        run: make typecheck
+
+      # Wait for Postgres before migrations
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U homesec && break
+            echo "Waiting for Postgres..."
+            sleep 1
+          done
+
+      - name: Run migrations
+        run: uv run alembic -c alembic.ini upgrade head
+
+      - name: Test
+        run: make test

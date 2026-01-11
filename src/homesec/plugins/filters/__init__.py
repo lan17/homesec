@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel
 
@@ -93,9 +94,7 @@ def load_filter_plugin(config: FilterConfig) -> ObjectFilter:
 
     if plugin_name not in FILTER_REGISTRY:
         available = ", ".join(sorted(FILTER_REGISTRY.keys()))
-        raise ValueError(
-            f"Unknown filter plugin: '{plugin_name}'. Available: {available}"
-        )
+        raise ValueError(f"Unknown filter plugin: '{plugin_name}'. Available: {available}")
 
     plugin = FILTER_REGISTRY[plugin_name]
 

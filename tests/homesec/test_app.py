@@ -19,10 +19,9 @@ from homesec.models.config import (
 )
 from homesec.models.filter import FilterConfig, YoloFilterSettings
 from homesec.models.source import LocalFolderSourceConfig
-from homesec.models.vlm import OpenAILLMConfig, VLMConfig
 from homesec.models.storage import StorageUploadResult
-from homesec.plugins.notifiers import MultiplexNotifier
-from homesec.plugins.notifiers import NotifierPlugin, NOTIFIER_REGISTRY
+from homesec.models.vlm import OpenAILLMConfig, VLMConfig
+from homesec.plugins.notifiers import NOTIFIER_REGISTRY, MultiplexNotifier, NotifierPlugin
 
 
 class _StubStorage:
@@ -160,7 +159,7 @@ async def test_application_wires_pipeline_and_health(monkeypatch: pytest.MonkeyP
     assert app._health_server is not None
     assert app._sources
     for source in app._sources:
-        callback = getattr(source, "_callback")
+        callback = source._callback
         assert callback is not None
         assert getattr(callback, "__self__", None) is app._pipeline
         assert getattr(callback, "__func__", None) is app._pipeline.on_new_clip.__func__

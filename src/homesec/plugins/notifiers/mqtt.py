@@ -3,29 +3,28 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import threading
 
 import paho.mqtt.client as mqtt
 
+from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
 from homesec.models.config import MQTTConfig
-from homesec.interfaces import Notifier
 
 logger = logging.getLogger(__name__)
 
 
 class MQTTNotifier(Notifier):
     """MQTT notifier for Home Assistant alerts.
-    
+
     Publishes alert messages to configured topics with QoS settings.
     """
 
     def __init__(self, config: MQTTConfig) -> None:
         """Initialize MQTT notifier with config validation.
-        
+
         Args:
             config: MQTTConfig instance
         """
@@ -35,11 +34,11 @@ class MQTTNotifier(Notifier):
         self.qos = int(config.qos)
         self.retain = bool(config.retain)
         self.connection_timeout = float(config.connection_timeout)
-        
+
         # Get credentials from env if provided
         self.username: str | None = None
         self.password: str | None = None
-        
+
         if config.auth and config.auth.username_env:
             username_var = config.auth.username_env
             self.username = os.getenv(username_var)
@@ -51,13 +50,13 @@ class MQTTNotifier(Notifier):
             self.password = os.getenv(password_var)
             if not self.password:
                 logger.warning("MQTT password not found in env: %s", password_var)
-        
+
         # Initialize MQTT client
         self.client = mqtt.Client()
-        
+
         if self.username and self.password:
             self.client.username_pw_set(self.username, self.password)
-        
+
         # Connection state
         self._connected = False
         self._connected_event = threading.Event()
@@ -95,13 +94,13 @@ class MQTTNotifier(Notifier):
     async def send(self, alert: Alert) -> None:
         """Send alert notification to MQTT topic."""
         await self._ensure_connected()
-        
+
         # Format topic
         topic = self.topic_template.format(camera_name=alert.camera_name)
-        
+
         # Serialize alert to JSON
         payload = alert.model_dump_json()
-        
+
         # Publish message
         await asyncio.to_thread(
             self._publish,
@@ -110,7 +109,7 @@ class MQTTNotifier(Notifier):
             self.qos,
             self.retain,
         )
-        
+
         logger.info(
             "Published alert to MQTT: topic=%s, clip_id=%s",
             topic,
@@ -153,9 +152,7 @@ class MQTTNotifier(Notifier):
         if self._connected:
             return
         # Wait for connection with timeout
-        connected = await asyncio.to_thread(
-            self._connected_event.wait, self.connection_timeout
-        )
+        connected = await asyncio.to_thread(self._connected_event.wait, self.connection_timeout)
         if not connected or not self._connected:
             raise RuntimeError(
                 f"MQTT broker not connected after {self.connection_timeout}s timeout"
@@ -164,9 +161,11 @@ class MQTTNotifier(Notifier):
 
 # Plugin registration
 from typing import cast
+
 from pydantic import BaseModel
-from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
+
 from homesec.interfaces import Notifier
+from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
 
 
 @notifier_plugin(name="mqtt")

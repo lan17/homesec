@@ -16,8 +16,8 @@ from homesec.models.clip import Clip
 from homesec.models.config import Config
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
-from homesec.repository import ClipRepository
 from homesec.plugins.notifiers.multiplex import NotifierEntry
+from homesec.repository import ClipRepository
 from homesec.storage_paths import build_clip_path
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ class UploadOutcome:
 
 class ClipPipeline:
     """Orchestrates clip processing through all pipeline stages.
-    
+
     Implements error-as-value pattern: stage methods return Result | Error
     instead of raising. This enables partial failures (e.g., upload fails
     but filter+notify still run).
@@ -56,7 +56,7 @@ class ClipPipeline:
         filter_plugin: ObjectFilter,
         vlm_plugin: VLMAnalyzer,
         notifier: Notifier,
-        alert_policy: "AlertPolicy",
+        alert_policy: AlertPolicy,
         notifier_entries: list[NotifierEntry] | None = None,
     ) -> None:
         """Initialize pipeline with all dependencies."""
@@ -66,9 +66,7 @@ class ClipPipeline:
         self._filter = filter_plugin
         self._vlm = vlm_plugin
         self._notifier = notifier
-        self._notifier_entries = self._resolve_notifier_entries(
-            notifier, notifier_entries
-        )
+        self._notifier_entries = self._resolve_notifier_entries(notifier, notifier_entries)
         self._alert_policy = alert_policy
 
         # Track in-flight processing
@@ -79,7 +77,7 @@ class ClipPipeline:
         self._sem_upload = asyncio.Semaphore(config.concurrency.upload_workers)
         self._sem_filter = asyncio.Semaphore(config.concurrency.filter_workers)
         self._sem_vlm = asyncio.Semaphore(config.concurrency.vlm_workers)
-        
+
         # Event loop for thread-safe callback handling
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -95,7 +93,7 @@ class ClipPipeline:
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Set event loop for thread-safe callback handling.
-        
+
         Must be called before registering with ClipSource if source
         runs in a different thread.
         """
@@ -119,7 +117,7 @@ class ClipPipeline:
 
     def on_new_clip(self, clip: Clip) -> None:
         """Callback for ClipSource when new clip is ready.
-        
+
         Thread-safe: can be called from any thread. Uses stored event loop
         if available, otherwise tries to get current loop.
         """
@@ -146,7 +144,7 @@ class ClipPipeline:
 
     async def _process_clip(self, clip: Clip) -> None:
         """Process a single clip through all stages.
-        
+
         Flow:
         1. Parallel: upload + filter
         2. Conditional: VLM (if filter detects trigger classes)
@@ -214,9 +212,7 @@ class ClipPipeline:
                             analysis_result.activity_type,
                         )
                     case _:
-                        raise TypeError(
-                            f"Unexpected VLM result type: {type(vlm_result).__name__}"
-                        )
+                        raise TypeError(f"Unexpected VLM result type: {type(vlm_result).__name__}")
             else:
                 await self._repository.record_vlm_skipped(
                     clip.clip_id,
@@ -286,8 +282,7 @@ class ClipPipeline:
         op: Callable[[], Awaitable[TResult]],
         on_attempt_start: Callable[[int], Awaitable[None]] | None = None,
         on_attempt_success: Callable[[TResult, int, int], Awaitable[None]] | None = None,
-        on_attempt_failure: Callable[[Exception, int, bool, int], Awaitable[None]]
-        | None = None,
+        on_attempt_failure: Callable[[Exception, int, bool, int], Awaitable[None]] | None = None,
     ) -> TResult:
         """Run stage with retry logic and event emission."""
         max_attempts = max(1, int(self._config.retry.max_attempts))
@@ -432,9 +427,7 @@ class ClipPipeline:
 
         async def attempt() -> AnalysisResult:
             async with self._sem_vlm:
-                return await self._vlm.analyze(
-                    clip.local_path, filter_result, self._config.vlm
-                )
+                return await self._vlm.analyze(clip.local_path, filter_result, self._config.vlm)
 
         async def on_attempt_start(attempt_num: int) -> None:
             await self._repository.record_vlm_started(clip.clip_id, attempt=attempt_num)
@@ -501,10 +494,7 @@ class ClipPipeline:
             vlm_failed=vlm_failed,
         )
 
-        tasks = [
-            self._notify_with_entry(entry, alert)
-            for entry in self._notifier_entries
-        ]
+        tasks = [self._notify_with_entry(entry, alert) for entry in self._notifier_entries]
         results = await asyncio.gather(*tasks)
 
         errors: list[NotifyError] = []
@@ -515,9 +505,7 @@ class ClipPipeline:
                 case None:
                     continue
                 case _:
-                    raise TypeError(
-                        f"Unexpected notify result type: {type(result).__name__}"
-                    )
+                    raise TypeError(f"Unexpected notify result type: {type(result).__name__}")
 
         if errors:
             return errors[0]
@@ -530,9 +518,7 @@ class ClipPipeline:
     ) -> None | NotifyError:
         notifier_name = entry.name
 
-        async def on_attempt_success(
-            _result: object, attempt_num: int, _duration_ms: int
-        ) -> None:
+        async def on_attempt_success(_result: object, attempt_num: int, _duration_ms: int) -> None:
             await self._repository.record_notification_sent(
                 alert.clip_id,
                 notifier_name=notifier_name,
@@ -609,12 +595,9 @@ class ClipPipeline:
                 storage_uri = outcome.storage_uri
                 view_url = outcome.view_url
             case _:
-                raise TypeError(
-                    f"Unexpected upload result type: {type(upload_result).__name__}"
-                )
+                raise TypeError(f"Unexpected upload result type: {type(upload_result).__name__}")
         logger.info("Upload complete for %s: %s", clip.clip_id, storage_uri)
         return storage_uri, view_url, False
-
 
     async def shutdown(self, timeout: float = 30.0) -> None:
         """Graceful shutdown of pipeline.

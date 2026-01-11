@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import pytest
 
@@ -13,7 +13,9 @@ from homesec.models.clip import Clip
 from homesec.sources import FtpSource, FtpSourceConfig, LocalFolderSource, LocalFolderSourceConfig
 
 
-async def _wait_for(condition: Callable[[], bool], timeout_s: float = 1.0, interval_s: float = 0.05) -> None:
+async def _wait_for(
+    condition: Callable[[], bool], timeout_s: float = 1.0, interval_s: float = 0.05
+) -> None:
     start = time.monotonic()
     while True:
         if condition():
@@ -34,26 +36,22 @@ class TestLocalFolderSource:
         )
 
     @pytest.mark.asyncio
-
-
     async def test_callback_registration(self, tmp_path: Path) -> None:
         """Test callback can be registered."""
         # Given a LocalFolderSource
         source = LocalFolderSource(self._config(tmp_path), camera_name="test")
-        
+
         called = []
-        
+
         def callback(clip: Clip) -> None:
             called.append(clip)
-        
+
         # When registering a callback
         source.register_callback(callback)
         # Then the callback is stored
         assert source._callback is callback
 
     @pytest.mark.asyncio
-
-
     async def test_health_check_before_start(self, tmp_path: Path) -> None:
         """Test health check returns True when dir exists."""
         # Given a LocalFolderSource with existing dir
@@ -64,54 +62,48 @@ class TestLocalFolderSource:
         assert healthy
 
     @pytest.mark.asyncio
-
-
     async def test_health_check_missing_dir(self, tmp_path: Path) -> None:
         """Test health check returns False when dir is missing."""
         # Given a LocalFolderSource with missing dir
         watch_dir = tmp_path / "nonexistent"
         source = LocalFolderSource(self._config(watch_dir), camera_name="test")
-        
+
         # When the dir is removed
         watch_dir.rmdir()
-        
+
         # Then health is False
         assert not source.is_healthy()
 
     @pytest.mark.asyncio
-
-
     async def test_heartbeat_updates(self, tmp_path: Path) -> None:
         """Test heartbeat timestamp updates during polling."""
         # Given a LocalFolderSource
         source = LocalFolderSource(self._config(tmp_path, poll_interval=0.1), camera_name="test")
-        
+
         initial_heartbeat = source.last_heartbeat()
-        
+
         # When the source runs briefly
         await source.start()
         await _wait_for(lambda: source.last_heartbeat() > initial_heartbeat, timeout_s=1.0)
-        
+
         # Then heartbeat is updated
         assert source.last_heartbeat() > initial_heartbeat
-        
+
         # Cleanup
         await source.shutdown()
 
     @pytest.mark.asyncio
-
-
     async def test_start_stop_lifecycle(self, tmp_path: Path) -> None:
         """Test source can be started and stopped."""
         # Given a LocalFolderSource
         source = LocalFolderSource(self._config(tmp_path, poll_interval=0.1), camera_name="test")
-        
+
         # When first created
         initial_thread = source._task
 
         # Then it starts with no thread
         assert initial_thread is None
-        
+
         # When starting
         await source.start()
 
@@ -119,7 +111,7 @@ class TestLocalFolderSource:
         assert source._task is not None
         assert not source._task.done()
         assert source.is_healthy()
-        
+
         # When stopping
         await source.shutdown()
 
@@ -127,119 +119,109 @@ class TestLocalFolderSource:
         assert source._task is None
 
     @pytest.mark.asyncio
-
-
     async def test_detects_new_clips(self, tmp_path: Path) -> None:
         """Test source detects new .mp4 files and triggers callback."""
         # Given a LocalFolderSource with a registered callback
         source = LocalFolderSource(self._config(tmp_path, poll_interval=0.1), camera_name="test")
-        
+
         detected_clips: list[Clip] = []
-        
+
         def callback(clip: Clip) -> None:
             detected_clips.append(clip)
-        
+
         source.register_callback(callback)
         await source.start()
-        
+
         # When a new .mp4 file is created
         clip_file = tmp_path / "test_clip.mp4"
         clip_file.write_bytes(b"fake video data")
-        
+
         await _wait_for(lambda: len(detected_clips) == 1, timeout_s=2.0)
-        
+
         # Then the clip is detected
         assert len(detected_clips) == 1
         assert detected_clips[0].clip_id == "test_clip"
         assert detected_clips[0].camera_name == "test"
         assert detected_clips[0].local_path == clip_file
         assert detected_clips[0].source_type == "local_folder"
-        
+
         # Cleanup
         await source.shutdown()
 
     @pytest.mark.asyncio
-
-
     async def test_ignores_non_video_files(self, tmp_path: Path) -> None:
         """Test source ignores non-.mp4 files."""
         # Given a LocalFolderSource
         source = LocalFolderSource(self._config(tmp_path, poll_interval=0.1), camera_name="test")
-        
+
         detected_clips: list[Clip] = []
         source.register_callback(lambda c: detected_clips.append(c))
         await source.start()
         initial_heartbeat = source.last_heartbeat()
-        
+
         # When non-video files are created
         (tmp_path / "test.txt").write_text("not a video")
         (tmp_path / "test.jpg").write_bytes(b"fake image")
-        
+
         # Then no clips are detected
         await _wait_for(lambda: source.last_heartbeat() > initial_heartbeat, timeout_s=1.0)
         assert len(detected_clips) == 0
-        
+
         await source.shutdown()
 
     @pytest.mark.asyncio
-
-
     async def test_does_not_detect_same_file_twice(self, tmp_path: Path) -> None:
         """Test source does not trigger callback for same file twice."""
         # Given a LocalFolderSource
         source = LocalFolderSource(self._config(tmp_path, poll_interval=0.1), camera_name="test")
-        
+
         detected_clips: list[Clip] = []
         source.register_callback(lambda c: detected_clips.append(c))
-        
+
         # When a file exists before start
         clip_file = tmp_path / "test_clip.mp4"
         clip_file.write_bytes(b"fake video data")
-        
+
         await source.start()
-        
+
         await _wait_for(lambda: len(detected_clips) == 1, timeout_s=2.0)
-        
+
         # Then it is only detected once
         assert len(detected_clips) == 1
-        
+
         await source.shutdown()
 
     @pytest.mark.asyncio
-
-
     async def test_callback_exception_does_not_crash(self, tmp_path: Path) -> None:
         """Test source continues running if callback raises exception."""
         # Given a LocalFolderSource with a failing callback
         source = LocalFolderSource(self._config(tmp_path, poll_interval=0.1), camera_name="test")
-        
+
         call_count = []
-        
+
         def bad_callback(clip: Clip) -> None:
             call_count.append(clip)
             raise ValueError("Simulated error")
-        
+
         source.register_callback(bad_callback)
         await source.start()
-        
+
         # When multiple clips are created
         (tmp_path / "clip1.mp4").write_bytes(b"video")
         await _wait_for(lambda: len(call_count) >= 1, timeout_s=2.0)
-        
+
         (tmp_path / "clip2.mp4").write_bytes(b"video")
         await _wait_for(lambda: len(call_count) >= 2, timeout_s=2.0)
-        
+
         # Then both clips are detected despite the callback error
         assert len(call_count) == 2
-        
+
         # Then source remains healthy
         assert source.is_healthy()
-        
+
         await source.shutdown()
 
     @pytest.mark.asyncio
-
-
     async def test_stability_threshold_delays_detection(self, tmp_path: Path) -> None:
         """Test files are ignored until they stabilize."""
         # Given a LocalFolderSource with a stability threshold
@@ -274,8 +256,6 @@ class TestFtpSource:
     """Test FtpSource behavior."""
 
     @pytest.mark.asyncio
-
-
     async def test_rejects_non_matching_extension(self, tmp_path: Path) -> None:
         """Rejects unsupported file extensions and deletes when configured."""
         # Given a FtpSource that deletes non-matching uploads
@@ -298,8 +278,6 @@ class TestFtpSource:
         assert not bad_file.exists()
 
     @pytest.mark.asyncio
-
-
     async def test_accepts_allowed_extension(self, tmp_path: Path) -> None:
         """Accepts allowed extensions and emits clips."""
         # Given a FtpSource that accepts .mp4
@@ -319,8 +297,6 @@ class TestFtpSource:
         assert emitted[0].source_type == "ftp"
 
     @pytest.mark.asyncio
-
-
     async def test_incomplete_upload_deletes_when_enabled(self, tmp_path: Path) -> None:
         """Deletes incomplete uploads when configured."""
         # Given a FtpSource with delete_incomplete enabled

@@ -5,21 +5,14 @@ from __future__ import annotations
 import asyncio
 import ftplib
 import time
+from collections.abc import Callable
 from pathlib import Path
 from threading import Event
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import pytest
 
 from homesec.config import load_config_from_dict
-from tests.homesec.mocks import (
-    MockEventStore,
-    MockFilter,
-    MockNotifier,
-    MockStateStore,
-    MockStorage,
-    MockVLM,
-)
 from homesec.models.config import DefaultAlertPolicySettings
 from homesec.models.filter import FilterResult
 from homesec.pipeline import ClipPipeline
@@ -30,6 +23,14 @@ from homesec.sources import (
     FtpSourceConfig,
     LocalFolderSource,
     LocalFolderSourceConfig,
+)
+from tests.homesec.mocks import (
+    MockEventStore,
+    MockFilter,
+    MockNotifier,
+    MockStateStore,
+    MockStorage,
+    MockVLM,
 )
 
 if TYPE_CHECKING:
@@ -51,63 +52,65 @@ async def _wait_for(
 @pytest.fixture
 def integration_config() -> Config:
     """Create config for integration tests."""
-    return load_config_from_dict({
-        "version": 1,
-        "cameras": [
-            {
-                "name": "test_camera",
-                "source": {
-                    "type": "local_folder",
-                    "config": {
-                        "watch_dir": "recordings",
-                        "poll_interval": 0.1,
-                        "stability_threshold_s": 0.01,
+    return load_config_from_dict(
+        {
+            "version": 1,
+            "cameras": [
+                {
+                    "name": "test_camera",
+                    "source": {
+                        "type": "local_folder",
+                        "config": {
+                            "watch_dir": "recordings",
+                            "poll_interval": 0.1,
+                            "stability_threshold_s": 0.01,
+                        },
                     },
+                }
+            ],
+            "storage": {
+                "backend": "dropbox",
+                "dropbox": {
+                    "root": "/homecam",
                 },
-            }
-        ],
-        "storage": {
-            "backend": "dropbox",
-            "dropbox": {
-                "root": "/homecam",
             },
-        },
-        "state_store": {
-            "dsn": "postgresql://user:pass@localhost/db",
-        },
-        "notifiers": [
-            {
-                "backend": "mqtt",
+            "state_store": {
+                "dsn": "postgresql://user:pass@localhost/db",
+            },
+            "notifiers": [
+                {
+                    "backend": "mqtt",
+                    "config": {
+                        "host": "localhost",
+                        "port": 1883,
+                    },
+                }
+            ],
+            "filter": {
+                "plugin": "yolo",
+                "max_workers": 1,
                 "config": {
-                    "host": "localhost",
-                    "port": 1883,
+                    "model_path": "yolov8n.pt",
                 },
-            }
-        ],
-        "filter": {
-            "plugin": "yolo",
-            "max_workers": 1,
-            "config": {
-                "model_path": "yolov8n.pt",
             },
-        },
-        "vlm": {
-            "backend": "openai",
-            "trigger_classes": ["person"],
-            "max_workers": 1,
-            "llm": {
-                "api_key_env": "OPENAI_API_KEY",
-                "model": "gpt-4o",
+            "vlm": {
+                "backend": "openai",
+                "trigger_classes": ["person"],
+                "max_workers": 1,
+                "llm": {
+                    "api_key_env": "OPENAI_API_KEY",
+                    "model": "gpt-4o",
+                },
             },
-        },
-        "alert_policy": {
-            "backend": "default",
-            "config": {
-                "min_risk_level": "low",
-                "notify_on_motion": False,
+            "alert_policy": {
+                "backend": "default",
+                "config": {
+                    "min_risk_level": "low",
+                    "notify_on_motion": False,
+                },
             },
-        },
-    })
+        }
+    )
 
 
 def make_alert_policy(config: Config) -> DefaultAlertPolicy:

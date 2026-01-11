@@ -59,16 +59,13 @@ def validate_plugin_names(
         errors.append(f"Unknown VLM plugin: {config.vlm.backend} (valid: {valid_vlms})")
 
     if valid_storage is not None and config.storage.backend not in valid_storage:
-        errors.append(
-            f"Unknown storage backend: {config.storage.backend} (valid: {valid_storage})"
-        )
+        errors.append(f"Unknown storage backend: {config.storage.backend} (valid: {valid_storage})")
 
     if valid_notifiers is not None:
         for notifier in config.notifiers:
             if notifier.backend not in valid_notifiers:
                 errors.append(
-                    "Unknown notifier backend: "
-                    f"{notifier.backend} (valid: {valid_notifiers})"
+                    f"Unknown notifier backend: {notifier.backend} (valid: {valid_notifiers})"
                 )
 
     if valid_alert_policies is not None:

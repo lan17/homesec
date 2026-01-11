@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+
 from pydantic import BaseModel
 
 from homesec.models.vlm import RiskLevel, SequenceAnalysis
+
 
 class AlertDecision(BaseModel):
     """Decision whether to send an alert for a clip."""

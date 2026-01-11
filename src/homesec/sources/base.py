@@ -6,11 +6,11 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from threading import Event, Thread
-from typing import Callable
 
-from homesec.models.clip import Clip
 from homesec.interfaces import ClipSource
+from homesec.models.clip import Clip
 
 logger = logging.getLogger(__name__)
 

@@ -23,6 +23,7 @@ from typing import Any, cast
 import cv2
 import numpy as np
 import numpy.typing as npt
+
 from homesec.models.clip import Clip
 from homesec.models.source import RTSPSourceConfig
 from homesec.sources.base import ThreadedClipSource
@@ -386,9 +387,7 @@ class RTSPSource(ThreadedClipSource):
         try:
             return shlex.join([str(x) for x in cmd])
         except Exception as exc:
-            logger.warning(
-                "Failed to format command with shlex.join: %s", exc, exc_info=True
-            )
+            logger.warning("Failed to format command with shlex.join: %s", exc, exc_info=True)
             return " ".join([str(x) for x in cmd])
 
     def detect_motion(self, frame: npt.NDArray[np.uint8]) -> bool:
@@ -469,7 +468,7 @@ class RTSPSource(ThreadedClipSource):
 
             if log_file:
                 try:
-                    with open(log_file, "r") as f:
+                    with open(log_file) as f:
                         error_lines = f.read()
                         if error_lines:
                             logger.warning("Recording error log:\n%s", error_lines[-1000:])
@@ -572,7 +571,7 @@ class RTSPSource(ThreadedClipSource):
                 logger.error("Recording process died immediately (exit code: %s)", proc.returncode)
                 logger.error("Check logs at: %s", stderr_log)
                 try:
-                    with open(stderr_log, "r") as f:
+                    with open(stderr_log) as f:
                         error_lines = f.read()
                     if error_lines:
                         logger.error("Error output: %s", error_lines[:500])
@@ -832,7 +831,9 @@ class RTSPSource(ThreadedClipSource):
             except Exception as exc:
                 logger.warning("Failed to close stderr log: %s", exc, exc_info=True)
             stderr_tail = _read_tail(stderr_log)
-            logger.error("Frame pipeline died immediately (%s, exit code: %s)", label, process.returncode)
+            logger.error(
+                "Frame pipeline died immediately (%s, exit code: %s)", label, process.returncode
+            )
             if stderr_tail:
                 logger.error("Frame pipeline stderr tail (%s):\n%s", label, stderr_tail)
             process = None
@@ -841,7 +842,9 @@ class RTSPSource(ThreadedClipSource):
 
         raise RuntimeError("Frame pipeline failed to start")
 
-    def _stop_process(self, proc: subprocess.Popen[bytes], name: str, terminate_timeout_s: float) -> None:
+    def _stop_process(
+        self, proc: subprocess.Popen[bytes], name: str, terminate_timeout_s: float
+    ) -> None:
         if proc.poll() is not None:
             return
         try:
@@ -890,7 +893,9 @@ class RTSPSource(ThreadedClipSource):
     def _start_frame_pipeline(self) -> None:
         self._stop_frame_pipeline()
 
-        self.frame_pipe, self._frame_pipe_stderr, self._frame_width, self._frame_height = self.get_frame_pipe()
+        self.frame_pipe, self._frame_pipe_stderr, self._frame_width, self._frame_height = (
+            self.get_frame_pipe()
+        )
         self._frame_size = int(self._frame_width) * int(self._frame_height)
         self._frame_queue = Queue(maxsize=self.frame_queue_size)
         self._frame_reader_stop = Event()
@@ -1168,13 +1173,20 @@ class RTSPSource(ThreadedClipSource):
                         self.recording_process is not None,
                     )
                     if self.frame_pipe and self.frame_pipe.poll() is not None:
-                        logger.error("Frame pipeline died! Exit code: %s", self.frame_pipe.returncode)
+                        logger.error(
+                            "Frame pipeline died! Exit code: %s", self.frame_pipe.returncode
+                        )
                         break
                     last_heartbeat = time.monotonic()
 
                 frame_count += 1
 
-                if not self._frame_queue or not self._frame_width or not self._frame_height or not self._frame_size:
+                if (
+                    not self._frame_queue
+                    or not self._frame_width
+                    or not self._frame_height
+                    or not self._frame_size
+                ):
                     break
 
                 try:

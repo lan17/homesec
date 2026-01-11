@@ -10,7 +10,7 @@ from homesec.models.clip import ClipStateData
 
 class MockStateStore:
     """Mock implementation of StateStore interface for testing.
-    
+
     Stores clip states in memory dict for test assertions.
     Supports configurable failure injection and delays.
     """
@@ -21,7 +21,7 @@ class MockStateStore:
         delay_s: float = 0.0,
     ) -> None:
         """Initialize mock state store.
-        
+
         Args:
             simulate_failure: If True, upsert/get operations raise RuntimeError
             delay_s: Artificial delay before returning

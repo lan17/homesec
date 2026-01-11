@@ -11,7 +11,7 @@ from homesec.models.filter import FilterOverrides, FilterResult
 
 class MockFilter:
     """Mock implementation of ObjectFilter interface for testing.
-    
+
     Supports configurable failure injection and delays to test
     concurrency and error handling scenarios.
     """
@@ -24,7 +24,7 @@ class MockFilter:
         plugin_name: str = "mock_filter",
     ) -> None:
         """Initialize mock filter.
-        
+
         Args:
             simulate_failure: If True, detect() raises FilterError
             delay_s: Artificial delay before returning result
