@@ -6,8 +6,29 @@ on:
   pull_request:
 
 jobs:
-  ci:
+  lint:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv and Python
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Lint
+        run: make lint
+
+      - name: Type check
+        run: make typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
     services:
       postgres:
         image: postgres:16-alpine
@@ -35,22 +56,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Show versions
-        run: |
-          uv --version
-          python --version
-
       - name: Sync dependencies
         run: uv sync
 
       - name: Run migrations
         run: uv run alembic -c alembic.ini upgrade head
-
-      - name: Lint
-        run: make lint
-
-      - name: Type check
-        run: make typecheck
 
       - name: Test
         run: make test
