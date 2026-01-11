@@ -40,7 +40,7 @@ jobs:
           key: venv-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock') }}
 
       - name: Sync dependencies
-        run: uv sync
+        run: uv sync --group dev
 
       # Lint and typecheck run while Postgres boots
       - name: Lint
