@@ -10,7 +10,7 @@ Under the hood, it's a pluggable async pipeline for home security cameras. It re
 
 ## Highlights
 
-- Bring your own input: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
+- Flexible video clip sources: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
 - Parallel upload + filter ([YOLOv8](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
 - OpenAI-compatible VLM analysis with structured output
 - Policy-driven alerts with per-camera overrides
