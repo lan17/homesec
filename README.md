@@ -1,5 +1,9 @@
 # HomeSec
 
+<p align="center">
+  <img src="logo.svg" alt="HomeSec Logo" width="200">
+</p>
+
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
@@ -23,19 +27,6 @@ best-effort, and non-critical stages can fail without losing the alert.
 
 ## Pipeline at a glance
 
-```mermaid
-flowchart LR
-    S[Sources: RTSP, FTP, Local] --> P[Clip Pipeline]
-    P --> UF[Upload + Filter in parallel]
-    UF --> SB[Storage backend: Dropbox, Local, Custom]
-    UF --> T{Trigger classes?}
-    T -->|Yes| V[VLM Analyzer]
-    T -->|No| AP[Alert Policy]
-    V --> AP
-    AP --> N[Notifiers: MQTT, Email, Custom]
-    P -.-> DB[Postgres state and events]
-```
-
 ```
 ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 ```
@@ -48,7 +39,7 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 
 ### Requirements
 
-- Python 3.10+ (newest available is best; 3.14 is fine if your deps support it)
+- Python 3.10+ (3.12 or 3.13 recommended)
 - ffmpeg in PATH (required for RTSP source)
 - Postgres for state/events (`make db-up` starts a local instance). The pipeline
   continues if the DB is down, but a DSN is still required.
@@ -133,8 +124,8 @@ per_camera_alert:
 A few things worth knowing:
 - Secrets never go in YAML. Use env var names (`*_env`) and set values in your shell or `.env`.
 - At least one notifier must be enabled (`mqtt` or `sendgrid_email`).
-- Built-in YOLO classes: `person`, `bird`, `cat`, `dog`, `horse`, `sheep`, `cow`,
-  `elephant`, `bear`, `zebra`, `giraffe`.
+- Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`,
+  `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
 - Local storage for development:
 
 ```yaml
@@ -168,13 +159,6 @@ Extension points (all pluggable):
 - VLM analyzers: OpenAI-compatible APIs or local models
 - Alert policies: per-camera rules and thresholds
 - Notifiers: MQTT, email, or anything else you can send from Python
-
-```mermaid
-flowchart LR
-    EP[Entry points + config] --> REG[Plugin registry]
-    REG --> IF[Interfaces: Filter, VLM, Storage, Notifier, Policy]
-    IF --> P[Clip Pipeline]
-```
 
 ## CLI
 
