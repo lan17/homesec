@@ -13,7 +13,7 @@
 # =============================================================================
 # Stage 1: Builder
 # =============================================================================
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,7 +47,7 @@ RUN uv sync --frozen --no-dev
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 # Install runtime dependencies
 # - ffmpeg: required for RTSP source video processing

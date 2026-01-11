@@ -17,7 +17,7 @@ jobs:
           POSTGRES_PASSWORD: homesec
         ports:
           - "5432:5432"
-        # No health check options - let Postgres boot while lint/typecheck run
+        # No health check - Postgres boots while lint/typecheck run
 
     env:
       DB_DSN: postgresql+asyncpg://homesec:homesec@localhost:5432/homesec
@@ -29,13 +29,20 @@ jobs:
       - name: Setup uv and Python
         uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock') }}
 
       - name: Sync dependencies
         run: uv sync
 
-      # Lint and typecheck run while Postgres boots in parallel
+      # Lint and typecheck run while Postgres boots
       - name: Lint
         run: make lint
 
