@@ -40,7 +40,8 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 
 1. Create a config file:
    ```bash
-   cp config/example.yaml config/production.yaml
+   cp config/example.yaml config/config.yaml
+   # Edit config/config.yaml with your settings
    ```
 2. Set environment variables:
    ```bash
@@ -67,7 +68,7 @@ If you prefer to run locally:
 
 ## Configuration
 
-Configs are YAML and validated with Pydantic. Start with any file in `config/`.
+Configs are YAML and validated with Pydantic. See `config/example.yaml` for all options.
 
 Minimal example (RTSP + Dropbox + MQTT):
 
@@ -166,11 +167,11 @@ Extension points (all pluggable):
 ## CLI
 
 - Run the pipeline:
-  `uv run python -m homesec.cli run --config config/example.yaml --log_level INFO`
+  `uv run python -m homesec.cli run --config config/config.yaml --log_level INFO`
 - Validate config:
-  `uv run python -m homesec.cli validate --config config/example.yaml`
+  `uv run python -m homesec.cli validate --config config/config.yaml`
 - Cleanup (reanalyze and optionally delete empty clips):
-  `uv run python -m homesec.cli cleanup --config config/example.yaml --older_than_days 7 --dry_run True`
+  `uv run python -m homesec.cli cleanup --config config/config.yaml --older_than_days 7 --dry_run True`
 
 ## Built-in plugins
 

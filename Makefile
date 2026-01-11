@@ -28,7 +28,7 @@ help:
 	@echo "    make publish       Build and upload to PyPI"
 
 # Config
-HOMESEC_CONFIG ?= config/production.yaml
+HOMESEC_CONFIG ?= config/config.yaml
 HOMESEC_LOG_LEVEL ?= INFO
 DOCKER_IMAGE ?= homesec
 DOCKER_TAG ?= latest

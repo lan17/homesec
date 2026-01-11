@@ -1,38 +1,94 @@
-# HomeSec Pipeline Configuration Example
-# See DESIGN.md for full documentation
+# HomeSec Configuration Example
+#
+# Copy this file and customize for your setup:
+#   cp config/example.yaml config/config.yaml
+#
+# All secrets should be stored in .env (see .env.example)
+# Reference them here using _env suffix (e.g., token_env: MY_TOKEN)
+#
+# Run with:
+#   homesec run --config config/config.yaml
 
 version: 1
 
+# =============================================================================
+# Cameras - Define your video sources
+# =============================================================================
 cameras:
+  # RTSP camera (IP cameras, NVRs)
   - name: front_door
     source:
       type: rtsp
       config:
+        # RTSP URL from environment variable (set in .env)
         rtsp_url_env: FRONT_DOOR_RTSP_URL
-#        detect_rtsp_url_env: FRONT_DOOR_RTSP_SUB_URL
+        # Optional: separate low-res stream for motion detection
+        # detect_rtsp_url_env: FRONT_DOOR_RTSP_SUB_URL
         output_dir: "./recordings"
-        pixel_threshold: 45
-        min_changed_pct: 1.0
-        blur_kernel: 5
-        stop_delay: 10
-        max_recording_s: 60
-        frame_timeout_s: 2.0
-        reconnect_backoff_s: 1.0
+        # Motion detection settings
+        pixel_threshold: 45        # Pixel difference threshold (0-255)
+        min_changed_pct: 1.0       # Min % of frame that must change
+        blur_kernel: 5             # Blur kernel size (reduces noise)
+        stop_delay: 10             # Seconds of no motion before stopping
+        max_recording_s: 60        # Max clip length
+        frame_timeout_s: 2.0       # Timeout waiting for frames
+        reconnect_backoff_s: 1.0   # Backoff between reconnects
 
+  # FTP server (receive uploads from cameras that support FTP)
+  - name: ftp_camera
+    source:
+      type: ftp
+      config:
+        host: "0.0.0.0"
+        port: 2121
+        root_dir: "./ftp_incoming"
+        anonymous: true
+        # For authenticated FTP:
+        # anonymous: false
+        # username_env: FTP_USERNAME
+        # password_env: FTP_PASSWORD
+
+  # Local folder (watch for new files)
+  - name: local_camera
+    source:
+      type: local_folder
+      config:
+        watch_dir: "./recordings"
+        poll_interval: 1.0           # Seconds between folder scans
+        stability_threshold_s: 1.0   # Wait for file to stop growing
+
+# =============================================================================
+# Storage - Where to upload processed clips
+# =============================================================================
 storage:
-  backend: dropbox
+  backend: dropbox  # Options: dropbox, local
+
+  # Dropbox storage
   dropbox:
     root: "/homecam"
+    # Simple token auth (get from Dropbox App Console)
     token_env: DROPBOX_TOKEN
-    app_key_env: DROPBOX_APP_KEY
-    app_secret_env: DROPBOX_APP_SECRET
-    refresh_token_env: DROPBOX_REFRESH_TOKEN
+    # OR OAuth refresh flow (for long-running apps)
+    # app_key_env: DROPBOX_APP_KEY
+    # app_secret_env: DROPBOX_APP_SECRET
+    # refresh_token_env: DROPBOX_REFRESH_TOKEN
     web_url_prefix: "https://www.dropbox.com/home"
 
-state_store:
-  dsn_env: DB_DSN
+  # Local storage (alternative to Dropbox)
+  # local:
+  #   root: "./storage"
 
+# =============================================================================
+# State Store - PostgreSQL for clip state tracking
+# =============================================================================
+state_store:
+  dsn_env: DB_DSN  # e.g., postgresql+asyncpg://user:pass@localhost:5432/homesec
+
+# =============================================================================
+# Notifiers - How to send alerts
+# =============================================================================
 notifiers:
+  # MQTT (for Home Assistant, Node-RED, etc.)
   - backend: mqtt
     config:
       host: "localhost"
@@ -43,6 +99,8 @@ notifiers:
       topic_template: "homecam/alerts/{camera_name}"
       qos: 1
       retain: false
+
+  # SendGrid email
   # - backend: sendgrid_email
   #   config:
   #     api_key_env: SENDGRID_API_KEY
@@ -50,36 +108,87 @@ notifiers:
   #     from_name: "HomeSec"
   #     to_emails: ["you@example.com"]
 
+# =============================================================================
+# Filter - Object detection to filter clips
+# =============================================================================
 filter:
-  plugin: "yolo"
-  max_workers: 4
+  plugin: yolo
+  max_workers: 4  # Parallel detection workers
   config:
-    # model_path defaults to yolo11n.pt (cached under ./yolo_cache)
-    classes: ["person", "animal"]
+    # Model downloads automatically to ./yolo_cache
+    # model_path: "yolo11n.pt"  # Default model
+    classes:
+      - person
+      - car
+      - truck
+      - motorcycle
+      - bicycle
+      - dog
+      - cat
     min_confidence: 0.5
-    sample_fps: 2
+    sample_fps: 2           # Frames per second to analyze
+    min_box_h_ratio: 0.03   # Min box height as ratio of frame
 
+# =============================================================================
+# VLM - Vision Language Model for scene analysis
+# =============================================================================
 vlm:
-  backend: "openai"
-  trigger_classes: ["person"]
+  backend: openai
+  trigger_classes: ["person"]  # Only run VLM if these detected
   max_workers: 2
   llm:
-    api_key_env: "OPENAI_API_KEY"
+    api_key_env: OPENAI_API_KEY
     model: "gpt-4o"
+    # For local/alternative providers:
+    # base_url: "http://localhost:1234/v1"
+    # model: "local-model-name"
   preprocessing:
-    max_frames: 10
-    max_size: 1024
-    quality: 85
+    max_frames: 10    # Max frames to send to VLM
+    max_size: 1024    # Max dimension (pixels)
+    quality: 85       # JPEG quality (1-100)
 
+# =============================================================================
+# Alert Policy - When to send notifications
+# =============================================================================
 alert_policy:
   backend: default
   enabled: true
   config:
-    min_risk_level: "medium"
-    notify_on_activity_types: []
-    notify_on_motion: false
+    min_risk_level: "medium"  # Options: low, medium, high, critical
+    notify_on_activity_types:
+      - person_at_door
+      - delivery
+      - suspicious
+    notify_on_motion: false   # Alert on any motion (no VLM required)
 
+# Per-camera overrides
 per_camera_alert:
   front_door:
     min_risk_level: "low"
-    notify_on_activity_types: ["person_at_door", "delivery"]
+    notify_on_activity_types:
+      - person_at_door
+      - delivery
+      - suspicious
+      - animal
+
+# =============================================================================
+# Advanced Settings (optional)
+# =============================================================================
+
+# Retry settings for transient failures
+# retry:
+#   max_attempts: 3
+#   backoff_s: 1.0
+
+# Concurrency limits
+# concurrency:
+#   max_clips_in_flight: 4
+#   upload_workers: 4
+#   filter_workers: 4
+#   vlm_workers: 2
+
+# Health check server
+# health:
+#   host: "0.0.0.0"
+#   port: 8080
+#   mqtt_is_critical: false
