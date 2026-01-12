@@ -1,6 +1,6 @@
 # HomeSec Development Guidelines
 
-**Last reviewed:** 2025-01-04
+**Last reviewed:** 2025-01-11
 **Purpose:** Critical patterns to prevent runtime bugs when extending HomeSec. For architecture overview, see `DESIGN.md`.
 
 ---
@@ -11,7 +11,7 @@
 - **Program to interfaces**: Use factory/registry helpers (e.g., `load_filter_plugin()`). Avoid direct instantiation of plugins.
 - **Repository pattern**: Use `ClipRepository` for all state/event writes. Never touch `StateStore`/`EventStore` directly.
 - **Preserve stack traces**: Custom errors must set `self.__cause__ = cause` to preserve original exception.
-- **Tests must use Given/When/Then comments**: Every test case must include these comments (new or edited).
+- **Tests must use Given/When/Then comments**: Every test must include these comments and follow behavioral testing principles (see `TESTING.md`).
 - **Postgres for state**: Use `clip_states` table with `clip_id` (primary key) + `data` (jsonb) for evolvable schema.
 - **Pydantic everywhere**: Validate config, DB payloads, VLM outputs, and MQTT payloads with Pydantic models.
 - **Clarify before complexity**: Ask user for clarification when simpler design may exist. Don't proceed with complex workarounds.
@@ -277,13 +277,20 @@ def register():
 
 ### 5. Testing Requirements
 
-**Rule:** All tests must use Given/When/Then comments. Use mocks from `tests/homesec/mocks/`.
+**Rule:** All tests must use Given/When/Then comments. Follow principles in `TESTING.md` for writing high-quality tests.
+
+**Key Principles (see `TESTING.md` for full details):**
+- **Test observable behavior, not internal state** - Never assert on `obj._private_attr`
+- **Mock at the boundary** - Mock HTTP/network, not internal methods
+- **Use contract testing** - Capture and verify API request structure
+- **Use real implementations where cheap** - Filesystem via `tmp_path`, pure functions
+- **Track API calls, not state flags** - Use `api_calls: list[str]` not `was_called: bool`
 
 **✅ Template: Test with Given/When/Then**
 
 ```python
 async def test_filter_stage_success():
-    # Given: A clip with person detected
+    # Given: A clip and a filter configured to detect person
     clip = Clip(clip_id="test-001", camera_name="front_door", ...)
     mock_filter = MockFilter(result=FilterResult(detected_classes=["person"], confidence=0.9))
     pipeline = ClipPipeline(filter_plugin=mock_filter, ...)
@@ -294,7 +301,7 @@ async def test_filter_stage_success():
     # Then: Should return FilterResult with detected person
     assert isinstance(result, FilterResult)
     assert "person" in result.detected_classes
-    assert mock_filter.detect_count == 1
+    assert result.confidence == 0.9
 
 async def test_filter_stage_failure():
     # Given: A filter that simulates failure
@@ -304,14 +311,14 @@ async def test_filter_stage_failure():
     # When: Processing clip through filter stage
     result = await pipeline._filter_stage(clip)
 
-    # Then: Should return FilterError with cause preserved
+    # Then: Should return FilterError (error-as-value pattern)
     assert isinstance(result, FilterError)
-    assert result.cause is not None
     assert result.clip_id == clip.clip_id
 ```
 
 **Available Mocks:** `MockFilter`, `MockVLM`, `MockStorage`, `MockNotifier`, `MockStateStore`, `MockEventStore`
-All mocks support `simulate_failure=True` and track call counts.
+
+**Reference:** See `TESTING.md` for comprehensive testing guidelines and anti-patterns to avoid.
 
 ---
 
@@ -404,6 +411,7 @@ token: "sl.ABC123..."  # Don't do this!
 
 **Architecture & Design:**
 - See `DESIGN.md` for full architecture overview and design decisions
+- See `TESTING.md` for comprehensive testing guidelines and principles
 - See `src/homesec/interfaces.py` for complete interface definitions
 
 **Plugin Development:**
