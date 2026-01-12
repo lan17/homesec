@@ -482,16 +482,18 @@ class TestOpenAIVLMShutdown:
     @pytest.mark.asyncio
     async def test_shutdown_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Shutdown can be called multiple times safely."""
-        # Given: An analyzer
+        # Given: An analyzer with an active session
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         analyzer = OpenAIVLM(_make_config())
+        session = await analyzer._ensure_session()
 
         # When: Calling shutdown multiple times
         await analyzer.shutdown()
         await analyzer.shutdown()
         await analyzer.shutdown()
 
-        # Then: No exception is raised
+        # Then: Session is closed (shutdown state observable)
+        assert session.closed
 
     @pytest.mark.asyncio
     async def test_shutdown_closes_session(self, monkeypatch: pytest.MonkeyPatch) -> None:

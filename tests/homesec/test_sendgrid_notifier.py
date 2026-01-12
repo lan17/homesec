@@ -472,7 +472,9 @@ class TestSendGridShutdown:
         await notifier.shutdown()
         await notifier.shutdown()
 
-        # Then: No exception raised
+        # Then: Ping returns False (shutdown state observable)
+        result = await notifier.ping()
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_shutdown_closes_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
