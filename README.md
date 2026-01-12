@@ -48,6 +48,7 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 
 ### Requirements
 
+- Raspberry Pi 4 (or equivalent) or higher; any x86_64 system works as well
 - Docker and Docker Compose
 - Optional: MQTT broker, Dropbox credentials, OpenAI-compatible API key
 
