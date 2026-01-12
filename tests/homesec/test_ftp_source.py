@@ -97,75 +97,33 @@ class TestParsePassivePorts:
         assert result == [6000]
 
 
-class TestFtpSourceClipCreation:
-    """Tests for clip creation."""
+class TestFtpSourceFileHandling:
+    """Tests for file handling behavior."""
 
-    def test_clip_id_from_filename(self, tmp_path: Path) -> None:
-        """Clip ID is derived from filename stem."""
-        # Given: An FtpSource with a file
-        config = FtpSourceConfig(root_dir=str(tmp_path))
+    def test_emitted_clip_has_expected_fields(self, tmp_path: Path) -> None:
+        """Emitted clip contains expected metadata."""
+        # Given: An FtpSource and a captured callback
+        config = FtpSourceConfig(root_dir=str(tmp_path), default_duration_s=30.0)
         source = FtpSource(config, camera_name="test_cam")
+        emitted: list[Clip] = []
+        source.register_callback(lambda clip: emitted.append(clip))
 
         clip_file = tmp_path / "recording_2024_01_15.mp4"
         clip_file.write_bytes(b"video content")
-
-        # When: Creating clip from file
-        clip = source._create_clip(clip_file)
-
-        # Then: Clip ID is the filename stem
-        assert clip.clip_id == "recording_2024_01_15"
-
-    def test_clip_camera_name_from_source(self, tmp_path: Path) -> None:
-        """Clip camera_name comes from source configuration."""
-        # Given: An FtpSource with specific camera name
-        config = FtpSourceConfig(root_dir=str(tmp_path))
-        source = FtpSource(config, camera_name="back_yard")
-
-        clip_file = tmp_path / "clip.mp4"
-        clip_file.write_bytes(b"video")
-
-        # When: Creating clip
-        clip = source._create_clip(clip_file)
-
-        # Then: Camera name matches source
-        assert clip.camera_name == "back_yard"
-
-    def test_clip_source_type_is_ftp(self, tmp_path: Path) -> None:
-        """Clip source_type is 'ftp'."""
-        # Given: An FtpSource
-        config = FtpSourceConfig(root_dir=str(tmp_path))
-        source = FtpSource(config, camera_name="cam")
-
-        clip_file = tmp_path / "clip.mp4"
-        clip_file.write_bytes(b"video")
-
-        # When: Creating clip
-        clip = source._create_clip(clip_file)
-
-        # Then: Source type is ftp
-        assert clip.source_type == "ftp"
-
-    def test_clip_timestamps_from_mtime(self, tmp_path: Path) -> None:
-        """Clip timestamps are calculated from file mtime."""
-        # Given: An FtpSource with custom duration
-        config = FtpSourceConfig(root_dir=str(tmp_path), default_duration_s=30.0)
-        source = FtpSource(config, camera_name="cam")
-
-        clip_file = tmp_path / "clip.mp4"
-        clip_file.write_bytes(b"video")
         mtime = datetime.fromtimestamp(clip_file.stat().st_mtime)
 
-        # When: Creating clip
-        clip = source._create_clip(clip_file)
+        # When: Handling a received file
+        source._handle_file_received(clip_file)
 
-        # Then: end_ts is mtime, start_ts is mtime - duration
+        # Then: Clip metadata is derived from file and config
+        assert len(emitted) == 1
+        clip = emitted[0]
+        assert clip.clip_id == "recording_2024_01_15"
+        assert clip.camera_name == "test_cam"
+        assert clip.source_type == "ftp"
         assert clip.end_ts == mtime
         assert clip.start_ts == mtime - timedelta(seconds=30.0)
         assert clip.duration_s == 30.0
-
-
-class TestFtpSourceFileHandling:
-    """Tests for file handling behavior."""
 
     def test_allowed_extension_emits_clip(self, tmp_path: Path) -> None:
         """Allowed extensions emit clips."""
@@ -248,6 +206,26 @@ class TestFtpSourceFileHandling:
         # Then: All clips are emitted
         assert len(emitted) == 4
 
+    def test_extension_check_is_case_insensitive(self, tmp_path: Path) -> None:
+        """Extension checks allow different casing."""
+        # Given: An FtpSource with lowercase extension filter
+        config = FtpSourceConfig(
+            root_dir=str(tmp_path),
+            allowed_extensions=[".mp4"],
+        )
+        source = FtpSource(config, camera_name="cam")
+        emitted: list[Clip] = []
+        source.register_callback(lambda clip: emitted.append(clip))
+
+        clip_file = tmp_path / "video.MP4"
+        clip_file.write_bytes(b"video")
+
+        # When: Handling file with uppercase extension
+        source._handle_file_received(clip_file)
+
+        # Then: Clip is emitted
+        assert len(emitted) == 1
+
 
 class TestFtpSourceConfiguration:
     """Tests for FtpSource configuration."""
@@ -284,6 +262,26 @@ class TestFtpSourceConfiguration:
         # Then: No error (credentials not required)
         assert source is not None
 
+    def test_non_anonymous_with_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-anonymous mode succeeds when credentials are set."""
+        # Given: Credentials in environment
+        monkeypatch.setenv("FTP_USER", "user")
+        monkeypatch.setenv("FTP_PASS", "pass")
+        config = FtpSourceConfig(
+            root_dir=str(tmp_path),
+            anonymous=False,
+            username_env="FTP_USER",
+            password_env="FTP_PASS",
+        )
+
+        # When: Creating source
+        source = FtpSource(config, camera_name="cam")
+
+        # Then: Source initializes without error
+        assert source is not None
+
     def test_ftp_subdir_appended_to_root(self, tmp_path: Path) -> None:
         """ftp_subdir is appended to root_dir."""
         # Given: Config with ftp_subdir
@@ -297,87 +295,3 @@ class TestFtpSourceConfiguration:
 
         # Then: root_dir includes subdir
         assert source.root_dir == tmp_path / "camera_uploads"
-
-
-class TestFtpSourceResolveEnv:
-    """Tests for environment variable resolution."""
-
-    def test_resolve_env_returns_value(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Returns env var value when set."""
-        # Given: An env var is set
-        monkeypatch.setenv("TEST_VAR", "test_value")
-        config = FtpSourceConfig(root_dir=str(tmp_path))
-        source = FtpSource(config, camera_name="cam")
-
-        # When: Resolving the env var
-        result = source._resolve_env("TEST_VAR")
-
-        # Then: Returns the value
-        assert result == "test_value"
-
-    def test_resolve_env_returns_none_when_not_set(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Returns None when env var not set."""
-        # Given: An env var is not set
-        monkeypatch.delenv("MISSING_VAR", raising=False)
-        config = FtpSourceConfig(root_dir=str(tmp_path))
-        source = FtpSource(config, camera_name="cam")
-
-        # When: Resolving the env var
-        result = source._resolve_env("MISSING_VAR")
-
-        # Then: Returns None
-        assert result is None
-
-    def test_resolve_env_returns_none_for_none_name(self, tmp_path: Path) -> None:
-        """Returns None when name is None."""
-        # Given: None env var name
-        config = FtpSourceConfig(root_dir=str(tmp_path))
-        source = FtpSource(config, camera_name="cam")
-
-        # When: Resolving None
-        result = source._resolve_env(None)
-
-        # Then: Returns None
-        assert result is None
-
-
-class TestFtpSourceExtensionCheck:
-    """Tests for extension checking logic."""
-
-    def test_is_extension_allowed_case_insensitive(self, tmp_path: Path) -> None:
-        """Extension check is case-insensitive."""
-        # Given: An FtpSource with lowercase extension filter
-        config = FtpSourceConfig(
-            root_dir=str(tmp_path),
-            allowed_extensions=[".mp4"],
-        )
-        source = FtpSource(config, camera_name="cam")
-
-        # When: Checking various cases
-        uppercase = source._is_extension_allowed(Path("video.MP4"))
-        mixed = source._is_extension_allowed(Path("video.Mp4"))
-        lowercase = source._is_extension_allowed(Path("video.mp4"))
-
-        # Then: All cases are allowed
-        assert uppercase is True
-        assert mixed is True
-        assert lowercase is True
-
-    def test_is_extension_allowed_rejects_wrong_extension(self, tmp_path: Path) -> None:
-        """Rejects extensions not in allowed list."""
-        # Given: An FtpSource with specific extensions
-        config = FtpSourceConfig(
-            root_dir=str(tmp_path),
-            allowed_extensions=[".mp4", ".avi"],
-        )
-        source = FtpSource(config, camera_name="cam")
-
-        # When: Checking wrong extension
-        result = source._is_extension_allowed(Path("video.mkv"))
-
-        # Then: Not allowed
-        assert result is False

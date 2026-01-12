@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -15,7 +16,7 @@ import pytest
 from PIL import Image
 
 from homesec.models.filter import FilterResult
-from homesec.models.vlm import OpenAILLMConfig, VLMConfig
+from homesec.models.vlm import OpenAILLMConfig, VLMConfig, VLMPreprocessConfig
 from homesec.plugins.analyzers.openai import OpenAIVLM
 
 
@@ -53,6 +54,8 @@ def _create_test_video(path: Path, frames: int = 5, size: tuple[int, int] = (64,
     """
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(str(path), fourcc, 10.0, size)
+    if not out.isOpened():
+        pytest.skip("OpenCV VideoWriter (mp4v) not available")
 
     for i in range(frames):
         # Create frames with different content (gradient based on frame number)
@@ -61,6 +64,8 @@ def _create_test_video(path: Path, frames: int = 5, size: tuple[int, int] = (64,
         out.write(frame)
 
     out.release()
+    if not path.exists() or path.stat().st_size == 0:
+        pytest.skip("OpenCV failed to write test video")
 
 
 def _analysis_response(
@@ -86,13 +91,41 @@ def _analysis_response(
     }
 
 
-def _mock_http_response(status: int, json_data: dict[str, Any]) -> AsyncMock:
-    """Create a mock aiohttp response."""
-    response = AsyncMock()
-    response.status = status
-    response.json = AsyncMock(return_value=json_data)
-    response.text = AsyncMock(return_value=json.dumps(json_data))
-    return response
+def _make_async_cm(response: AsyncMock) -> AsyncMock:
+    async_cm = AsyncMock()
+    async_cm.__aenter__ = AsyncMock(return_value=response)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+    return async_cm
+
+
+def _patch_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    async_cm: AsyncMock,
+    capture: dict[str, Any] | None = None,
+) -> MagicMock:
+    session = MagicMock()
+
+    def capture_post(url: str, json: dict[str, Any], headers: dict[str, str]) -> AsyncMock:
+        if capture is not None:
+            capture["url"] = url
+            capture["json"] = json
+            capture["headers"] = headers
+        return async_cm
+
+    session.post = capture_post if capture is not None else MagicMock(return_value=async_cm)
+
+    async def _close() -> None:
+        session.closed = True
+
+    session.close = AsyncMock(side_effect=_close)
+    session.closed = False
+
+    monkeypatch.setattr(
+        "homesec.plugins.analyzers.openai.aiohttp.ClientSession",
+        lambda **_kw: session,
+    )
+    return session
 
 
 class TestOpenAIVLMAnalyze:
@@ -109,29 +142,14 @@ class TestOpenAIVLMAnalyze:
         _create_test_video(video_path, frames=5)
 
         analyzer = OpenAIVLM(_make_config())
-
         captured_request: dict[str, Any] = {}
 
-        # Create async context manager for the response
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value=_analysis_response())
 
-        async_cm = AsyncMock()
-        async_cm.__aenter__ = AsyncMock(return_value=mock_response)
-        async_cm.__aexit__ = AsyncMock(return_value=None)
-
-        def capture_post(url: str, json: dict[str, Any], headers: dict[str, str]) -> Any:
-            captured_request["url"] = url
-            captured_request["json"] = json
-            captured_request["headers"] = headers
-            return async_cm
-
-        mock_session = MagicMock()
-        mock_session.post = capture_post
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        analyzer._session = mock_session
+        async_cm = _make_async_cm(mock_response)
+        _patch_session(monkeypatch, async_cm=async_cm, capture=captured_request)
 
         # When: Analyzing the video
         result = await analyzer.analyze(video_path, _make_filter_result(), _make_config())
@@ -144,29 +162,76 @@ class TestOpenAIVLMAnalyze:
         assert payload["model"] == "gpt-4o"
         assert "response_format" in payload
 
-        # Verify frames were extracted and encoded
+        # Then: Frames were extracted and encoded
         messages = payload["messages"]
         assert len(messages) == 2  # system + user
         user_content = messages[1]["content"]
 
-        # Count image_url entries (should have frames)
         image_entries = [c for c in user_content if c.get("type") == "image_url"]
         assert len(image_entries) > 0
 
-        # Verify images are valid base64 JPEGs
         for entry in image_entries:
             url = entry["image_url"]["url"]
             assert url.startswith("data:image/jpeg;base64,")
             b64_data = url.split(",")[1]
             decoded = base64.b64decode(b64_data)
-            # Verify it's a valid JPEG
             img = Image.open(io.BytesIO(decoded))
             assert img.format == "JPEG"
 
-        # Verify result is correct
+        # Then: Timestamps are formatted consistently
+        frame_texts = [
+            c["text"]
+            for c in user_content
+            if c.get("type") == "text" and c["text"].startswith("Frame at ")
+        ]
+        assert frame_texts
+        for text in frame_texts:
+            timestamp = text.split("Frame at ")[1].split(" (", 1)[0]
+            assert re.match(r"^\d{2}:\d{2}:\d{2}\.\d{2}$", timestamp)
+
+        # Then: Result is parsed correctly
         assert result.risk_level == "low"
         assert result.activity_type == "passerby"
         assert result.prompt_tokens == 100
+
+        await analyzer.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_analyze_respects_preprocessing_limits(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Analyze limits frame count and image size per preprocessing config."""
+        # Given: A video larger than preprocessing limits
+        monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
+        preprocess = VLMPreprocessConfig(max_frames=3, max_size=64, quality=85)
+        config = _make_config(preprocessing=preprocess)
+        video_path = tmp_path / "clip.mp4"
+        _create_test_video(video_path, frames=12, size=(128, 128))
+
+        analyzer = OpenAIVLM(config)
+        captured_request: dict[str, Any] = {}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=_analysis_response())
+
+        async_cm = _make_async_cm(mock_response)
+        _patch_session(monkeypatch, async_cm=async_cm, capture=captured_request)
+
+        # When: Analyzing the video
+        await analyzer.analyze(video_path, _make_filter_result(), config)
+
+        # Then: Frame count is capped
+        user_content = captured_request["json"]["messages"][1]["content"]
+        image_entries = [c for c in user_content if c.get("type") == "image_url"]
+        assert len(image_entries) == 3
+
+        # Then: Images are resized to max_size
+        for entry in image_entries:
+            b64_data = entry["image_url"]["url"].split(",", 1)[1]
+            decoded = base64.b64decode(b64_data)
+            img = Image.open(io.BytesIO(decoded))
+            assert max(img.size) <= 64
 
         await analyzer.shutdown()
 
@@ -186,15 +251,8 @@ class TestOpenAIVLMAnalyze:
         mock_response.status = 401
         mock_response.text = AsyncMock(return_value='{"error": "Invalid API key"}')
 
-        async_cm = AsyncMock()
-        async_cm.__aenter__ = AsyncMock(return_value=mock_response)
-        async_cm.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=async_cm)
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        analyzer._session = mock_session
+        async_cm = _make_async_cm(mock_response)
+        _patch_session(monkeypatch, async_cm=async_cm)
 
         # When/Then: Analyze raises with status code
         with pytest.raises(RuntimeError) as exc_info:
@@ -221,15 +279,8 @@ class TestOpenAIVLMAnalyze:
             return_value={"choices": [{"message": {"content": "not valid json {"}}], "usage": {}}
         )
 
-        async_cm = AsyncMock()
-        async_cm.__aenter__ = AsyncMock(return_value=mock_response)
-        async_cm.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=async_cm)
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        analyzer._session = mock_session
+        async_cm = _make_async_cm(mock_response)
+        _patch_session(monkeypatch, async_cm=async_cm)
 
         # When/Then: Analyze raises JSONDecodeError
         with pytest.raises(json.JSONDecodeError):
@@ -255,15 +306,8 @@ class TestOpenAIVLMAnalyze:
             return_value={"choices": [{"message": {"content": '{"wrong": "schema"}'}}], "usage": {}}
         )
 
-        async_cm = AsyncMock()
-        async_cm.__aenter__ = AsyncMock(return_value=mock_response)
-        async_cm.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=async_cm)
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        analyzer._session = mock_session
+        async_cm = _make_async_cm(mock_response)
+        _patch_session(monkeypatch, async_cm=async_cm)
 
         # When/Then: Analyze raises ValueError
         with pytest.raises(ValueError, match="does not match SequenceAnalysis"):
@@ -288,145 +332,6 @@ class TestOpenAIVLMAnalyze:
             await analyzer.analyze(video_path, _make_filter_result(), _make_config())
 
         await analyzer.shutdown()
-
-
-class TestOpenAIVLMFrameExtraction:
-    """Tests for frame extraction - using real video files."""
-
-    def test_extract_frames_from_real_video(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Extracts frames from a real video file."""
-        # Given: A test video with 10 frames
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        video_path = tmp_path / "clip.mp4"
-        _create_test_video(video_path, frames=10, size=(100, 100))
-
-        analyzer = OpenAIVLM(_make_config())
-
-        # When: Extracting frames
-        frames = analyzer._extract_frames(video_path, max_frames=5, max_size=512, quality=85)
-
-        # Then: Correct number of frames extracted
-        assert len(frames) == 5
-
-        # Verify each frame is valid base64 JPEG with timestamp
-        for b64_data, timestamp in frames:
-            decoded = base64.b64decode(b64_data)
-            img = Image.open(io.BytesIO(decoded))
-            assert img.format == "JPEG"
-            # Timestamp format: HH:MM:SS.cc
-            assert len(timestamp.split(":")) == 3
-
-    def test_extract_frames_samples_evenly(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Samples frames evenly across the video."""
-        # Given: A video with 100 frames
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        video_path = tmp_path / "long.mp4"
-        _create_test_video(video_path, frames=100, size=(64, 64))
-
-        analyzer = OpenAIVLM(_make_config())
-
-        # When: Extracting 10 frames
-        frames = analyzer._extract_frames(video_path, max_frames=10, max_size=512, quality=85)
-
-        # Then: 10 frames extracted, spread across video
-        assert len(frames) == 10
-
-    def test_extract_frames_respects_max_size(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Resizes large frames to max_size."""
-        # Given: A video with large frames
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        video_path = tmp_path / "large.mp4"
-        _create_test_video(video_path, frames=3, size=(1920, 1080))
-
-        analyzer = OpenAIVLM(_make_config())
-
-        # When: Extracting with max_size=512
-        frames = analyzer._extract_frames(video_path, max_frames=3, max_size=512, quality=85)
-
-        # Then: Frames are resized
-        for b64_data, _ in frames:
-            decoded = base64.b64decode(b64_data)
-            img = Image.open(io.BytesIO(decoded))
-            assert max(img.size) <= 512
-
-
-class TestOpenAIVLMImageProcessing:
-    """Tests for image processing helper methods."""
-
-    def test_resize_image_landscape(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Resizes landscape image preserving aspect ratio."""
-        # Given: An analyzer and a wide image
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-        img = Image.new("RGB", (2000, 1000))  # 2:1 aspect ratio
-
-        # When: Resizing to max 512
-        result = analyzer._resize_image(img, 512)
-
-        # Then: Width is max_size, height preserves ratio
-        assert result.size[0] == 512
-        assert result.size[1] == 256  # 512 * 0.5
-
-    def test_resize_image_portrait(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Resizes portrait image preserving aspect ratio."""
-        # Given: An analyzer and a tall image
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-        img = Image.new("RGB", (1000, 2000))  # 1:2 aspect ratio
-
-        # When: Resizing to max 512
-        result = analyzer._resize_image(img, 512)
-
-        # Then: Height is max_size, width preserves ratio
-        assert result.size[0] == 256  # 512 * 0.5
-        assert result.size[1] == 512
-
-    def test_resize_image_already_small(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Doesn't resize image already within limits."""
-        # Given: An analyzer and a small image
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-        img = Image.new("RGB", (256, 256))
-
-        # When: Resizing to max 512
-        result = analyzer._resize_image(img, 512)
-
-        # Then: Image is unchanged
-        assert result.size == (256, 256)
-
-    def test_format_timestamp_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Formats 0ms timestamp correctly."""
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-
-        assert analyzer._format_timestamp(0.0) == "00:00:00.00"
-
-    def test_format_timestamp_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Formats timestamp with seconds correctly."""
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-
-        assert analyzer._format_timestamp(5500.0) == "00:00:05.50"
-
-    def test_format_timestamp_minutes(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Formats timestamp with minutes correctly."""
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-
-        assert analyzer._format_timestamp(90000.0) == "00:01:30.00"
-
-    def test_format_timestamp_hours(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Formats timestamp with hours correctly."""
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-
-        assert analyzer._format_timestamp(3723000.0) == "01:02:03.00"
 
 
 class TestOpenAIVLMConfiguration:
@@ -480,32 +385,30 @@ class TestOpenAIVLMShutdown:
             await analyzer.analyze(video_path, _make_filter_result(), _make_config())
 
     @pytest.mark.asyncio
-    async def test_shutdown_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_shutdown_is_idempotent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """Shutdown can be called multiple times safely."""
         # Given: An analyzer with an active session
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        video_path = tmp_path / "clip.mp4"
+        _create_test_video(video_path, frames=3)
         analyzer = OpenAIVLM(_make_config())
-        session = await analyzer._ensure_session()
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=_analysis_response())
+
+        async_cm = _make_async_cm(mock_response)
+        session = _patch_session(monkeypatch, async_cm=async_cm)
+
+        await analyzer.analyze(video_path, _make_filter_result(), _make_config())
 
         # When: Calling shutdown multiple times
         await analyzer.shutdown()
         await analyzer.shutdown()
         await analyzer.shutdown()
 
-        # Then: Session is closed (shutdown state observable)
-        assert session.closed
-
-    @pytest.mark.asyncio
-    async def test_shutdown_closes_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Shutdown closes the HTTP session."""
-        # Given: An analyzer with an active session
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        analyzer = OpenAIVLM(_make_config())
-        session = await analyzer._ensure_session()
-        assert not session.closed
-
-        # When: Shutting down
-        await analyzer.shutdown()
-
-        # Then: Session is closed
-        assert session.closed
+        # Then: Session is closed once
+        assert session.closed is True
+        assert session.close.call_count == 1

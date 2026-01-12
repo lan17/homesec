@@ -11,6 +11,11 @@ import pytest
 from homesec.plugins.utils import iter_entry_points, load_plugin_from_entry_point
 
 
+class _FakeEntryPoints(list):
+    def select(self, group: str) -> list[metadata.EntryPoint]:
+        return [ep for ep in self if ep.group == group]
+
+
 class DummyPlugin:
     """Dummy plugin class for testing."""
 
@@ -21,9 +26,22 @@ class DummyPlugin:
 class TestIterEntryPoints:
     """Tests for iter_entry_points function."""
 
-    def test_returns_empty_for_unknown_group(self) -> None:
+    def test_returns_empty_for_unknown_group(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns empty iterable for non-existent group."""
-        # Given: A group name that doesn't exist
+        # Given: Entry points without the target group
+        fake_eps = _FakeEntryPoints(
+            [
+                metadata.EntryPoint(
+                    name="homesec",
+                    value="homesec.cli:main",
+                    group="console_scripts",
+                )
+            ]
+        )
+        monkeypatch.setattr(
+            "homesec.plugins.utils.metadata.entry_points",
+            lambda: fake_eps,
+        )
 
         # When: Iterating entry points for the group
         result = list(iter_entry_points("nonexistent.group.xyz.12345"))
@@ -31,16 +49,49 @@ class TestIterEntryPoints:
         # Then: Empty list is returned
         assert result == []
 
-    def test_returns_real_entry_points(self) -> None:
-        """Returns actual entry points for known groups."""
-        # Given: A real entry point group (console_scripts is always populated)
+    def test_returns_entry_points_from_select(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns entry points when select() is available."""
+        # Given: Entry points with select() support
+        fake_eps = _FakeEntryPoints(
+            [
+                metadata.EntryPoint(
+                    name="homesec",
+                    value="homesec.cli:main",
+                    group="console_scripts",
+                )
+            ]
+        )
+        monkeypatch.setattr(
+            "homesec.plugins.utils.metadata.entry_points",
+            lambda: fake_eps,
+        )
 
         # When: Iterating entry points
         result = list(iter_entry_points("console_scripts"))
 
-        # Then: We get entry points (homesec CLI should be there)
+        # Then: Entry points are returned from the stub
         entry_point_names = [ep.name for ep in result]
-        assert "homesec" in entry_point_names
+        assert entry_point_names == ["homesec"]
+
+    def test_returns_entry_points_from_mapping(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns entry points when entry_points() yields a mapping."""
+        # Given: A Python 3.9-style mapping
+        ep = metadata.EntryPoint(
+            name="homesec",
+            value="homesec.cli:main",
+            group="console_scripts",
+        )
+        monkeypatch.setattr(
+            "homesec.plugins.utils.metadata.entry_points",
+            lambda: {"console_scripts": [ep]},
+        )
+
+        # When: Iterating entry points
+        result = list(iter_entry_points("console_scripts"))
+
+        # Then: Entry points are returned from the mapping
+        entry_point_names = [ep.name for ep in result]
+        assert entry_point_names == ["homesec"]
 
 
 class TestLoadPluginFromEntryPoint:

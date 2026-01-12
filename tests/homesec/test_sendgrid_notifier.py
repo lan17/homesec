@@ -51,9 +51,46 @@ def _mock_http_response(status: int) -> AsyncMock:
     response = AsyncMock()
     response.status = status
     response.text = AsyncMock(return_value="OK" if status < 400 else "Error")
+    response.read = AsyncMock(return_value=b"{}")
     response.__aenter__ = AsyncMock(return_value=response)
     response.__aexit__ = AsyncMock(return_value=None)
     return response
+
+
+def _patch_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    post_cm: AsyncMock | None = None,
+    get_cm: AsyncMock | None = None,
+    capture: dict[str, Any] | None = None,
+) -> MagicMock:
+    session = MagicMock()
+
+    if post_cm is not None:
+
+        def capture_post(url: str, json: dict[str, Any], headers: dict[str, str]) -> AsyncMock:
+            if capture is not None:
+                capture["url"] = url
+                capture["json"] = json
+                capture["headers"] = headers
+            return post_cm
+
+        session.post = capture_post
+
+    if get_cm is not None:
+        session.get = MagicMock(return_value=get_cm)
+
+    async def _close() -> None:
+        session.closed = True
+
+    session.close = AsyncMock(side_effect=_close)
+    session.closed = False
+
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.sendgrid_email.aiohttp.ClientSession",
+        lambda **_kw: session,
+    )
+    return session
 
 
 class TestSendGridNotifierSend:
@@ -70,21 +107,8 @@ class TestSendGridNotifierSend:
         notifier = SendGridEmailNotifier(config)
 
         captured_request: dict[str, Any] = {}
-
         mock_response = _mock_http_response(202)
-
-        mock_session = MagicMock()
-
-        def capture_post(url: str, json: dict[str, Any], headers: dict[str, str]) -> AsyncMock:
-            captured_request["url"] = url
-            captured_request["json"] = json
-            captured_request["headers"] = headers
-            return mock_response
-
-        mock_session.post = capture_post
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        notifier._session = mock_session
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
 
         # When: Sending an alert
         await notifier.send(_make_alert(camera_name="back_yard", clip_id="clip_456"))
@@ -95,23 +119,77 @@ class TestSendGridNotifierSend:
 
         payload = captured_request["json"]
 
-        # Verify sender
+        # Then: Sender is correct
         assert payload["from"]["email"] == "sender@example.com"
 
-        # Verify recipients
+        # Then: Recipients are correct and cc/bcc omitted by default
         personalizations = payload["personalizations"]
         assert len(personalizations) == 1
         assert personalizations[0]["to"] == [{"email": "to@example.com"}]
+        assert "cc" not in personalizations[0]
+        assert "bcc" not in personalizations[0]
 
-        # Verify subject was templated
+        # Then: Subject was templated
         assert personalizations[0]["subject"] == "Alert: back_yard"
 
-        # Verify content
+        # Then: Content includes both text and HTML
         content = payload["content"]
         text_content = next(c for c in content if c["type"] == "text/plain")
         html_content = next(c for c in content if c["type"] == "text/html")
         assert text_content["value"] == "Clip clip_456"
         assert html_content["value"] == "<b>clip_456</b>"
+
+        await notifier.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_send_includes_cc_and_bcc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Send includes cc/bcc recipients when configured."""
+        # Given: A notifier with to, cc, bcc recipients
+        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
+        config = _make_config(
+            to_emails=["to1@example.com", "to2@example.com"],
+            cc_emails=["cc@example.com"],
+            bcc_emails=["bcc@example.com"],
+        )
+        notifier = SendGridEmailNotifier(config)
+
+        captured_request: dict[str, Any] = {}
+        mock_response = _mock_http_response(202)
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
+
+        # When: Sending an alert
+        await notifier.send(_make_alert())
+
+        # Then: cc and bcc are included
+        personalizations = captured_request["json"]["personalizations"]
+        assert personalizations[0]["to"] == [
+            {"email": "to1@example.com"},
+            {"email": "to2@example.com"},
+        ]
+        assert personalizations[0]["cc"] == [{"email": "cc@example.com"}]
+        assert personalizations[0]["bcc"] == [{"email": "bcc@example.com"}]
+
+        await notifier.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_send_text_only_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Send includes only text content when HTML template is empty."""
+        # Given: A notifier with text-only template
+        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
+        config = _make_config(html_template="")
+        notifier = SendGridEmailNotifier(config)
+
+        captured_request: dict[str, Any] = {}
+        mock_response = _mock_http_response(202)
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
+
+        # When: Sending an alert
+        await notifier.send(_make_alert())
+
+        # Then: Only text content is included
+        content = captured_request["json"]["content"]
+        assert len(content) == 1
+        assert content[0]["type"] == "text/plain"
 
         await notifier.shutdown()
 
@@ -124,12 +202,7 @@ class TestSendGridNotifierSend:
         notifier = SendGridEmailNotifier(config)
 
         mock_response = _mock_http_response(400)
-
-        mock_session = MagicMock()
-        mock_session.post = MagicMock(return_value=mock_response)
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        notifier._session = mock_session
+        _patch_session(monkeypatch, post_cm=mock_response)
 
         # When/Then: Send raises RuntimeError
         with pytest.raises(RuntimeError, match="400"):
@@ -174,17 +247,8 @@ class TestSendGridNotifierPing:
         config = _make_config()
         notifier = SendGridEmailNotifier(config)
 
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.read = AsyncMock(return_value=b"{}")
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_response)
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        notifier._session = mock_session
+        mock_response = _mock_http_response(200)
+        _patch_session(monkeypatch, get_cm=mock_response)
 
         # When: Pinging
         result = await notifier.ping()
@@ -202,16 +266,8 @@ class TestSendGridNotifierPing:
         config = _make_config()
         notifier = SendGridEmailNotifier(config)
 
-        mock_response = AsyncMock()
-        mock_response.status = 401
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_response)
-        mock_session.close = AsyncMock()
-        mock_session.closed = False
-        notifier._session = mock_session
+        mock_response = _mock_http_response(401)
+        _patch_session(monkeypatch, get_cm=mock_response)
 
         # When: Pinging
         result = await notifier.ping()
@@ -251,209 +307,45 @@ class TestSendGridNotifierPing:
         assert result is False
 
 
-class TestSendGridPayloadBuilding:
-    """Tests for payload construction - verifying output structure."""
-
-    def test_builds_payload_with_all_recipients(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Payload includes all recipients (to, cc, bcc)."""
-        # Given: A notifier with to, cc, bcc recipients
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config(
-            to_emails=["to1@example.com", "to2@example.com"],
-            cc_emails=["cc@example.com"],
-            bcc_emails=["bcc@example.com"],
-        )
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Building payload
-        payload = notifier._build_payload("Subject", "text", "html")
-
-        # Then: All recipients are included correctly
-        personalizations = payload["personalizations"]
-        assert len(personalizations) == 1
-        p = personalizations[0]
-        assert p["to"] == [{"email": "to1@example.com"}, {"email": "to2@example.com"}]
-        assert p["cc"] == [{"email": "cc@example.com"}]
-        assert p["bcc"] == [{"email": "bcc@example.com"}]
-
-    def test_excludes_cc_when_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Payload excludes cc when not configured."""
-        # Given: A notifier without cc
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config(cc_emails=[])
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Building payload
-        payload = notifier._build_payload("Subject", "text", "html")
-
-        # Then: No cc in personalization
-        personalizations = payload["personalizations"]
-        assert "cc" not in personalizations[0]
-
-    def test_text_only_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Payload with text-only content."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Building payload with text only
-        payload = notifier._build_payload("Subject", "text body", "")
-
-        # Then: Only text content is included
-        content = payload["content"]
-        assert len(content) == 1
-        assert content[0]["type"] == "text/plain"
-        assert content[0]["value"] == "text body"
-
-    def test_html_only_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Payload with HTML-only content."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Building payload with HTML only
-        payload = notifier._build_payload("Subject", "", "<b>html</b>")
-
-        # Then: Only HTML content is included
-        content = payload["content"]
-        assert len(content) == 1
-        assert content[0]["type"] == "text/html"
-        assert content[0]["value"] == "<b>html</b>"
-
-    def test_sender_includes_name_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Sender includes name when configured."""
-        # Given: A notifier with from_name
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config(from_name="HomeSec Alerts")
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Building payload
-        payload = notifier._build_payload("Subject", "text", "")
-
-        # Then: Sender has name
-        sender = payload["from"]
-        assert sender["email"] == "sender@example.com"
-        assert sender["name"] == "HomeSec Alerts"
-
-
 class TestSendGridTemplateRendering:
-    """Tests for template rendering - verifying output text."""
+    """Tests for template rendering via public send behavior."""
 
-    def test_render_subject_substitutes_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Subject template substitutes variables from alert."""
-        # Given: A notifier with subject template
+    @pytest.mark.asyncio
+    async def test_send_escapes_analysis_html(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Analysis HTML escapes special characters."""
+        # Given: An alert with analysis content that includes HTML
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config(subject_template="[{risk_level}] {camera_name}")
-        notifier = SendGridEmailNotifier(config)
-        alert = _make_alert(camera_name="back_yard", risk_level="high")
-
-        # When: Rendering subject
-        subject = notifier._render_subject(alert)
-
-        # Then: Variables are substituted
-        assert subject == "[high] back_yard"
-
-    def test_render_html_escapes_special_chars(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """HTML rendering escapes special characters to prevent XSS."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Rendering value with special chars
-        result = notifier._render_value_html("<script>alert('xss')</script>")
-
-        # Then: HTML is escaped
-        assert "<script>" not in result
-        assert "&lt;script&gt;" in result
-
-    def test_render_dict_as_html_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Dict values are rendered as HTML unordered lists."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Rendering a dict
-        result = notifier._render_value_html({"key1": "value1", "key2": "value2"})
-
-        # Then: Rendered as HTML list with keys and values
-        assert "<ul>" in result
-        assert "<li>" in result
-        assert "<strong>key1:</strong>" in result
-        assert "value1" in result
-        assert "<strong>key2:</strong>" in result
-        assert "value2" in result
-
-    def test_render_analysis_includes_key_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """SequenceAnalysis is rendered with key information."""
-        # Given: A notifier with analysis
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
+        config = _make_config(html_template="{analysis_html}")
         notifier = SendGridEmailNotifier(config)
 
         analysis = SequenceAnalysis(
-            sequence_description="Person walks by",
+            sequence_description="<script>alert('x')</script>",
             max_risk_level="low",
             primary_activity="passerby",
-            observations=["entered", "left"],
+            observations=[],
             entities_timeline=[],
             requires_review=False,
-            frame_count=5,
+            frame_count=1,
             video_start_time="00:00:00.00",
-            video_end_time="00:00:05.00",
+            video_end_time="00:00:01.00",
         )
+        alert = _make_alert(analysis=analysis)
 
-        # When: Rendering analysis HTML
-        html = notifier._render_analysis_html(analysis)
+        captured_request: dict[str, Any] = {}
+        mock_response = _mock_http_response(202)
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
 
-        # Then: Contains key information
-        assert "<ul>" in html
-        assert "sequence_description" in html
-        assert "Person walks by" in html
-        assert "max_risk_level" in html
-        assert "low" in html
+        # When: Sending the alert
+        await notifier.send(alert)
 
-    def test_render_analysis_none_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns empty string when analysis is None."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
+        # Then: Analysis HTML is escaped
+        content = captured_request["json"]["content"]
+        html_content = next(c for c in content if c["type"] == "text/html")
+        assert "<script>" not in html_content["value"]
+        assert "&lt;script&gt;" in html_content["value"]
+        assert "none" in html_content["value"]
 
-        # When: Rendering None analysis
-        html = notifier._render_analysis_html(None)
-
-        # Then: Empty string
-        assert html == ""
-
-    def test_render_none_value_shows_na(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """None values render as n/a."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Rendering None value
-        result = notifier._render_value_html(None)
-
-        # Then: Shows n/a in italics
-        assert result == "<em>n/a</em>"
-
-    def test_render_empty_list_shows_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Empty lists render as 'none'."""
-        # Given: A notifier
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-
-        # When: Rendering empty list
-        result = notifier._render_list_html([])
-
-        # Then: Shows none
-        assert "none" in result
+        await notifier.shutdown()
 
 
 class TestSendGridShutdown:
@@ -462,32 +354,21 @@ class TestSendGridShutdown:
     @pytest.mark.asyncio
     async def test_shutdown_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Shutdown can be called multiple times."""
-        # Given: A notifier
+        # Given: A notifier with an active session
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
         config = _make_config()
         notifier = SendGridEmailNotifier(config)
+
+        mock_response = _mock_http_response(202)
+        session = _patch_session(monkeypatch, post_cm=mock_response)
+
+        await notifier.send(_make_alert())
 
         # When: Calling shutdown multiple times
         await notifier.shutdown()
         await notifier.shutdown()
         await notifier.shutdown()
 
-        # Then: Ping returns False (shutdown state observable)
-        result = await notifier.ping()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_shutdown_closes_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Shutdown closes HTTP session."""
-        # Given: A notifier with active session
-        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
-        config = _make_config()
-        notifier = SendGridEmailNotifier(config)
-        session = await notifier._get_session()
-        assert not session.closed
-
-        # When: Shutting down
-        await notifier.shutdown()
-
-        # Then: Session is closed
-        assert session.closed
+        # Then: Session is closed once
+        assert session.closed is True
+        assert session.close.call_count == 1

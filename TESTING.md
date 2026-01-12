@@ -20,6 +20,7 @@
 ### 1. Test Observable Behavior, Not Internal State
 
 **Rule:** Verify what the code *does*, not how it *does it*. Tests should pass if behavior is correct, even if implementation changes.
+If the only public surface is a library callback or hook, treat that callback as the boundary and assert on observable effects.
 
 **Bad - Testing internal state:**
 ```python
@@ -52,7 +53,8 @@ async def test_shutdown_is_idempotent(self):
 
 ### 2. Mock at the Boundary, Not Internal Methods
 
-**Rule:** Mock external dependencies (HTTP, databases, filesystems) at their boundary, not internal methods. This tests more of your actual code.
+**Rule:** Mock external dependencies (HTTP, databases) at their boundary, not internal methods. This tests more of your actual code.
+Filesystem is a special case: prefer real `tmp_path` usage when cheap and deterministic.
 
 **Bad - Mocking internal methods:**
 ```python
@@ -89,7 +91,8 @@ async def test_analyze_video(self, tmp_path: Path, monkeypatch: pytest.MonkeyPat
     mock_session.post = MagicMock(return_value=async_cm)
     mock_session.close = AsyncMock()
 
-    monkeypatch.setattr("aiohttp.ClientSession", lambda **kw: mock_session)
+    # Patch the module under test, not the global aiohttp import
+    monkeypatch.setattr("homesec.plugins.analyzers.openai.aiohttp.ClientSession", lambda **kw: mock_session)
 
     # Now real frame extraction happens, only HTTP is mocked
     vlm = OpenAIVLM(config)
@@ -119,11 +122,15 @@ async def test_sends_email(self):
 async def test_sends_email_with_correct_structure(self):
     captured_request: dict[str, Any] = {}
 
+    async_cm = AsyncMock()
+    async_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
     def capture_post(url: str, json: dict, headers: dict) -> AsyncMock:
         captured_request["url"] = url
         captured_request["json"] = json
         captured_request["headers"] = headers
-        return mock_response
+        return async_cm
 
     mock_session.post = capture_post
 
@@ -147,7 +154,7 @@ async def test_sends_email_with_correct_structure(self):
 - Filesystem operations via `tmp_path` fixture
 - In-memory data structures
 - Pure functions (validators, formatters, parsers)
-- Entry points discovery (test against actual registered plugins)
+- Entry points behavior via stubbed `entry_points()` (deterministic; no packaging dependency)
 
 **Mock:**
 - Network calls (HTTP, MQTT, etc.)
@@ -173,13 +180,25 @@ async def test_put_get_delete_roundtrip(self, tmp_path: Path):
     assert download_path.read_bytes() == b"video content"
 ```
 
-**Example - Using real entry points:**
+**Example - Using stubbed entry points (deterministic):**
 ```python
-def test_returns_real_entry_points(self):
-    # GOOD: Test against actual registered entry points
+def test_returns_stubbed_entry_points(self, monkeypatch):
+    # GOOD: Deterministic entry points without relying on installation metadata
+    fake_eps = [
+        metadata.EntryPoint(name="homesec", value="homesec.cli:main", group="console_scripts")
+    ]
+
+    class _FakeEntryPoints(list):
+        def select(self, group: str):
+            return [ep for ep in self if ep.group == group]
+
+    monkeypatch.setattr(
+        "homesec.plugins.utils.metadata.entry_points",
+        lambda: _FakeEntryPoints(fake_eps),
+    )
+
     result = list(iter_entry_points("console_scripts"))
-    entry_point_names = [ep.name for ep in result]
-    assert "homesec" in entry_point_names
+    assert [ep.name for ep in result] == ["homesec"]
 ```
 
 ---
