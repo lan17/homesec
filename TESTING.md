@@ -276,9 +276,23 @@ def test_handles_unicode_filenames(self):
 
 ---
 
-## Required Test Structure
+## Given/When/Then Structure
 
-All tests must follow the Given/When/Then pattern with explicit comments:
+**Rule:** All tests must use Given/When/Then comments. This structure enforces behavioral thinking and makes tests self-documenting.
+
+### Why Given/When/Then?
+
+The pattern forces you to think about tests as **behavior specifications**:
+- **Given** = Preconditions (setup state, create dependencies)
+- **When** = Action (the single thing being tested)
+- **Then** = Postconditions (observable outcomes)
+
+This naturally leads to behavioral testing because:
+1. **Given** focuses on *what state exists*, not *how to create internal state*
+2. **When** tests *one action*, not implementation steps
+3. **Then** verifies *observable outcomes*, not internal changes
+
+### Template
 
 ```python
 async def test_filter_detects_person(self):
@@ -294,6 +308,86 @@ async def test_filter_detects_person(self):
     assert "person" in result.detected_classes
     assert result.confidence > 0.5
 ```
+
+### Writing Good "Given" Sections
+
+Focus on **what** state exists, not **how** to manipulate internals:
+
+**Bad:**
+```python
+# Given: A notifier with _connected set to False
+notifier = MQTTNotifier(config)
+notifier._connected = False  # Manipulating internal state!
+```
+
+**Good:**
+```python
+# Given: A notifier that failed to connect
+fake_client = _FakeClientNoConnect()
+monkeypatch.setattr("...mqtt.Client", lambda: fake_client)
+notifier = MQTTNotifier(config)  # Naturally not connected
+```
+
+### Writing Good "When" Sections
+
+Test **one action**. If you need multiple actions, you're testing a workflow (which may be valid for integration tests).
+
+**Bad:**
+```python
+# When: Uploading and then checking
+await storage.put_file(source, "test.mp4")
+exists = await storage.exists(uri)
+await storage.delete(uri)
+```
+
+**Good:**
+```python
+# When: Uploading a file
+result = await storage.put_file(source, "test.mp4")
+```
+
+Or for lifecycle tests, make the workflow explicit:
+```python
+async def test_put_get_delete_roundtrip(self):
+    """Full lifecycle: put -> exists -> get -> delete."""
+    # Given: A storage instance and source file
+    ...
+    # When/Then: Each step of the lifecycle
+    result = await storage.put_file(source, "test.mp4")
+    assert await storage.exists(result.storage_uri)
+    ...
+```
+
+### Writing Good "Then" Sections
+
+Assert on **observable behavior**, not internal state:
+
+**Bad:**
+```python
+# Then: Notifier should be shut down
+assert notifier._shutdown_called is True
+assert notifier._client is None
+```
+
+**Good:**
+```python
+# Then: Notifier should reject new operations
+with pytest.raises(RuntimeError, match="shut down"):
+    await notifier.send(alert)
+
+# Then: Ping should return False
+assert await notifier.ping() is False
+```
+
+### Connecting Given/When/Then to Behavioral Testing
+
+| Section | Behavioral Focus | Anti-Pattern |
+|---------|------------------|--------------|
+| Given | Set up via public APIs or realistic fakes | Directly setting `obj._private = value` |
+| When | Call public methods | Call internal helpers or set flags |
+| Then | Assert return values, exceptions, side effects | Assert on `obj._internal_state` |
+
+The key insight: **if you can't express your test in Given/When/Then without touching internals, you're testing implementation, not behavior.**
 
 ---
 
