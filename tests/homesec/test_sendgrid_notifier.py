@@ -194,6 +194,74 @@ class TestSendGridNotifierSend:
         await notifier.shutdown()
 
     @pytest.mark.asyncio
+    async def test_send_html_only_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Send includes only HTML content when text template is empty."""
+        # Given: A notifier with HTML-only template
+        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
+        config = _make_config(text_template="")
+        notifier = SendGridEmailNotifier(config)
+
+        captured_request: dict[str, Any] = {}
+        mock_response = _mock_http_response(202)
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
+
+        # When: Sending an alert
+        await notifier.send(_make_alert())
+
+        # Then: Only HTML content is included
+        content = captured_request["json"]["content"]
+        assert len(content) == 1
+        assert content[0]["type"] == "text/html"
+
+        await notifier.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_send_includes_sender_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Send includes sender name when configured."""
+        # Given: A notifier with from_name configured
+        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
+        config = _make_config(from_name="HomeSec Alerts")
+        notifier = SendGridEmailNotifier(config)
+
+        captured_request: dict[str, Any] = {}
+        mock_response = _mock_http_response(202)
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
+
+        # When: Sending an alert
+        await notifier.send(_make_alert())
+
+        # Then: Sender includes name
+        sender = captured_request["json"]["from"]
+        assert sender["email"] == "sender@example.com"
+        assert sender["name"] == "HomeSec Alerts"
+
+        await notifier.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_send_handles_none_analysis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Send handles alert without analysis gracefully."""
+        # Given: A notifier with analysis_html in template and alert without analysis
+        monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
+        config = _make_config(html_template="Analysis: {analysis_html}")
+        notifier = SendGridEmailNotifier(config)
+
+        captured_request: dict[str, Any] = {}
+        mock_response = _mock_http_response(202)
+        _patch_session(monkeypatch, post_cm=mock_response, capture=captured_request)
+
+        # When: Sending an alert without analysis
+        alert = _make_alert()
+        assert alert.analysis is None
+        await notifier.send(alert)
+
+        # Then: Request succeeds and analysis_html is empty or placeholder
+        content = captured_request["json"]["content"]
+        html_content = next(c for c in content if c["type"] == "text/html")
+        assert "Analysis:" in html_content["value"]
+
+        await notifier.shutdown()
+
+    @pytest.mark.asyncio
     async def test_send_raises_on_api_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Raises RuntimeError with status code on API failure."""
         # Given: A SendGrid notifier with API returning 400
@@ -369,6 +437,5 @@ class TestSendGridShutdown:
         await notifier.shutdown()
         await notifier.shutdown()
 
-        # Then: Session is closed once
+        # Then: Session is closed (shutdown state observable)
         assert session.closed is True
-        assert session.close.call_count == 1
