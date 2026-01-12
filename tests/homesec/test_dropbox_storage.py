@@ -62,23 +62,23 @@ class _FakeDropboxClient:
         self.kwargs: dict[str, object] = {}
         self.uploaded: list[tuple[str, bytes]] = []
         self.deleted: list[str] = []
-        self.session_started = False
-        self.session_finished = False
-        self.session_appends = 0
+        # Track API calls made (for contract testing)
+        self.api_calls: list[str] = []
         self.metadata: set[str] = set()
 
     def files_upload(self, data: bytes, dest_path: str, mode: object) -> None:
+        self.api_calls.append("files_upload")
         self.uploaded.append((dest_path, data))
         self.metadata.add(dest_path)
 
     def files_upload_session_start(self, chunk: bytes) -> _FakeSession:
-        self.session_started = True
+        self.api_calls.append("files_upload_session_start")
         return _FakeSession(session_id="session_1")
 
     def files_upload_session_append_v2(
         self, chunk: bytes, cursor: _FakeUploadSessionCursor
     ) -> None:
-        self.session_appends += 1
+        self.api_calls.append("files_upload_session_append_v2")
         cursor.offset += len(chunk)
 
     def files_upload_session_finish(
@@ -87,7 +87,7 @@ class _FakeDropboxClient:
         cursor: _FakeUploadSessionCursor,
         commit: _FakeCommitInfo,
     ) -> None:
-        self.session_finished = True
+        self.api_calls.append("files_upload_session_finish")
         self.metadata.add(commit.path)
 
     def files_get_metadata(self, path: str) -> object:
@@ -202,9 +202,9 @@ async def test_dropbox_storage_chunked_upload(
     file_path.write_bytes(b"12345")
     await storage.put_file(file_path, "front/big.mp4")
 
-    # Then chunked upload paths are used
-    assert client.session_started is True
-    assert client.session_finished is True
+    # Then chunked upload API calls are made
+    assert "files_upload_session_start" in client.api_calls
+    assert "files_upload_session_finish" in client.api_calls
 
 
 @pytest.mark.asyncio
@@ -360,8 +360,7 @@ class TestDropboxStorageShutdown:
         await storage.shutdown()
         await storage.shutdown()
 
-        # Then: No exception raised
-        assert storage._shutdown_called is True
+        # Then: No exception raised (idempotent behavior verified by no exception)
 
     @pytest.mark.asyncio
     async def test_operations_fail_after_shutdown(
@@ -663,7 +662,7 @@ class TestDropboxStorageChunkedUpload:
         file_path.write_bytes(b"1234567")
         await storage.put_file(file_path, "front/big.mp4")
 
-        # Then: Session start, appends, and finish are all used
-        assert client.session_started is True
-        assert client.session_appends >= 1  # At least one append
-        assert client.session_finished is True
+        # Then: Session start, appends, and finish API calls are all made
+        assert "files_upload_session_start" in client.api_calls
+        assert "files_upload_session_append_v2" in client.api_calls
+        assert "files_upload_session_finish" in client.api_calls

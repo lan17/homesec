@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from importlib import metadata
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,82 +26,53 @@ class TestIterEntryPoints:
         # Given: A group name that doesn't exist
 
         # When: Iterating entry points for the group
-        result = list(iter_entry_points("nonexistent.group.xyz"))
+        result = list(iter_entry_points("nonexistent.group.xyz.12345"))
 
         # Then: Empty list is returned
         assert result == []
 
-    def test_uses_select_api_when_available(self) -> None:
-        """Uses the select() API on Python 3.10+."""
-        # Given: A mocked entry_points() with select method
-        mock_eps = MagicMock()
-        mock_eps.select.return_value = ["ep1", "ep2"]
+    def test_returns_real_entry_points(self) -> None:
+        """Returns actual entry points for known groups."""
+        # Given: A real entry point group (console_scripts is always populated)
 
-        with patch.object(metadata, "entry_points", return_value=mock_eps):
-            # When: Calling iter_entry_points
-            result = list(iter_entry_points("test.group"))
+        # When: Iterating entry points
+        result = list(iter_entry_points("console_scripts"))
 
-            # Then: select() was called with the group
-            mock_eps.select.assert_called_once_with(group="test.group")
-            assert result == ["ep1", "ep2"]
-
-    def test_falls_back_to_dict_api(self) -> None:
-        """Falls back to dict-style API when select() is not available."""
-        # Given: A mocked entry_points() without select method (Python 3.9 style)
-        mock_eps: dict[str, list[str]] = {
-            "test.group": ["ep1", "ep2"],
-            "other.group": ["ep3"],
-        }
-        # Remove select attribute by using a plain dict
-        with patch.object(metadata, "entry_points", return_value=mock_eps):
-            # When: Calling iter_entry_points
-            result = list(iter_entry_points("test.group"))
-
-            # Then: Dict lookup was used
-            assert result == ["ep1", "ep2"]
-
-    def test_dict_api_returns_empty_for_missing_group(self) -> None:
-        """Dict-style API returns empty for missing group."""
-        # Given: A mocked entry_points() without the requested group
-        mock_eps: dict[str, list[str]] = {
-            "other.group": ["ep1"],
-        }
-
-        with patch.object(metadata, "entry_points", return_value=mock_eps):
-            # When: Calling iter_entry_points for missing group
-            result = list(iter_entry_points("test.group"))
-
-            # Then: Empty list is returned
-            assert result == []
+        # Then: We get entry points (homesec CLI should be there)
+        entry_point_names = [ep.name for ep in result]
+        assert "homesec" in entry_point_names
 
 
 class TestLoadPluginFromEntryPoint:
     """Tests for load_plugin_from_entry_point function."""
 
+    def _make_entry_point(self, name: str, load_returns: Any) -> MagicMock:
+        """Create a mock entry point that returns the given value on load()."""
+        mock_ep = MagicMock(spec=metadata.EntryPoint)
+        mock_ep.name = name
+        mock_ep.load.return_value = load_returns
+        return mock_ep
+
     def test_loads_direct_plugin_instance(self) -> None:
         """Loads plugin when entry point returns instance directly."""
         # Given: An entry point that returns a DummyPlugin instance
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "test_plugin"
-        mock_ep.load.return_value = DummyPlugin("direct")
+        plugin = DummyPlugin("direct")
+        mock_ep = self._make_entry_point("test_plugin", plugin)
 
         # When: Loading the plugin
         result = load_plugin_from_entry_point(mock_ep, DummyPlugin, "Test")
 
-        # Then: The plugin instance is returned
-        assert isinstance(result, DummyPlugin)
+        # Then: The same plugin instance is returned
+        assert result is plugin
         assert result.name == "direct"
 
     def test_loads_plugin_from_factory(self) -> None:
         """Loads plugin when entry point returns a factory callable."""
         # Given: An entry point that returns a factory function
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "test_plugin"
-
         def factory() -> DummyPlugin:
             return DummyPlugin("from_factory")
 
-        mock_ep.load.return_value = factory
+        mock_ep = self._make_entry_point("test_plugin", factory)
 
         # When: Loading the plugin
         result = load_plugin_from_entry_point(mock_ep, DummyPlugin, "Test")
@@ -109,49 +81,48 @@ class TestLoadPluginFromEntryPoint:
         assert isinstance(result, DummyPlugin)
         assert result.name == "from_factory"
 
-    def test_raises_for_invalid_return_type(self) -> None:
+    def test_raises_for_wrong_type(self) -> None:
         """Raises TypeError when entry point returns wrong type."""
         # Given: An entry point that returns a non-plugin object
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "bad_plugin"
-        mock_ep.load.return_value = "not a plugin"
+        mock_ep = self._make_entry_point("bad_plugin", "not a plugin")
 
-        # When/Then: Loading raises TypeError
-        with pytest.raises(TypeError, match="Invalid Test plugin entry point"):
+        # When/Then: Loading raises TypeError with helpful message
+        with pytest.raises(TypeError) as exc_info:
             load_plugin_from_entry_point(mock_ep, DummyPlugin, "Test")
+
+        error_msg = str(exc_info.value)
+        assert "bad_plugin" in error_msg  # Entry point name for debugging
+        assert "Test" in error_msg  # Plugin type name
+        assert "DummyPlugin" in error_msg  # Expected type
 
     def test_raises_when_factory_returns_wrong_type(self) -> None:
         """Raises TypeError when factory returns wrong type."""
         # Given: An entry point that returns a factory with wrong return type
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "bad_factory_plugin"
-
         def bad_factory() -> str:
             return "not a plugin"
 
-        mock_ep.load.return_value = bad_factory
+        mock_ep = self._make_entry_point("bad_factory", bad_factory)
 
         # When/Then: Loading raises TypeError
-        with pytest.raises(TypeError, match="Invalid Test plugin entry point"):
+        with pytest.raises(TypeError, match="bad_factory"):
             load_plugin_from_entry_point(mock_ep, DummyPlugin, "Test")
 
-    def test_handles_subclass_instances(self) -> None:
+    def test_accepts_subclass_instances(self) -> None:
         """Accepts subclass instances of the expected type."""
 
         # Given: A subclass of DummyPlugin
         class DummyPluginSubclass(DummyPlugin):
             pass
 
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "subclass_plugin"
-        mock_ep.load.return_value = DummyPluginSubclass("subclass")
+        plugin = DummyPluginSubclass("subclass")
+        mock_ep = self._make_entry_point("subclass_plugin", plugin)
 
         # When: Loading the plugin
         result = load_plugin_from_entry_point(mock_ep, DummyPlugin, "Test")
 
         # Then: The subclass instance is accepted
+        assert result is plugin
         assert isinstance(result, DummyPlugin)
-        assert result.name == "subclass"
 
     def test_factory_can_return_subclass(self) -> None:
         """Factory can return subclass of expected type."""
@@ -160,13 +131,10 @@ class TestLoadPluginFromEntryPoint:
         class DummyPluginSubclass(DummyPlugin):
             pass
 
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "subclass_factory_plugin"
-
         def factory() -> DummyPluginSubclass:
             return DummyPluginSubclass("factory_subclass")
 
-        mock_ep.load.return_value = factory
+        mock_ep = self._make_entry_point("factory_plugin", factory)
 
         # When: Loading the plugin
         result = load_plugin_from_entry_point(mock_ep, DummyPlugin, "Test")
@@ -174,17 +142,3 @@ class TestLoadPluginFromEntryPoint:
         # Then: The subclass instance is accepted
         assert isinstance(result, DummyPlugin)
         assert result.name == "factory_subclass"
-
-    def test_error_message_includes_plugin_name(self) -> None:
-        """Error message includes entry point name for debugging."""
-        # Given: An entry point with a specific name
-        mock_ep = MagicMock(spec=metadata.EntryPoint)
-        mock_ep.name = "my_broken_plugin"
-        mock_ep.load.return_value = 12345  # Wrong type
-
-        # When/Then: Error message includes the entry point name
-        with pytest.raises(TypeError) as exc_info:
-            load_plugin_from_entry_point(mock_ep, DummyPlugin, "Filter")
-
-        assert "my_broken_plugin" in str(exc_info.value)
-        assert "Filter" in str(exc_info.value)

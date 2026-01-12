@@ -193,11 +193,17 @@ class TestLocalStoragePathValidation:
         source_file = tmp_path / "source.mp4"
         source_file.write_bytes(b"unicode content")
 
-        # When: Uploading with unicode filename
-        result = await storage.put_file(source_file, "clips/video_2024.mp4")
+        # When: Uploading with unicode filename (Cyrillic and Japanese)
+        result = await storage.put_file(source_file, "clips/камера_передняя.mp4")
 
         # Then: File is stored successfully
         assert await storage.exists(result.storage_uri)
+
+        # When: Another unicode filename
+        result2 = await storage.put_file(source_file, "clips/玄関カメラ.mp4")
+
+        # Then: File is stored successfully
+        assert await storage.exists(result2.storage_uri)
 
         await storage.shutdown()
 

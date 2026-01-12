@@ -209,8 +209,9 @@ class TestMQTTNotifierShutdown:
         await notifier.shutdown()
         await notifier.shutdown()
 
-        # Then: No exception raised
-        assert notifier._shutdown_called is True
+        # Then: No exception raised and ping returns False (shutdown state observable)
+        result = await notifier.ping()
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_send_fails_after_shutdown(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,13 +248,14 @@ class TestMQTTNotifierConnection:
 
         fake_client = _FakeClientConnectFails()
         monkeypatch.setattr("homesec.plugins.notifiers.mqtt.mqtt.Client", lambda: fake_client)
-        config = MQTTConfig(host="localhost")
+        config = MQTTConfig(host="localhost", connection_timeout=0.01)
 
         # When: Creating notifier (connection fails)
         notifier = MQTTNotifier(config)
 
-        # Then: Notifier is created but not connected
-        assert notifier._connected is False
+        # Then: Notifier is created but ping returns False (not connected)
+        result = await notifier.ping()
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_on_connect_failure_sets_not_connected(
@@ -276,13 +278,14 @@ class TestMQTTNotifierConnection:
 
         fake_client = _FakeClientConnectError()
         monkeypatch.setattr("homesec.plugins.notifiers.mqtt.mqtt.Client", lambda: fake_client)
-        config = MQTTConfig(host="localhost")
+        config = MQTTConfig(host="localhost", connection_timeout=0.01)
 
         # When: Creating notifier
         notifier = MQTTNotifier(config)
 
-        # Then: Not connected due to error code
-        assert notifier._connected is False
+        # Then: Ping returns False (not connected due to error code)
+        result = await notifier.ping()
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_unexpected_disconnect_sets_not_connected(
@@ -292,16 +295,20 @@ class TestMQTTNotifierConnection:
         # Given: A connected notifier
         fake_client = _FakeClient()
         monkeypatch.setattr("homesec.plugins.notifiers.mqtt.mqtt.Client", lambda: fake_client)
-        config = MQTTConfig(host="localhost")
+        config = MQTTConfig(host="localhost", connection_timeout=0.01)
         notifier = MQTTNotifier(config)
-        assert notifier._connected is True
+
+        # Verify initially connected via ping
+        initial_ping = await notifier.ping()
+        assert initial_ping is True
 
         # When: Unexpected disconnect occurs (rc != 0)
         assert fake_client.on_disconnect is not None
         fake_client.on_disconnect(fake_client, None, 1)  # rc=1 = unexpected
 
-        # Then: Not connected
-        assert notifier._connected is False
+        # Then: Ping returns False (not connected)
+        result = await notifier.ping()
+        assert result is False
 
 
 class TestMQTTNotifierAuth:

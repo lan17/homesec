@@ -277,7 +277,14 @@ def register():
 
 ### 5. Testing Requirements
 
-**Rule:** All tests must use Given/When/Then comments. Use mocks from `tests/homesec/mocks/`.
+**Rule:** All tests must use Given/When/Then comments. Follow principles in `TESTING.md` for writing high-quality tests.
+
+**Key Principles (see `TESTING.md` for full details):**
+- **Test observable behavior, not internal state** - Never assert on `obj._private_attr`
+- **Mock at the boundary** - Mock HTTP/network, not internal methods
+- **Use contract testing** - Capture and verify API request structure
+- **Use real implementations where cheap** - Filesystem via `tmp_path`, pure functions
+- **Track API calls, not state flags** - Use `api_calls: list[str]` not `was_called: bool`
 
 **✅ Template: Test with Given/When/Then**
 
@@ -312,6 +319,8 @@ async def test_filter_stage_failure():
 
 **Available Mocks:** `MockFilter`, `MockVLM`, `MockStorage`, `MockNotifier`, `MockStateStore`, `MockEventStore`
 All mocks support `simulate_failure=True` and track call counts.
+
+**Reference:** See `TESTING.md` for comprehensive testing guidelines and anti-patterns to avoid.
 
 ---
 
@@ -404,6 +413,7 @@ token: "sl.ABC123..."  # Don't do this!
 
 **Architecture & Design:**
 - See `DESIGN.md` for full architecture overview and design decisions
+- See `TESTING.md` for comprehensive testing guidelines and principles
 - See `src/homesec/interfaces.py` for complete interface definitions
 
 **Plugin Development:**
