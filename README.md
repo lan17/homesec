@@ -8,6 +8,21 @@ HomeSec is a self-hosted, extensible network video recorder that puts you in con
 
 Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model ([VLM](https://en.wikipedia.org/wiki/Vision%E2%80%93language_model)) for a structured summary, and sends alerts via [MQTT](https://en.wikipedia.org/wiki/MQTT) or email. The design is built for reliability: clips land on disk first, state/event writes are best-effort, and non-critical stages can fail without losing the alert.
 
+## Table of Contents
+
+- [Highlights](#highlights)
+- [Pipeline at a glance](#pipeline-at-a-glance)
+- [Quickstart](#quickstart)
+- [Configuration](#configuration)
+- [Extensible by design](#extensible-by-design)
+- [CLI](#cli)
+- [Built-in plugins](#built-in-plugins)
+- [Writing a plugin](#writing-a-plugin)
+- [Observability](#observability)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Highlights
 
 - Flexible video clip sources: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
@@ -232,6 +247,30 @@ my_filters = "my_package.filters.custom"
 - Run both: `make check`
 - Tests must include Given/When/Then comments.
 - Architecture notes: `DESIGN.md`
+
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork and clone** the repository
+2. **Create a branch** for your feature or fix: `git checkout -b my-feature`
+3. **Install dependencies**: `uv sync`
+4. **Make your changes** and ensure tests pass: `make check`
+5. **Submit a pull request** with a clear description of your changes
+
+### Guidelines
+
+- All code must pass type checking (`make typecheck`) and tests (`make test`)
+- Tests should include Given/When/Then comments explaining the test scenario
+- New plugins should follow the existing patterns in `src/homesec/plugins/`
+- Keep PRs focused on a single change for easier review
+
+### Reporting Issues
+
+Found a bug or have a feature request? Please [open an issue](../../issues) with:
+- A clear description of the problem or suggestion
+- Steps to reproduce (for bugs)
+- Your environment (OS, Python version, HomeSec version)
 
 ## License
 
