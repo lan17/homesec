@@ -3,15 +3,31 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
+[![codecov](https://codecov.io/gh/lan17/homesec/branch/main/graph/badge.svg)](https://codecov.io/gh/lan17/homesec)
 
 HomeSec is a self-hosted, extensible network video recorder that puts you in control. Store clips wherever you want, analyze them with AI, and get smart notifications—all while keeping your footage private and off third-party clouds.
 
-Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model (VLM) for a structured summary, and sends alerts via MQTT or email. The design leans toward reliability: clips land on disk first, state/event writes are best-effort, and non-critical stages can fail without losing the alert.
+Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model ([VLM](https://en.wikipedia.org/wiki/Vision%E2%80%93language_model)) for a structured summary, and sends alerts via [MQTT](https://en.wikipedia.org/wiki/MQTT) or email. The design prioritizes reliability and extensibility.
+
+## Table of Contents
+
+- [Highlights](#highlights)
+- [Pipeline at a glance](#pipeline-at-a-glance)
+- [Quickstart](#quickstart)
+- [Configuration](#configuration)
+- [Extensible by design](#extensible-by-design)
+- [CLI](#cli)
+- [Built-in plugins](#built-in-plugins)
+- [Writing a plugin](#writing-a-plugin)
+- [Observability](#observability)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Highlights
 
-- Bring your own input: RTSP motion detection, FTP uploads, or a watched folder
-- Parallel upload + filter (YOLOv8) with frame sampling and early exit
+- Multiple pluggable video clip sources: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
+- Parallel upload + filter ([YOLOv8](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
 - OpenAI-compatible VLM analysis with structured output
 - Policy-driven alerts with per-camera overrides
 - Fan-out notifiers (MQTT for Home Assistant, SendGrid email)
@@ -33,6 +49,7 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 
 ### Requirements
 
+- Raspberry Pi 4 (or equivalent) or higher; any x86_64 system works as well
 - Docker and Docker Compose
 - Optional: MQTT broker, Dropbox credentials, OpenAI-compatible API key
 
@@ -232,6 +249,30 @@ my_filters = "my_package.filters.custom"
 - Run both: `make check`
 - Tests must include Given/When/Then comments.
 - Architecture notes: `DESIGN.md`
+
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork and clone** the repository
+2. **Create a branch** for your feature or fix: `git checkout -b my-feature`
+3. **Install dependencies**: `uv sync`
+4. **Make your changes** and ensure tests pass: `make check`
+5. **Submit a pull request** with a clear description of your changes
+
+### Guidelines
+
+- All code must pass CI checks: `make check`
+- Tests should include Given/When/Then comments explaining the test scenario
+- New plugins should follow the existing patterns in `src/homesec/plugins/`
+- Keep PRs focused on a single change for easier review
+
+### Reporting Issues
+
+Found a bug or have a feature request? Please [open an issue](../../issues) with:
+- A clear description of the problem or suggestion
+- Steps to reproduce (for bugs)
+- Your environment (OS, Python version, HomeSec version)
 
 ## License
 

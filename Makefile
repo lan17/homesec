@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test typecheck lint check db-migrate db-migration publish
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish
 
 help:
 	@echo "Targets:"
@@ -15,7 +15,8 @@ help:
 	@echo "  Local dev:"
 	@echo "    make run           Run HomeSec locally (requires Postgres)"
 	@echo "    make db            Start just Postgres"
-	@echo "    make test          Run tests"
+	@echo "    make test          Run tests with coverage"
+	@echo "    make coverage      Run tests and generate HTML coverage report"
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
 	@echo "    make check         Run lint + typecheck + test"
@@ -64,7 +65,11 @@ db:
 	docker compose up -d postgres
 
 test:
-	uv run pytest tests/homesec/ -v
+	uv run pytest tests/homesec/ -v --cov=homesec --cov-report=term-missing
+
+coverage:
+	uv run pytest tests/homesec/ -v --cov=homesec --cov-report=html --cov-report=xml
+	@echo "Coverage report: htmlcov/index.html"
 
 typecheck:
 	uv run mypy --package homesec --strict
