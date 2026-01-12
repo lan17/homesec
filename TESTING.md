@@ -5,6 +5,16 @@
 
 ---
 
+## TL;DR - The 5 Rules
+
+1. **Test behavior, not internals** - Assert on return values and exceptions, never on `obj._private_attr`
+2. **Mock at boundaries** - Mock HTTP/network calls, not internal methods like `_extract_frames()`
+3. **Use Given/When/Then** - Every test needs these comments; they enforce behavioral thinking
+4. **Prefer real over fake** - Use `tmp_path` for files, real entry points, real pure functions
+5. **Capture API contracts** - When mocking, verify request structure, not just "was called"
+
+---
+
 ## Core Principles
 
 ### 1. Test Observable Behavior, Not Internal State
@@ -267,10 +277,10 @@ def test_handles_unicode_filenames(self):
 ```python
 def test_handles_unicode_filenames(self):
     # Actually tests unicode (Cyrillic and Japanese)
-    result = await storage.put_file(source, "clips/\u043a\u0430\u043c\u0435\u0440\u0430.mp4")
+    result = await storage.put_file(source, "clips/камера_передняя.mp4")
     assert await storage.exists(result.storage_uri)
 
-    result2 = await storage.put_file(source, "clips/\u7384\u95a2\u30ab\u30e1\u30e9.mp4")
+    result2 = await storage.put_file(source, "clips/玄関カメラ.mp4")
     assert await storage.exists(result2.storage_uri)
 ```
 
