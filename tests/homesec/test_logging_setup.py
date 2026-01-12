@@ -363,9 +363,7 @@ class TestInstallFilters:
             _install_camera_filter()
 
             # Then: Filter is added to handler
-            has_camera_filter = any(
-                isinstance(f, _CameraNameFilter) for f in handler.filters
-            )
+            has_camera_filter = any(isinstance(f, _CameraNameFilter) for f in handler.filters)
             assert has_camera_filter
         finally:
             # Cleanup
@@ -384,17 +382,13 @@ class TestInstallFilters:
         logger.addHandler(handler)
 
         try:
-            initial_count = sum(
-                1 for f in handler.filters if isinstance(f, _CameraNameFilter)
-            )
+            initial_count = sum(1 for f in handler.filters if isinstance(f, _CameraNameFilter))
 
             # When: Installing camera filter again
             _install_camera_filter()
 
             # Then: No duplicate added
-            final_count = sum(
-                1 for f in handler.filters if isinstance(f, _CameraNameFilter)
-            )
+            final_count = sum(1 for f in handler.filters if isinstance(f, _CameraNameFilter))
             assert final_count == initial_count
         finally:
             logger.removeHandler(handler)
@@ -415,9 +409,7 @@ class TestInstallFilters:
             _install_recording_filter()
 
             # Then: Filter is added to handler
-            has_recording_filter = any(
-                isinstance(f, _RecordingIdFilter) for f in handler.filters
-            )
+            has_recording_filter = any(isinstance(f, _RecordingIdFilter) for f in handler.filters)
             assert has_recording_filter
         finally:
             logger.removeHandler(handler)
@@ -461,7 +453,5 @@ class TestConfigureLogging:
         from homesec.telemetry.db_log_handler import AsyncPostgresJsonLogHandler
 
         root = logging.getLogger()
-        has_db_handler = any(
-            isinstance(h, AsyncPostgresJsonLogHandler) for h in root.handlers
-        )
+        has_db_handler = any(isinstance(h, AsyncPostgresJsonLogHandler) for h in root.handlers)
         assert not has_db_handler

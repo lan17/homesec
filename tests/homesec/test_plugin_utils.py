@@ -68,6 +68,7 @@ class TestLoadPluginFromEntryPoint:
 
     def test_loads_plugin_from_factory(self) -> None:
         """Loads plugin when entry point returns a factory callable."""
+
         # Given: An entry point that returns a factory function
         def factory() -> DummyPlugin:
             return DummyPlugin("from_factory")
@@ -97,6 +98,7 @@ class TestLoadPluginFromEntryPoint:
 
     def test_raises_when_factory_returns_wrong_type(self) -> None:
         """Raises TypeError when factory returns wrong type."""
+
         # Given: An entry point that returns a factory with wrong return type
         def bad_factory() -> str:
             return "not a plugin"
