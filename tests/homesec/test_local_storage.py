@@ -33,6 +33,7 @@ class TestLocalStorageHappyPath:
         # Then: File is stored and accessible
         assert result.storage_uri.startswith("local:")
         assert "test.mp4" in result.storage_uri
+        assert result.view_url is not None
         assert result.view_url.startswith("file://")
 
         # When: Checking if file exists

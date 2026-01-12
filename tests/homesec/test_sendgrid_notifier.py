@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,9 +14,9 @@ from homesec.models.vlm import SequenceAnalysis
 from homesec.plugins.notifiers.sendgrid_email import SendGridEmailNotifier
 
 
-def _make_config(**overrides: object) -> SendGridEmailConfig:
+def _make_config(**overrides: Any) -> SendGridEmailConfig:
     """Create a SendGridEmailConfig with defaults."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "from_email": "sender@example.com",
         "to_emails": ["to@example.com"],
         "subject_template": "Alert: {camera_name}",
@@ -26,9 +27,9 @@ def _make_config(**overrides: object) -> SendGridEmailConfig:
     return SendGridEmailConfig(**defaults)
 
 
-def _make_alert(**overrides: object) -> Alert:
+def _make_alert(**overrides: Any) -> Alert:
     """Create a sample Alert with defaults."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "clip_id": "clip_123",
         "camera_name": "front_door",
         "storage_uri": "mock://clip_123",
@@ -49,9 +50,7 @@ class TestSendGridNotifierSend:
     """Tests for the send method."""
 
     @pytest.mark.asyncio
-    async def test_send_success_with_mocked_api(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_send_success_with_mocked_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Successfully sends email via SendGrid API."""
         # Given: A SendGrid notifier with mocked _get_session
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -82,9 +81,7 @@ class TestSendGridNotifierSend:
         assert "Bearer test-api-key" in call_args[1]["headers"]["Authorization"]
 
     @pytest.mark.asyncio
-    async def test_send_fails_on_http_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_send_fails_on_http_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Raises RuntimeError on API error."""
         # Given: A SendGrid notifier with API returning 400
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -122,9 +119,7 @@ class TestSendGridNotifierSend:
             await notifier.send(_make_alert())
 
     @pytest.mark.asyncio
-    async def test_send_fails_after_shutdown(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_send_fails_after_shutdown(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Raises RuntimeError after shutdown."""
         # Given: A notifier that has been shut down
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -169,9 +164,7 @@ class TestSendGridNotifierPing:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_ping_fails_on_api_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_ping_fails_on_api_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns False when API returns error status."""
         # Given: A SendGrid notifier with API returning 401
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -198,9 +191,7 @@ class TestSendGridNotifierPing:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_ping_false_without_api_key(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_ping_false_without_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns False when API key is missing."""
         # Given: A notifier without API key
         monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
@@ -214,9 +205,7 @@ class TestSendGridNotifierPing:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_ping_false_after_shutdown(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_ping_false_after_shutdown(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns False after shutdown."""
         # Given: A notifier that has been shut down
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -234,9 +223,7 @@ class TestSendGridNotifierPing:
 class TestSendGridPayloadBuilding:
     """Tests for payload construction."""
 
-    def test_builds_payload_with_all_recipients(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_builds_payload_with_all_recipients(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Payload includes all recipients."""
         # Given: A notifier with to, cc, bcc recipients
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -251,10 +238,13 @@ class TestSendGridPayloadBuilding:
         payload = notifier._build_payload("Subject", "text", "html")
 
         # Then: All recipients are included
-        personalization = payload["personalizations"][0]
-        assert len(personalization["to"]) == 2
-        assert len(personalization["cc"]) == 1
-        assert len(personalization["bcc"]) == 1
+        personalizations = payload["personalizations"]
+        assert isinstance(personalizations, list)
+        personalization = personalizations[0]
+        assert isinstance(personalization, dict)
+        assert len(personalization["to"]) == 2  # type: ignore[arg-type]
+        assert len(personalization["cc"]) == 1  # type: ignore[arg-type]
+        assert len(personalization["bcc"]) == 1  # type: ignore[arg-type]
 
     def test_excludes_cc_when_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Payload excludes cc when not configured."""
@@ -267,7 +257,10 @@ class TestSendGridPayloadBuilding:
         payload = notifier._build_payload("Subject", "text", "html")
 
         # Then: No cc in personalization
-        personalization = payload["personalizations"][0]
+        personalizations = payload["personalizations"]
+        assert isinstance(personalizations, list)
+        personalization = personalizations[0]
+        assert isinstance(personalization, dict)
         assert "cc" not in personalization
 
     def test_text_only_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,8 +275,9 @@ class TestSendGridPayloadBuilding:
 
         # Then: Only text content is included
         content = payload["content"]
+        assert isinstance(content, list)
         assert len(content) == 1
-        assert content[0]["type"] == "text/plain"
+        assert content[0]["type"] == "text/plain"  # type: ignore[index]
 
     def test_html_only_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Payload with HTML-only content."""
@@ -297,12 +291,11 @@ class TestSendGridPayloadBuilding:
 
         # Then: Only HTML content is included
         content = payload["content"]
+        assert isinstance(content, list)
         assert len(content) == 1
-        assert content[0]["type"] == "text/html"
+        assert content[0]["type"] == "text/html"  # type: ignore[index]
 
-    def test_sender_includes_name_when_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sender_includes_name_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Sender includes name when configured."""
         # Given: A notifier with from_name
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -314,15 +307,14 @@ class TestSendGridPayloadBuilding:
 
         # Then: Sender has name
         sender = payload["from"]
+        assert isinstance(sender, dict)
         assert sender["name"] == "HomeSec Alerts"
 
 
 class TestSendGridTemplateRendering:
     """Tests for template rendering."""
 
-    def test_render_subject_substitution(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_render_subject_substitution(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Subject template substitutes variables."""
         # Given: A notifier with subject template
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -336,9 +328,7 @@ class TestSendGridTemplateRendering:
         # Then: Variables are substituted
         assert subject == "[high] back_yard"
 
-    def test_render_html_escapes_special_chars(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_render_html_escapes_special_chars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """HTML escapes special characters in values."""
         # Given: A notifier
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -352,9 +342,7 @@ class TestSendGridTemplateRendering:
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
 
-    def test_render_analysis_nested_dict(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_render_analysis_nested_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Renders nested dict as HTML list."""
         # Given: A notifier with analysis containing nested data
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -381,9 +369,7 @@ class TestSendGridTemplateRendering:
         assert "sequence_description" in html
         assert "Person walks by" in html
 
-    def test_render_analysis_none_returns_empty(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_render_analysis_none_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns empty string when analysis is None."""
         # Given: A notifier
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -409,9 +395,7 @@ class TestSendGridTemplateRendering:
         # Then: Shows n/a
         assert result == "<em>n/a</em>"
 
-    def test_render_empty_list_shows_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_render_empty_list_shows_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Empty lists render as 'none'."""
         # Given: A notifier
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -429,9 +413,7 @@ class TestSendGridShutdown:
     """Tests for shutdown behavior."""
 
     @pytest.mark.asyncio
-    async def test_shutdown_is_idempotent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_shutdown_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Shutdown can be called multiple times."""
         # Given: A notifier
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")
@@ -446,9 +428,7 @@ class TestSendGridShutdown:
         # Then: No exception
 
     @pytest.mark.asyncio
-    async def test_shutdown_closes_session(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_shutdown_closes_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Shutdown closes HTTP session."""
         # Given: A notifier with active session
         monkeypatch.setenv("SENDGRID_API_KEY", "test-api-key")

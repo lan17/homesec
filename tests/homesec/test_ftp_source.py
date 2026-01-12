@@ -188,9 +188,7 @@ class TestFtpSourceFileHandling:
         assert len(emitted) == 1
         assert emitted[0].clip_id == "video"
 
-    def test_disallowed_extension_kept_when_not_configured(
-        self, tmp_path: Path
-    ) -> None:
+    def test_disallowed_extension_kept_when_not_configured(self, tmp_path: Path) -> None:
         """Disallowed extensions are kept when delete_non_matching=False."""
         # Given: An FtpSource that doesn't delete non-matching
         config = FtpSourceConfig(
@@ -369,9 +367,7 @@ class TestFtpSourceExtensionCheck:
         assert mixed is True
         assert lowercase is True
 
-    def test_is_extension_allowed_rejects_wrong_extension(
-        self, tmp_path: Path
-    ) -> None:
+    def test_is_extension_allowed_rejects_wrong_extension(self, tmp_path: Path) -> None:
         """Rejects extensions not in allowed list."""
         # Given: An FtpSource with specific extensions
         config = FtpSourceConfig(

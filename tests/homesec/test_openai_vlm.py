@@ -345,9 +345,7 @@ class TestOpenAIVLMConfiguration:
         with pytest.raises(ValueError, match="API key not found"):
             OpenAIVLM(_make_config())
 
-    def test_raises_with_wrong_llm_config_type(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_raises_with_wrong_llm_config_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Raises ValueError when llm is not OpenAILLMConfig."""
         # Given: A config with wrong llm type
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")

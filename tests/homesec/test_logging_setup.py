@@ -64,7 +64,7 @@ class TestCameraNameFilter:
 
         # Then: camera_name is preserved
         assert result is True
-        assert record.camera_name == "front_door"
+        assert record.camera_name == "front_door"  # type: ignore[attr-defined]
 
     def test_replaces_none_camera_name(self) -> None:
         """Replaces None camera_name with default."""
@@ -86,7 +86,7 @@ class TestCameraNameFilter:
 
         # Then: camera_name is set to default
         assert result is True
-        assert record.camera_name is not None
+        assert record.camera_name is not None  # type: ignore[attr-defined]
 
     def test_replaces_empty_camera_name(self) -> None:
         """Replaces empty string camera_name with default."""
@@ -108,7 +108,7 @@ class TestCameraNameFilter:
 
         # Then: camera_name is set to default
         assert result is True
-        assert record.camera_name != ""
+        assert record.camera_name != ""  # type: ignore[attr-defined]
 
 
 class TestRecordingIdFilter:
@@ -155,7 +155,7 @@ class TestRecordingIdFilter:
 
         # Then: recording_id is preserved
         assert result is True
-        assert record.recording_id == "rec_123"
+        assert record.recording_id == "rec_123"  # type: ignore[attr-defined]
 
 
 class TestDbLevelFilter:
@@ -388,7 +388,7 @@ class TestSetCameraName:
         )
         filter_ = _CameraNameFilter()
         filter_.filter(record)
-        assert record.camera_name == "back_yard"
+        assert record.camera_name == "back_yard"  # type: ignore[attr-defined]
 
     def test_none_becomes_dash(self) -> None:
         """None camera name becomes '-'."""
@@ -409,7 +409,7 @@ class TestSetCameraName:
         )
         filter_ = _CameraNameFilter()
         filter_.filter(record)
-        assert record.camera_name == "-"
+        assert record.camera_name == "-"  # type: ignore[attr-defined]
 
 
 class TestSetRecordingId:
@@ -434,7 +434,7 @@ class TestSetRecordingId:
         )
         filter_ = _RecordingIdFilter()
         filter_.filter(record)
-        assert record.recording_id == "rec_456"
+        assert record.recording_id == "rec_456"  # type: ignore[attr-defined]
 
     def test_none_stays_none(self) -> None:
         """None recording ID stays None."""
@@ -455,7 +455,7 @@ class TestSetRecordingId:
         )
         filter_ = _RecordingIdFilter()
         filter_.filter(record)
-        assert record.recording_id is None
+        assert record.recording_id is None  # type: ignore[attr-defined]
 
 
 class TestInstallFilters:
@@ -474,9 +474,7 @@ class TestInstallFilters:
             _install_camera_filter()
 
             # Then: Filter is added to handler
-            has_camera_filter = any(
-                isinstance(f, _CameraNameFilter) for f in handler.filters
-            )
+            has_camera_filter = any(isinstance(f, _CameraNameFilter) for f in handler.filters)
             assert has_camera_filter
         finally:
             # Cleanup
@@ -495,17 +493,13 @@ class TestInstallFilters:
         logger.addHandler(handler)
 
         try:
-            initial_count = sum(
-                1 for f in handler.filters if isinstance(f, _CameraNameFilter)
-            )
+            initial_count = sum(1 for f in handler.filters if isinstance(f, _CameraNameFilter))
 
             # When: Installing camera filter again
             _install_camera_filter()
 
             # Then: No duplicate added
-            final_count = sum(
-                1 for f in handler.filters if isinstance(f, _CameraNameFilter)
-            )
+            final_count = sum(1 for f in handler.filters if isinstance(f, _CameraNameFilter))
             assert final_count == initial_count
         finally:
             logger.removeHandler(handler)
@@ -526,9 +520,7 @@ class TestInstallFilters:
             _install_recording_filter()
 
             # Then: Filter is added to handler
-            has_recording_filter = any(
-                isinstance(f, _RecordingIdFilter) for f in handler.filters
-            )
+            has_recording_filter = any(isinstance(f, _RecordingIdFilter) for f in handler.filters)
             assert has_recording_filter
         finally:
             logger.removeHandler(handler)
@@ -575,9 +567,7 @@ class TestConfigureLogging:
         from homesec.telemetry.db_log_handler import AsyncPostgresJsonLogHandler
 
         root = logging.getLogger()
-        has_db_handler = any(
-            isinstance(h, AsyncPostgresJsonLogHandler) for h in root.handlers
-        )
+        has_db_handler = any(isinstance(h, AsyncPostgresJsonLogHandler) for h in root.handlers)
         assert not has_db_handler
 
     def test_captures_warnings(self) -> None:
