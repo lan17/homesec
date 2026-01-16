@@ -88,9 +88,9 @@ This installs the `homesec` CLI and all dependencies. Requires Python 3.10+.
 If you prefer to run locally:
 
 1. Install Python 3.10+ and ffmpeg
-2. `uv sync`
-3. `make db` (starts Postgres)
-4. `make run`
+2. `pip install homesec`
+3. Start Postgres (or use `make db` from the repo)
+4. `homesec run --config config/config.yaml`
 
 ## Configuration
 
@@ -271,10 +271,23 @@ my_filters = "my_package.filters.custom"
 
 ## Development
 
+### Setup
+
+1. Clone the repository
+2. Install [uv](https://docs.astral.sh/uv/) for dependency management
+3. `uv sync` to install dependencies
+4. `make db` to start Postgres locally
+
+### Commands
+
 - Run tests: `make test`
 - Run type checking (strict): `make typecheck`
 - Run both: `make check`
-- Tests must include Given/When/Then comments.
+- Run the pipeline: `make run`
+
+### Notes
+
+- Tests must include Given/When/Then comments
 - Architecture notes: `DESIGN.md`
 
 ## Contributing
