@@ -205,27 +205,6 @@ per_camera_alert:
 - Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
 - Set `alert_policy.enabled: false` to disable notifications.
 
-## Extensible by design
-
-HomeSec is intentionally modular. Each major capability is an interface
-(`ClipSource`, `StorageBackend`, `ObjectFilter`, `VLMAnalyzer`, `AlertPolicy`,
-`Notifier`) defined in `src/homesec/interfaces.py`, and plugins are discovered at
-runtime via entry points. This keeps the core pipeline small while making it
-easy to add new backends without editing core code.
-
-What this means in practice:
-- Swap storage or notifications by changing config, not code.
-- Add a new plugin type as a separate package and register it.
-- Keep config validation strict by pairing each plugin with a Pydantic model.
-
-Extension points (all pluggable):
-- Sources: RTSP motion detection, FTP uploads, local folders
-- Storage backends: Dropbox, local disk, or your own
-- Filters: object detection (YOLO or custom models)
-- VLM analyzers: OpenAI-compatible APIs or local models
-- Alert policies: per-camera rules and thresholds
-- Notifiers: MQTT, email, or anything else you can send from Python
-
 ## CLI
 
 After installation, the `homesec` command is available:
@@ -253,23 +232,37 @@ homesec cleanup --config config/config.yaml --older_than_days 7 --dry_run=False
 
 Use `homesec <command> --help` for detailed options on each command.
 
-## Built-in plugins
+## Plugins
 
-- Filters: `yolo`
-- VLM analyzers: `openai` (OpenAI-compatible API)
-- Storage: `dropbox`, `local`
-- Notifiers: `mqtt`, `sendgrid_email`
-- Alert policies: `default`, `noop`
+HomeSec uses a plugin architecture—every component is discovered at runtime via entry points.
 
-## Writing a plugin
+### Built-in plugins
 
-HomeSec discovers plugins via entry points in the `homesec.plugins` group. A plugin
-module just needs to import and register itself.
+| Type | Plugins |
+|------|---------|
+| Sources | [`rtsp`](src/homesec/sources/rtsp.py), [`ftp`](src/homesec/sources/ftp.py), [`local_folder`](src/homesec/sources/local_folder.py) |
+| Filters | [`yolo`](src/homesec/plugins/filters/yolo.py) |
+| Storage | [`dropbox`](src/homesec/plugins/storage/dropbox.py), [`local`](src/homesec/plugins/storage/local.py) |
+| VLM analyzers | [`openai`](src/homesec/plugins/analyzers/openai.py) |
+| Notifiers | [`mqtt`](src/homesec/plugins/notifiers/mqtt.py), [`sendgrid_email`](src/homesec/plugins/notifiers/sendgrid_email.py) |
+| Alert policies | [`default`](src/homesec/plugins/alert_policies/default.py), [`noop`](src/homesec/plugins/alert_policies/noop.py) |
 
-Each plugin provides:
-- A unique name (used in config)
-- A Pydantic config model for validation
-- A factory that builds the concrete implementation
+### Plugin interfaces
+
+All interfaces are defined in [`src/homesec/interfaces.py`](src/homesec/interfaces.py).
+
+| Type | Interface | Decorator |
+|------|-----------|-----------|
+| Sources | `ClipSource` | `@source_plugin` |
+| Filters | `ObjectFilter` | `@filter_plugin` |
+| Storage | `StorageBackend` | `@storage_plugin` |
+| VLM analyzers | `VLMAnalyzer` | `@vlm_plugin` |
+| Notifiers | `Notifier` | `@notifier_plugin` |
+| Alert policies | `AlertPolicy` | `@alert_policy_plugin` |
+
+### Writing a custom plugin
+
+Each plugin provides a name, a Pydantic config model, and a factory:
 
 ```python
 # my_package/filters/custom.py
@@ -292,8 +285,9 @@ def register() -> FilterPlugin:
     )
 ```
 
+Register via entry points in `pyproject.toml`:
+
 ```toml
-# pyproject.toml
 [project.entry-points."homesec.plugins"]
 my_filters = "my_package.filters.custom"
 ```
