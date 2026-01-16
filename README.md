@@ -32,12 +32,11 @@ Under the hood, it's a pluggable async pipeline: ingest clips from multiple sour
 ## Highlights
 
 - Multiple pluggable video clip sources: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
-- Parallel upload + filter ([YOLOv8](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
+- Parallel upload + filter ([YOLO11](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
 - OpenAI-compatible VLM analysis with structured output
 - Policy-driven alerts with per-camera overrides
 - Fan-out notifiers (MQTT for Home Assistant, SendGrid email)
 - Postgres-backed state + events with graceful degradation
-- Built around small, stable interfaces so new plugins drop in cleanly
 - Health endpoint plus optional Postgres telemetry logging
 
 ## Pipeline at a glance
