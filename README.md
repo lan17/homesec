@@ -13,6 +13,7 @@ Under the hood, it's a pluggable async pipeline for home security cameras. It re
 
 - [Highlights](#highlights)
 - [Pipeline at a glance](#pipeline-at-a-glance)
+- [Installation](#installation)
 - [Quickstart](#quickstart)
 - [Configuration](#configuration)
 - [Extensible by design](#extensible-by-design)
@@ -44,6 +45,14 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 - Upload and filter run in parallel; VLM runs only when trigger classes are detected.
 - Upload failures do not block alerts; filter failures stop processing.
 - State is stored in Postgres (`clip_states` + `clip_events`) when available.
+
+## Installation
+
+```bash
+pip install homesec
+```
+
+This installs the `homesec` CLI and all dependencies. Requires Python 3.10+.
 
 ## Quickstart
 
@@ -183,12 +192,30 @@ Extension points (all pluggable):
 
 ## CLI
 
-- Run the pipeline:
-  `uv run python -m homesec.cli run --config config/config.yaml --log_level INFO`
-- Validate config:
-  `uv run python -m homesec.cli validate --config config/config.yaml`
-- Cleanup (reanalyze and optionally delete empty clips):
-  `uv run python -m homesec.cli cleanup --config config/config.yaml --older_than_days 7 --dry_run True`
+After installation, the `homesec` command is available:
+
+```bash
+homesec --help
+```
+
+### Commands
+
+**Run the pipeline:**
+```bash
+homesec run --config config/config.yaml
+```
+
+**Validate config:**
+```bash
+homesec validate --config config/config.yaml
+```
+
+**Cleanup old clips** (reanalyze and optionally delete empty clips):
+```bash
+homesec cleanup --config config/config.yaml --older_than_days 7 --dry_run=False
+```
+
+Use `homesec <command> --help` for detailed options on each command.
 
 ## Built-in plugins
 
