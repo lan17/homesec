@@ -16,8 +16,8 @@ Under the hood, it's a pluggable async pipeline: ingest clips from multiple sour
 - [Pipeline at a glance](#pipeline-at-a-glance)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
-  - [With Docker](#with-docker)
-  - [Without Docker](#without-docker)
+  - [Configure](#1-configure)
+  - [Run](#2-run): [With Docker](#with-docker) | [Without Docker](#without-docker)
 - [Configuration](#configuration)
 - [CLI](#cli)
 - [Plugins](#plugins)
@@ -59,41 +59,42 @@ This installs the `homesec` CLI and all dependencies. Requires Python 3.10+.
 
 ## Quickstart
 
-### Requirements
+### 1. Configure
 
-- Raspberry Pi 4 (or equivalent) or higher; any x86_64 system works as well
-- Docker and Docker Compose
-- Optional: MQTT broker, Dropbox credentials, OpenAI-compatible API key
+First, clone the repo and create your config:
 
-### Setup
+```bash
+git clone https://github.com/lan17/homesec.git
+cd homesec
 
-1. Create a config file:
-   ```bash
-   cp config/example.yaml config/config.yaml
-   # Edit config/config.yaml with your settings
-   ```
-2. Set environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-3. Start HomeSec + Postgres:
-   ```bash
-   make up
-   ```
-4. Stop:
-   ```bash
-   make down
-   ```
+cp config/example.yaml config/config.yaml
+cp .env.example .env
+# Edit both files with your settings
+```
 
-### Running without Docker
+See [Configuration](#configuration) for all options.
 
-If you prefer to run locally:
+### 2. Run
 
-1. Install Python 3.10+ and ffmpeg
-2. `pip install homesec`
-3. Start Postgres (or use `make db` from the repo)
-4. `homesec run --config config/config.yaml`
+#### With Docker
+
+Requires Docker and Docker Compose.
+
+```bash
+make up      # Start HomeSec + Postgres
+make down    # Stop
+```
+
+#### Without Docker
+
+Requires Python 3.10+, ffmpeg, and a Postgres instance.
+
+```bash
+pip install homesec
+homesec run --config config/config.yaml
+```
+
+Use `make db` to start Postgres locally if needed.
 
 ## Configuration
 
