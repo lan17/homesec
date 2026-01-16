@@ -1,13 +1,14 @@
 # HomeSec
 
+[![PyPI](https://img.shields.io/pypi/v/homesec)](https://pypi.org/project/homesec/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 [![codecov](https://codecov.io/gh/lan17/HomeSec/branch/main/graph/badge.svg)](https://codecov.io/gh/lan17/HomeSec)
 
-HomeSec is a self-hosted, extensible network video recorder that puts you in control. Store clips wherever you want, analyze them with AI, and get smart notifications—all while keeping your footage private and off third-party clouds.
+HomeSec is a self-hosted, extensible video pipeline for home security cameras. Connect cameras directly via RTSP with motion detection, receive clips over FTP, or watch a folder—then filter with AI and get smart notifications. Your footage stays private and off third-party clouds.
 
-Under the hood, it's a pluggable async pipeline for home security cameras. It records short clips, runs object detection, optionally calls a vision-language model ([VLM](https://en.wikipedia.org/wiki/Vision%E2%80%93language_model)) for a structured summary, and sends alerts via [MQTT](https://en.wikipedia.org/wiki/MQTT) or email. The design prioritizes reliability and extensibility.
+Under the hood, it's a pluggable async pipeline: ingest clips from multiple sources, run object detection (YOLO), optionally call a vision-language model ([VLM](https://en.wikipedia.org/wiki/Vision%E2%80%93language_model)) for structured analysis, and send alerts via [MQTT](https://en.wikipedia.org/wiki/MQTT) or email. Every component—sources, filters, storage, analyzers, notifiers—is a plugin you can swap or extend.
 
 ## Table of Contents
 
