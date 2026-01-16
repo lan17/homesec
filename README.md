@@ -116,9 +116,9 @@ export OPENAI_API_KEY="sk-..."
 homesec run --config config.yaml
 ```
 
-### With Docker
+### With Docker (easier setup)
 
-For Docker deployment, clone the repo:
+Cloning the repo gives you convenience commands and a Docker Compose setup with Postgres:
 
 ```bash
 git clone https://github.com/lan17/homesec.git
@@ -194,9 +194,8 @@ per_camera_alert:
 ### Tips
 
 - Secrets never go in YAML. Use env var names (`*_env`) and set values in your shell or `.env`.
-- At least one notifier must be enabled (`mqtt` or `sendgrid_email`).
+- At least one notifier must be configured, but set `alert_policy.enabled: false` to disable sending alerts.
 - Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
-- Set `alert_policy.enabled: false` to disable notifications.
 
 ## CLI
 
@@ -210,17 +209,17 @@ homesec --help
 
 **Run the pipeline:**
 ```bash
-homesec run --config config/config.yaml
+homesec run --config config.yaml
 ```
 
 **Validate config:**
 ```bash
-homesec validate --config config/config.yaml
+homesec validate --config config.yaml
 ```
 
 **Cleanup old clips** (reanalyze and optionally delete empty clips):
 ```bash
-homesec cleanup --config config/config.yaml --older_than_days 7 --dry_run=False
+homesec cleanup --config config.yaml --older_than_days 7 --dry_run=False
 ```
 
 Use `homesec <command> --help` for detailed options on each command.
@@ -287,10 +286,8 @@ my_filters = "my_package.filters.custom"
 
 ## Observability
 
-- Health endpoint: `GET /health` (configurable in `health.host`/`health.port`)
-- Optional telemetry logs to Postgres when `DB_DSN` is set:
-  - Start local DB: `make db`
-  - Run migrations: `make db-migrate`
+- Health endpoint: `GET /health` (configurable via `health.host`/`health.port` in config)
+- Telemetry logs to Postgres when `DB_DSN` is set
 
 ## Development
 
