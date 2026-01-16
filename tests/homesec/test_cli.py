@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
-from homesec.cli import HomeSec, setup_logging
+from homesec.cli import HomeSec, main, setup_logging
 from homesec.config import ConfigError
 
 
@@ -334,15 +334,73 @@ class TestHomeSecCleanup:
 class TestMain:
     """Tests for main entrypoint."""
 
-    def test_main_calls_fire(self) -> None:
-        """Main entrypoint calls fire.Fire with HomeSec."""
-        # Given: Mocked fire module
-
-        # When: Calling main
-        with patch("homesec.cli.fire.Fire") as mock_fire:
-            from homesec.cli import main
-
+    def test_main_calls_fire_with_command(self) -> None:
+        """Main entrypoint calls fire.Fire when command is provided."""
+        # Given: Mocked fire module and sys.argv with a command
+        with (
+            patch("homesec.cli.fire.Fire") as mock_fire,
+            patch("homesec.cli.sys.argv", ["homesec", "validate", "--config", "x.yaml"]),
+        ):
+            # When: Calling main
             main()
 
         # Then: fire.Fire called with HomeSec
         mock_fire.assert_called_once_with(HomeSec)
+
+    def test_main_calls_fire_with_no_args(self) -> None:
+        """Main calls fire.Fire when called with no arguments (Fire shows commands)."""
+        # Given: sys.argv with only the program name
+        with (
+            patch("homesec.cli.fire.Fire") as mock_fire,
+            patch("homesec.cli.sys.argv", ["homesec"]),
+        ):
+            # When: Calling main
+            main()
+
+        # Then: fire.Fire is called (Fire will show commands list)
+        mock_fire.assert_called_once_with(HomeSec)
+
+    def test_main_strips_help_flag_before_fire(self) -> None:
+        """Main strips --help flag so Fire shows commands list."""
+        # Given: sys.argv with --help
+        argv = ["homesec", "--help"]
+        with (
+            patch("homesec.cli.fire.Fire") as mock_fire,
+            patch("homesec.cli.sys.argv", argv),
+        ):
+            # When: Calling main
+            main()
+
+        # Then: fire.Fire is called and --help was stripped from argv
+        mock_fire.assert_called_once_with(HomeSec)
+        assert argv == ["homesec"]
+
+    def test_main_strips_h_flag_before_fire(self) -> None:
+        """Main strips -h flag so Fire shows commands list."""
+        # Given: sys.argv with -h
+        argv = ["homesec", "-h"]
+        with (
+            patch("homesec.cli.fire.Fire") as mock_fire,
+            patch("homesec.cli.sys.argv", argv),
+        ):
+            # When: Calling main
+            main()
+
+        # Then: fire.Fire is called and -h was stripped from argv
+        mock_fire.assert_called_once_with(HomeSec)
+        assert argv == ["homesec"]
+
+    def test_main_preserves_command_help_flag(self) -> None:
+        """Main preserves --help when used with a command."""
+        # Given: sys.argv with command and --help
+        argv = ["homesec", "run", "--help"]
+        with (
+            patch("homesec.cli.fire.Fire") as mock_fire,
+            patch("homesec.cli.sys.argv", argv),
+        ):
+            # When: Calling main
+            main()
+
+        # Then: fire.Fire is called and argv is unchanged
+        mock_fire.assert_called_once_with(HomeSec)
+        assert argv == ["homesec", "run", "--help"]

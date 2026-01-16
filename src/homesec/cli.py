@@ -155,6 +155,9 @@ class HomeSec:
 
 def main() -> None:
     """Main CLI entrypoint."""
+    # Strip --help/-h when it's the only arg so Fire shows its commands list
+    if len(sys.argv) == 2 and sys.argv[1] in ("--help", "-h"):
+        sys.argv.pop()
     fire.Fire(HomeSec)
 
 
