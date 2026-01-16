@@ -15,7 +15,7 @@ Under the hood, it's a pluggable async pipeline: ingest clips from multiple sour
 - [Highlights](#highlights)
 - [Pipeline at a glance](#pipeline-at-a-glance)
 - [Quickstart](#quickstart)
-  - [Install](#1-install) | [Configure](#2-configure) | [Run](#3-run) | [With Docker](#with-docker)
+  - [Install](#1-install) | [Configure](#2-configure) | [Run](#3-run) | [With Docker](#with-docker-easier-setup)
 - [Configuration](#configuration)
 - [CLI](#cli)
 - [Plugins](#plugins)
