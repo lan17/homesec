@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-01-16)
+
+### Bug Fixes
+
+- Improve CLI help output to show available commands ([#8](https://github.com/lan17/homesec/pull/8),
+  [`4c8342f`](https://github.com/lan17/homesec/commit/4c8342f71274f2110231f112b77d68c8bb119c17))
+
+### Chores
+
+- Sync uv.lock version ([#8](https://github.com/lan17/homesec/pull/8),
+  [`4c8342f`](https://github.com/lan17/homesec/commit/4c8342f71274f2110231f112b77d68c8bb119c17))
+
+### Refactoring
+
+- Use Fire's native help output for CLI commands ([#8](https://github.com/lan17/homesec/pull/8),
+  [`4c8342f`](https://github.com/lan17/homesec/commit/4c8342f71274f2110231f112b77d68c8bb119c17))
+
+
 ## v1.1.0 (2026-01-12)
 
 ### Bug Fixes
