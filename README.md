@@ -100,7 +100,50 @@ Use `make db` to start Postgres locally if needed.
 
 Configs are YAML and validated with Pydantic. See `config/example.yaml` for all options.
 
-Minimal example (RTSP + Dropbox + MQTT):
+### Minimal example
+
+```yaml
+version: 1
+
+cameras:
+  - name: front_door
+    source:
+      type: rtsp
+      config:
+        rtsp_url_env: FRONT_DOOR_RTSP_URL
+        output_dir: "./recordings"
+
+storage:
+  backend: local
+  local:
+    root: "./storage"
+
+state_store:
+  dsn_env: DB_DSN
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: "localhost"
+      port: 1883
+
+filter:
+  plugin: yolo
+
+vlm:
+  backend: openai
+  llm:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: medium
+```
+
+### Full example (Dropbox + per-camera alerts)
 
 ```yaml
 version: 1
@@ -155,23 +198,12 @@ per_camera_alert:
     notify_on_activity_types: ["person_at_door", "delivery"]
 ```
 
-A few things worth knowing:
+### Tips
+
 - Secrets never go in YAML. Use env var names (`*_env`) and set values in your shell or `.env`.
 - At least one notifier must be enabled (`mqtt` or `sendgrid_email`).
-- Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`,
-  `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
-- Local storage for development:
-
-```yaml
-storage:
-  backend: local
-  local:
-    root: "./storage"
-```
-
-- Set `alert_policy.enabled: false` to disable notifications (a noop policy is used).
-- For a quick local run, pair `local_folder` with `local` storage and drop a clip
-  into `recordings/`.
+- Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
+- Set `alert_policy.enabled: false` to disable notifications.
 
 ## Extensible by design
 
