@@ -153,34 +153,11 @@ class HomeSec:
             pass
 
 
-def print_help() -> None:
-    """Print help message with available commands."""
-    help_text = """\
-HomeSec - Home Security Camera Pipeline
-
-Usage: homesec <command> [options]
-
-Commands:
-  run       Run the HomeSec pipeline
-  validate  Validate config file without running
-  cleanup   Re-analyze and optionally delete clips that appear empty
-
-Run 'homesec <command> --help' for more information on a command.
-
-Examples:
-  homesec run --config config.yaml
-  homesec validate --config config.yaml
-  homesec cleanup --config config.yaml --older_than_days 7 --dry_run=False
-"""
-    print(help_text)
-
-
 def main() -> None:
     """Main CLI entrypoint."""
-    # Handle --help/-h at top level to show available commands
-    if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] in ("--help", "-h")):
-        print_help()
-        return
+    # Strip --help/-h when it's the only arg so Fire shows its commands list
+    if len(sys.argv) == 2 and sys.argv[1] in ("--help", "-h"):
+        sys.argv.pop()
     fire.Fire(HomeSec)
 
 
