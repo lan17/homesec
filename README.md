@@ -14,10 +14,8 @@ Under the hood, it's a pluggable async pipeline: ingest clips from multiple sour
 
 - [Highlights](#highlights)
 - [Pipeline at a glance](#pipeline-at-a-glance)
-- [Installation](#installation)
 - [Quickstart](#quickstart)
-  - [Configure](#1-configure)
-  - [Run](#2-run): [With Docker](#with-docker) | [Without Docker](#without-docker)
+  - [Install](#1-install) | [Configure](#2-configure) | [Run](#3-run) | [With Docker](#with-docker)
 - [Configuration](#configuration)
 - [CLI](#cli)
 - [Plugins](#plugins)
@@ -49,58 +47,19 @@ ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
 - Upload failures do not block alerts; filter failures stop processing.
 - State is stored in Postgres (`clip_states` + `clip_events`) when available.
 
-## Installation
-
-```bash
-pip install homesec
-```
-
-This installs the `homesec` CLI and all dependencies. Requires Python 3.10+.
-
 ## Quickstart
 
-### 1. Configure
-
-First, clone the repo and create your config:
-
-```bash
-git clone https://github.com/lan17/homesec.git
-cd homesec
-
-cp config/example.yaml config/config.yaml
-cp .env.example .env
-# Edit both files with your settings
-```
-
-See [Configuration](#configuration) for all options.
-
-### 2. Run
-
-#### With Docker
-
-Requires Docker and Docker Compose.
-
-```bash
-make up      # Start HomeSec + Postgres
-make down    # Stop
-```
-
-#### Without Docker
-
-Requires Python 3.10+, ffmpeg, and a Postgres instance.
+### 1. Install
 
 ```bash
 pip install homesec
-homesec run --config config/config.yaml
 ```
 
-Use `make db` to start Postgres locally if needed.
+Requires Python 3.10+ and ffmpeg.
 
-## Configuration
+### 2. Configure
 
-Configs are YAML and validated with Pydantic. See `config/example.yaml` for all options.
-
-### Minimal example
+Create a `config.yaml` file (see [Configuration](#configuration) for all options):
 
 ```yaml
 version: 1
@@ -142,6 +101,40 @@ alert_policy:
   config:
     min_risk_level: medium
 ```
+
+Set environment variables in your shell or a `.env` file:
+
+```bash
+export FRONT_DOOR_RTSP_URL="rtsp://user:pass@camera-ip:554/stream"
+export DB_DSN="postgresql://user:pass@localhost/homesec"
+export OPENAI_API_KEY="sk-..."
+```
+
+### 3. Run
+
+```bash
+homesec run --config config.yaml
+```
+
+### With Docker
+
+For Docker deployment, clone the repo:
+
+```bash
+git clone https://github.com/lan17/homesec.git
+cd homesec
+
+cp config/example.yaml config/config.yaml
+cp .env.example .env
+# Edit both files with your settings
+
+make up      # Start HomeSec + Postgres
+make down    # Stop
+```
+
+## Configuration
+
+Configs are YAML and validated with Pydantic. See [Quickstart](#2-configure) for a minimal example, or `config/example.yaml` for all options.
 
 ### Full example (Dropbox + per-camera alerts)
 
