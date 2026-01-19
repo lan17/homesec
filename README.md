@@ -16,7 +16,7 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. C
 
 ## Pipeline at a glance
 
-## Pipeline at a glance
+
 
 ```
                             +-----------------+
@@ -64,7 +64,10 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. C
 - [Highlights](#highlights)
 - [Pipeline at a glance](#pipeline-at-a-glance)
 - [Quickstart](#quickstart)
-  - [Install](#1-install) | [Configure](#2-configure) | [Run](#3-run) | [With Docker](#with-docker-easier-setup)
+  - [Install](#1-install)
+  - [Configure](#2-configure)
+  - [Run](#3-run)
+  - [With Docker](#with-docker-easier-setup)
 - [Configuration](#configuration)
 - [CLI](#cli)
 - [Plugins](#plugins)

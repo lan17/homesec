@@ -1,4 +1,4 @@
-"""YOLOv8 object detection filter plugin."""
+"""YOLO object detection filter plugin."""
 
 from __future__ import annotations
 
