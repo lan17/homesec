@@ -19,7 +19,7 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. Y
 
 
 ```mermaid
-graph TD
+graph LR
     S[Clip Source] -->|New Job| C(Clip File)
     C --> U[Upload]
     C --> F[Filter]
@@ -29,10 +29,6 @@ graph TD
     AI -->|No| D[Discard]
     V -->|Context| P[Alert Policy]
     P -->|Decide| N[Notifiers]
-    
-    style S fill:#d4e6f1,stroke:#3498db
-    style P fill:#f9e79f,stroke:#f1c40f
-    style N fill:#e8daef,stroke:#8e44ad
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
