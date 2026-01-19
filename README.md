@@ -99,11 +99,15 @@ For standard production usage without Docker Compose:
 
 3. **Configure**
    ```bash
-   # Download example config
+   # Download example config & env
    curl -O https://raw.githubusercontent.com/lan17/homesec/main/config/example.yaml
    mv example.yaml config.yaml
    
+   curl -O https://raw.githubusercontent.com/lan17/homesec/main/.env.example
+   mv .env.example .env
+
    # Setup environment (DB_DSN is required)
+   # Edit .env to set your secrets!
    export DB_DSN="postgresql://user:pass@localhost/homesec"
    ```
 
