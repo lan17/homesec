@@ -18,40 +18,20 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. C
 
 
 
-```
-                            +-----------------+
-                            |   Clip Source   |
-                            | (RTSP/FTP/Dir)  |
-                            +--------+--------+
-                                     |
-                +--------------------+--------------------+
-                |                                         |
-        +-------v-------+                       +---------v---------+
-        |    Upload     +-----( Store )-------->|  Storage Backend  |
-        +---------------+                       |  (Local/Dropbox)  |
-                                                +-------------------+
-                |
-        +-------v-------+
-        | Object Filter |
-        |    (YOLO)     |
-        +-------+-------+
-                |
-        +-------v-------+       +----------------+
-        |  Object(s)?   +------>|    Discard     |
-        +-------+-------+  No   +----------------+
-                | Yes
-        +-------v-------+
-        | VLM Analysis  |
-        |   (Optional)  |
-        +-------+-------+
-                |
-        +-------v-------+
-        | Alert Policy  |
-        +-------+-------+
-                |
-        +-------v-------+
-        |  Notifier(s)  |
-        +---------------+
+```mermaid
+graph TD
+    S[Clip Source] -->|New Job| U[Upload]
+    S -->|New Job| F[Filter]
+    U -->|Store| DB[Storage]
+    F -->|Detect| AI{Object?}
+    AI -->|Yes| V[VLM Analysis]
+    AI -->|No| D[Discard]
+    V -->|Context| P[Alert Policy]
+    P -->|Decide| N[Notifiers]
+    
+    style S fill:#d4e6f1,stroke:#3498db
+    style P fill:#f9e79f,stroke:#f1c40f
+    style N fill:#e8daef,stroke:#8e44ad
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
