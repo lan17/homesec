@@ -7,21 +7,47 @@ import html
 import logging
 import os
 from collections import defaultdict
+from typing import Any
 
-import aiohttp
+aiohttp: Any
+
+try:
+    import aiohttp as _aiohttp
+except Exception:
+    aiohttp = None
+else:
+    aiohttp = _aiohttp
+
 
 from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
 from homesec.models.config import SendGridEmailConfig
 from homesec.models.vlm import SequenceAnalysis
+from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
 
+def _ensure_sendgrid_dependencies() -> None:
+    """Fail fast with a clear error if SendGrid dependencies are missing."""
+    if aiohttp is None:
+        raise RuntimeError(
+            "Missing dependency for SendGrid notifier. Install with: uv pip install aiohttp"
+        )
+
+
+@plugin(plugin_type=PluginType.NOTIFIER, name="sendgrid_email")
 class SendGridEmailNotifier(Notifier):
     """SendGrid email notifier for HomeSec alerts."""
 
+    config_cls = SendGridEmailConfig
+
+    @classmethod
+    def create(cls, config: SendGridEmailConfig) -> Notifier:
+        return cls(config)
+
     def __init__(self, config: SendGridEmailConfig) -> None:
+        _ensure_sendgrid_dependencies()
         self._api_key_env = config.api_key_env
         self._from_email = config.from_email
         self._from_name = config.from_name
@@ -62,7 +88,8 @@ class SendGridEmailNotifier(Notifier):
         async with session.post(url, json=payload, headers=headers) as response:
             if response.status >= 400:
                 details = await response.text()
-                raise RuntimeError(f"SendGrid email send failed ({response.status}): {details}")
+                logger.debug("SendGrid API error details: %s", details)
+                raise RuntimeError(f"SendGrid email send failed: HTTP {response.status}")
 
         logger.info(
             "Sent SendGrid email alert: to=%s clip_id=%s",
@@ -73,6 +100,8 @@ class SendGridEmailNotifier(Notifier):
     async def ping(self) -> bool:
         """Health check - verify SendGrid credentials and connectivity."""
         if self._shutdown_called or not self._api_key:
+            return False
+        if aiohttp is None:
             return False
 
         url = f"{self._api_base}/user/profile"
@@ -100,6 +129,8 @@ class SendGridEmailNotifier(Notifier):
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            if aiohttp is None:
+                raise RuntimeError("aiohttp dependency is required for SendGrid notifier")
             timeout = aiohttp.ClientTimeout(total=self._timeout_s)
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
@@ -138,7 +169,7 @@ class SendGridEmailNotifier(Notifier):
             {
                 "camera_name": alert.camera_name,
                 "clip_id": alert.clip_id,
-                "risk_level": alert.risk_level or "unknown",
+                "risk_level": str(alert.risk_level) if alert.risk_level is not None else "unknown",
                 "activity_type": alert.activity_type or "unknown",
                 "notify_reason": alert.notify_reason,
                 "summary": alert.summary or "",
@@ -195,32 +226,3 @@ class SendGridEmailNotifier(Notifier):
             else:
                 rendered_items.append(f"<li>{rendered_value}</li>")
         return "<ul>" + "".join(rendered_items) + "</ul>"
-
-
-# Plugin registration
-from typing import cast
-
-from pydantic import BaseModel
-
-from homesec.interfaces import Notifier
-from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
-
-
-@notifier_plugin(name="sendgrid_email")
-def sendgrid_email_plugin() -> NotifierPlugin:
-    """SendGrid email notifier plugin factory.
-
-    Returns:
-        NotifierPlugin for SendGrid email notifications
-    """
-    from homesec.models.config import SendGridEmailConfig
-
-    def factory(cfg: BaseModel) -> Notifier:
-        # Config is already validated by app.py, just cast
-        return SendGridEmailNotifier(cast(SendGridEmailConfig, cfg))
-
-    return NotifierPlugin(
-        name="sendgrid_email",
-        config_model=SendGridEmailConfig,
-        factory=factory,
-    )

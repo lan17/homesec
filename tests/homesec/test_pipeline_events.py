@@ -77,11 +77,10 @@ def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> 
 
 def make_alert_policy(config: Config) -> DefaultAlertPolicy:
     settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
-    return DefaultAlertPolicy(
-        settings=settings,
-        overrides=config.per_camera_alert,
-        trigger_classes=config.vlm.trigger_classes,
-    )
+    settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
+    settings.overrides = config.per_camera_alert
+    settings.trigger_classes = set(config.vlm.trigger_classes)
+    return DefaultAlertPolicy(settings)
 
 
 def make_clip(tmp_path: Path, clip_id: str) -> Clip:

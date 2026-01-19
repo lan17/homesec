@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-RiskLevel = Literal["low", "medium", "high", "critical"]
+from homesec.models.enums import RiskLevelField
+
+__all__ = ["AnalysisResult", "VLMConfig", "VLMPreprocessConfig"]
 
 
 class AnalysisResult(BaseModel):
     """Structured result from VLM analysis of a video clip."""
 
-    risk_level: RiskLevel
+    risk_level: RiskLevelField
     activity_type: str
     summary: str
     analysis: SequenceAnalysis | None = None
@@ -38,7 +40,7 @@ class SequenceAnalysis(BaseModel):
 
     model_config = {"extra": "forbid"}
     sequence_description: str
-    max_risk_level: RiskLevel
+    max_risk_level: RiskLevelField
     primary_activity: Literal[
         "normal_delivery",
         "normal_visitor",
@@ -77,13 +79,15 @@ class OpenAILLMConfig(BaseModel):
     max_tokens: int | None = None
     temperature: float | None = 0.0
     request_timeout: float = 60.0
+    trigger_classes: list[str] = Field(default_factory=lambda: ["person"])
+    max_workers: int = Field(default=2, ge=1)
 
 
 class VLMConfig(BaseModel):
     """Base VLM configuration.
 
     LLM-specific config is stored in the 'llm' field.
-    - During YAML parsing: dict[str, object] (preserves all third-party fields)
+    - During YAML parsing: dict[str, Any] (preserves all third-party fields)
     - After plugin discovery: BaseModel subclass (validated against plugin.config_model)
 
     Note: Backend names are validated against the registry at runtime via
@@ -94,5 +98,12 @@ class VLMConfig(BaseModel):
     backend: str
     trigger_classes: list[str] = Field(default_factory=lambda: ["person"])
     max_workers: int = Field(default=2, ge=1)
-    llm: dict[str, object] | BaseModel  # Dict before validation, BaseModel after
+    llm: dict[str, Any] | BaseModel  # Dict before validation, BaseModel after
     preprocessing: VLMPreprocessConfig = Field(default_factory=VLMPreprocessConfig)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value

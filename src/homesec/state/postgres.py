@@ -18,6 +18,7 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -27,6 +28,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from homesec.interfaces import EventStore, StateStore
 from homesec.models.clip import ClipStateData
+from homesec.models.enums import EventType
 from homesec.models.events import (
     AlertDecisionMadeEvent,
     ClipDeletedEvent,
@@ -52,23 +54,25 @@ from homesec.models.events import (
 
 logger = logging.getLogger(__name__)
 
+# Map EventType enum to event model classes
+# Using enum values ensures consistency with event models
 _EVENT_TYPE_MAP: dict[str, type[ClipEventModel]] = {
-    "clip_recorded": ClipRecordedEvent,
-    "clip_deleted": ClipDeletedEvent,
-    "clip_rechecked": ClipRecheckedEvent,
-    "upload_started": UploadStartedEvent,
-    "upload_completed": UploadCompletedEvent,
-    "upload_failed": UploadFailedEvent,
-    "filter_started": FilterStartedEvent,
-    "filter_completed": FilterCompletedEvent,
-    "filter_failed": FilterFailedEvent,
-    "vlm_started": VLMStartedEvent,
-    "vlm_completed": VLMCompletedEvent,
-    "vlm_failed": VLMFailedEvent,
-    "vlm_skipped": VLMSkippedEvent,
-    "alert_decision_made": AlertDecisionMadeEvent,
-    "notification_sent": NotificationSentEvent,
-    "notification_failed": NotificationFailedEvent,
+    EventType.CLIP_RECORDED: ClipRecordedEvent,
+    EventType.CLIP_DELETED: ClipDeletedEvent,
+    EventType.CLIP_RECHECKED: ClipRecheckedEvent,
+    EventType.UPLOAD_STARTED: UploadStartedEvent,
+    EventType.UPLOAD_COMPLETED: UploadCompletedEvent,
+    EventType.UPLOAD_FAILED: UploadFailedEvent,
+    EventType.FILTER_STARTED: FilterStartedEvent,
+    EventType.FILTER_COMPLETED: FilterCompletedEvent,
+    EventType.FILTER_FAILED: FilterFailedEvent,
+    EventType.VLM_STARTED: VLMStartedEvent,
+    EventType.VLM_COMPLETED: VLMCompletedEvent,
+    EventType.VLM_FAILED: VLMFailedEvent,
+    EventType.VLM_SKIPPED: VLMSkippedEvent,
+    EventType.ALERT_DECISION_MADE: AlertDecisionMadeEvent,
+    EventType.NOTIFICATION_SENT: NotificationSentEvent,
+    EventType.NOTIFICATION_FAILED: NotificationFailedEvent,
 }
 
 
@@ -338,7 +342,7 @@ class PostgresStateStore(StateStore):
         """Parse JSONB payload from SQLAlchemy into a dict."""
         return _parse_jsonb_payload(raw)
 
-    def create_event_store(self) -> PostgresEventStore | NoopEventStore:
+    def create_event_store(self) -> EventStore:
         """Create a Postgres-backed event store or a no-op fallback."""
         if self._engine is None:
             return NoopEventStore()
@@ -455,6 +459,19 @@ class PostgresEventStore(EventStore):
             logger.error("Failed to get events for %s: %s", clip_id, e, exc_info=e)
             return []
 
+    async def shutdown(self, timeout: float | None = None) -> None:
+        """Shutdown is handled by PostgresStateStore which owns the engine."""
+        _ = timeout
+
+    async def ping(self) -> bool:
+        """Health check - verify database is reachable."""
+        try:
+            async with self._engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
 
 class NoopEventStore(EventStore):
     """Event store that drops events (used when Postgres is unavailable)."""
@@ -468,6 +485,14 @@ class NoopEventStore(EventStore):
         after_id: int | None = None,
     ) -> list[ClipLifecycleEvent]:
         return []
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        """No resources to clean up."""
+        _ = timeout
+
+    async def ping(self) -> bool:
+        """Noop store is always 'unhealthy' - indicates no real backend."""
+        return False
 
 
 class NoopStateStore(StateStore):
@@ -498,3 +523,7 @@ class NoopStateStore(StateStore):
 
     async def ping(self) -> bool:
         return False
+
+    def create_event_store(self) -> EventStore:
+        """Return NoopEventStore."""
+        return NoopEventStore()

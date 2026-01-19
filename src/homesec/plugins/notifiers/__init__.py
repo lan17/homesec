@@ -3,79 +3,43 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TypeVar
+from typing import cast
 
 from pydantic import BaseModel
 
 from homesec.interfaces import Notifier
 from homesec.plugins.notifiers.multiplex import MultiplexNotifier, NotifierEntry
+from homesec.plugins.registry import PluginType, load_plugin
 
 logger = logging.getLogger(__name__)
 
 
-NotifierFactory = Callable[[BaseModel], Notifier]
-
-
-@dataclass(frozen=True)
-class NotifierPlugin:
-    name: str
-    config_model: type[BaseModel]
-    factory: NotifierFactory
-
-
-NOTIFIER_REGISTRY: dict[str, NotifierPlugin] = {}
-
-
-def register_notifier(plugin: NotifierPlugin) -> None:
-    """Register a notifier plugin with collision detection.
+def load_notifier_plugin(backend: str, config: dict[str, object] | BaseModel) -> Notifier:
+    """Load and instantiate a notifier plugin.
 
     Args:
-        plugin: Notifier plugin to register
-
-    Raises:
-        ValueError: If a plugin with the same name is already registered
-    """
-    if plugin.name in NOTIFIER_REGISTRY:
-        raise ValueError(
-            f"Notifier plugin '{plugin.name}' is already registered. "
-            f"Plugin names must be unique across all notifier plugins."
-        )
-    NOTIFIER_REGISTRY[plugin.name] = plugin
-
-
-T = TypeVar("T", bound=Callable[[], NotifierPlugin])
-
-
-def notifier_plugin(name: str) -> Callable[[T], T]:
-    """Decorator to register a notifier plugin.
-
-    Usage:
-        @notifier_plugin(name="my_notifier")
-        def my_notifier_plugin() -> NotifierPlugin:
-            return NotifierPlugin(...)
-
-    Args:
-        name: Plugin name (for validation only - must match plugin.name)
+        backend: Notifier backend name (e.g., "mqtt", "sendgrid_email")
+        config: Raw config dict or already-validated BaseModel
 
     Returns:
-        Decorator function that registers the plugin
+        Configured Notifier instance
+
+    Raises:
+        ValueError: If backend not found in registry
+        ValidationError: If config validation fails
     """
-
-    def decorator(factory_fn: T) -> T:
-        plugin = factory_fn()
-        register_notifier(plugin)
-        return factory_fn
-
-    return decorator
+    return cast(
+        Notifier,
+        load_plugin(
+            PluginType.NOTIFIER,
+            backend,
+            config,
+        ),
+    )
 
 
 __all__ = [
     "MultiplexNotifier",
     "NotifierEntry",
-    "NotifierPlugin",
-    "NOTIFIER_REGISTRY",
-    "register_notifier",
-    "notifier_plugin",
+    "load_notifier_plugin",
 ]

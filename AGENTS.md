@@ -1,6 +1,6 @@
 # HomeSec Development Guidelines
 
-**Last reviewed:** 2025-01-11
+**Last reviewed:** 2026-01-18
 **Purpose:** Critical patterns to prevent runtime bugs when extending HomeSec. For architecture overview, see `DESIGN.md`.
 
 ---
@@ -12,6 +12,7 @@
 - **Repository pattern**: Use `ClipRepository` for all state/event writes. Never touch `StateStore`/`EventStore` directly.
 - **Preserve stack traces**: Custom errors must set `self.__cause__ = cause` to preserve original exception.
 - **Tests must use Given/When/Then comments**: Every test must include these comments and follow behavioral testing principles (see `TESTING.md`).
+- **Import from canonical source**: Import types from their defining module, not re-exports. For example, import `RiskLevel` from `models.enums`, not from `models.vlm`. Avoid creating re-exports in `__all__`.
 - **Postgres for state**: Use `clip_states` table with `clip_id` (primary key) + `data` (jsonb) for evolvable schema.
 - **Pydantic everywhere**: Validate config, DB payloads, VLM outputs, and MQTT payloads with Pydantic models.
 - **Clarify before complexity**: Ask user for clarification when simpler design may exist. Don't proceed with complex workarounds.
@@ -232,14 +233,13 @@ await self._event_store.append(event)  # What if this fails? State already updat
 
 ### 4. Plugin Registration
 
-**Rule:** Use entry point discovery for all plugin types. Allows users to add custom plugins without modifying core code.
+**Rule:** Use decorator-based registration with typed factories. All plugins follow the same pattern: `@<type>_plugin` decorator + `load_<type>_plugin()` loader.
 
-**✅ Template: Entry Point Discovery**
+**✅ Template: Decorator-Based Registration**
 
 ```python
 # In src/homesec/plugins/notifiers/__init__.py
 from dataclasses import dataclass
-from importlib.metadata import entry_points
 from pydantic import BaseModel
 
 @dataclass(frozen=True)
@@ -250,28 +250,71 @@ class NotifierPlugin:
 
 NOTIFIER_REGISTRY: dict[str, NotifierPlugin] = {}
 
-def register_notifier(name: str, config_model: type, factory: Callable):
-    NOTIFIER_REGISTRY[name] = NotifierPlugin(name, config_model, factory)
+def register_notifier(plugin: NotifierPlugin) -> None:
+    """Register with collision detection."""
+    if plugin.name in NOTIFIER_REGISTRY:
+        raise ValueError(f"Plugin '{plugin.name}' already registered")
+    NOTIFIER_REGISTRY[plugin.name] = plugin
 
-def discover_notifiers(import_paths: list[str]):
-    # Discover from pyproject.toml entry points
-    for ep in entry_points(group="homesec.notifiers"):
-        register_fn = ep.load()
-        register_fn()
+def notifier_plugin(name: str) -> Callable[[T], T]:
+    """Decorator to register a notifier plugin."""
+    def decorator(factory_fn: T) -> T:
+        plugin = factory_fn()
+        register_notifier(plugin)
+        return factory_fn
+    return decorator
 
-# In custom plugin package:
-def register():
-    from homesec.plugins.notifiers import register_notifier
-    register_notifier("mqtt", MQTTConfig, lambda cfg: MQTTNotifier(cfg))
-
-# In user's pyproject.toml:
-# [project.entry-points."homesec.notifiers"]
-# mqtt = "homesec_mqtt:register"
+def load_notifier_plugin(backend: str, config: dict | BaseModel) -> Notifier:
+    """Load and instantiate a notifier plugin with config validation."""
+    plugin = NOTIFIER_REGISTRY[backend.lower()]
+    validated = plugin.config_model.model_validate(config) if isinstance(config, dict) else config
+    return plugin.factory(validated)
 ```
 
-**Note:** All plugin types (filters, VLMs, storage, notifiers, alert policies) use this unified pattern. For shared utilities, see `src/homesec/plugins/utils.py` which provides `iter_entry_points()` and `load_plugin_from_entry_point()` helpers.
+**✅ Template: Plugin Implementation with Type Safety**
 
-**Reference:** See any plugin `__init__.py` file for complete implementations: `src/homesec/plugins/filters/__init__.py`, `src/homesec/plugins/analyzers/__init__.py`, `src/homesec/plugins/storage/__init__.py`, `src/homesec/plugins/notifiers/__init__.py`, or `src/homesec/plugins/alert_policies/__init__.py`.
+```python
+# In src/homesec/plugins/notifiers/mqtt.py
+from pydantic import BaseModel
+from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
+
+class MQTTNotifierConfig(BaseModel):
+    broker_url: str
+    topic_prefix: str = "homesec"
+
+@notifier_plugin(name="mqtt")
+def mqtt_notifier_plugin() -> NotifierPlugin:
+    def factory(cfg: BaseModel) -> Notifier:
+        # Type-safe: validate config type at runtime
+        if not isinstance(cfg, MQTTNotifierConfig):
+            raise TypeError(f"Expected MQTTNotifierConfig, got {type(cfg).__name__}")
+        return MQTTNotifier(cfg)
+
+    return NotifierPlugin(
+        name="mqtt",
+        config_model=MQTTNotifierConfig,
+        factory=factory,
+    )
+```
+
+**Plugin Types and Context Objects:**
+
+| Plugin Type | Decorator | Context | Factory Signature |
+|-------------|-----------|---------|-------------------|
+| Filters | `@filter_plugin` | `FilterContext` | `(BaseModel, FilterContext) -> ObjectFilter` |
+| Analyzers | `@vlm_plugin` | `VLMContext` | `(BaseModel, VLMContext) -> VLMAnalyzer` |
+| Sources | `@source_plugin` | `SourceContext` | `(BaseModel, SourceContext) -> ClipSource` |
+| Alert Policies | `@alert_policy_plugin` | `AlertPolicyContext` | `(BaseModel, AlertPolicyContext) -> AlertPolicy` |
+| Notifiers | `@notifier_plugin` | None | `(BaseModel) -> Notifier` |
+| Storage | `@storage_plugin` | None | `(BaseModel) -> StorageBackend` |
+
+**Why some plugins have Context and others don't:**
+- **With Context** (Filters, Analyzers, Sources, AlertPolicies): These plugins need runtime information beyond their config—camera names, executor pools, file paths, or pipeline state. Context objects provide this without polluting config models.
+- **Without Context** (Notifiers, Storage): These are stateless services that only need their own config. They don't depend on which camera or pipeline invokes them.
+
+**Note:** Always use `isinstance()` checks in factories instead of `cast()` to ensure type safety at runtime.
+
+**Reference:** See `PLUGIN_DEVELOPMENT.md` for complete guide. Example implementations: `src/homesec/plugins/filters/yolo.py`, `src/homesec/plugins/notifiers/mqtt.py`.
 
 ---
 
@@ -380,6 +423,13 @@ make db-migrate         # Run Alembic migrations
 - `PascalCase` for classes
 - `UPPER_SNAKE_CASE` for constants
 - 4-space indentation
+
+### Import Organization
+
+- **All imports at top of file** - Never use local/inline imports except when absolutely necessary to avoid circular imports
+- **Standard ordering**: stdlib → third-party → homesec (ruff handles this with `ruff check --fix`)
+- **No re-imports at end of file** - Plugin registration decorators should use imports from the top
+- **Circular import avoidance**: Use `TYPE_CHECKING` blocks for type-only imports when needed
 
 ### Security
 

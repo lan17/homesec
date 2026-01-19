@@ -23,6 +23,7 @@ from homesec.models.config import (
     StateStoreConfig,
     StorageConfig,
 )
+from homesec.models.enums import RiskLevel
 from homesec.models.filter import (
     FilterConfig,
     FilterOverrides,
@@ -61,11 +62,10 @@ def make_repository(config: Config, mocks: PipelineMocks) -> ClipRepository:
 def make_alert_policy(config: Config) -> DefaultAlertPolicy:
     """Build the default alert policy from config."""
     settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
-    return DefaultAlertPolicy(
-        settings=settings,
-        overrides=config.per_camera_alert,
-        trigger_classes=config.vlm.trigger_classes,
-    )
+    # Inject runtime fields as the registry would
+    settings.overrides = config.per_camera_alert
+    settings.trigger_classes = set(config.vlm.trigger_classes)
+    return DefaultAlertPolicy(settings)
 
 
 @pytest.fixture
@@ -746,7 +746,7 @@ class TestClipPipelineAlertPolicy:
         notifier: MockNotifier = mocks.notifier
         assert len(notifier.sent_alerts) == 1
         alert = notifier.sent_alerts[0]
-        assert alert.risk_level == "high"
+        assert alert.risk_level == RiskLevel.HIGH
         assert alert.activity_type == "person_loitering"
 
 

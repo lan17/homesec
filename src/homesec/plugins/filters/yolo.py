@@ -5,17 +5,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Callable
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import cast
+from typing import Any
 
-import cv2
-import torch
-from ultralytics import YOLO  # type: ignore[attr-defined]
+cv2: Any
+torch: Any
+YOLO_CLASS: Any
+
+try:
+    import cv2 as _cv2
+    import torch as _torch
+    from ultralytics import YOLO as _YOLO  # type: ignore[attr-defined]
+except Exception:
+    cv2 = None
+    torch = None
+    YOLO_CLASS = None
+else:
+    cv2 = _cv2
+    torch = _torch
+    YOLO_CLASS = _YOLO
 
 from homesec.interfaces import ObjectFilter
-from homesec.models.filter import FilterConfig, FilterOverrides, FilterResult, YoloFilterSettings
+from homesec.models.filter import FilterOverrides, FilterResult, YoloFilterSettings
+from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +48,18 @@ HUMAN_ANIMAL_CLASSES = {
     23: "giraffe",
 }
 
-_MODEL_CACHE: dict[tuple[str, str], YOLO] = {}
+_MODEL_CACHE: dict[tuple[str, str], Any] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
 _YOLO_CACHE_DIR = Path.cwd() / "yolo_cache"
+
+
+def _ensure_yolo_dependencies() -> None:
+    """Fail fast with a clear error if YOLO dependencies are missing."""
+    if cv2 is None or torch is None or YOLO_CLASS is None:
+        raise RuntimeError(
+            "Missing dependency for YOLO filter. "
+            "Install with: uv pip install ultralytics opencv-python"
+        )
 
 
 def _resolve_requested_path(model_path: str) -> Path:
@@ -45,6 +69,23 @@ def _resolve_requested_path(model_path: str) -> Path:
     return requested
 
 
+def _check_file_safe(key: str) -> str | None:
+    """Call ultralytics check_file with type-safe result handling.
+
+    Returns the resolved path string if found, None otherwise.
+    """
+    try:
+        from ultralytics.utils.checks import check_file
+
+        result = check_file(key)  # type: ignore[no-untyped-call]
+        # Validate result is string (ultralytics may return various types)
+        if isinstance(result, str):
+            return result
+        return None
+    except Exception:
+        return None
+
+
 def _resolve_weights_path(model_path: str) -> Path:
     requested_path = _resolve_requested_path(model_path)
     if requested_path.exists():
@@ -52,23 +93,18 @@ def _resolve_weights_path(model_path: str) -> Path:
 
     resolved: Path | None = None
     try:
-        from ultralytics.utils.checks import check_file
-
-        check_file_fn = cast(Callable[[str], str | None], check_file)
-
         for key in (str(requested_path), requested_path.name):
-            try:
-                candidate = check_file_fn(key)
-            except Exception:
-                continue
+            candidate = _check_file_safe(key)
             if candidate and Path(candidate).exists():
                 resolved = Path(candidate)
                 break
 
         if resolved is None and requested_path.suffix.lower() == ".pt":
             try:
-                _ = YOLO(requested_path.name)
-                candidate = check_file_fn(requested_path.name)
+                if YOLO_CLASS is None:
+                    raise RuntimeError("YOLO dependencies are not available")
+                _ = YOLO_CLASS(requested_path.name)
+                candidate = _check_file_safe(requested_path.name)
                 if candidate and Path(candidate).exists():
                     resolved = Path(candidate)
             except Exception:
@@ -90,15 +126,31 @@ def _resolve_weights_path(model_path: str) -> Path:
     return resolved
 
 
-def _get_model(model_path: str, device: str) -> YOLO:
+def _get_model(model_path: str, device: str) -> Any:
+    """Get or create a cached YOLO model instance.
+
+    Thread-safe: uses a lock to prevent duplicate model loading when
+    multiple threads access the cache simultaneously.
+    """
     key = (model_path, device)
+    # Fast path: check without lock (safe for reads)
     model = _MODEL_CACHE.get(key)
-    if model is None:
-        model = YOLO(model_path).to(device)
-        _MODEL_CACHE[key] = model
-    return model
+    if model is not None:
+        return model
+
+    # Slow path: acquire lock for potential write
+    with _MODEL_CACHE_LOCK:
+        # Double-check after acquiring lock
+        model = _MODEL_CACHE.get(key)
+        if model is None:
+            if YOLO_CLASS is None:
+                raise RuntimeError("YOLO dependencies are not available")
+            model = YOLO_CLASS(model_path).to(device)
+            _MODEL_CACHE[key] = model
+        return model
 
 
+@plugin(plugin_type=PluginType.FILTER, name="yolo")
 class YOLOv8Filter(ObjectFilter):
     """YOLO-based object detection filter.
 
@@ -107,34 +159,29 @@ class YOLOv8Filter(ObjectFilter):
     Bare model filenames resolve under ./yolo_cache and auto-download if missing.
     """
 
-    def __init__(self, config: FilterConfig) -> None:
-        """Initialize YOLO filter with config validation.
+    config_cls = YoloFilterSettings
 
-        Required config:
-            model_path: Path to .pt model file
+    @classmethod
+    def create(cls, config: YoloFilterSettings) -> ObjectFilter:
+        return cls(config)
 
-        Optional config:
-            classes: List of class names to detect (default: person)
-            min_confidence: Minimum confidence threshold (default: 0.5)
-            sample_fps: Frame sampling rate (default: 2)
-            min_box_h_ratio: Minimum box height ratio (default: 0.1)
-            min_hits: Minimum detections to confirm (default: 1)
+    def __init__(self, settings: YoloFilterSettings) -> None:
+        """Initialize YOLO filter with validated settings.
+
+        Args:
+            settings: YOLO-specific configuration (model_path, classes, thresholds)
+                      Also assumes settings.max_workers is populated.
         """
-        match config.config:
-            case YoloFilterSettings() as settings:
-                cfg = settings
-            case _:
-                raise ValueError("YOLOv8Filter requires YoloFilterSettings config")
-
-        self._settings = cfg
-        self.model_path = _resolve_weights_path(str(cfg.model_path))
+        _ensure_yolo_dependencies()
+        self._settings = settings
+        self.model_path = _resolve_weights_path(str(settings.model_path))
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model not found: {self.model_path}")
 
         self._class_id_cache: dict[tuple[str, ...], list[int]] = {}
 
         # Initialize executor
-        self._executor = ProcessPoolExecutor(max_workers=config.max_workers)
+        self._executor = ProcessPoolExecutor(max_workers=settings.max_workers)
         self._shutdown_called = False
 
         logger.info(
@@ -187,6 +234,15 @@ class YOLOv8Filter(ObjectFilter):
         self._executor.shutdown(wait=True, cancel_futures=False)
         logger.info("YOLOv8Filter shutdown complete")
 
+    async def ping(self) -> bool:
+        """Health check - verify executor is alive and model path exists."""
+        if self._shutdown_called:
+            return False
+        if not self.model_path.exists():
+            return False
+        # Executor is considered healthy if not shut down
+        return True
+
     def _apply_overrides(self, overrides: FilterOverrides | None) -> YoloFilterSettings:
         if overrides is None:
             return self._settings
@@ -218,6 +274,9 @@ def _detect_worker(
 
     This runs in a separate process, so it needs to load the model fresh.
     """
+    if cv2 is None or torch is None:
+        raise RuntimeError("YOLO dependencies are not available")
+
     # Determine device
     device = (
         "mps"
@@ -290,26 +349,4 @@ def _detect_worker(
         confidence=max_confidence if detected_classes else 0.0,
         model=Path(model_path).name,
         sampled_frames=sampled_frames,
-    )
-
-
-# Plugin registration
-from homesec.plugins.filters import FilterPlugin, filter_plugin
-
-
-@filter_plugin(name="yolo")
-def yolo_filter_plugin() -> FilterPlugin:
-    """YOLO filter plugin factory.
-
-    Returns:
-        FilterPlugin for YOLOv8 object detection
-    """
-
-    def factory(cfg: FilterConfig) -> ObjectFilter:
-        return YOLOv8Filter(cfg)
-
-    return FilterPlugin(
-        name="yolo",
-        config_model=YoloFilterSettings,
-        factory=factory,
     )

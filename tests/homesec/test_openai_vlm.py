@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from homesec.models.enums import RiskLevel
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import OpenAILLMConfig, VLMConfig, VLMPreprocessConfig
 from homesec.plugins.analyzers.openai import OpenAIVLM
@@ -33,6 +34,21 @@ def _make_config(**overrides: Any) -> VLMConfig:
     }
     defaults.update(overrides)
     return VLMConfig(**defaults)
+
+
+def _make_vlm(config: VLMConfig | None = None) -> OpenAIVLM:
+    """Create an OpenAIVLM."""
+    if config is None:
+        config = _make_config()
+    llm_config = config.llm
+    if not isinstance(llm_config, OpenAILLMConfig):
+        raise TypeError("Expected OpenAILLMConfig")
+
+    # Inject context into config as if it was loaded by plugin registry
+    llm_config.trigger_classes = list(config.trigger_classes)
+    llm_config.max_workers = config.max_workers
+
+    return OpenAIVLM(llm_config)
 
 
 def _make_filter_result(**overrides: Any) -> FilterResult:
@@ -141,7 +157,7 @@ class TestOpenAIVLMAnalyze:
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=5)
 
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
         captured_request: dict[str, Any] = {}
 
         mock_response = AsyncMock()
@@ -190,7 +206,7 @@ class TestOpenAIVLMAnalyze:
             assert re.match(r"^\d{2}:\d{2}:\d{2}\.\d{2}$", timestamp)
 
         # Then: Result is parsed correctly
-        assert result.risk_level == "low"
+        assert result.risk_level == RiskLevel.LOW
         assert result.activity_type == "passerby"
         assert result.prompt_tokens == 100
 
@@ -208,7 +224,7 @@ class TestOpenAIVLMAnalyze:
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=12, size=(128, 128))
 
-        analyzer = OpenAIVLM(config)
+        analyzer = _make_vlm(config)
         captured_request: dict[str, Any] = {}
 
         mock_response = AsyncMock()
@@ -245,7 +261,7 @@ class TestOpenAIVLMAnalyze:
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=3)
 
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
 
         mock_response = AsyncMock()
         mock_response.status = 401
@@ -271,7 +287,7 @@ class TestOpenAIVLMAnalyze:
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=3)
 
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
 
         mock_response = AsyncMock()
         mock_response.status = 200
@@ -298,7 +314,7 @@ class TestOpenAIVLMAnalyze:
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=3)
 
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
 
         mock_response = AsyncMock()
         mock_response.status = 200
@@ -325,7 +341,7 @@ class TestOpenAIVLMAnalyze:
         video_path = tmp_path / "empty.mp4"
         video_path.write_bytes(b"not a real video")
 
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
 
         # When/Then: Analyze raises ValueError
         with pytest.raises(ValueError, match="No frames extracted"):
@@ -344,24 +360,7 @@ class TestOpenAIVLMConfiguration:
 
         # When/Then: Creating analyzer raises ValueError
         with pytest.raises(ValueError, match="API key not found"):
-            OpenAIVLM(_make_config())
-
-    def test_raises_with_wrong_llm_config_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Raises ValueError when llm is not OpenAILLMConfig."""
-        # Given: A config with wrong llm type
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-
-        from pydantic import BaseModel
-
-        class WrongLLMConfig(BaseModel):
-            api_key_env: str = "OPENAI_API_KEY"
-
-        config = _make_config()
-        wrong_config = config.model_copy(update={"llm": WrongLLMConfig()})
-
-        # When/Then: Creating analyzer raises ValueError
-        with pytest.raises(ValueError, match="requires llm=OpenAILLMConfig"):
-            OpenAIVLM(wrong_config)
+            _make_vlm()
 
 
 class TestOpenAIVLMShutdown:
@@ -377,7 +376,7 @@ class TestOpenAIVLMShutdown:
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=3)
 
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
         await analyzer.shutdown()
 
         # When/Then: Analyze raises RuntimeError
@@ -393,7 +392,7 @@ class TestOpenAIVLMShutdown:
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         video_path = tmp_path / "clip.mp4"
         _create_test_video(video_path, frames=3)
-        analyzer = OpenAIVLM(_make_config())
+        analyzer = _make_vlm()
 
         mock_response = AsyncMock()
         mock_response.status = 200

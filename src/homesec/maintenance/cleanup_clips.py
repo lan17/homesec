@@ -21,8 +21,8 @@ from homesec.interfaces import ObjectFilter, StorageBackend
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterConfig, YoloFilterSettings
 from homesec.plugins import discover_all_plugins
-from homesec.plugins.filters import load_filter_plugin
-from homesec.plugins.storage import create_storage
+from homesec.plugins.filters import load_filter
+from homesec.plugins.storage import load_storage_plugin
 from homesec.repository.clip_repository import ClipRepository
 from homesec.state.postgres import PostgresStateStore
 
@@ -168,7 +168,7 @@ async def run_cleanup(opts: CleanupOptions) -> None:
     if not dsn:
         raise RuntimeError("Postgres DSN is required for cleanup")
 
-    storage = create_storage(cfg.storage)
+    storage = load_storage_plugin(cfg.storage)
     state_store = PostgresStateStore(dsn)
     ok = await state_store.initialize()
     if not ok:
@@ -178,7 +178,7 @@ async def run_cleanup(opts: CleanupOptions) -> None:
     repo = ClipRepository(state_store, event_store, retry=cfg.retry)
 
     recheck_cfg = _build_recheck_filter_config(cfg.filter, opts)
-    filter_plugin = load_filter_plugin(recheck_cfg)
+    filter_plugin = load_filter(recheck_cfg)
 
     sem = asyncio.Semaphore(int(opts.workers))
 

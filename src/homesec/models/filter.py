@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class FilterResult(BaseModel):
@@ -28,6 +30,7 @@ class YoloFilterSettings(BaseModel):
     sample_fps: int = Field(default=2, ge=1)
     min_box_h_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     min_hits: int = Field(default=1, ge=1)
+    max_workers: int = Field(default=4, ge=1)
 
 
 class FilterOverrides(BaseModel):
@@ -46,7 +49,7 @@ class FilterConfig(BaseModel):
     """Base filter configuration (plugin-agnostic).
 
     Plugin-specific config is stored in the 'config' field.
-    - During YAML parsing: dict[str, object] (preserves all third-party fields)
+    - During YAML parsing: dict[str, Any] (preserves all third-party fields)
     - After plugin discovery: BaseModel subclass (validated against plugin.config_model)
 
     Note: Plugin names are validated against the registry at runtime via
@@ -57,4 +60,11 @@ class FilterConfig(BaseModel):
 
     plugin: str
     max_workers: int = Field(default=4, ge=1)
-    config: dict[str, object] | BaseModel  # Dict before validation, BaseModel after
+    config: dict[str, Any] | BaseModel  # Dict before validation, BaseModel after
+
+    @field_validator("plugin", mode="before")
+    @classmethod
+    def _normalize_plugin(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value

@@ -9,3 +9,4 @@ video_cache
 yolo_cache
 ftp_incoming
 config/config.yaml
+.coverage

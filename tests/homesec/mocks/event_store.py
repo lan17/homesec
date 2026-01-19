@@ -52,3 +52,11 @@ class MockEventStore:
         if after_id is not None:
             result = [event for event in result if event.id is not None and event.id > after_id]
         return result
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        """No resources to clean up in mock."""
+        _ = timeout
+
+    async def ping(self) -> bool:
+        """Health check - returns True unless simulating failure."""
+        return not self.simulate_failure

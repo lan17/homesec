@@ -6,21 +6,37 @@ import asyncio
 import logging
 import os
 import threading
+from typing import Any
 
-import paho.mqtt.client as mqtt
+mqtt: Any
+
+try:
+    import paho.mqtt.client as _mqtt
+except Exception:
+    mqtt = None
+else:
+    mqtt = _mqtt
 
 from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
 from homesec.models.config import MQTTConfig
+from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
 
+@plugin(plugin_type=PluginType.NOTIFIER, name="mqtt")
 class MQTTNotifier(Notifier):
     """MQTT notifier for Home Assistant alerts.
 
     Publishes alert messages to configured topics with QoS settings.
     """
+
+    config_cls = MQTTConfig
+
+    @classmethod
+    def create(cls, config: MQTTConfig) -> Notifier:
+        return cls(config)
 
     def __init__(self, config: MQTTConfig) -> None:
         """Initialize MQTT notifier with config validation.
@@ -28,6 +44,11 @@ class MQTTNotifier(Notifier):
         Args:
             config: MQTTConfig instance
         """
+        if mqtt is None:
+            raise RuntimeError(
+                "Missing dependency: paho-mqtt. Install with: uv pip install paho-mqtt"
+            )
+
         self.host = config.host
         self.port = int(config.port)
         self.topic_template = config.topic_template
@@ -157,32 +178,3 @@ class MQTTNotifier(Notifier):
             raise RuntimeError(
                 f"MQTT broker not connected after {self.connection_timeout}s timeout"
             )
-
-
-# Plugin registration
-from typing import cast
-
-from pydantic import BaseModel
-
-from homesec.interfaces import Notifier
-from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
-
-
-@notifier_plugin(name="mqtt")
-def mqtt_plugin() -> NotifierPlugin:
-    """MQTT notifier plugin factory.
-
-    Returns:
-        NotifierPlugin for MQTT notifications
-    """
-    from homesec.models.config import MQTTConfig
-
-    def factory(cfg: BaseModel) -> Notifier:
-        # Config is already validated by app.py, just cast
-        return MQTTNotifier(cast(MQTTConfig, cfg))
-
-    return NotifierPlugin(
-        name="mqtt",
-        config_model=MQTTConfig,
-        factory=factory,
-    )

@@ -46,6 +46,10 @@ class _TestFilter(ObjectFilter):
         _ = timeout
         self.shutdown_called = True
 
+    async def ping(self) -> bool:
+        """Health check - test filter is always healthy."""
+        return not self.shutdown_called
+
 
 def _write_cleanup_config(path: Path, *, dsn: str, storage_root: Path) -> None:
     config = {
@@ -124,7 +128,7 @@ async def test_cleanup_deletes_empty_clips(
 
     filter_plugin = _TestFilter(detect_on=set())
     monkeypatch.setattr(
-        "homesec.maintenance.cleanup_clips.load_filter_plugin",
+        "homesec.maintenance.cleanup_clips.load_filter",
         lambda *_: filter_plugin,
     )
 
@@ -190,7 +194,7 @@ async def test_cleanup_marks_false_negatives(
 
     filter_plugin = _TestFilter(detect_on={"detect"})
     monkeypatch.setattr(
-        "homesec.maintenance.cleanup_clips.load_filter_plugin",
+        "homesec.maintenance.cleanup_clips.load_filter",
         lambda *_: filter_plugin,
     )
 

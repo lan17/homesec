@@ -23,6 +23,7 @@ class ThreadedClipSource(ClipSource, ABC):
         self._thread: Thread | None = None
         self._stop_event = Event()
         self._last_heartbeat = time.monotonic()
+        self._started = False
 
     def register_callback(self, callback: Callable[[Clip], None]) -> None:
         """Register callback to be invoked when a new clip is ready."""
@@ -34,6 +35,7 @@ class ThreadedClipSource(ClipSource, ABC):
             logger.warning("%s already started", self.__class__.__name__)
             return
 
+        self._started = True
         self._stop_event.clear()
         self._on_start()
         self._thread = Thread(target=self._run_wrapper, daemon=True)
@@ -68,12 +70,21 @@ class ThreadedClipSource(ClipSource, ABC):
         """Return monotonic timestamp of last heartbeat update."""
         return self._last_heartbeat
 
+    async def ping(self) -> bool:
+        """Health check - verify source is operational.
+
+        Returns True if:
+        - Source not started yet (ready to start)
+        - Background thread is alive
+        """
+        return self._thread_is_healthy()
+
     def _touch_heartbeat(self) -> None:
         self._last_heartbeat = time.monotonic()
 
     def _thread_is_healthy(self) -> bool:
         if self._thread is None:
-            return True
+            return not self._started
         return self._thread.is_alive()
 
     def _emit_clip(self, clip: Clip) -> None:
@@ -126,6 +137,7 @@ class AsyncClipSource(ClipSource, ABC):
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._last_heartbeat = time.monotonic()
+        self._started = False
 
     def register_callback(self, callback: Callable[[Clip], None]) -> None:
         """Register callback to be invoked when a new clip is ready."""
@@ -137,6 +149,7 @@ class AsyncClipSource(ClipSource, ABC):
             logger.warning("%s already started", self.__class__.__name__)
             return
 
+        self._started = True
         self._stop_event.clear()
         self._on_start()
         self._task = asyncio.create_task(self._run_wrapper())
@@ -174,12 +187,21 @@ class AsyncClipSource(ClipSource, ABC):
         """Return timestamp (monotonic) of last successful operation."""
         return self._last_heartbeat
 
+    async def ping(self) -> bool:
+        """Health check - verify source is operational.
+
+        Returns True if:
+        - Source not started yet (ready to start)
+        - Background task is running
+        """
+        return self._task_is_healthy()
+
     def _touch_heartbeat(self) -> None:
         self._last_heartbeat = time.monotonic()
 
     def _task_is_healthy(self) -> bool:
         if self._task is None:
-            return True
+            return not self._started
         return not self._task.done()
 
     def _emit_clip(self, clip: Clip) -> None:
