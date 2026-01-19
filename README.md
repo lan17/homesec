@@ -22,7 +22,7 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. Y
 graph TD
     subgraph Pipeline [Media Processing Pipeline]
         direction TB
-        S[Clip Source] -->|New Job| C(Clip File)
+        S[Clip Source] -->|New Clip File| C(Clip File)
         C --> U([Upload to Storage])
         C --> F([Detect objects: YOLO])
         F -->|Detected objects| AI{Trigger classes filter}
@@ -34,7 +34,7 @@ graph TD
     end
 
     PG[(Postgres)]
-    C -.->|State & Events| PG
+    Pipeline -.->|State & Events| PG
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
