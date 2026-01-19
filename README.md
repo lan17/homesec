@@ -8,7 +8,34 @@
 
 HomeSec is a self-hosted, extensible video pipeline for home security cameras. Connect cameras directly via RTSP with motion detection, receive clips over FTP, or watch a folder—then filter with AI and get smart notifications. Your footage stays private and off third-party clouds.
 
-Under the hood, it's a pluggable async pipeline: ingest clips from multiple sources, run object detection (YOLO), optionally call a vision-language model ([VLM](https://en.wikipedia.org/wiki/Vision%E2%80%93language_model)) for structured analysis, and send alerts via [MQTT](https://en.wikipedia.org/wiki/MQTT) or email. Every component—sources, filters, storage, analyzers, notifiers—is a plugin you can swap or extend.
+## Philosophy
+
+- **Privacy First**: Your footage never leaves your LAN unless you explicitly configure a cloud sink (like Dropbox). No "cloud by default."
+- **Plugin First**: Every component—source, filter, analyzer, notifier—is a plugin. Don't like our AI? Swap it out in 5 lines of Python.
+- **Robustness**: Designed for the real world of flaky consumer cameras and unstable networks.
+
+## Pipeline at a glance
+
+```mermaid
+graph LR
+    S[Clip Source] -->|New Job| U[Upload]
+    S -->|New Job| F[Filter]
+    U -->|Store| DB[Storage]
+    F -->|Detect| AI{Object?}
+    AI -->|Yes| V[VLM Analysis]
+    AI -->|No| D[Discard]
+    V -->|Context| P[Alert Policy]
+    P -->|Decide| N[Notifiers]
+    
+    style S fill:#d4e6f1,stroke:#3498db
+    style P fill:#f9e79f,stroke:#f1c40f
+    style N fill:#e8daef,stroke:#8e44ad
+```
+
+- **Parallel Processing**: Upload and filter run in parallel; VLM runs only when specific classes are detected.
+- **Resilience**: Upload failures do not block alerts; filter failures stop expensive VLM calls.
+- **State**: Metadata is stored in Postgres (`clip_states` + `clip_events`) for full observability.
+
 
 ## Table of Contents
 
@@ -37,167 +64,91 @@ Under the hood, it's a pluggable async pipeline: ingest clips from multiple sour
 - Postgres-backed state + events with graceful degradation
 - Health endpoint plus optional Postgres telemetry logging
 
-## Pipeline at a glance
 
-```
-ClipSource -> (Upload + Filter) -> VLM (optional) -> Alert Policy -> Notifier(s)
-```
-
-- Upload and filter run in parallel; VLM runs only when trigger classes are detected.
-- Upload failures do not block alerts; filter failures stop processing.
-- State is stored in Postgres (`clip_states` + `clip_events`) when available.
 
 ## Quickstart
 
-### 1. Install
-
-```bash
-pip install homesec
-```
-
-Requires Python 3.10+ and ffmpeg.
-
-### 2. Configure
-
-Create a `config.yaml` file (see [Configuration](#configuration) for all options):
-
-```yaml
-version: 1
-
-cameras:
-  - name: front_door
-    source:
-      type: rtsp
-      config:
-        rtsp_url_env: FRONT_DOOR_RTSP_URL
-        output_dir: "./recordings"
-
-storage:
-  backend: local
-  local:
-    root: "./storage"
-
-state_store:
-  dsn_env: DB_DSN
-
-notifiers:
-  - backend: mqtt
-    config:
-      host: "localhost"
-      port: 1883
-
-filter:
-  plugin: yolo
-
-vlm:
-  backend: openai
-  llm:
-    api_key_env: OPENAI_API_KEY
-    model: gpt-4o
-
-alert_policy:
-  backend: default
-  enabled: true
-  config:
-    min_risk_level: medium
-```
-
-Set environment variables in your shell or a `.env` file:
-
-```bash
-export FRONT_DOOR_RTSP_URL="rtsp://user:pass@camera-ip:554/stream"
-export DB_DSN="postgresql://user:pass@localhost/homesec"
-export OPENAI_API_KEY="sk-..."
-```
-
-### 3. Run
-
-```bash
-homesec run --config config.yaml
-```
-
-### With Docker (easier setup)
-
-Cloning the repo gives you convenience commands and a Docker Compose setup with Postgres:
+### 30-Second Start (Docker)
+The fastest way to see it in action. Includes a pre-configured Postgres and a dummy local source.
 
 ```bash
 git clone https://github.com/lan17/homesec.git
 cd homesec
-
-cp config/example.yaml config/config.yaml
-cp .env.example .env
-# Edit both files with your settings
-
-make up      # Start HomeSec + Postgres
-make down    # Stop
+make up
 ```
+*Modify `config/config.yaml` to add your real cameras, then restart.*
+
+### Manual Setup
+If you prefer running on bare metal (Mac/Linux):
+
+1. **Install**
+   ```bash
+   pip install homesec
+   # Requires Python 3.10+ and ffmpeg
+   ```
+
+2. **Configure**
+   ```bash
+   cp config/example.yaml config.yaml
+   cp .env.example .env
+   # Edit with your RTSP URLs and keys
+   ```
+
+3. **Run**
+   ```bash
+   homesec run --config config.yaml
+   ```
+
+### With Docker (easier setup)
+
+See "30-Second Start" above. `make up` handles everything.
 
 ## Configuration
 
-Configs are YAML and validated with Pydantic. See [Quickstart](#2-configure) for a minimal example, or `config/example.yaml` for all options.
+Configuration is YAML-based and strictly validated. Secrets (API keys, passwords) should always be loaded from environment variables (`_env` suffix).
 
-### Full example (Dropbox + per-camera alerts)
+### Recipes
+
+#### 1. The "Power User" (Robust RTSP)
+Best for real-world setups with flaky cameras.
 
 ```yaml
-version: 1
-
 cameras:
-  - name: front_door
+  - name: driveway
     source:
       type: rtsp
       config:
-        rtsp_url_env: FRONT_DOOR_RTSP_URL
+        rtsp_url_env: CAM_URL
         output_dir: "./recordings"
-
-storage:
-  backend: dropbox
-  dropbox:
-    root: "/homecam"
-    token_env: DROPBOX_TOKEN
-    app_key_env: DROPBOX_APP_KEY
-    app_secret_env: DROPBOX_APP_SECRET
-    refresh_token_env: DROPBOX_REFRESH_TOKEN
-
-state_store:
-  dsn_env: DB_DSN
-
-notifiers:
-  - backend: mqtt
-    config:
-      host: "localhost"
-      port: 1883
+        # Critical for camera compatibility:
+        ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
+        reconnect_backoff_s: 5
 
 filter:
   plugin: yolo
   config:
-    classes: ["person"]
-    min_confidence: 0.5
-
-vlm:
-  backend: openai
-  llm:
-    api_key_env: OPENAI_API_KEY
-    model: gpt-4o
-
-alert_policy:
-  backend: default
-  enabled: true
-  config:
-    min_risk_level: medium
-
-per_camera_alert:
-  front_door:
-    min_risk_level: low
-    notify_on_activity_types: ["person_at_door", "delivery"]
+    classes: ["person", "car"]
+    min_confidence: 0.6
 ```
 
-### Tips
+#### 2. The "Cloud Safe" (Dropbox + Encryption)
+Uploads to Cloud but keeps analysis local.
 
-- Secrets never go in YAML. Use env var names (`*_env`) and set values in your shell or `.env`.
-- At least one notifier must be configured, but set `alert_policy.enabled: false` to disable sending alerts.
-- Built-in YOLO classes: `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
+```yaml
+storage:
+  backend: dropbox
+  dropbox:
+    token_env: DROPBOX_TOKEN
+    root: "/SecurityCam"
 
-## CLI
+notifiers:
+    - backend: sendgrid_email
+      config:
+        api_key_env: EMAIL_KEY
+        to_emails: ["me@example.com"]
+```
+
+See [`config/example.yaml`](config/example.yaml) for a complete reference of all options.
 
 After installation, the `homesec` command is available:
 
@@ -254,35 +205,9 @@ All interfaces are defined in [`src/homesec/interfaces.py`](src/homesec/interfac
 
 ### Writing a custom plugin
 
-Each plugin provides a name, a Pydantic config model, and a factory:
+Extending HomeSec is designed to be easy. You can write custom sources, filters, storage backends, and more.
 
-```python
-# my_package/filters/custom.py
-from pydantic import BaseModel
-from homesec.interfaces import ObjectFilter
-from homesec.plugins.filters import FilterPlugin, filter_plugin
-
-class CustomConfig(BaseModel):
-    threshold: float = 0.5
-
-class CustomFilter(ObjectFilter):
-    ...
-
-@filter_plugin(name="custom")
-def register() -> FilterPlugin:
-    return FilterPlugin(
-        name="custom",
-        config_model=CustomConfig,
-        factory=lambda cfg: CustomFilter(cfg),
-    )
-```
-
-Register via entry points in `pyproject.toml`:
-
-```toml
-[project.entry-points."homesec.plugins"]
-my_filters = "my_package.filters.custom"
-```
+👉 **See [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md) for a complete guide.**
 
 ## Observability
 
