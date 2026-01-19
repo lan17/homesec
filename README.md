@@ -45,12 +45,12 @@ graph TD
 - [Highlights](#highlights)
 - [Pipeline at a glance](#pipeline-at-a-glance)
 - [Quickstart](#quickstart)
-  - [Install](#1-install)
-  - [Configure](#2-configure)
-  - [Run](#3-run)
-  - [With Docker](#with-docker-easier-setup)
+  - [Install](#2-install)
+  - [Configure](#3-configure)
+  - [Run](#4-run)
+  - [With Docker](#30-second-start-docker)
 - [Configuration](#configuration)
-- [CLI](#cli)
+  - [Commands](#commands)
 - [Plugins](#plugins)
   - [Built-in plugins](#built-in-plugins)
   - [Plugin interfaces](#plugin-interfaces)
@@ -189,7 +189,6 @@ In your `.env`:
 ```bash
 DROPBOX_TOKEN="sl.Al..."
 SENDGRID_API_KEY="SG.xyz..."
-EMAIL_KEY="SG.xyz..."
 ```
 
 See [`config/example.yaml`](config/example.yaml) for a complete reference of all options.
@@ -227,7 +226,7 @@ Use `homesec <command> --help` for detailed options on each command.
 
 ## Plugins
 
-## Extensible by design
+### Extensible by design
 
 We designed HomeSec to be modular. Each major capability is an interface (`ClipSource`, `StorageBackend`, `ObjectFilter`, `VLMAnalyzer`, `AlertPolicy`, `Notifier`) defined in `src/homesec/interfaces.py`. This means you can swap out components (like replacing YOLO with a different detector) without changing the core pipeline.
   
