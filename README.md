@@ -20,19 +20,30 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. Y
 
 ```mermaid
 graph TD
-    S[Clip Source] -->|New Job| C(Clip File)
-    C --> U[Upload]
-    C --> F[Filter]
-    U -->|Store| DB[Storage]
-    F -->|Detect| AI{Object?}
-    AI -->|Yes| V[VLM Analysis]
-    AI -->|No| D[Discard]
-    V -->|Context| P[Alert Policy]
-    P -->|Decide| N[Notifiers]
-    
-    style S fill:#d4e6f1,stroke:#3498db
-    style P fill:#f9e79f,stroke:#f1c40f
-    style N fill:#e8daef,stroke:#8e44ad
+    %% Layout Wrapper for horizontal alignment
+    subgraph Wrapper [" "]
+        direction LR
+        style Wrapper fill:none,stroke:none
+        
+        S[Clip Source]
+        
+        subgraph Pipeline [Media Processing Pipeline]
+            direction TB
+            C(Clip File) --> U([Upload to Storage])
+            C --> F([Detect objects: YOLO])
+            F -->|Detected objects| AI{Trigger classes filter}
+            AI -->|Yes| V([VLM Analysis])
+            AI -->|No| D([Discard])
+            V -->|Risk level, detected objects| P{Alert Policy filter}
+            P -->|No| D
+            P -->|YES| N[Notifiers]
+        end
+        
+        S -->|New Clip File| Pipeline
+        
+        PG[(Postgres)]
+        Pipeline -.->|State & Events| PG
+    end
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
@@ -45,12 +56,10 @@ graph TD
 - [Highlights](#highlights)
 - [Pipeline at a glance](#pipeline-at-a-glance)
 - [Quickstart](#quickstart)
-  - [Install](#1-install)
-  - [Configure](#2-configure)
-  - [Run](#3-run)
-  - [With Docker](#with-docker-easier-setup)
+  - [30-Second Start (Docker)](#30-second-start-docker)
+  - [Manual Setup](#manual-setup)
 - [Configuration](#configuration)
-- [CLI](#cli)
+  - [Commands](#commands)
 - [Plugins](#plugins)
   - [Built-in plugins](#built-in-plugins)
   - [Plugin interfaces](#plugin-interfaces)
@@ -189,7 +198,6 @@ In your `.env`:
 ```bash
 DROPBOX_TOKEN="sl.Al..."
 SENDGRID_API_KEY="SG.xyz..."
-EMAIL_KEY="SG.xyz..."
 ```
 
 See [`config/example.yaml`](config/example.yaml) for a complete reference of all options.
@@ -227,7 +235,7 @@ Use `homesec <command> --help` for detailed options on each command.
 
 ## Plugins
 
-## Extensible by design
+### Extensible by design
 
 We designed HomeSec to be modular. Each major capability is an interface (`ClipSource`, `StorageBackend`, `ObjectFilter`, `VLMAnalyzer`, `AlertPolicy`, `Notifier`) defined in `src/homesec/interfaces.py`. This means you can swap out components (like replacing YOLO with a different detector) without changing the core pipeline.
   
