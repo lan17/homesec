@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-01-19)
+
+### Bug Fixes
+
+- Use PAT token for release workflow to bypass branch protection
+  ([#13](https://github.com/lan17/homesec/pull/13),
+  [`511ac6d`](https://github.com/lan17/homesec/commit/511ac6d8899365d324ede41aefdbe8fab910f1cb))
+
+### Refactoring
+
+- Complete plugin architecture standardization ([#10](https://github.com/lan17/homesec/pull/10),
+  [`4e5b85f`](https://github.com/lan17/homesec/commit/4e5b85fd9a32d4f71c4365222a735c2e01eba583))
+
+
 ## v1.1.1 (2026-01-16)
 
 ### Bug Fixes
