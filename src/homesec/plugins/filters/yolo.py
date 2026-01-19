@@ -1,4 +1,4 @@
-"""YOLOv8 object detection filter plugin."""
+"""YOLO object detection filter plugin."""
 
 from __future__ import annotations
 
@@ -151,7 +151,7 @@ def _get_model(model_path: str, device: str) -> Any:
 
 
 @plugin(plugin_type=PluginType.FILTER, name="yolo")
-class YOLOv8Filter(ObjectFilter):
+class YOLOFilter(ObjectFilter):
     """YOLO-based object detection filter.
 
     Uses ProcessPoolExecutor internally for CPU/GPU-bound inference.

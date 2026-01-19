@@ -1,4 +1,4 @@
-"""Tests for YOLOv8 filter worker logic."""
+"""Tests for YOLO filter worker logic."""
 
 from __future__ import annotations
 
