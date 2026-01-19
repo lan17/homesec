@@ -6,12 +6,12 @@
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 [![codecov](https://codecov.io/gh/lan17/HomeSec/branch/main/graph/badge.svg)](https://codecov.io/gh/lan17/HomeSec)
 
-HomeSec is a self-hosted, extensible video pipeline for home security cameras. Connect cameras directly via RTSP with motion detection, receive clips over FTP, or implement your own ClipSource—then filter with AI and get smart notifications. Your footage stays private and off third-party clouds.
+HomeSec is a self-hosted, extensible video pipeline for home security cameras. You can connect cameras directly via RTSP, receive clips over FTP, or implement your own ClipSource. From there, the pipeline filters events with AI and sends smart notifications. Your footage stays private and off third-party clouds.
 
 ## Design Principles
 
 - **Local-Only Data Processing**: Video footage remains on the local network by default. Cloud usage (Storage, VLM/OpenAI) is strictly opt-in.
-- **Modular Architecture**: All major components (sources, filters, analyzers, notifiers) are decoupled plugins defined by strict interfaces.
+- **Modular Architecture**: All major components (sources, filters, analyzers, notifiers) are decoupled plugins defined by strict interfaces. If you want to use a different AI model or storage backend, you can swap it out with a few lines of Python.
 - **Resilience**: The primary resilience feature is backing up clips to storage. The pipeline handles intermittent stream failures and network instability without crashing or stalling.
 
 ## Pipeline at a glance
@@ -213,9 +213,9 @@ Use `homesec <command> --help` for detailed options on each command.
 
 ## Extensible by design
 
-HomeSec is intentionally modular. Each major capability is an interface (`ClipSource`, `StorageBackend`, `ObjectFilter`, `VLMAnalyzer`, `AlertPolicy`, `Notifier`) defined in `src/homesec/interfaces.py`. This allows you to swap out components (e.g., replace YOLO with a different detector) without changing the core pipeline.
-
-HomeSec uses a plugin architecture—every component is discovered at runtime via entry points.
+We designed HomeSec to be modular. Each major capability is an interface (`ClipSource`, `StorageBackend`, `ObjectFilter`, `VLMAnalyzer`, `AlertPolicy`, `Notifier`) defined in `src/homesec/interfaces.py`. This means you can swap out components (like replacing YOLO with a different detector) without changing the core pipeline.
+  
+HomeSec uses a plugin architecture where every component is discovered at runtime via entry points.
 
 ### Built-in plugins
 
