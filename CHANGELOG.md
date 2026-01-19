@@ -2,6 +2,145 @@
 
 <!-- version list -->
 
+## v1.2.1 (2026-01-19)
+
+### Bug Fixes
+
+- Correct ToC anchor for 'With Docker' section ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Improve CLI help output to show available commands ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+### Chores
+
+- Sync uv.lock version ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Update uv.lock
+  ([`f417abc`](https://github.com/lan17/homesec/commit/f417abc93632e52dbb8bb109ba9bedf354713252))
+
+### Documentation
+
+- Add .env setup to manual quickstart to address feedback
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Add installation section and update CLI examples ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Add Postgres state tracking to mermaid diagram ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Address copilot feedback (ToC links, hierarchy, config cleanup)
+  ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Address PR feedback on Intro and Design Principles ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Clean up mermaid diagram with simplified Postgres tracking
+  ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Consolidate plugin sections with interfaces table ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Fix ToC links to point to valid headers ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Fix yolo docstring in tests ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Huge readme refactor and config update ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Humanize tone, simpler phrasing, no em-dashes ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Improve mermaid diagram to show clip file intermediate step
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Improve README intro with clearer value prop and PyPI badge
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Move Clip Source inside subgraph to fix title overlap
+  ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Overhaul README & Update Config for Accuracy/DX ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Polish README - consistent paths, clearer tips ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Position Postgres to the right of pipeline ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Refine mermaid diagram (graph LR, remove styles) ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Refine mermaid layout with nested wrapper subgraph
+  ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Refine README tone to be more technical ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Remove dup header, fix ToC, update yolo docstring ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Rename RTSP var to DRIVEWAY_RTSP_URL to match camera name
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Reorganize README table of contents ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Restructure Configuration with minimal and full examples
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Restructure Quickstart - shared config, Docker/non-Docker run options
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Revert mermaid diagram to vertical (graph TD) ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+- Revert to mermaid diagram but make it vertical ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Simplify Running without Docker, expand Development section
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Streamline Quickstart for pip-only users ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Sync readme config examples with .env.example ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Update Highlights - YOLO11 and remove redundant bullet
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Wrap mermaid pipeline in subgraph for better visual grouping
+  ([#15](https://github.com/lan17/homesec/pull/15),
+  [`908b0d8`](https://github.com/lan17/homesec/commit/908b0d807dfe91eae5a0b29601c598d305c676d6))
+
+### Refactoring
+
+- Rename YOLOv8Filter to YOLOFilter and overhaul docs based on feedback
+  ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+- Use Fire's native help output for CLI commands ([#9](https://github.com/lan17/homesec/pull/9),
+  [`77b5f65`](https://github.com/lan17/homesec/commit/77b5f65461ce4016186cfbf2b3961779fd5a9fef))
+
+
 ## v1.2.0 (2026-01-19)
 
 ### Bug Fixes
