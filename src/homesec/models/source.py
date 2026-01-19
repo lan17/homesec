@@ -30,6 +30,7 @@ class RTSPSourceConfig(BaseModel):
     heartbeat_s: float = 30.0
     rtsp_connect_timeout_s: float = 2.0
     rtsp_io_timeout_s: float = 2.0
+    ffmpeg_flags: list[str] = Field(default_factory=list)
 
 
 class LocalFolderSourceConfig(BaseModel):
