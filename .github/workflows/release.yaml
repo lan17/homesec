@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -43,7 +44,7 @@ jobs:
         if: ${{ !inputs.dry_run }}
         id: semrel
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           semantic-release version
           echo "version=$(grep 'version = ' pyproject.toml | head -1 | cut -d'\"' -f2)" >> $GITHUB_OUTPUT
@@ -63,7 +64,7 @@ jobs:
       - name: Upload to GitHub Release
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           VERSION=${{ steps.semrel.outputs.version }}
           # Upload dist files to the release that semantic-release created
