@@ -570,7 +570,7 @@ class RTSPSource(ThreadedClipSource):
 
         has_fps_mode = any(x == "-fps_mode" or x == "-vsync" for x in user_flags)
         if not has_fps_mode:
-            cmd.extend(["-fps_mode", "passthrough"])
+            cmd.extend(["-vsync", "0"])
 
         # Add user flags last so they can potentially override or add to the above
         cmd.extend(user_flags)
