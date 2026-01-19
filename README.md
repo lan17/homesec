@@ -20,21 +20,30 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. Y
 
 ```mermaid
 graph TD
-    subgraph Pipeline [Media Processing Pipeline]
-        direction TB
-        S[Clip Source] -->|New Clip File| C(Clip File)
-        C --> U([Upload to Storage])
-        C --> F([Detect objects: YOLO])
-        F -->|Detected objects| AI{Trigger classes filter}
-        AI -->|Yes| V([VLM Analysis])
-        AI -->|No| D([Discard])
-        V -->|Risk level, detected objects| P{Alert Policy filter}
-        P -->|No| D
-        P -->|YES| N[Notifiers]
+    %% Layout Wrapper for horizontal alignment
+    subgraph Wrapper [" "]
+        direction LR
+        style Wrapper fill:none,stroke:none
+        
+        S[Clip Source]
+        
+        subgraph Pipeline [Media Processing Pipeline]
+            direction TB
+            C(Clip File) --> U([Upload to Storage])
+            C --> F([Detect objects: YOLO])
+            F -->|Detected objects| AI{Trigger classes filter}
+            AI -->|Yes| V([VLM Analysis])
+            AI -->|No| D([Discard])
+            V -->|Risk level, detected objects| P{Alert Policy filter}
+            P -->|No| D
+            P -->|YES| N[Notifiers]
+        end
+        
+        S -->|New Job| C
     end
 
     PG[(Postgres)]
-    Pipeline -.->|State & Events| PG
+    C -.->|State & Events| PG
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
