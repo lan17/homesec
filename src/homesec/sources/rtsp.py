@@ -554,11 +554,6 @@ class RTSPSource(ThreadedClipSource):
             "-y",
         ]
 
-        # Add robust defaults if no conflicting flags are provided by user
-        defaults = [
-            ("-loglevel", "warning"),
-            ("-fflags", "+genpts+igndts"),
-        ]
         user_flags = self.ffmpeg_flags
 
         # Naive check to see if user overrode defaults
@@ -792,10 +787,6 @@ class RTSPSource(ThreadedClipSource):
             logger.info("Hardware acceleration disabled due to previous failures")
 
         # 2. Global Flags (Robustness & Logging)
-        defaults = [
-            ("-loglevel", "warning"),
-            ("-fflags", "+genpts+igndts"),
-        ]
         user_flags = self.ffmpeg_flags
 
         has_loglevel = any(x == "-loglevel" for x in user_flags)
@@ -828,11 +819,10 @@ class RTSPSource(ThreadedClipSource):
         ]
 
         timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-        timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
         attempts: list[tuple[str, list[str]]] = [
             (
-                "stimeout+rw_timeout",
-                ["-stimeout", timeout_us_connect, "-rw_timeout", timeout_us_io] + base_input_args,
+                "stimeout",
+                ["-stimeout", timeout_us_connect] + base_input_args,
             ),
             ("stimeout", ["-stimeout", timeout_us_connect] + base_input_args),
             ("no_timeouts", base_input_args),
