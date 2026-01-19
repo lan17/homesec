@@ -21,14 +21,14 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. Y
 ```mermaid
 graph TD
     S[Clip Source] -->|New Job| C(Clip File)
-    C --> U[Upload]
-    C --> F[Filter]
-    U -->|Store| DB[Storage]
-    F -->|Detect| AI{Object?}
-    AI -->|Yes| V[VLM Analysis]
-    AI -->|No| D[Discard]
-    V -->|Risk level, detected objects| P[Alert Policy]
-    P -->|Decide| N[Notifiers]
+    C --> U([Upload to Storage])
+    C --> F([Detect objects: YOLO])
+    F -->|Detected objects| AI{Trigger classes filter}
+    AI -->|Yes| V([VLM Analysis])
+    AI -->|No| D([Discard])
+    V -->|Risk level, detected objects| P{Alert Policy filter}
+    P -->|No| D
+    P -->|YES| N[Notifiers]
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
