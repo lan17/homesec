@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+from homesec.models.enums import ClipStatus
 
 if TYPE_CHECKING:
     from homesec.models.alert import AlertDecision
@@ -33,7 +35,7 @@ class ClipStateData(BaseModel):
     camera_name: str
 
     # High-level status for queries
-    status: Literal["queued_local", "uploaded", "analyzed", "done", "error", "deleted"]
+    status: ClipStatus
 
     # Pointers
     local_path: str

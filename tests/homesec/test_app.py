@@ -11,9 +11,7 @@ from homesec.models.config import (
     CameraSourceConfig,
     Config,
     DropboxStorageConfig,
-    MQTTConfig,
     NotifierConfig,
-    SendGridEmailConfig,
     StateStoreConfig,
     StorageConfig,
 )
@@ -21,7 +19,7 @@ from homesec.models.filter import FilterConfig, YoloFilterSettings
 from homesec.models.source import LocalFolderSourceConfig
 from homesec.models.storage import StorageUploadResult
 from homesec.models.vlm import OpenAILLMConfig, VLMConfig
-from homesec.plugins.notifiers import NOTIFIER_REGISTRY, MultiplexNotifier, NotifierPlugin
+from homesec.plugins.notifiers import MultiplexNotifier
 
 
 class _StubStorage:
@@ -62,6 +60,11 @@ class _StubStateStore:
     async def ping(self) -> bool:
         return True
 
+    def create_event_store(self) -> object:
+        from homesec.state import NoopEventStore
+
+        return NoopEventStore()
+
     async def shutdown(self, timeout: float | None = None) -> None:
         self.shutdown_called = True
 
@@ -89,6 +92,26 @@ class _StubFilter:
 class _StubVLM:
     async def shutdown(self, timeout: float | None = None) -> None:
         return None
+
+
+class _StubSource:
+    """Stub source for testing."""
+
+    def __init__(self) -> None:
+        self._callback: object = None
+        self.shutdown_called = False
+
+    def register_callback(self, callback: object) -> None:
+        self._callback = callback
+
+    async def start(self) -> None:
+        return None
+
+    def is_healthy(self) -> bool:
+        return True
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        self.shutdown_called = True
 
 
 def _make_config(notifiers: list[object]) -> Config:
@@ -124,8 +147,35 @@ def _make_config(notifiers: list[object]) -> Config:
     )
 
 
+@pytest.fixture
+def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock plugin loading to return stubs."""
+    monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
+    monkeypatch.setattr("homesec.app.PostgresStateStore", _StubStateStore)
+    monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
+
+    # Mock specific loads used in app.py
+    monkeypatch.setattr("homesec.app.load_filter", lambda _: _StubFilter())
+    monkeypatch.setattr("homesec.app.load_analyzer", lambda _: _StubVLM())
+    monkeypatch.setattr(
+        "homesec.app.load_source_plugin", lambda source_type, config, camera_name: _StubSource()
+    )
+
+    # Mock registry validation
+    def _mock_validate(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr("homesec.app.validate_plugin_names", _mock_validate)
+
+    # Mock notifier loading loop in app.py manually if needed,
+    # but app.py uses load_notifier_plugin.
+    monkeypatch.setattr(
+        "homesec.app.load_notifier_plugin", lambda backend, config: _StubNotifier(config)
+    )
+
+
 @pytest.mark.asyncio
-async def test_application_wires_pipeline_and_health(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_application_wires_pipeline_and_health(_mock_plugins: None) -> None:
     """Application should wire pipeline, sources, and health server."""
     # Given a config and stubbed dependencies
     config = _make_config(
@@ -138,18 +188,6 @@ async def test_application_wires_pipeline_and_health(monkeypatch: pytest.MonkeyP
     )
     app = Application(config_path=__file__)
     app._config = config
-
-    monkeypatch.setattr("homesec.app.create_storage", lambda cfg: _StubStorage(cfg))
-    monkeypatch.setattr("homesec.app.PostgresStateStore", _StubStateStore)
-    monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
-    NOTIFIER_REGISTRY.clear()
-    NOTIFIER_REGISTRY["mqtt"] = NotifierPlugin(
-        name="mqtt",
-        config_model=MQTTConfig,
-        factory=lambda cfg: _StubNotifier(cfg),
-    )
-    monkeypatch.setattr("homesec.app.load_filter_plugin", lambda _: _StubFilter())
-    monkeypatch.setattr("homesec.app.load_vlm_plugin", lambda _: _StubVLM())
 
     # When creating components
     await app._create_components()
@@ -170,7 +208,7 @@ async def test_application_wires_pipeline_and_health(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_application_uses_multiplex_for_multiple_notifiers(
-    monkeypatch: pytest.MonkeyPatch,
+    _mock_plugins: None,
 ) -> None:
     """Multiple notifiers should use MultiplexNotifier."""
     # Given a config with multiple notifiers and stubbed dependencies
@@ -191,23 +229,6 @@ async def test_application_uses_multiplex_for_multiple_notifiers(
     )
     app = Application(config_path=__file__)
     app._config = config
-
-    monkeypatch.setattr("homesec.app.create_storage", lambda cfg: _StubStorage(cfg))
-    monkeypatch.setattr("homesec.app.PostgresStateStore", _StubStateStore)
-    monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
-    NOTIFIER_REGISTRY.clear()
-    NOTIFIER_REGISTRY["mqtt"] = NotifierPlugin(
-        name="mqtt",
-        config_model=MQTTConfig,
-        factory=lambda cfg: _StubNotifier(cfg),
-    )
-    NOTIFIER_REGISTRY["sendgrid_email"] = NotifierPlugin(
-        name="sendgrid_email",
-        config_model=SendGridEmailConfig,
-        factory=lambda cfg: _StubNotifier(cfg),
-    )
-    monkeypatch.setattr("homesec.app.load_filter_plugin", lambda _: _StubFilter())
-    monkeypatch.setattr("homesec.app.load_vlm_plugin", lambda _: _StubVLM())
 
     # When creating components
     await app._create_components()

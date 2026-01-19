@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypeVar
+from typing import Any, TypeVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from homesec.models.enums import RiskLevel, RiskLevelField
 from homesec.models.filter import FilterConfig
 from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSPSourceConfig
-from homesec.models.vlm import (
-    RiskLevel,
-    VLMConfig,
-)
+from homesec.models.vlm import VLMConfig
 
 
 class AlertPolicyOverrides(BaseModel):
     """Per-camera alert policy overrides (only non-None fields override base)."""
 
-    min_risk_level: RiskLevel | None = None
+    min_risk_level: RiskLevelField | None = None
     notify_on_activity_types: list[str] | None = None
     notify_on_motion: bool | None = None
 
@@ -25,9 +23,11 @@ class AlertPolicyOverrides(BaseModel):
 class DefaultAlertPolicySettings(BaseModel):
     """Default alert policy settings."""
 
-    min_risk_level: RiskLevel = "medium"
+    min_risk_level: RiskLevelField = RiskLevel.MEDIUM
     notify_on_activity_types: list[str] = Field(default_factory=list)
     notify_on_motion: bool = False
+    overrides: dict[str, AlertPolicyOverrides] = Field(default_factory=dict, exclude=True)
+    trigger_classes: list[str] = Field(default_factory=list, exclude=True)
 
 
 class AlertPolicyConfig(BaseModel):
@@ -35,12 +35,21 @@ class AlertPolicyConfig(BaseModel):
 
     backend: str = "default"
     enabled: bool = True
-    config: dict[str, object] = Field(default_factory=dict)
+    config: dict[str, Any] | BaseModel = Field(default_factory=dict)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
     @model_validator(mode="after")
     def _validate_alert_policy(self) -> AlertPolicyConfig:
-        if self.backend == "default":
-            DefaultAlertPolicySettings.model_validate(self.config)
+        # Validate and reassign config for built-in backends
+        if self.backend == "default" and isinstance(self.config, dict):
+            validated = DefaultAlertPolicySettings.model_validate(self.config)
+            object.__setattr__(self, "config", validated)
         return self
 
 
@@ -83,11 +92,18 @@ class StorageConfig(BaseModel):
     local: LocalStorageConfig | None = None
     paths: StoragePathsConfig = Field(default_factory=StoragePathsConfig)
 
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
+
     @model_validator(mode="after")
     def _validate_builtin_backends(self) -> StorageConfig:
         """Validate that built-in backends have their required config.
 
-        Third-party backends are validated later in create_storage().
+        Third-party backends are validated later in load_storage_plugin().
         """
         match self.backend:
             case "dropbox":
@@ -103,7 +119,7 @@ class StorageConfig(BaseModel):
                         "Add 'storage.local' section to your config."
                     )
             case _:
-                # Third-party backend - validation happens in create_storage()
+                # Third-party backend - validation happens in load_storage_plugin()
                 pass
         return self
 
@@ -195,7 +211,14 @@ class NotifierConfig(BaseModel):
 
     backend: str
     enabled: bool = True
-    config: dict[str, object] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
 
 class RetentionConfig(BaseModel):
@@ -229,12 +252,17 @@ class HealthConfig(BaseModel):
 
 
 class CameraSourceConfig(BaseModel):
-    """Camera source configuration wrapper."""
+    """Camera source configuration wrapper.
+
+    The `type` field is a string to allow external plugins to register new source types.
+    Built-in types ("rtsp", "local_folder", "ftp") have their configs validated here.
+    External plugin configs are validated by the plugin at load time.
+    """
 
     model_config = {"extra": "forbid"}
 
-    type: Literal["rtsp", "local_folder", "ftp"]
-    config: RTSPSourceConfig | LocalFolderSourceConfig | FtpSourceConfig
+    type: str
+    config: RTSPSourceConfig | LocalFolderSourceConfig | FtpSourceConfig | dict[str, Any]
 
     @model_validator(mode="before")
     @classmethod
@@ -248,6 +276,9 @@ class CameraSourceConfig(BaseModel):
 
         config_data = raw_config or {}
         updated = dict(data)
+        if isinstance(source_type, str):
+            source_type = source_type.lower()
+            updated["type"] = source_type
         match source_type:
             case "rtsp":
                 updated["config"] = RTSPSourceConfig.model_validate(config_data)
@@ -255,7 +286,18 @@ class CameraSourceConfig(BaseModel):
                 updated["config"] = LocalFolderSourceConfig.model_validate(config_data)
             case "ftp":
                 updated["config"] = FtpSourceConfig.model_validate(config_data)
+            case _:
+                # External plugin source type - keep config as dict
+                # Plugin will validate at load time
+                updated["config"] = config_data if isinstance(config_data, dict) else {}
         return updated
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _normalize_type(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
     @model_validator(mode="after")
     def _validate_source_config(self) -> CameraSourceConfig:
@@ -271,6 +313,9 @@ class CameraSourceConfig(BaseModel):
             case "ftp":
                 if not isinstance(self.config, FtpSourceConfig):
                     raise ValueError("camera.source.config must be FtpSourceConfig for type=ftp")
+            case _:
+                # External plugin source type - validation happens at plugin load time
+                pass
         return self
 
 

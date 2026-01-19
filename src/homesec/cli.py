@@ -17,11 +17,7 @@ from homesec.config import ConfigError, load_config
 from homesec.config.validation import validate_camera_references, validate_plugin_names
 from homesec.logging_setup import configure_logging
 from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
-from homesec.plugins.alert_policies import ALERT_POLICY_REGISTRY
-from homesec.plugins.analyzers import VLM_REGISTRY
-from homesec.plugins.filters import FILTER_REGISTRY
-from homesec.plugins.notifiers import NOTIFIER_REGISTRY
-from homesec.plugins.storage import STORAGE_REGISTRY
+from homesec.plugins.registry import PluginType, get_plugin_names
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -73,11 +69,11 @@ class HomeSec:
             validate_camera_references(cfg)
             validate_plugin_names(
                 cfg,
-                sorted(FILTER_REGISTRY.keys()),
-                sorted(VLM_REGISTRY.keys()),
-                valid_storage=sorted(STORAGE_REGISTRY.keys()),
-                valid_notifiers=sorted(NOTIFIER_REGISTRY.keys()),
-                valid_alert_policies=sorted(ALERT_POLICY_REGISTRY.keys()),
+                sorted(get_plugin_names(PluginType.FILTER)),
+                sorted(get_plugin_names(PluginType.ANALYZER)),
+                valid_storage=sorted(get_plugin_names(PluginType.STORAGE)),
+                valid_notifiers=sorted(get_plugin_names(PluginType.NOTIFIER)),
+                valid_alert_policies=sorted(get_plugin_names(PluginType.ALERT_POLICY)),
             )
 
             print(f"✓ Config valid: {config_path}")

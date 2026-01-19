@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-01-19)
+
+### Bug Fixes
+
+- **rtsp**: Remove incompatible -rw_timeout flag and unused variables
+  ([`40339a2`](https://github.com/lan17/homesec/commit/40339a27ff3f45117ef918c6485da8dbcc0be724))
+
+- **rtsp**: Use -vsync 0 instead of -fps_mode for older ffmpeg compat
+  ([`22fc7e3`](https://github.com/lan17/homesec/commit/22fc7e3fab57aefa869d4246b036d5d0b47494dd))
+
+### Chores
+
+- Sync uv.lock with project version 1.1.2 ([#14](https://github.com/lan17/homesec/pull/14),
+  [`64f50d8`](https://github.com/lan17/homesec/commit/64f50d86d22f0a52a8298c9ba38146cc17a1f0be))
+
+### Features
+
+- **rtsp**: Add configurable ffmpeg_flags and robust defaults
+  ([`e460637`](https://github.com/lan17/homesec/commit/e460637bbdeee7f3947ddf2778a69c980edcf24b))
+
+
+## v1.1.2 (2026-01-19)
+
+### Bug Fixes
+
+- Use PAT token for release workflow to bypass branch protection
+  ([#13](https://github.com/lan17/homesec/pull/13),
+  [`511ac6d`](https://github.com/lan17/homesec/commit/511ac6d8899365d324ede41aefdbe8fab910f1cb))
+
+### Refactoring
+
+- Complete plugin architecture standardization ([#10](https://github.com/lan17/homesec/pull/10),
+  [`4e5b85f`](https://github.com/lan17/homesec/commit/4e5b85fd9a32d4f71c4365222a735c2e01eba583))
+
+
 ## v1.1.1 (2026-01-16)
 
 ### Bug Fixes

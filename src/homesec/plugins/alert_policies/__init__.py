@@ -3,77 +3,52 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TypeVar
-
-from pydantic import BaseModel
+from typing import Any, cast
 
 from homesec.interfaces import AlertPolicy
 from homesec.models.config import AlertPolicyOverrides
+from homesec.plugins.alert_policies.noop import NoopAlertPolicySettings
+from homesec.plugins.registry import PluginType, load_plugin
 
 logger = logging.getLogger(__name__)
 
 
-AlertPolicyFactory = Callable[[BaseModel, dict[str, AlertPolicyOverrides], list[str]], AlertPolicy]
-
-
-@dataclass(frozen=True)
-class AlertPolicyPlugin:
-    name: str
-    config_model: type[BaseModel]
-    factory: AlertPolicyFactory
-
-
-ALERT_POLICY_REGISTRY: dict[str, AlertPolicyPlugin] = {}
-
-
-def register_alert_policy(plugin: AlertPolicyPlugin) -> None:
-    """Register an alert policy plugin with collision detection.
+def load_alert_policy(
+    config: Any,  # AlertPolicyConfig but trying to avoid circular import if possible
+    per_camera_overrides: dict[str, AlertPolicyOverrides],
+    trigger_classes: list[str],
+) -> AlertPolicy:
+    """Load and instantiate an alert policy plugin.
 
     Args:
-        plugin: Alert policy plugin to register
-
-    Raises:
-        ValueError: If a plugin with the same name is already registered
-    """
-    if plugin.name in ALERT_POLICY_REGISTRY:
-        raise ValueError(
-            f"Alert policy plugin '{plugin.name}' is already registered. "
-            f"Plugin names must be unique across all alert policy plugins."
-        )
-    ALERT_POLICY_REGISTRY[plugin.name] = plugin
-
-
-T = TypeVar("T", bound=Callable[[], AlertPolicyPlugin])
-
-
-def alert_policy_plugin(name: str) -> Callable[[T], T]:
-    """Decorator to register an alert policy plugin.
-
-    Usage:
-        @alert_policy_plugin(name="my_policy")
-        def my_policy_plugin() -> AlertPolicyPlugin:
-            return AlertPolicyPlugin(...)
-
-    Args:
-        name: Plugin name (for validation only - must match plugin.name)
+        config: Alert policy configuration (AlertPolicyConfig)
+        per_camera_overrides: Map of camera name to override settings
+        trigger_classes: List of object classes that trigger analysis
 
     Returns:
-        Decorator function that registers the plugin
+        Configured AlertPolicy instance
     """
+    # Handle disabled -> noop fallback
+    if not config.enabled:
+        return cast(
+            AlertPolicy,
+            load_plugin(
+                PluginType.ALERT_POLICY,
+                "noop",
+                NoopAlertPolicySettings(),
+            ),
+        )
 
-    def decorator(factory_fn: T) -> T:
-        plugin = factory_fn()
-        register_alert_policy(plugin)
-        return factory_fn
+    return cast(
+        AlertPolicy,
+        load_plugin(
+            PluginType.ALERT_POLICY,
+            config.backend,
+            config.config,
+            overrides=per_camera_overrides,
+            trigger_classes=trigger_classes,
+        ),
+    )
 
-    return decorator
 
-
-__all__ = [
-    "AlertPolicyPlugin",
-    "ALERT_POLICY_REGISTRY",
-    "register_alert_policy",
-    "alert_policy_plugin",
-]
+__all__ = ["load_alert_policy"]

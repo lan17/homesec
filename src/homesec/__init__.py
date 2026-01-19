@@ -10,11 +10,11 @@ from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 
 __all__ = [
-    "__version__",
     "Alert",
     "AnalysisResult",
     "Clip",
     "ClipStateData",
     "FilterResult",
     "PipelineError",
+    "__version__",
 ]

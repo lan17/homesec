@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from anyio import Path as AsyncPath
 
 from homesec.models.clip import Clip
 from homesec.models.source import LocalFolderSourceConfig
 from homesec.sources.base import AsyncClipSource
-
-if TYPE_CHECKING:
-    from homesec.interfaces import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -34,38 +31,38 @@ class LocalFolderSource(AsyncClipSource):
     def __init__(
         self,
         config: LocalFolderSourceConfig,
-        camera_name: str = "local",
-        state_store: StateStore | None = None,
+        camera_name: str | None = None,
     ) -> None:
         """Initialize folder watcher.
 
         Args:
             config: LocalFolder source configuration
-            camera_name: Name of the camera (used in Clip objects)
-            state_store: Optional state store for deduplication via clip_states table.
-                If None, falls back to in-memory cache only (may reprocess files after restart).
+            camera_name: Name of the camera (overrides config.camera_name).
         """
         super().__init__()
         self.watch_dir = Path(config.watch_dir)
-        self.camera_name = camera_name
+        # Use config's camera_name if not explicitly passed, else default to "local"
+        self.camera_name = camera_name or config.camera_name or "local"
         self.poll_interval = float(config.poll_interval)
         self.stability_threshold_s = float(config.stability_threshold_s)
-        self._state_store = state_store
 
         # Ensure watch dir exists
         self.watch_dir.mkdir(parents=True, exist_ok=True)
 
-        # Bounded in-memory cache for performance (avoid DB query on every scan)
-        # 10,000 files ≈ 100 days for 1 camera @ 100 clips/day (≈500 KB memory)
-        # When limit exceeded, oldest half are removed (FIFO eviction)
-        # This is just an optimization - clip_states table is source of truth
+        # Local State Manifest (replaces StateStore dependency)
+        # This file tracks which clips have been processed to avoid re-emitting on restart.
+        self._state_file = self.watch_dir / ".homesec_state.json"
+        self._processed_files: set[str] = set()
+        self._load_local_state()
+
+        # Bounded in-memory cache for performance (avoid checking set on every scan)
         self._seen_files: OrderedDict[str, None] = OrderedDict()
         self._max_seen_files = 10000
 
         logger.info(
-            "LocalFolderSource initialized: watch_dir=%s, has_state_store=%s",
+            "LocalFolderSource initialized: watch_dir=%s, camera_name=%s",
             self.watch_dir,
-            state_store is not None,
+            self.camera_name,
         )
 
     def register_callback(self, callback: Callable[[Clip], None]) -> None:
@@ -74,12 +71,7 @@ class LocalFolderSource(AsyncClipSource):
         logger.debug("Callback registered for %s", self.camera_name)
 
     def is_healthy(self) -> bool:
-        """Check if source is healthy.
-
-        Returns True if:
-        - Watch directory exists and is readable
-        - Watch task is alive (if started)
-        """
+        """Check if source is healthy."""
         if not self.watch_dir.exists():
             return False
 
@@ -101,12 +93,34 @@ class LocalFolderSource(AsyncClipSource):
     def _on_stopped(self) -> None:
         logger.info("LocalFolderSource stopped")
 
-    async def _run(self) -> None:
-        """Background task that polls for new files.
+    def _load_local_state(self) -> None:
+        """Load processed files from local JSON manifest."""
+        if not self._state_file.exists():
+            return
+        try:
+            with open(self._state_file) as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    self._processed_files = set(data)
+                elif isinstance(data, dict) and "processed_files" in data:
+                    self._processed_files = set(data["processed_files"])
+            logger.info("Loaded %d processed files from local state", len(self._processed_files))
+        except Exception as e:
+            logger.warning("Failed to load local state file: %s", e)
 
-        Uses anyio.Path for non-blocking filesystem operations to avoid
-        stalling the event loop on slow/network filesystems.
-        """
+    def _save_local_state(self) -> None:
+        """Save processed files to local JSON manifest."""
+        # Simple atomic write
+        try:
+            temp_file = self._state_file.with_suffix(".tmp")
+            with open(temp_file, "w") as f:
+                json.dump({"processed_files": list(self._processed_files)}, f)
+            temp_file.replace(self._state_file)
+        except Exception as e:
+            logger.warning("Failed to save local state file: %s", e)
+
+    async def _run(self) -> None:
+        """Background task that polls for new files."""
         logger.info("Watch loop started")
 
         # Create async path wrapper for watch directory
@@ -117,13 +131,18 @@ class LocalFolderSource(AsyncClipSource):
                 # Update heartbeat
                 self._touch_heartbeat()
 
+                new_files_processed = False
+
                 # Scan for new .mp4 files (async to avoid blocking event loop)
                 async for async_file_path in async_watch_dir.glob("*.mp4"):
                     file_path = Path(async_file_path)  # Convert to regular Path for Clip
                     file_id = str(file_path)
                     clip_id = file_path.stem
 
-                    # Check in-memory cache first (fast path)
+                    # Check if already processed (Session cache OR Persistent Manifest)
+                    if clip_id in self._processed_files:
+                        continue
+
                     if file_id in self._seen_files:
                         continue
 
@@ -144,16 +163,10 @@ class LocalFolderSource(AsyncClipSource):
                         logger.warning("Failed to stat file %s: %s", file_path, e, exc_info=True)
                         continue
 
-                    # Check clip_states table (source of truth for deduplication)
-                    # This prevents reprocessing files even after cache eviction or restart
-                    if await self._has_clip_state(clip_id):
-                        # File was already processed - add to cache and skip
-                        self._add_to_cache(file_id)
-                        logger.debug("Skipping already-processed file: %s", file_path.name)
-                        continue
-
-                    # Mark as seen in cache
+                    # Mark as seen
+                    self._processed_files.add(clip_id)
                     self._add_to_cache(file_id)
+                    new_files_processed = True
 
                     # Create Clip object (reuse mtime from async stat to avoid blocking)
                     clip = self._create_clip(file_path, mtime=mtime)
@@ -161,6 +174,11 @@ class LocalFolderSource(AsyncClipSource):
                     # Invoke callback
                     logger.info("New clip detected: %s", file_path.name)
                     self._emit_clip(clip)
+
+                # Check for removed files to clean up manifest (OPTIONAL, maybe too expensive?)
+                # For now, let's just save if we added anything.
+                if new_files_processed:
+                    await asyncio.to_thread(self._save_local_state)
 
             except Exception as e:
                 logger.error("Error in watch loop: %s", e, exc_info=True)
@@ -183,50 +201,11 @@ class LocalFolderSource(AsyncClipSource):
                 self._seen_files.popitem(last=False)
             logger.debug("Evicted %d old entries from seen files cache", evict_count)
 
-    async def _has_clip_state(self, clip_id: str) -> bool:
-        """Check if clip_id exists in clip_states table.
-
-        Returns:
-            True if clip_state exists (any status including 'deleted'), False otherwise
-        """
-        if self._state_store is None:
-            return False
-
-        try:
-            # Direct async DB access - no threading complexity!
-            state = await asyncio.wait_for(
-                self._state_store.get(clip_id),
-                timeout=5.0,
-            )
-            return state is not None
-        except asyncio.TimeoutError:
-            logger.warning(
-                "DB query timeout for clip_states check: %s (assuming not seen)",
-                clip_id,
-            )
-            return False
-        except Exception as e:
-            logger.warning(
-                "Error checking clip_states for %s: %s (assuming not seen)",
-                clip_id,
-                e,
-                exc_info=True,
-            )
-            return False
-
     def _create_clip(self, file_path: Path, mtime: float) -> Clip:
-        """Create Clip object from file path.
-
-        Args:
-            file_path: Path to the video file
-            mtime: File modification timestamp (from async stat)
-
-        Estimates timestamps based on file modification time.
-        """
+        """Create Clip object from file path."""
         mtime_dt = datetime.fromtimestamp(mtime)
 
         # Estimate clip duration (assume 10s if we can't determine)
-        # In production, would parse from filename or video metadata
         duration_s = 10.0
 
         return Clip(

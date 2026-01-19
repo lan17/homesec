@@ -8,10 +8,25 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
-import aiohttp
-import cv2
-from PIL import Image
+aiohttp: Any
+cv2: Any
+Image: Any
+
+try:
+    import aiohttp as _aiohttp
+    import cv2 as _cv2
+    from PIL import Image as _Image
+except Exception:
+    aiohttp = None
+    cv2 = None
+    Image = None
+else:
+    aiohttp = _aiohttp
+    cv2 = _cv2
+    Image = _Image
+
 from pydantic import BaseModel
 
 from homesec.interfaces import VLMAnalyzer
@@ -23,6 +38,7 @@ from homesec.models.vlm import (
     VLMConfig,
     VLMPreprocessConfig,
 )
+from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +61,15 @@ Focus on KEY EVENTS ONLY:
 Keep observations list concise (short bullet points of security-relevant actions)."""
 
 
+def _ensure_openai_dependencies() -> None:
+    """Fail fast with a clear error if OpenAI VLM dependencies are missing."""
+    if aiohttp is None or cv2 is None or Image is None:
+        raise RuntimeError(
+            "Missing dependency for OpenAI VLM. "
+            "Install with: uv pip install aiohttp opencv-python pillow"
+        )
+
+
 def _create_json_schema_format(
     schema_model: type[BaseModel], schema_name: str
 ) -> dict[str, object]:
@@ -59,6 +84,7 @@ def _create_json_schema_format(
     }
 
 
+@plugin(plugin_type=PluginType.ANALYZER, name="openai")
 class OpenAIVLM(VLMAnalyzer):
     """OpenAI-compatible VLM analyzer plugin.
 
@@ -66,49 +92,43 @@ class OpenAIVLM(VLMAnalyzer):
     Supports structured output with Pydantic schemas.
     """
 
-    def __init__(self, config: VLMConfig) -> None:
-        """Initialize OpenAI VLM with config validation.
+    config_cls = OpenAILLMConfig
 
-        Required config:
-            llm.api_key_env: Env var name with API key
-            llm.model: Model name (e.g., gpt-4o)
+    @classmethod
+    def create(cls, config: OpenAILLMConfig) -> VLMAnalyzer:
+        return cls(config)
 
-        Optional config:
-            llm.base_url: API base URL (default: https://api.openai.com/v1)
-            llm.token_param: max_tokens or max_completion_tokens
-            llm.max_completion_tokens/max_tokens: Token limits
-            llm.temperature: Temperature (None to omit)
-            preprocessing.max_frames: Maximum frames to send (default: 10)
-            preprocessing.max_size: Max image dimension (default: 1024)
-            preprocessing.quality: JPEG quality (default: 85)
+    def __init__(self, llm_config: OpenAILLMConfig) -> None:
+        """Initialize OpenAI VLM with validated LLM config.
+
+        Args:
+            llm_config: OpenAI-specific configuration (API key, model, etc.)
+                        Also assumes injected runtime fields (trigger_classes, max_workers)
         """
-        if not isinstance(config.llm, OpenAILLMConfig):
-            raise ValueError("OpenAIVLM requires llm=OpenAILLMConfig")
-        llm = config.llm
-        preprocess = config.preprocessing
+        _ensure_openai_dependencies()
+        self._config = llm_config
 
         # Get API key from env
-        self._api_key_env = llm.api_key_env
+        self._api_key_env = llm_config.api_key_env
         self.api_key = os.getenv(self._api_key_env)
         if not self.api_key:
             raise ValueError(f"API key not found in env: {self._api_key_env}")
 
-        self.model = llm.model
-        self.base_url = llm.base_url
+        self.model = llm_config.model
+        self.base_url = llm_config.base_url
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self.temperature = llm.temperature
-        self.token_param = llm.token_param
-        self.max_tokens = self._resolve_token_limit(llm)
-        self.request_timeout = float(llm.request_timeout)
+        self.temperature = llm_config.temperature
+        self.token_param = llm_config.token_param
+        self.max_tokens = self._resolve_token_limit(llm_config)
+        self.request_timeout = float(llm_config.request_timeout)
 
         # Create HTTP session
         self._session: aiohttp.ClientSession | None = None
         self._shutdown_called = False
 
         logger.info(
-            "OpenAIVLM initialized: model=%s, max_frames=%d, token_param=%s, temperature=%s",
+            "OpenAIVLM initialized: model=%s, token_param=%s, temperature=%s",
             self.model,
-            preprocess.max_frames,
             self.token_param,
             self.temperature if self.temperature is not None else "default",
         )
@@ -116,6 +136,8 @@ class OpenAIVLM(VLMAnalyzer):
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Lazy-create aiohttp session with timeout."""
         if self._session is None:
+            if aiohttp is None:
+                raise RuntimeError("aiohttp dependency is required for OpenAI VLM")
             timeout = aiohttp.ClientTimeout(total=self.request_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
@@ -256,7 +278,8 @@ class OpenAIVLM(VLMAnalyzer):
         async with session.post(url, json=payload, headers=headers) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
-                raise RuntimeError(f"OpenAI API error {resp.status}: {error_text}")
+                logger.debug("OpenAI API error details: %s", error_text)
+                raise RuntimeError(f"OpenAI API error: HTTP {resp.status}")
 
             data = await resp.json()
             if not isinstance(data, dict):
@@ -330,6 +353,9 @@ class OpenAIVLM(VLMAnalyzer):
 
         Returns list of (base64 JPEG, timestamp) tuples.
         """
+        if cv2 is None or Image is None:
+            raise RuntimeError("OpenAI VLM dependencies are not available")
+
         cap = cv2.VideoCapture(str(video_path))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
@@ -413,25 +439,16 @@ class OpenAIVLM(VLMAnalyzer):
 
         logger.info("OpenAIVLM shutdown complete")
 
+    async def ping(self) -> bool:
+        """Health check - verify API is reachable.
 
-# Plugin registration
-from homesec.plugins.analyzers import VLMPlugin, vlm_plugin
-
-
-@vlm_plugin(name="openai")
-def openai_vlm_plugin() -> VLMPlugin:
-    """OpenAI VLM plugin factory.
-
-    Returns:
-        VLMPlugin for OpenAI vision-language model
-    """
-    from homesec.models.vlm import OpenAILLMConfig
-
-    def factory(cfg: VLMConfig) -> VLMAnalyzer:
-        return OpenAIVLM(cfg)
-
-    return VLMPlugin(
-        name="openai",
-        config_model=OpenAILLMConfig,
-        factory=factory,
-    )
+        Note: This checks if session is alive and not shut down.
+        A full API connectivity check would require an API call.
+        """
+        if self._shutdown_called:
+            return False
+        # Session being None is fine - it's lazy-created
+        # If session exists and is closed, that's a problem
+        if self._session is not None and self._session.closed:
+            return False
+        return True
