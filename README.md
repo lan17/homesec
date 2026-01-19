@@ -39,11 +39,11 @@ graph TD
             P -->|YES| N[Notifiers]
         end
         
-        S -->|New Job| C
+        S -->|New Clip File| Pipeline
+        
+        PG[(Postgres)]
+        Pipeline -.->|State & Events| PG
     end
-
-    PG[(Postgres)]
-    C -.->|State & Events| PG
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
