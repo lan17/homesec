@@ -29,6 +29,15 @@ graph TD
     V -->|Risk level, detected objects| P{Alert Policy filter}
     P -->|No| D
     P -->|YES| N[Notifiers]
+
+    %% State tracking connections
+    PG[(Postgres)]
+    S -.-> PG
+    U -.-> PG
+    F -.-> PG
+    V -.-> PG
+    P -.-> PG
+    N -.-> PG
 ```
 
 - **Parallel Processing**: Upload and filter run in parallel.
