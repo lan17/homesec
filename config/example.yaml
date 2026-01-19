@@ -23,7 +23,7 @@ cameras:
         # RTSP URL from environment variable (set in .env)
         rtsp_url_env: FRONT_DOOR_RTSP_URL
         # Optional: separate low-res stream for motion detection
-        detect_rtsp_url_env: FRONT_DOOR_RTSP_SUB_URL
+        # detect_rtsp_url_env: FRONT_DOOR_RTSP_SUB_URL
         # Customize ffmpeg behavior (e.g., for flaky TCP streams)
         ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
         output_dir: "./recordings"

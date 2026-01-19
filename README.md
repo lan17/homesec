@@ -16,23 +16,45 @@ HomeSec is a self-hosted, extensible video pipeline for home security cameras. C
 
 ## Pipeline at a glance
 
-```mermaid
-graph LR
-    S[Clip Source] -->|New Job| U[Upload]
-    S -->|New Job| F[Filter]
-    U -->|Store| DB[Storage]
-    F -->|Detect| AI{Object?}
-    AI -->|Yes| V[VLM Analysis]
-    AI -->|No| D[Discard]
-    V -->|Context| P[Alert Policy]
-    P -->|Decide| N[Notifiers]
-    
-    style S fill:#d4e6f1,stroke:#3498db
-    style P fill:#f9e79f,stroke:#f1c40f
-    style N fill:#e8daef,stroke:#8e44ad
+## Pipeline at a glance
+
+```
+                            +-----------------+
+                            |   Clip Source   |
+                            | (RTSP/FTP/Dir)  |
+                            +--------+--------+
+                                     |
+                +--------------------+--------------------+
+                |                                         |
+        +-------v-------+                       +---------v---------+
+        |    Upload     +-----( Store )-------->|  Storage Backend  |
+        +---------------+                       |  (Local/Dropbox)  |
+                                                +-------------------+
+                |
+        +-------v-------+
+        | Object Filter |
+        |    (YOLO)     |
+        +-------+-------+
+                |
+        +-------v-------+       +----------------+
+        |  Object(s)?   +------>|    Discard     |
+        +-------+-------+  No   +----------------+
+                | Yes
+        +-------v-------+
+        | VLM Analysis  |
+        |   (Optional)  |
+        +-------+-------+
+                |
+        +-------v-------+
+        | Alert Policy  |
+        +-------+-------+
+                |
+        +-------v-------+
+        |  Notifier(s)  |
+        +---------------+
 ```
 
-- **Parallel Processing**: Upload and filter run in parallel; VLM runs only when specific classes are detected.
+- **Parallel Processing**: Upload and filter run in parallel.
 - **Resilience**: Upload failures do not block alerts; filter failures stop expensive VLM calls.
 - **State**: Metadata is stored in Postgres (`clip_states` + `clip_events`) for full observability.
 
@@ -57,7 +79,7 @@ graph LR
 ## Highlights
 
 - Multiple pluggable video clip sources: [RTSP](https://en.wikipedia.org/wiki/Real-Time_Streaming_Protocol) motion detection, [FTP](https://en.wikipedia.org/wiki/File_Transfer_Protocol) uploads, or a watched folder
-- Parallel upload + filter ([YOLO11](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
+- Parallel upload + filter ([YOLO](https://en.wikipedia.org/wiki/You_Only_Look_Once)) with frame sampling and early exit
 - OpenAI-compatible VLM analysis with structured output
 - Policy-driven alerts with per-camera overrides
 - Fan-out notifiers (MQTT for Home Assistant, SendGrid email)
@@ -79,35 +101,57 @@ make up
 *Modify `config/config.yaml` to add your real cameras, then restart.*
 
 ### Manual Setup
-If you prefer running on bare metal (Mac/Linux):
+For standard production usage without Docker Compose:
 
-1. **Install**
+1. **Prerequisites**:
+   - Python 3.10+
+   - ffmpeg
+   - PostgreSQL (running and accessible)
+
+2. **Install**
    ```bash
    pip install homesec
-   # Requires Python 3.10+ and ffmpeg
    ```
 
-2. **Configure**
+3. **Configure**
    ```bash
-   cp config/example.yaml config.yaml
-   cp .env.example .env
-   # Edit with your RTSP URLs and keys
+   # Download example config
+   curl -O https://raw.githubusercontent.com/lan17/homesec/main/config/example.yaml
+   mv example.yaml config.yaml
+   
+   # Setup environment (DB_DSN is required)
+   export DB_DSN="postgresql://user:pass@localhost/homesec"
    ```
 
-3. **Run**
+4. **Run**
    ```bash
    homesec run --config config.yaml
    ```
 
-### With Docker (easier setup)
+### Developer Setup
+If you are contributing or running from source:
 
-See "30-Second Start" above. `make up` handles everything.
+1. **Install dependencies**
+   ```bash
+   uv sync
+   ```
+
+2. **Start Infrastructure**
+   ```bash
+   make db  # Starts just Postgres in Docker
+   ```
+
+3. **Run**
+   ```bash
+   uv run python -m homesec.cli run --config config/config.yaml
+   ```
+
 
 ## Configuration
 
 Configuration is YAML-based and strictly validated. Secrets (API keys, passwords) should always be loaded from environment variables (`_env` suffix).
 
-### Recipes
+### Configuration Examples
 
 #### 1. The "Power User" (Robust RTSP)
 Best for real-world setups with flaky cameras.
@@ -131,7 +175,7 @@ filter:
     min_confidence: 0.6
 ```
 
-#### 2. The "Cloud Safe" (Dropbox + Encryption)
+#### 2. The "Cloud Storage" (Dropbox)
 Uploads to Cloud but keeps analysis local.
 
 ```yaml
@@ -149,6 +193,12 @@ notifiers:
 ```
 
 See [`config/example.yaml`](config/example.yaml) for a complete reference of all options.
+
+### Tips
+
+- **Secrets**: Never put secrets in YAML. Use env vars (`*_env`) and set them in your shell or `.env`.
+- **Notifiers**: At least one notifier (mqtt/email) must be enabled unless `alert_policy.enabled` is false.
+- **YOLO Classes**: Built-in classes include `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
 
 After installation, the `homesec` command is available:
 
@@ -176,6 +226,10 @@ homesec cleanup --config config.yaml --older_than_days 7 --dry_run=False
 Use `homesec <command> --help` for detailed options on each command.
 
 ## Plugins
+
+## Extensible by design
+
+HomeSec is intentionally modular. Each major capability is an interface (`ClipSource`, `StorageBackend`, `ObjectFilter`, `VLMAnalyzer`, `AlertPolicy`, `Notifier`) defined in `src/homesec/interfaces.py`. This allows you to swap out components (e.g., replace YOLO with a different detector) without changing the core pipeline.
 
 HomeSec uses a plugin architecture—every component is discovered at runtime via entry points.
 
