@@ -14,6 +14,7 @@ from homesec.config import (
     validate_camera_references,
     validate_plugin_names,
 )
+from homesec.models.enums import RiskLevel
 from homesec.models.filter import YoloFilterSettings
 
 
@@ -85,7 +86,7 @@ def test_load_config_from_dict_success() -> None:
     assert config.filter.config.model_path == "yolo11n.pt"
     assert config.vlm.backend == "openai"
     assert config.alert_policy.backend == "default"
-    assert config.get_default_alert_policy("front_door").min_risk_level == "medium"
+    assert config.get_default_alert_policy("front_door").min_risk_level == RiskLevel.MEDIUM
 
 
 def test_load_config_from_dict_missing_required_field() -> None:
@@ -175,7 +176,7 @@ alert_policy:
         assert isinstance(config.filter.config, YoloFilterSettings)
         assert config.filter.config.model_path == "yolo11n.pt"
         assert config.vlm.backend == "openai"
-        assert config.get_default_alert_policy("front_door").min_risk_level == "low"
+        assert config.get_default_alert_policy("front_door").min_risk_level == RiskLevel.LOW
     finally:
         path.unlink()
 
@@ -243,12 +244,12 @@ def test_per_camera_override_merge() -> None:
 
     # Then default camera uses base config
     default_policy = config.get_default_alert_policy("unknown_camera")
-    assert default_policy.min_risk_level == "medium"
+    assert default_policy.min_risk_level == RiskLevel.MEDIUM
     assert default_policy.notify_on_activity_types == []
 
     # Then front_door uses merged config
     front_door_policy = config.get_default_alert_policy("front_door")
-    assert front_door_policy.min_risk_level == "low"
+    assert front_door_policy.min_risk_level == RiskLevel.LOW
     assert front_door_policy.notify_on_activity_types == ["delivery"]
 
 
@@ -350,6 +351,38 @@ def test_validate_plugin_names_invalid() -> None:
 
     # Then the missing backend is reported
     assert "mqtt" in str(exc_info.value)
+
+
+def test_validate_plugin_names_case_insensitive() -> None:
+    """Test validation allows plugin names with different casing."""
+    # Given a config with uppercase plugin names
+    data = minimal_config()
+    data["filter"]["plugin"] = "YOLO"
+    data["vlm"]["backend"] = "OPENAI"
+    data["storage"]["backend"] = "DROPBOX"
+    data["notifiers"][0]["backend"] = "MQTT"
+    data["alert_policy"]["backend"] = "DEFAULT"
+    data["cameras"][0]["source"]["type"] = "LOCAL_FOLDER"
+    config = load_config_from_dict(data)  # type: ignore[arg-type]
+
+    # When validating plugin names
+    validate_plugin_names(
+        config,
+        valid_filters=["yolo"],
+        valid_vlms=["openai"],
+        valid_storage=["dropbox"],
+        valid_notifiers=["mqtt", "sendgrid_email"],
+        valid_alert_policies=["default"],
+        valid_sources=["local_folder"],
+    )
+
+    # Then validation succeeds regardless of casing
+    assert config.filter.plugin == "yolo"
+    assert config.vlm.backend == "openai"
+    assert config.storage.backend == "dropbox"
+    assert config.notifiers[0].backend == "mqtt"
+    assert config.alert_policy.backend == "default"
+    assert config.cameras[0].source.type == "local_folder"
 
 
 def test_load_example_config() -> None:

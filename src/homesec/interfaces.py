@@ -69,6 +69,19 @@ class ClipSource(Shutdownable, ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Health check for the clip source.
+
+        Returns True if the source is operational:
+        - Connection/watcher is alive
+        - Can receive new clips
+
+        This is similar to is_healthy() but async and follows the standard
+        ping() pattern used by other interfaces.
+        """
+        raise NotImplementedError
+
 
 class StorageBackend(Shutdownable, ABC):
     """Stores raw clips and derived artifacts."""
@@ -137,8 +150,18 @@ class StateStore(Shutdownable, ABC):
         """Health check. Returns True if database is reachable."""
         raise NotImplementedError
 
+    @abstractmethod
+    def create_event_store(self) -> EventStore:
+        """Create an event store associated with this state store.
 
-class EventStore(ABC):
+        Returns NoopEventStore if not supported.
+        """
+        from homesec.state import NoopEventStore
+
+        return NoopEventStore()
+
+
+class EventStore(Shutdownable, ABC):
     """Manages clip lifecycle events in Postgres."""
 
     @abstractmethod
@@ -160,6 +183,11 @@ class EventStore(ABC):
 
         Returns events ordered by id. Returns empty list on error.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Health check. Returns True if event store is reachable."""
         raise NotImplementedError
 
 
@@ -229,6 +257,17 @@ class ObjectFilter(Shutdownable, ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Health check for the filter.
+
+        Returns True if the filter is operational:
+        - Model is loaded
+        - Executor pool is alive (if applicable)
+        - Ready to process detection requests
+        """
+        raise NotImplementedError
+
 
 class VLMAnalyzer(Shutdownable, ABC):
     """Plugin interface for VLM-based clip analysis."""
@@ -251,4 +290,13 @@ class VLMAnalyzer(Shutdownable, ABC):
         """
         raise NotImplementedError
 
-    # shutdown() defined in Shutdownable
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Health check for the analyzer.
+
+        Returns True if the analyzer is operational:
+        - API endpoint reachable (for API-based analyzers)
+        - Model loaded (for local analyzers)
+        - HTTP session alive
+        """
+        raise NotImplementedError

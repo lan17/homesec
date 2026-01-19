@@ -8,6 +8,95 @@
 4. **Single async flow per clip.** In-process handoff with bounded concurrency (global + per-stage `asyncio.Semaphore`). Callback-based ClipSource interface for extensibility.
 5. **Pluggable object detection and VLM analysis.** Specific models (YOLO, GPT-4, etc.) are abstracted behind async plugin interfaces. Pipeline is model-agnostic; plugins manage their own resources (GPU, process pools, API clients).
 6. **Errors as values.** Stage methods return `Result | StageError` instead of raising exceptions. This enables partial failures (e.g., upload fails but filter succeeds → still send alert). Stack traces are preserved in error objects. **Strict type checking required** (mypy --strict or pyright) to prevent runtime errors from missing `isinstance()` checks.
+7. **Type-safe enums for domain values.** Use `StrEnum`/`IntEnum` from `models/enums.py` for type safety, IDE support, and maintainability. See [Type Safety & Enums](#type-safety--enums) below.
+
+## Type Safety & Enums
+
+Domain values that appear in multiple places use centralized enums in `models/enums.py`:
+
+| Enum | Type | Purpose | Example |
+|------|------|---------|---------|
+| `EventType` | `StrEnum` | Clip lifecycle event types | `EventType.CLIP_RECORDED` |
+| `ClipStatus` | `StrEnum` | Clip processing status | `ClipStatus.UPLOADED` |
+| `RiskLevel` | `IntEnum` | VLM risk assessment (ordered) | `RiskLevel.HIGH > RiskLevel.LOW` |
+
+### Benefits
+
+- **Type safety**: Catch typos at compile time with mypy/pyright
+- **IDE support**: Autocomplete and refactoring
+- **Single source of truth**: No duplicate string literals
+- **Natural comparison**: `RiskLevel` uses `IntEnum` for `>=` comparisons
+
+### Usage Examples
+
+```python
+from homesec.models.enums import EventType, ClipStatus, RiskLevel
+
+# Event types in event models
+class ClipRecordedEvent(ClipEvent):
+    event_type: Literal[EventType.CLIP_RECORDED] = EventType.CLIP_RECORDED
+
+# Status comparisons
+if state.status == ClipStatus.UPLOADED:
+    ...
+
+# Risk level comparison (IntEnum)
+if analysis.risk_level >= RiskLevel.MEDIUM:
+    send_alert()
+
+# Parse from string (for config)
+level = RiskLevel.from_string("high")  # Returns RiskLevel.HIGH
+```
+
+### Serialization
+
+- `StrEnum` values serialize to their string value automatically
+- `RiskLevel` (IntEnum) uses custom Pydantic serialization to maintain string representation in configs (`"medium"` not `1`)
+
+## Plugin Architecture & Philosophy
+
+For detailed implementation guides and how-tos, see **[PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)**.
+
+HomeSec employs a **Class-Based Plugin Architecture (V2)** designed for strict type safety, runtime validation, and clear separation of concerns. This section details the design patterns and philosophies driving the system.
+
+### 1. Core Philosophy: "Configuration is the Contract"
+
+In V1, plugins were factories accepting raw dictionaries and loose context objects. In V2, the **Configuration Model** (Pydantic) defines the entire contract for a plugin.
+
+-   **Type Safety**: Every plugin defines a `config_cls` (Pydantic model). The registry validates raw JSON/YAML against this model *before* the plugin is instantiated.
+-   **Dependency Injection**: Runtime dependencies (like `camera_name` for sources, or `trigger_classes` for analyzers) are injected into the configuration dictionary *before* validation.
+    -   *Benefit*: The plugin implementation doesn't need a separate `context` argument. It just declares `camera_name: str` in its config model, and the system ensures it's present.
+-   **Fail Fast**: Invalid configs cause a `ValidationError` at loading time, preventing partial start-ups.
+
+### 2. The Unified Registry Pattern
+
+Instead of maintaining separate registries for each plugin type (`SOURCE_REGISTRY`, `FILTER_REGISTRY`), we use a single, generic `PluginRegistry[ConfigT, PluginInterfaceT]`.
+
+-   **Generics for Safety**: The registry is generic over the configuration type and the plugin interface.
+    ```python
+    # strict typing ensures that load_plugin(PluginType.SOURCE, ...) returns a ClipSource
+    source = registry.load_plugin(PluginType.SOURCE, "my_source", config_dict)
+    ```
+-   **Declarative Registration**: Plugins register themselves using the `@plugin` decorator, which captures metadata (name, type) and creates the association without manual mapping code.
+
+### 3. Factory Pattern vs. Class Creation
+
+We transitioned from functional factories (`make_source()`) to class-based factories (`Class.create()`).
+
+-   **Encapsulation**: The class handles its own construction logic in `create()`, keeping `__init__` clean or free for dependency injection.
+-   **State Management**: Plugins often hold state (database connections, ML model handles). Classes naturally encapsulate this state and provide lifecycle methods (`shutdown()`) to clean it up.
+
+### 4. Decoupling & Local State
+
+A key design validation was separating `LocalFolderSource` from the global `StateStore`.
+
+-   **Philosophy**: Components should own their local truth.
+-   **Implementation**: `LocalFolderSource` uses a "Local State Manifest" (`.homesec_state.json`) to track processed files. This means the source can function even if the central database is down, fulfilling the "P0: Never miss new clips" requirement.
+
+### 5. Error Handling Philosophy
+
+-   **Boundaries must never crash**: Top-level loops wrap plugin calls in broad exception handlers (specifically catching `PipelineError`).
+-   **Errors as Values**: Where possible, return error objects/states rather than raising exceptions, allowing the pipeline to degrade gracefully (e.g., skip analysis but still upload).
 
 ## Goals
 
@@ -47,9 +136,9 @@ Build a reliable, pluggable pipeline to:
 
 ## Current Building Blocks (Repo)
 
-- Motion + recording: `src/motion_recorder.py` (OpenCV motion detection + ffmpeg recording; optional Dropbox upload via `src/dropbox_uploader.py`).
-- Object detection plugin (reference implementation): `src/human_filter/human_filter.py` (YOLOv8 sampling to detect people/animals).
-- VLM plugin (reference implementation): `src/vlm.py` (structured output with `risk_level`, `activity_type`, timeline, and `alert_threshold`).
+- Motion + recording: `src/homesec/sources/rtsp.py` (OpenCV motion detection + ffmpeg recording).
+- Object detection plugin (reference): `src/homesec/plugins/filters/yolo.py` (YOLOv8 sampling to detect people/animals).
+- VLM plugin (reference): `src/homesec/plugins/analyzers/openai.py` (structured output with `risk_level`, `activity_type`, timeline).
 - Postgres (workflow state when available): Alembic migrations (`alembic/`) + telemetry logging (`src/db_log_handler.py`) + workflow state table `clip_states` (best-effort; DB outages may drop state updates).
 
 ## Proposed Architecture (Event-Driven Pipeline)
@@ -277,13 +366,11 @@ class AlertPolicy(Protocol):
 
 # === Plugin Interfaces ===
 
-class ObjectFilter(Protocol):
+class ObjectFilter(Shutdownable, Protocol):
     """Plugin interface for object detection in video clips."""
     
     async def detect(
-        self, 
-        video_path: Path, 
-        config: FilterConfig
+        self, video_path: Path, overrides: FilterOverrides | None = None
     ) -> FilterResult:
         """
         Detect objects in video clip.
@@ -292,8 +379,9 @@ class ObjectFilter(Protocol):
         - MUST be async (use asyncio.to_thread or run_in_executor for blocking code)
         - CPU/GPU-bound plugins should manage their own ProcessPoolExecutor internally
         - I/O-bound plugins can use async HTTP clients directly
-        - Should respect config.max_workers if managing worker pool
+        - Should respect the instance config max_workers if managing worker pool
         - Should support early exit on first detection for efficiency
+        - overrides apply per-call (model path cannot be overridden)
         
         Returns:
             FilterResult with detected_classes, confidence, sampled_frames, model name
@@ -303,24 +391,14 @@ class ObjectFilter(Protocol):
     async def shutdown(self) -> None:
         """
         Cleanup resources (process pools, GPU memory, file handles).
-        
-        Called once during application shutdown. Implementation should:
-        - Shutdown ProcessPoolExecutor if used (wait=True to finish in-flight work)
-        - Release GPU memory
-        - Close any open file handles or connections
-        
-        Example:
-            self._executor.shutdown(wait=True, cancel_futures=False)
         """
+        ...
 
-class VLMAnalyzer(Protocol):
+class VLMAnalyzer(Shutdownable, Protocol):
     """Plugin interface for VLM-based clip analysis."""
     
     async def analyze(
-        self,
-        video_path: Path,
-        filter_result: FilterResult,
-        config: VLMConfig
+        self, video_path: Path, filter_result: FilterResult, config: VLMConfig
     ) -> AnalysisResult:
         """
         Analyze clip and produce structured assessment.
@@ -340,15 +418,8 @@ class VLMAnalyzer(Protocol):
     async def shutdown(self) -> None:
         """
         Cleanup resources (HTTP sessions, process pools, model memory).
-        
-        Called once during application shutdown. Implementation should:
-        - Close HTTP sessions (aiohttp.ClientSession.close())
-        - Shutdown ProcessPoolExecutor if using local models
-        - Unload models from GPU/RAM
-        
-        Example:
-            await self._session.close()
         """
+        ...
 ```
 
 **Reference Implementations (MVP):**
@@ -361,7 +432,7 @@ class VLMAnalyzer(Protocol):
 - `MockFilter` / `MockVLM`: For testing (instant responses, no actual inference)
   - `shutdown()` implementation: no-op (no resources to clean up)
 
-## Configuration (Proposed)
+## Configuration
 
 Prefer a single YAML file for non-secret configuration (cameras, sources, policies, MQTT). Keep secrets in `.env` and reference them by env var name from YAML.
 

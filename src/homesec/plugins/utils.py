@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from importlib import metadata
-from typing import TypeVar, cast
+from typing import TypeVar
 
 PluginT = TypeVar("PluginT")
 
@@ -20,10 +20,14 @@ def iter_entry_points(group: str) -> Iterable[metadata.EntryPoint]:
     """
     entry_points = metadata.entry_points()
     if hasattr(entry_points, "select"):
-        # Python 3.10+ API
+        # Python 3.10+ API - SelectableGroups with .select() method
         return entry_points.select(group=group)
-    # Python 3.9 API
-    return cast(dict[str, list[metadata.EntryPoint]], entry_points).get(group, [])
+    # Python 3.9 API - dict[str, list[EntryPoint]]
+    # Type validated at runtime: entry_points is dict-like in Python 3.9
+    if isinstance(entry_points, dict):
+        return entry_points.get(group, [])
+    # Fallback for unexpected types - return empty
+    return []
 
 
 def load_plugin_from_entry_point(

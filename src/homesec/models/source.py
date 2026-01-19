@@ -10,6 +10,7 @@ class RTSPSourceConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    camera_name: str | None = None
     rtsp_url_env: str | None = None
     rtsp_url: str | None = None
     detect_rtsp_url_env: str | None = None
@@ -36,6 +37,7 @@ class LocalFolderSourceConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    camera_name: str | None = None
     watch_dir: str = "recordings"
     poll_interval: float = 1.0
     stability_threshold_s: float = 3.0
@@ -46,6 +48,7 @@ class FtpSourceConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    camera_name: str | None = None
     host: str = "0.0.0.0"
     port: int = 2121
     root_dir: str = "./ftp_incoming"

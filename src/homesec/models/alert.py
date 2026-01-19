@@ -6,7 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from homesec.models.vlm import RiskLevel, SequenceAnalysis
+from homesec.models.enums import RiskLevelField
+from homesec.models.vlm import SequenceAnalysis
 
 
 class AlertDecision(BaseModel):
@@ -23,7 +24,7 @@ class Alert(BaseModel):
     camera_name: str
     storage_uri: str | None
     view_url: str | None
-    risk_level: RiskLevel | None  # None if VLM skipped
+    risk_level: RiskLevelField | None  # None if VLM skipped
     activity_type: str | None
     notify_reason: str
     summary: str | None

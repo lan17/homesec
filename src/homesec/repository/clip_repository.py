@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from homesec.models.clip import Clip, ClipStateData
 from homesec.models.config import RetryConfig
+from homesec.models.enums import ClipStatus, RiskLevelField
 from homesec.models.events import (
     AlertDecisionMadeEvent,
     ClipDeletedEvent,
@@ -63,7 +64,7 @@ class ClipRepository:
         """Create initial state + record clip received event."""
         state = ClipStateData(
             camera_name=clip.camera_name,
-            status="queued_local",
+            status=ClipStatus.QUEUED_LOCAL,
             local_path=str(clip.local_path),
         )
 
@@ -105,8 +106,13 @@ class ClipRepository:
 
         state.storage_uri = storage_uri
         state.view_url = view_url
-        if state.status not in ("analyzed", "done", "error", "deleted"):
-            state.status = "uploaded"
+        if state.status not in (
+            ClipStatus.ANALYZED,
+            ClipStatus.DONE,
+            ClipStatus.ERROR,
+            ClipStatus.DELETED,
+        ):
+            state.status = ClipStatus.UPLOADED
 
         event = UploadCompletedEvent(
             clip_id=clip_id,
@@ -208,8 +214,8 @@ class ClipRepository:
         if state is None:
             return None
 
-        if state.status != "deleted":
-            state.status = "error"
+        if state.status != ClipStatus.DELETED:
+            state.status = ClipStatus.ERROR
         await self._safe_upsert(clip_id, state)
         return state
 
@@ -238,8 +244,8 @@ class ClipRepository:
             return None
 
         state.analysis_result = result
-        if state.status != "deleted":
-            state.status = "analyzed"
+        if state.status != ClipStatus.DELETED:
+            state.status = ClipStatus.ANALYZED
 
         event = VLMCompletedEvent(
             clip_id=clip_id,
@@ -294,7 +300,7 @@ class ClipRepository:
         clip_id: str,
         decision: AlertDecision,
         detected_classes: list[str] | None,
-        vlm_risk: str | None,
+        vlm_risk: RiskLevelField | None,
     ) -> ClipStateData | None:
         """Record alert decision + update state."""
         state = await self._load_state(clip_id, action="alert decision")
@@ -328,8 +334,8 @@ class ClipRepository:
         if state is None:
             return None
 
-        if state.status != "deleted":
-            state.status = "done"
+        if state.status != ClipStatus.DELETED:
+            state.status = ClipStatus.DONE
 
         event = NotificationSentEvent(
             clip_id=clip_id,
@@ -380,7 +386,7 @@ class ClipRepository:
         if state is None:
             return None
 
-        state.status = "deleted"
+        state.status = ClipStatus.DELETED
 
         event = ClipDeletedEvent(
             clip_id=clip_id,
@@ -411,7 +417,7 @@ class ClipRepository:
         state = await self._load_state(clip_id, action="clip recheck")
         if state is None:
             return None
-        if state.status == "deleted":
+        if state.status == ClipStatus.DELETED:
             return state
 
         state.filter_result = result
@@ -464,10 +470,10 @@ class ClipRepository:
         if state is None:
             return None
 
-        if state.status in ("done", "deleted"):
+        if state.status in (ClipStatus.DONE, ClipStatus.DELETED):
             return state
 
-        state.status = "done"
+        state.status = ClipStatus.DONE
         await self._safe_upsert(clip_id, state)
         return state
 

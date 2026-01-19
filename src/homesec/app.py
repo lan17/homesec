@@ -5,11 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
-
-from pydantic import BaseModel
+from typing import TYPE_CHECKING
 
 from homesec.config import (
     load_config,
@@ -19,21 +16,19 @@ from homesec.config import (
 )
 from homesec.health import HealthServer
 from homesec.interfaces import EventStore
-from homesec.models.config import NotifierConfig
-from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSPSourceConfig
 from homesec.pipeline import ClipPipeline
-from homesec.plugins.alert_policies import ALERT_POLICY_REGISTRY
-from homesec.plugins.analyzers import VLM_REGISTRY, load_vlm_plugin
-from homesec.plugins.filters import FILTER_REGISTRY, load_filter_plugin
+from homesec.plugins.alert_policies import load_alert_policy
+from homesec.plugins.analyzers import load_analyzer
+from homesec.plugins.filters import load_filter
 from homesec.plugins.notifiers import (
-    NOTIFIER_REGISTRY,
     MultiplexNotifier,
     NotifierEntry,
-    NotifierPlugin,
+    load_notifier_plugin,
 )
-from homesec.plugins.storage import STORAGE_REGISTRY, create_storage
+from homesec.plugins.registry import PluginType, get_plugin_names
+from homesec.plugins.sources import load_source_plugin
+from homesec.plugins.storage import load_storage_plugin
 from homesec.repository import ClipRepository
-from homesec.sources import FtpSource, LocalFolderSource, RTSPSource
 from homesec.state import NoopEventStore, NoopStateStore, PostgresStateStore
 
 if TYPE_CHECKING:
@@ -148,8 +143,8 @@ class Application:
         await self._log_notifier_health()
 
         # Create filter, VLM, and alert policy plugins
-        filter_plugin = load_filter_plugin(config.filter)
-        vlm_plugin = load_vlm_plugin(config.vlm)
+        filter_plugin = load_filter(config.filter)
+        vlm_plugin = load_analyzer(config.vlm)
         self._filter = filter_plugin
         self._vlm = vlm_plugin
         alert_policy = self._create_alert_policy(config)
@@ -191,7 +186,7 @@ class Application:
 
     def _create_storage(self, config: Config) -> StorageBackend:
         """Create storage backend based on config."""
-        return create_storage(config.storage)
+        return load_storage_plugin(config.storage)
 
     async def _create_state_store(self, config: Config) -> StateStore:
         """Create state store based on config."""
@@ -207,23 +202,20 @@ class Application:
 
     def _create_event_store(self, state_store: StateStore) -> EventStore:
         """Create event store based on state store backend."""
-        create_event_store = getattr(state_store, "create_event_store", None)
-        if callable(create_event_store):
-            event_store = cast(Callable[[], EventStore], create_event_store)()
-            if isinstance(event_store, NoopEventStore):
-                logger.warning("Event store unavailable; events will be dropped")
-            return event_store
-        logger.warning("Unsupported state store for events; events will be dropped")
-        return NoopEventStore()
+        event_store = state_store.create_event_store()
+        if isinstance(event_store, NoopEventStore):
+            logger.warning(
+                "Event store unavailable (NoopEventStore returned); events will be dropped"
+            )
+        return event_store
 
     def _create_notifier(self, config: Config) -> Notifier:
-        """Create notifier(s) based on config."""
+        """Create notifier(s) based on config using plugin registry."""
         entries: list[NotifierEntry] = []
         for index, notifier_cfg in enumerate(config.notifiers):
-            plugin, validated_cfg = self._validate_notifier_config(notifier_cfg)
             if not notifier_cfg.enabled:
                 continue
-            notifier = plugin.factory(validated_cfg)
+            notifier = load_notifier_plugin(notifier_cfg.backend, notifier_cfg.config)
             name = f"{notifier_cfg.backend}[{index}]"
             entries.append(NotifierEntry(name=name, notifier=notifier))
 
@@ -256,65 +248,26 @@ class Application:
                         exc_info=err,
                     )
 
-    def _validate_notifier_config(
-        self, notifier_cfg: NotifierConfig
-    ) -> tuple[NotifierPlugin, BaseModel]:
-        """Validate notifier config and return the plugin and validated config."""
-        plugin = NOTIFIER_REGISTRY.get(notifier_cfg.backend)
-        if plugin is None:
-            raise RuntimeError(f"Unsupported notifier backend: {notifier_cfg.backend}")
-        validated_cfg = plugin.config_model.model_validate(notifier_cfg.config)
-        return plugin, validated_cfg
-
     def _create_alert_policy(self, config: Config) -> AlertPolicy:
-        policy_cfg = config.alert_policy
-
-        # Use noop backend when alert policy is disabled
-        backend = "noop" if not policy_cfg.enabled else policy_cfg.backend
-
-        plugin = ALERT_POLICY_REGISTRY.get(backend)
-        if plugin is None:
-            raise RuntimeError(f"Unsupported alert policy backend: {backend}")
-
-        # Always validate to ensure proper BaseModel contract
-        if policy_cfg.enabled:
-            settings = plugin.config_model.model_validate(policy_cfg.config)
-        else:
-            # Noop uses empty BaseModel, validate empty dict to get BaseModel instance
-            settings = plugin.config_model.model_validate({})
-
-        return plugin.factory(settings, config.per_camera_alert, config.vlm.trigger_classes)
+        """Create alert policy using the plugin registry."""
+        return load_alert_policy(
+            config.alert_policy,
+            per_camera_overrides=config.per_camera_alert,
+            trigger_classes=config.vlm.trigger_classes,
+        )
 
     def _create_sources(self, config: Config) -> list[ClipSource]:
-        """Create clip sources based on config."""
+        """Create clip sources based on config using plugin registry."""
         sources: list[ClipSource] = []
 
         for camera in config.cameras:
             source_cfg = camera.source
-            match source_cfg.type:
-                case "local_folder":
-                    local_cfg = source_cfg.config
-                    assert isinstance(local_cfg, LocalFolderSourceConfig)
-                    sources.append(
-                        LocalFolderSource(
-                            local_cfg,
-                            camera_name=camera.name,
-                            state_store=self._state_store,
-                        )
-                    )
-
-                case "rtsp":
-                    rtsp_cfg = source_cfg.config
-                    assert isinstance(rtsp_cfg, RTSPSourceConfig)
-                    sources.append(RTSPSource(rtsp_cfg, camera_name=camera.name))
-
-                case "ftp":
-                    ftp_cfg = source_cfg.config
-                    assert isinstance(ftp_cfg, FtpSourceConfig)
-                    sources.append(FtpSource(ftp_cfg, camera_name=camera.name))
-
-                case _:
-                    raise RuntimeError(f"Unsupported source type: {source_cfg.type}")
+            source = load_source_plugin(
+                source_type=source_cfg.type,
+                config=source_cfg.config,
+                camera_name=camera.name,
+            )
+            sources.append(source)
 
         return sources
 
@@ -327,11 +280,12 @@ class Application:
         validate_camera_references(config)
         validate_plugin_names(
             config,
-            valid_filters=sorted(FILTER_REGISTRY.keys()),
-            valid_vlms=sorted(VLM_REGISTRY.keys()),
-            valid_storage=sorted(STORAGE_REGISTRY.keys()),
-            valid_notifiers=sorted(NOTIFIER_REGISTRY.keys()),
-            valid_alert_policies=sorted(ALERT_POLICY_REGISTRY.keys()),
+            valid_filters=get_plugin_names(PluginType.FILTER),
+            valid_vlms=get_plugin_names(PluginType.ANALYZER),
+            valid_storage=get_plugin_names(PluginType.STORAGE),
+            valid_notifiers=get_plugin_names(PluginType.NOTIFIER),
+            valid_alert_policies=get_plugin_names(PluginType.ALERT_POLICY),
+            valid_sources=get_plugin_names(PluginType.SOURCE),
         )
 
     def _setup_signal_handlers(self) -> None:

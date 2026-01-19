@@ -37,6 +37,7 @@ def validate_plugin_names(
     valid_storage: list[str] | None = None,
     valid_notifiers: list[str] | None = None,
     valid_alert_policies: list[str] | None = None,
+    valid_sources: list[str] | None = None,
 ) -> None:
     """Validate that plugin names are recognized.
 
@@ -46,34 +47,59 @@ def validate_plugin_names(
         valid_vlms: List of valid VLM plugin names
         valid_storage: Optional list of valid storage backends
         valid_notifiers: Optional list of valid notifier backends
+        valid_alert_policies: Optional list of valid alert policy backends
+        valid_sources: Optional list of valid source types
 
     Raises:
         ConfigError: If plugin names are not recognized
     """
     errors = []
 
-    if config.filter.plugin not in valid_filters:
-        errors.append(f"Unknown filter plugin: {config.filter.plugin} (valid: {valid_filters})")
+    valid_filters_lower = {name.lower() for name in valid_filters}
+    if config.filter.plugin.lower() not in valid_filters_lower:
+        errors.append(
+            f"Unknown filter plugin: {config.filter.plugin} (valid: {sorted(valid_filters_lower)})"
+        )
 
-    if config.vlm.backend not in valid_vlms:
-        errors.append(f"Unknown VLM plugin: {config.vlm.backend} (valid: {valid_vlms})")
+    valid_vlms_lower = {name.lower() for name in valid_vlms}
+    if config.vlm.backend.lower() not in valid_vlms_lower:
+        errors.append(
+            f"Unknown VLM plugin: {config.vlm.backend} (valid: {sorted(valid_vlms_lower)})"
+        )
 
-    if valid_storage is not None and config.storage.backend not in valid_storage:
-        errors.append(f"Unknown storage backend: {config.storage.backend} (valid: {valid_storage})")
+    if valid_storage is not None:
+        valid_storage_lower = {name.lower() for name in valid_storage}
+        if config.storage.backend.lower() not in valid_storage_lower:
+            errors.append(
+                f"Unknown storage backend: {config.storage.backend} "
+                f"(valid: {sorted(valid_storage_lower)})"
+            )
 
     if valid_notifiers is not None:
+        valid_notifiers_lower = {name.lower() for name in valid_notifiers}
         for notifier in config.notifiers:
-            if notifier.backend not in valid_notifiers:
+            if notifier.backend.lower() not in valid_notifiers_lower:
                 errors.append(
-                    f"Unknown notifier backend: {notifier.backend} (valid: {valid_notifiers})"
+                    f"Unknown notifier backend: {notifier.backend} "
+                    f"(valid: {sorted(valid_notifiers_lower)})"
                 )
 
     if valid_alert_policies is not None:
-        if config.alert_policy.backend not in valid_alert_policies:
+        valid_alert_policies_lower = {name.lower() for name in valid_alert_policies}
+        if config.alert_policy.backend.lower() not in valid_alert_policies_lower:
             errors.append(
                 "Unknown alert policy backend: "
-                f"{config.alert_policy.backend} (valid: {valid_alert_policies})"
+                f"{config.alert_policy.backend} (valid: {sorted(valid_alert_policies_lower)})"
             )
+
+    if valid_sources is not None:
+        valid_sources_lower = {name.lower() for name in valid_sources}
+        for camera in config.cameras:
+            if camera.source.type.lower() not in valid_sources_lower:
+                errors.append(
+                    f"Unknown source type for camera '{camera.name}': "
+                    f"{camera.source.type} (valid: {sorted(valid_sources_lower)})"
+                )
 
     if errors:
         raise ConfigError("Invalid plugin configuration:\n  " + "\n  ".join(errors))

@@ -10,12 +10,20 @@ from pathlib import Path, PurePosixPath
 from homesec.interfaces import StorageBackend
 from homesec.models.config import LocalStorageConfig
 from homesec.models.storage import StorageUploadResult
+from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
 
+@plugin(plugin_type=PluginType.STORAGE, name="local")
 class LocalStorage(StorageBackend):
     """Local storage backend for development and tests."""
+
+    config_cls = LocalStorageConfig
+
+    @classmethod
+    def create(cls, config: LocalStorageConfig) -> StorageBackend:
+        return cls(config)
 
     def __init__(self, config: LocalStorageConfig) -> None:
         self.root = Path(config.root).expanduser().resolve()
@@ -79,32 +87,3 @@ class LocalStorage(StorageBackend):
         if path.is_absolute() or ".." in path.parts:
             raise ValueError(f"Invalid dest_path: {dest_path}")
         return self.root.joinpath(*path.parts)
-
-
-# Plugin registration
-from typing import cast
-
-from pydantic import BaseModel
-
-from homesec.interfaces import StorageBackend
-from homesec.plugins.storage import StoragePlugin, storage_plugin
-
-
-@storage_plugin(name="local")
-def local_storage_plugin() -> StoragePlugin:
-    """Local storage plugin factory.
-
-    Returns:
-        StoragePlugin for local filesystem storage
-    """
-    from homesec.models.config import LocalStorageConfig
-
-    def factory(cfg: BaseModel) -> StorageBackend:
-        # Config is already validated by pydantic when loaded
-        return LocalStorage(cast(LocalStorageConfig, cfg))
-
-    return StoragePlugin(
-        name="local",
-        config_model=LocalStorageConfig,
-        factory=factory,
-    )

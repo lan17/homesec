@@ -8,14 +8,25 @@ from homesec.models.vlm import AnalysisResult
 from homesec.plugins.alert_policies.default import DefaultAlertPolicy
 
 
+def _make_policy(
+    min_risk_level: str, notify_on_motion: bool, notify_on_activity_types: list[str] | None = None
+) -> DefaultAlertPolicy:
+    """Helper to create policy with injected settings."""
+    settings = DefaultAlertPolicySettings(
+        min_risk_level=min_risk_level,
+        notify_on_motion=notify_on_motion,
+        notify_on_activity_types=notify_on_activity_types or [],
+    )
+    # Inject runtime fields
+    settings.overrides = {}
+    settings.trigger_classes = {"person"}
+    return DefaultAlertPolicy(settings)
+
+
 def test_notify_on_motion_always_notifies() -> None:
     """notify_on_motion should always notify even without analysis."""
     # Given notify_on_motion is enabled
-    policy = DefaultAlertPolicy(
-        DefaultAlertPolicySettings(min_risk_level="high", notify_on_motion=True),
-        overrides={},
-        trigger_classes=["person"],
-    )
+    policy = _make_policy(min_risk_level="high", notify_on_motion=True)
 
     # When analysis is missing and filter results are empty
     notify, reason = policy.should_notify(
@@ -32,11 +43,7 @@ def test_notify_on_motion_always_notifies() -> None:
 def test_risk_threshold_blocks_when_below() -> None:
     """Risk threshold should block notifications below minimum."""
     # Given a high risk threshold
-    policy = DefaultAlertPolicy(
-        DefaultAlertPolicySettings(min_risk_level="high", notify_on_motion=False),
-        overrides={},
-        trigger_classes=["person"],
-    )
+    policy = _make_policy(min_risk_level="high", notify_on_motion=False)
     analysis = AnalysisResult(
         risk_level="medium",
         activity_type="person_walking",
@@ -58,11 +65,7 @@ def test_risk_threshold_blocks_when_below() -> None:
 def test_risk_threshold_allows_when_above() -> None:
     """Risk threshold should allow notifications at or above minimum."""
     # Given a medium risk threshold
-    policy = DefaultAlertPolicy(
-        DefaultAlertPolicySettings(min_risk_level="medium", notify_on_motion=False),
-        overrides={},
-        trigger_classes=["person"],
-    )
+    policy = _make_policy(min_risk_level="medium", notify_on_motion=False)
     analysis = AnalysisResult(
         risk_level="high",
         activity_type="person_loitering",
@@ -84,14 +87,10 @@ def test_risk_threshold_allows_when_above() -> None:
 def test_activity_type_override_notifies() -> None:
     """Activity type allow-list should trigger notifications."""
     # Given an activity type override list
-    policy = DefaultAlertPolicy(
-        DefaultAlertPolicySettings(
-            min_risk_level="high",
-            notify_on_motion=False,
-            notify_on_activity_types=["delivery"],
-        ),
-        overrides={},
-        trigger_classes=["person"],
+    policy = _make_policy(
+        min_risk_level="high",
+        notify_on_motion=False,
+        notify_on_activity_types=["delivery"],
     )
     analysis = AnalysisResult(
         risk_level="low",
@@ -114,11 +113,7 @@ def test_activity_type_override_notifies() -> None:
 def test_vlm_failure_falls_back_to_filter_triggers() -> None:
     """Missing analysis should still notify if filter hits trigger classes."""
     # Given no analysis and filter detects trigger class
-    policy = DefaultAlertPolicy(
-        DefaultAlertPolicySettings(min_risk_level="high", notify_on_motion=False),
-        overrides={},
-        trigger_classes=["person"],
-    )
+    policy = _make_policy(min_risk_level="high", notify_on_motion=False)
     filter_result = FilterResult(
         detected_classes=["person"],
         confidence=0.9,
@@ -137,11 +132,7 @@ def test_vlm_failure_falls_back_to_filter_triggers() -> None:
 def test_no_analysis_no_triggers_skips_notification() -> None:
     """Missing analysis should skip when no trigger classes are detected."""
     # Given no analysis and no trigger classes detected
-    policy = DefaultAlertPolicy(
-        DefaultAlertPolicySettings(min_risk_level="low", notify_on_motion=False),
-        overrides={},
-        trigger_classes=["person"],
-    )
+    policy = _make_policy(min_risk_level="low", notify_on_motion=False)
     filter_result = FilterResult(
         detected_classes=["dog"],
         confidence=0.6,

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from homesec.models.clip import Clip
+from homesec.models.enums import RiskLevel
 from homesec.models.events import ClipRecheckedEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import (
@@ -253,7 +254,7 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
     state = await state_store.get(clip.clip_id)
     assert state is not None
     assert state.analysis_result is not None
-    assert state.analysis_result.risk_level == "low"
+    assert state.analysis_result.risk_level == RiskLevel.LOW
     assert state.status == "analyzed"
 
     # And: Event is recorded with token usage

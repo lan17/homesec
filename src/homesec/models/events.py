@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from homesec.models.enums import EventType, RiskLevelField
 from homesec.models.filter import FilterResult
 
 
@@ -22,7 +23,7 @@ class ClipEvent(BaseModel):
 class ClipRecordedEvent(ClipEvent):
     """Clip was recorded and queued for processing."""
 
-    event_type: Literal["clip_recorded"] = "clip_recorded"
+    event_type: Literal[EventType.CLIP_RECORDED] = EventType.CLIP_RECORDED
     camera_name: str
     duration_s: float
     source_type: str
@@ -31,7 +32,7 @@ class ClipRecordedEvent(ClipEvent):
 class ClipDeletedEvent(ClipEvent):
     """Clip was deleted by a maintenance workflow (e.g., cleanup CLI)."""
 
-    event_type: Literal["clip_deleted"] = "clip_deleted"
+    event_type: Literal[EventType.CLIP_DELETED] = EventType.CLIP_DELETED
     camera_name: str
     reason: str
     run_id: str
@@ -44,7 +45,7 @@ class ClipDeletedEvent(ClipEvent):
 class ClipRecheckedEvent(ClipEvent):
     """Clip was re-analyzed by a maintenance workflow."""
 
-    event_type: Literal["clip_rechecked"] = "clip_rechecked"
+    event_type: Literal[EventType.CLIP_RECHECKED] = EventType.CLIP_RECHECKED
     camera_name: str
     reason: str
     run_id: str
@@ -55,7 +56,7 @@ class ClipRecheckedEvent(ClipEvent):
 class UploadStartedEvent(ClipEvent):
     """Upload to storage backend started."""
 
-    event_type: Literal["upload_started"] = "upload_started"
+    event_type: Literal[EventType.UPLOAD_STARTED] = EventType.UPLOAD_STARTED
     dest_key: str
     attempt: int
 
@@ -63,7 +64,7 @@ class UploadStartedEvent(ClipEvent):
 class UploadCompletedEvent(ClipEvent):
     """Upload to storage backend completed successfully."""
 
-    event_type: Literal["upload_completed"] = "upload_completed"
+    event_type: Literal[EventType.UPLOAD_COMPLETED] = EventType.UPLOAD_COMPLETED
     storage_uri: str
     view_url: str | None
     attempt: int
@@ -73,7 +74,7 @@ class UploadCompletedEvent(ClipEvent):
 class UploadFailedEvent(ClipEvent):
     """Upload to storage backend failed."""
 
-    event_type: Literal["upload_failed"] = "upload_failed"
+    event_type: Literal[EventType.UPLOAD_FAILED] = EventType.UPLOAD_FAILED
     attempt: int
     error_message: str
     error_type: str
@@ -83,14 +84,14 @@ class UploadFailedEvent(ClipEvent):
 class FilterStartedEvent(ClipEvent):
     """Object detection filter started."""
 
-    event_type: Literal["filter_started"] = "filter_started"
+    event_type: Literal[EventType.FILTER_STARTED] = EventType.FILTER_STARTED
     attempt: int
 
 
 class FilterCompletedEvent(ClipEvent):
     """Object detection filter completed."""
 
-    event_type: Literal["filter_completed"] = "filter_completed"
+    event_type: Literal[EventType.FILTER_COMPLETED] = EventType.FILTER_COMPLETED
     detected_classes: list[str]
     confidence: float
     model: str
@@ -102,7 +103,7 @@ class FilterCompletedEvent(ClipEvent):
 class FilterFailedEvent(ClipEvent):
     """Object detection filter failed."""
 
-    event_type: Literal["filter_failed"] = "filter_failed"
+    event_type: Literal[EventType.FILTER_FAILED] = EventType.FILTER_FAILED
     attempt: int
     error_message: str
     error_type: str
@@ -112,15 +113,15 @@ class FilterFailedEvent(ClipEvent):
 class VLMStartedEvent(ClipEvent):
     """VLM analysis started."""
 
-    event_type: Literal["vlm_started"] = "vlm_started"
+    event_type: Literal[EventType.VLM_STARTED] = EventType.VLM_STARTED
     attempt: int
 
 
 class VLMCompletedEvent(ClipEvent):
     """VLM analysis completed."""
 
-    event_type: Literal["vlm_completed"] = "vlm_completed"
-    risk_level: str
+    event_type: Literal[EventType.VLM_COMPLETED] = EventType.VLM_COMPLETED
+    risk_level: RiskLevelField
     activity_type: str
     summary: str
     analysis: dict[str, Any]
@@ -133,7 +134,7 @@ class VLMCompletedEvent(ClipEvent):
 class VLMFailedEvent(ClipEvent):
     """VLM analysis failed."""
 
-    event_type: Literal["vlm_failed"] = "vlm_failed"
+    event_type: Literal[EventType.VLM_FAILED] = EventType.VLM_FAILED
     attempt: int
     error_message: str
     error_type: str
@@ -143,24 +144,24 @@ class VLMFailedEvent(ClipEvent):
 class VLMSkippedEvent(ClipEvent):
     """VLM analysis skipped (no trigger classes detected)."""
 
-    event_type: Literal["vlm_skipped"] = "vlm_skipped"
+    event_type: Literal[EventType.VLM_SKIPPED] = EventType.VLM_SKIPPED
     reason: str
 
 
 class AlertDecisionMadeEvent(ClipEvent):
     """Alert policy decision made."""
 
-    event_type: Literal["alert_decision_made"] = "alert_decision_made"
+    event_type: Literal[EventType.ALERT_DECISION_MADE] = EventType.ALERT_DECISION_MADE
     should_notify: bool
     reason: str
     detected_classes: list[str] | None
-    vlm_risk: str | None
+    vlm_risk: RiskLevelField | None
 
 
 class NotificationSentEvent(ClipEvent):
     """Notification sent successfully."""
 
-    event_type: Literal["notification_sent"] = "notification_sent"
+    event_type: Literal[EventType.NOTIFICATION_SENT] = EventType.NOTIFICATION_SENT
     notifier_name: str
     dedupe_key: str
     attempt: int = 1
@@ -169,7 +170,7 @@ class NotificationSentEvent(ClipEvent):
 class NotificationFailedEvent(ClipEvent):
     """Notification send failed."""
 
-    event_type: Literal["notification_failed"] = "notification_failed"
+    event_type: Literal[EventType.NOTIFICATION_FAILED] = EventType.NOTIFICATION_FAILED
     notifier_name: str
     error_message: str
     error_type: str

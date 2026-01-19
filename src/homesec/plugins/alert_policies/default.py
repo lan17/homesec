@@ -4,26 +4,27 @@ from __future__ import annotations
 
 from homesec.interfaces import AlertPolicy
 from homesec.models.alert import AlertDecision
-from homesec.models.config import AlertPolicyOverrides, DefaultAlertPolicySettings
+from homesec.models.config import DefaultAlertPolicySettings
+from homesec.models.enums import RiskLevel
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
-
-# Risk level ordering for comparison
-RISK_LEVELS = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+from homesec.plugins.registry import PluginType, plugin
 
 
+@plugin(plugin_type=PluginType.ALERT_POLICY, name="default")
 class DefaultAlertPolicy(AlertPolicy):
     """Default alert policy implementation."""
 
-    def __init__(
-        self,
-        settings: DefaultAlertPolicySettings,
-        overrides: dict[str, AlertPolicyOverrides],
-        trigger_classes: list[str],
-    ) -> None:
+    config_cls = DefaultAlertPolicySettings
+
+    @classmethod
+    def create(cls, config: DefaultAlertPolicySettings) -> AlertPolicy:
+        return cls(config)
+
+    def __init__(self, settings: DefaultAlertPolicySettings) -> None:
         self._settings = settings
-        self._overrides = overrides
-        self._trigger_classes = list(trigger_classes)
+        self._overrides = settings.overrides
+        self._trigger_classes = list(settings.trigger_classes)
 
     def should_notify(
         self,
@@ -72,41 +73,15 @@ class DefaultAlertPolicy(AlertPolicy):
         }
         return DefaultAlertPolicySettings.model_validate(merged)
 
-    def _risk_meets_threshold(self, actual: str, threshold: str) -> bool:
-        return RISK_LEVELS.get(actual, 0) >= RISK_LEVELS.get(threshold, 0)
+    def _risk_meets_threshold(self, actual: RiskLevel, threshold: RiskLevel) -> bool:
+        """Check if actual risk level meets or exceeds threshold.
+
+        Uses IntEnum comparison for natural ordering:
+            RiskLevel.HIGH >= RiskLevel.MEDIUM  # True
+        """
+        return actual >= threshold
 
     def _filter_detected_trigger_classes(self, filter_result: FilterResult) -> bool:
         detected = set(filter_result.detected_classes)
         trigger = set(self._trigger_classes)
         return bool(detected & trigger)
-
-
-# Plugin registration
-from pydantic import BaseModel
-
-from homesec.interfaces import AlertPolicy
-from homesec.plugins.alert_policies import AlertPolicyPlugin, alert_policy_plugin
-
-
-@alert_policy_plugin(name="default")
-def default_alert_policy_plugin() -> AlertPolicyPlugin:
-    """Default alert policy plugin factory.
-
-    Returns:
-        AlertPolicyPlugin for default risk-based alert policy
-    """
-    from homesec.models.config import DefaultAlertPolicySettings
-
-    def factory(
-        cfg: BaseModel,
-        overrides: dict[str, AlertPolicyOverrides],
-        trigger_classes: list[str],
-    ) -> AlertPolicy:
-        settings = DefaultAlertPolicySettings.model_validate(cfg)
-        return DefaultAlertPolicy(settings, overrides, trigger_classes)
-
-    return AlertPolicyPlugin(
-        name="default",
-        config_model=DefaultAlertPolicySettings,
-        factory=factory,
-    )
