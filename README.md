@@ -27,7 +27,7 @@ graph TD
     F -->|Detect| AI{Object?}
     AI -->|Yes| V[VLM Analysis]
     AI -->|No| D[Discard]
-    V -->|Context| P[Alert Policy]
+    V -->|Risk level, detected objects| P[Alert Policy]
     P -->|Decide| N[Notifiers]
 ```
 
