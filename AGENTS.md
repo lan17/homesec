@@ -13,6 +13,7 @@
 - **Preserve stack traces**: Custom errors must set `self.__cause__ = cause` to preserve original exception.
 - **Tests must use Given/When/Then comments**: Every test must include these comments and follow behavioral testing principles (see `TESTING.md`).
 - **Postgres for state**: Use `clip_states` table with `clip_id` (primary key) + `data` (jsonb) for evolvable schema.
+- **DB migrations**: If you change schema/models, follow `docs/migrations.md` (PostgreSQL-first autogenerate, add SQLite compatibility, run migration smoke test).
 - **Pydantic everywhere**: Validate config, DB payloads, VLM outputs, and MQTT payloads with Pydantic models.
 - **Clarify before complexity**: Ask user for clarification when simpler design may exist. Don't proceed with complex workarounds.
 - **Product priorities**: Recording + uploading (P0) must work even if Postgres is down. Analysis/notifications are best-effort (P1).
@@ -349,11 +350,33 @@ async def test_filter_stage_failure():
 ```bash
 uv sync                 # Install dependencies
 make typecheck          # Run mypy --strict (mandatory before commit)
-make test               # Run pytest
-make check              # Run both typecheck + test
-make db-up              # Start Postgres for development
+make test               # Run pytest (both SQLite and PostgreSQL)
+make test-sqlite        # Run pytest with SQLite only (fast, no PG required)
+make check              # Run lint + typecheck + test
+make db                 # Start Postgres for development
 make db-migrate         # Run Alembic migrations
 ```
+
+### Database Testing
+
+Tests run against **both SQLite and PostgreSQL** by default using parametrized fixtures. This ensures compatibility with both backends.
+
+**If PostgreSQL is unavailable or causing issues**, you can skip PostgreSQL tests:
+
+```bash
+# Skip PostgreSQL tests, run only SQLite
+SKIP_POSTGRES_TESTS=1 make test
+
+# Or use the dedicated target
+make test-sqlite
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SKIP_POSTGRES_TESTS` | `0` (off) | Set to `1` to skip PostgreSQL tests |
+| `TEST_DB_DSN` | (from `.env`) | PostgreSQL connection string for tests |
+
+**Note:** CI always runs both backends. Only use `SKIP_POSTGRES_TESTS=1` for local development when PostgreSQL is unavailable.
 
 ### Pattern Usage Examples
 

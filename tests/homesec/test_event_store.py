@@ -17,9 +17,9 @@ from homesec.state.postgres import PostgresEventStore, PostgresStateStore
 
 
 @pytest.mark.asyncio
-async def test_append_and_get_events(postgres_dsn: str, clean_test_db: None) -> None:
+async def test_append_and_get_events(db_dsn_for_tests: str, clean_test_db: None) -> None:
     # Given: A state store and event store with initialized tables
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)
@@ -82,11 +82,11 @@ async def test_append_and_get_events(postgres_dsn: str, clean_test_db: None) -> 
 
 @pytest.mark.asyncio
 async def test_append_and_get_clip_deleted_event(
-    postgres_dsn: str,
+    db_dsn_for_tests: str,
     clean_test_db: None,
 ) -> None:
     # Given: A state store and event store with initialized tables
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)
@@ -129,9 +129,9 @@ async def test_append_and_get_clip_deleted_event(
 
 
 @pytest.mark.asyncio
-async def test_get_events_after_id(postgres_dsn: str, clean_test_db: None) -> None:
+async def test_get_events_after_id(db_dsn_for_tests: str, clean_test_db: None) -> None:
     # Given: A clip with multiple events
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)
@@ -180,9 +180,9 @@ async def test_get_events_after_id(postgres_dsn: str, clean_test_db: None) -> No
 
 
 @pytest.mark.asyncio
-async def test_events_for_nonexistent_clip(postgres_dsn: str) -> None:
+async def test_events_for_nonexistent_clip(db_dsn_for_tests: str) -> None:
     # Given: An initialized event store
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)

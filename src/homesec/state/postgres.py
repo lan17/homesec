@@ -1,30 +1,35 @@
-"""Postgres implementation of StateStore and EventStore."""
+"""SQLAlchemy implementation of StateStore and EventStore.
+
+Supports both PostgreSQL and SQLite through the database abstraction layer.
+For backwards compatibility, PostgresStateStore and PostgresEventStore are
+provided as aliases to the new unified implementations.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
+    Integer,
     Table,
     Text,
     and_,
     func,
+    insert,
     or_,
     select,
 )
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from homesec.db import DialectHelper, JSONType, create_async_engine_for_dsn
 from homesec.interfaces import EventStore, StateStore
 from homesec.models.clip import ClipStateData
 from homesec.models.events import (
@@ -50,8 +55,12 @@ from homesec.models.events import (
     ClipEvent as ClipEventModel,
 )
 
+if TYPE_CHECKING:
+    pass
+
 logger = logging.getLogger(__name__)
 
+# Event type name -> Pydantic model class mapping
 _EVENT_TYPE_MAP: dict[str, type[ClipEventModel]] = {
     "clip_recorded": ClipRecordedEvent,
     "clip_deleted": ClipDeletedEvent,
@@ -72,17 +81,28 @@ _EVENT_TYPE_MAP: dict[str, type[ClipEventModel]] = {
 }
 
 
+# =============================================================================
+# SQLAlchemy Models
+# =============================================================================
+
+
 class Base(DeclarativeBase):
+    """Base class for all SQLAlchemy models."""
+
     pass
 
 
 class ClipState(Base):
-    """Current state snapshot (lightweight, fast queries)."""
+    """Current state snapshot (lightweight, fast queries).
+
+    Uses JSONType which automatically adapts to JSONB for PostgreSQL
+    and JSON for SQLite.
+    """
 
     __tablename__ = "clip_states"
 
     clip_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -95,18 +115,24 @@ class ClipState(Base):
         nullable=False,
     )
 
-    __table_args__ = (
-        Index("idx_clip_states_status", func.jsonb_extract_path_text(data, "status")),
-        Index("idx_clip_states_camera", func.jsonb_extract_path_text(data, "camera_name")),
-    )
+    # Note: Functional indexes on JSON fields are created via Alembic migrations
+    # using dialect-specific syntax (see alembic/versions/ for details).
+    # Simple column indexes can still be defined here if needed.
 
 
 class ClipEvent(Base):
-    """Event history (append-only audit log)."""
+    """Event history (append-only audit log).
+
+    Uses JSONType which automatically adapts to JSONB for PostgreSQL
+    and JSON for SQLite.
+    """
 
     __tablename__ = "clip_events"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Use Integer with Identity() for cross-database autoincrement support.
+    # SQLite requires INTEGER PRIMARY KEY for autoincrement; BigInteger doesn't work.
+    # For most use cases, 32-bit Integer is sufficient for event IDs.
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
     clip_id: Mapped[str] = mapped_column(
         Text,
         ForeignKey("clip_states.clip_id", ondelete="CASCADE"),
@@ -117,7 +143,7 @@ class ClipEvent(Base):
         nullable=False,
     )
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
-    event_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    event_data: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
 
     __table_args__ = (
         Index("idx_clip_events_clip_id", "clip_id"),
@@ -127,79 +153,131 @@ class ClipEvent(Base):
     )
 
 
-def _normalize_async_dsn(dsn: str) -> str:
-    if "+asyncpg" in dsn:
-        return dsn
-    if dsn.startswith("postgresql://"):
-        return dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if dsn.startswith("postgres://"):
-        return dsn.replace("postgres://", "postgresql+asyncpg://", 1)
-    return dsn
+# =============================================================================
+# JSON Parsing Utilities
+# =============================================================================
 
 
-class PostgresStateStore(StateStore):
-    """Postgres implementation of StateStore interface.
+def _parse_json_payload(raw: object) -> dict[str, Any]:
+    """Parse JSON payload from SQLAlchemy into a dict.
 
-    Implements graceful degradation: operations return None/False
-    instead of raising when DB is unavailable.
+    Handles different representations that may come from different
+    database drivers and configurations.
+
+    Args:
+        raw: Raw value from database (dict, str, or bytes)
+
+    Returns:
+        Parsed dictionary
+
+    Raises:
+        TypeError: If raw is not a supported type
+    """
+    match raw:
+        case dict():
+            return cast(dict[str, Any], raw)
+        case str():
+            return cast(dict[str, Any], json.loads(raw))
+        case bytes() | bytearray():
+            return cast(dict[str, Any], json.loads(raw.decode("utf-8")))
+        case _:
+            raise TypeError(f"Unsupported JSON payload type: {type(raw).__name__}")
+
+
+# =============================================================================
+# State Store Implementation
+# =============================================================================
+
+
+class SQLAlchemyStateStore(StateStore):
+    """SQLAlchemy implementation of StateStore interface.
+
+    Supports both PostgreSQL and SQLite through the DialectHelper abstraction.
+    Implements graceful degradation: operations return None/False instead of
+    raising when DB is unavailable.
+
+    Example:
+        # PostgreSQL
+        store = SQLAlchemyStateStore("postgresql://user:pass@localhost/db")
+
+        # SQLite (file-based)
+        store = SQLAlchemyStateStore("sqlite:///data/homesec.db")
+
+        # SQLite (in-memory, for testing)
+        store = SQLAlchemyStateStore("sqlite:///:memory:")
     """
 
     def __init__(self, dsn: str) -> None:
         """Initialize state store.
 
         Args:
-            dsn: Postgres connection string (e.g., "postgresql+asyncpg://user:pass@host/db")
+            dsn: Database connection string. Supported formats:
+                 - PostgreSQL: postgresql://user:pass@host/db
+                 - SQLite: sqlite:///path/to/db.sqlite or sqlite:///:memory:
         """
-        self._dsn = _normalize_async_dsn(dsn)
+        self._dsn = dsn
         self._engine: AsyncEngine | None = None
+        self._dialect: DialectHelper | None = None
+
+    @property
+    def dialect(self) -> DialectHelper | None:
+        """Return the dialect helper, or None if not initialized."""
+        return self._dialect
 
     async def initialize(self) -> bool:
-        """Initialize connection pool.
+        """Initialize connection pool and dialect helper.
 
-        Note: Tables are created via alembic migrations, not here.
+        Note: Tables are created via Alembic migrations, not here.
 
         Returns:
             True if initialization succeeded, False otherwise
         """
         try:
-            self._engine = create_async_engine(
-                self._dsn,
-                pool_pre_ping=True,
-                pool_size=5,
-                max_overflow=0,
-            )
+            self._dialect = DialectHelper.from_dsn(self._dsn)
+            self._engine = create_async_engine_for_dsn(self._dsn)
+
             # Verify connection works
             async with self._engine.connect() as conn:
                 await conn.execute(select(1))
-            logger.info("PostgresStateStore initialized successfully")
+
+            logger.info(
+                "SQLAlchemyStateStore initialized successfully (dialect=%s)",
+                self._dialect.dialect_name,
+            )
             return True
         except Exception as e:
-            logger.error("Failed to initialize PostgresStateStore: %s", e, exc_info=True)
+            logger.error("Failed to initialize SQLAlchemyStateStore: %s", e, exc_info=True)
             if self._engine is not None:
                 await self._engine.dispose()
             self._engine = None
+            self._dialect = None
             return False
 
     async def upsert(self, clip_id: str, data: ClipStateData) -> None:
         """Insert or update clip state.
 
+        Uses dialect-specific upsert (INSERT ... ON CONFLICT DO UPDATE).
         Raises on execution errors so callers can retry/log appropriately.
         """
-        if self._engine is None:
+        if self._engine is None or self._dialect is None:
             logger.warning("StateStore not initialized, skipping upsert for %s", clip_id)
             return
 
         json_data = data.model_dump(mode="json")
         table = cast(Table, ClipState.__table__)
-        stmt = pg_insert(table).values(
+
+        # Use dialect-specific insert for upsert support
+        stmt = self._dialect.insert(table).values(
             clip_id=clip_id,
             data=json_data,
             updated_at=func.now(),
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[table.c.clip_id],
+        stmt = self._dialect.on_conflict_do_update(
+            stmt,
+            index_elements=["clip_id"],
             set_={"data": stmt.excluded.data, "updated_at": func.now()},
         )
+
         async with self._engine.begin() as conn:
             await conn.execute(stmt)
 
@@ -218,11 +296,12 @@ class PostgresStateStore(StateStore):
                     select(ClipState.data).where(ClipState.clip_id == clip_id)
                 )
                 raw = result.scalar_one_or_none()
+
             if raw is None:
                 return None
 
             # Parse JSON and validate with Pydantic
-            data_dict = self._parse_state_data(raw)
+            data_dict = _parse_json_payload(raw)
             return ClipStateData.model_validate(data_dict)
         except Exception as e:
             logger.error(
@@ -248,7 +327,7 @@ class PostgresStateStore(StateStore):
 
         Cursor is `(created_at, clip_id)` from the last row of the previous page.
         """
-        if self._engine is None:
+        if self._engine is None or self._dialect is None:
             logger.warning("StateStore not initialized, returning empty cleanup candidate list")
             return []
 
@@ -257,15 +336,18 @@ class PostgresStateStore(StateStore):
         if older_than_days is not None and older_than_days < 0:
             raise ValueError("older_than_days must be >= 0")
 
-        status_expr = func.jsonb_extract_path_text(ClipState.data, "status")
-        camera_expr = func.jsonb_extract_path_text(ClipState.data, "camera_name")
+        # Use dialect helper for JSON field extraction
+        status_expr = self._dialect.json_extract_text(ClipState.data, "status")
+        camera_expr = self._dialect.json_extract_text(ClipState.data, "camera_name")
 
         conditions = [or_(status_expr.is_(None), status_expr != "deleted")]
+
         if camera_name is not None:
             conditions.append(camera_expr == camera_name)
+
         if older_than_days is not None:
             conditions.append(
-                ClipState.created_at < func.now() - func.make_interval(days=int(older_than_days))
+                self._dialect.timestamp_older_than(ClipState.created_at, older_than_days)
             )
 
         if cursor is not None:
@@ -292,20 +374,20 @@ class PostgresStateStore(StateStore):
             rows = result.all()
 
         items: list[tuple[str, ClipStateData, datetime]] = []
-        for clip_id, raw, created_at in rows:
+        for row_clip_id, raw, created_at in rows:
             try:
-                data_dict = self._parse_state_data(raw)
+                data_dict = _parse_json_payload(raw)
                 state = ClipStateData.model_validate(data_dict)
             except Exception as exc:
                 logger.warning(
                     "Failed parsing clip state for cleanup: %s error=%s",
-                    clip_id,
+                    row_clip_id,
                     exc,
                     exc_info=True,
                 )
                 continue
 
-            items.append((clip_id, state, created_at))
+            items.append((row_clip_id, state, created_at))
 
         return items
 
@@ -331,81 +413,59 @@ class PostgresStateStore(StateStore):
         if self._engine is not None:
             await self._engine.dispose()
             self._engine = None
-            logger.info("PostgresStateStore closed")
+            self._dialect = None
+            logger.info("SQLAlchemyStateStore closed")
+
+    def is_retryable_error(self, exc: Exception) -> bool:
+        """Check if an exception is a retryable database error.
+
+        Delegates to DialectHelper for dialect-specific error classification.
+        """
+        if self._dialect is None:
+            return False
+        return self._dialect.is_retryable_error(exc)
+
+    def create_event_store(self) -> SQLAlchemyEventStore | NoopEventStore:
+        """Create an event store using the same engine, or a no-op fallback."""
+        if self._engine is None or self._dialect is None:
+            return NoopEventStore()
+        return SQLAlchemyEventStore(self._engine, self._dialect)
 
     @staticmethod
     def _parse_state_data(raw: object) -> dict[str, Any]:
-        """Parse JSONB payload from SQLAlchemy into a dict."""
-        return _parse_jsonb_payload(raw)
+        """Parse JSON payload from SQLAlchemy into a dict.
 
-    def create_event_store(self) -> PostgresEventStore | NoopEventStore:
-        """Create a Postgres-backed event store or a no-op fallback."""
-        if self._engine is None:
-            return NoopEventStore()
-        return PostgresEventStore(self._engine)
+        Provided for backwards compatibility with tests.
+        """
+        return _parse_json_payload(raw)
 
 
-def _parse_jsonb_payload(raw: object) -> dict[str, Any]:
-    """Parse JSONB payload from SQLAlchemy into a dict."""
-    match raw:
-        case dict():
-            return cast(dict[str, Any], raw)
-        case str():
-            return cast(dict[str, Any], json.loads(raw))
-        case bytes() | bytearray():
-            return cast(dict[str, Any], json.loads(raw.decode("utf-8")))
-        case _:
-            raise TypeError(f"Unsupported JSONB payload type: {type(raw).__name__}")
+# =============================================================================
+# Event Store Implementation
+# =============================================================================
 
 
-_RETRYABLE_SQLSTATES = {
-    "08000",  # connection_exception
-    "08003",  # connection_does_not_exist
-    "08006",  # connection_failure
-    "08007",  # transaction_resolution_unknown
-    "08001",  # sqlclient_unable_to_establish_sqlconnection
-    "08004",  # sqlserver_rejected_establishment_of_sqlconnection
-    "40P01",  # deadlock_detected
-    "40001",  # serialization_failure
-    "53300",  # too_many_connections
-    "57P01",  # admin_shutdown
-    "57P02",  # crash_shutdown
-    "57P03",  # cannot_connect_now
-}
+class SQLAlchemyEventStore(EventStore):
+    """SQLAlchemy implementation of EventStore interface.
 
+    Supports both PostgreSQL and SQLite through the DialectHelper abstraction.
+    """
 
-def _extract_sqlstate(exc: BaseException) -> str | None:
-    for candidate in (exc, getattr(exc, "orig", None)):
-        if candidate is None:
-            continue
-        sqlstate = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
-        if sqlstate:
-            return str(sqlstate)
-    return None
+    def __init__(self, engine: AsyncEngine, dialect: DialectHelper) -> None:
+        """Initialize with shared engine and dialect from StateStore.
 
-
-def is_retryable_pg_error(exc: Exception) -> bool:
-    """Return True if the exception is likely a transient Postgres error."""
-    if isinstance(exc, OperationalError):
-        return True
-    if isinstance(exc, DBAPIError) and exc.connection_invalidated:
-        return True
-    sqlstate = _extract_sqlstate(exc)
-    return sqlstate in _RETRYABLE_SQLSTATES
-
-
-class PostgresEventStore(EventStore):
-    """Postgres implementation of EventStore interface."""
-
-    def __init__(self, engine: AsyncEngine) -> None:
-        """Initialize with shared engine from StateStore."""
+        Args:
+            engine: SQLAlchemy async engine
+            dialect: DialectHelper for dialect-specific operations
+        """
         self._engine = engine
+        self._dialect = dialect
 
     async def append(self, event: ClipLifecycleEvent) -> None:
         """Append a single event."""
         try:
             async with self._engine.begin() as conn:
-                table = cast(Any, ClipEvent.__table__)
+                table = cast(Table, ClipEvent.__table__)
                 payload = {
                     "clip_id": event.clip_id,
                     "timestamp": event.timestamp,
@@ -415,7 +475,8 @@ class PostgresEventStore(EventStore):
                         exclude={"id", "event_type"},
                     ),
                 }
-                await conn.execute(pg_insert(table), [payload])
+                # Use standard insert - no conflict handling needed for append-only log
+                await conn.execute(insert(table).values(**payload))
         except Exception as e:
             logger.error("Failed to append event: %s", e, exc_info=e)
             raise
@@ -440,7 +501,7 @@ class PostgresEventStore(EventStore):
 
             events: list[ClipLifecycleEvent] = []
             for event_id, event_type, event_data in rows:
-                event_dict = _parse_jsonb_payload(event_data)
+                event_dict = _parse_json_payload(event_data)
                 event_dict.setdefault("event_type", event_type)
                 event_dict["id"] = event_id
                 event_cls = _EVENT_TYPE_MAP.get(event_type)
@@ -456,10 +517,16 @@ class PostgresEventStore(EventStore):
             return []
 
 
+# =============================================================================
+# No-op Implementations (for graceful degradation)
+# =============================================================================
+
+
 class NoopEventStore(EventStore):
-    """Event store that drops events (used when Postgres is unavailable)."""
+    """Event store that drops events (used when database is unavailable)."""
 
     async def append(self, event: ClipLifecycleEvent) -> None:
+        """No-op: event is dropped."""
         return
 
     async def get_events(
@@ -467,6 +534,7 @@ class NoopEventStore(EventStore):
         clip_id: str,
         after_id: int | None = None,
     ) -> list[ClipLifecycleEvent]:
+        """No-op: returns empty list."""
         return []
 
 
@@ -474,9 +542,11 @@ class NoopStateStore(StateStore):
     """State store that drops writes and returns no data."""
 
     async def upsert(self, clip_id: str, data: ClipStateData) -> None:
+        """No-op: data is dropped."""
         return
 
     async def get(self, clip_id: str) -> ClipStateData | None:
+        """No-op: returns None."""
         return None
 
     async def list_candidate_clips_for_cleanup(
@@ -487,6 +557,7 @@ class NoopStateStore(StateStore):
         batch_size: int,
         cursor: tuple[datetime, str] | None = None,
     ) -> list[tuple[str, ClipStateData, datetime]]:
+        """No-op: returns empty list."""
         _ = older_than_days
         _ = camera_name
         _ = batch_size
@@ -494,7 +565,38 @@ class NoopStateStore(StateStore):
         return []
 
     async def shutdown(self, timeout: float | None = None) -> None:
+        """No-op."""
         return
 
     async def ping(self) -> bool:
+        """No-op: always returns False."""
         return False
+
+
+# =============================================================================
+# Backwards Compatibility
+# =============================================================================
+
+# Aliases for backwards compatibility with existing code
+PostgresStateStore = SQLAlchemyStateStore
+PostgresEventStore = SQLAlchemyEventStore
+
+
+def is_retryable_pg_error(exc: Exception) -> bool:
+    """Return True if the exception is likely a transient database error.
+
+    This function is provided for backwards compatibility. New code should
+    use SQLAlchemyStateStore.is_retryable_error() or DialectHelper.is_retryable_error().
+    """
+    # Create a PostgreSQL dialect helper for backwards-compatible behavior
+    dialect = DialectHelper("postgresql")
+    return dialect.is_retryable_error(exc)
+
+
+def _normalize_async_dsn(dsn: str) -> str:
+    """Normalize DSN to include async driver.
+
+    This function is provided for backwards compatibility. New code should
+    use DialectHelper.normalize_dsn().
+    """
+    return DialectHelper.normalize_dsn(dsn)

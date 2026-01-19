@@ -102,10 +102,10 @@ def make_clip(tmp_path: Path, clip_id: str) -> Clip:
 
 @pytest.mark.asyncio
 async def test_pipeline_emits_success_events(
-    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+    db_dsn_for_tests: str, tmp_path: Path, clean_test_db: None
 ) -> None:
     # Given: A real Postgres event store and a pipeline with successful mocks
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)
@@ -172,10 +172,10 @@ async def test_pipeline_emits_success_events(
 
 @pytest.mark.asyncio
 async def test_pipeline_emits_notification_events_per_notifier(
-    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+    db_dsn_for_tests: str, tmp_path: Path, clean_test_db: None
 ) -> None:
     # Given: A real Postgres event store and two notifier entries
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)
@@ -223,10 +223,10 @@ async def test_pipeline_emits_notification_events_per_notifier(
 
 @pytest.mark.asyncio
 async def test_pipeline_emits_vlm_skipped_event(
-    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+    db_dsn_for_tests: str, tmp_path: Path, clean_test_db: None
 ) -> None:
     # Given: A clip with non-trigger classes and notify_on_motion disabled
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)
@@ -268,10 +268,10 @@ async def test_pipeline_emits_vlm_skipped_event(
 
 @pytest.mark.asyncio
 async def test_pipeline_emits_upload_failed_event(
-    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+    db_dsn_for_tests: str, tmp_path: Path, clean_test_db: None
 ) -> None:
     # Given: A pipeline where upload fails but filter/VLM succeed
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     event_store = state_store.create_event_store()
     assert isinstance(event_store, PostgresEventStore)

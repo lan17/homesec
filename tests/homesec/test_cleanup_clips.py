@@ -87,9 +87,19 @@ def _write_cleanup_config(path: Path, *, dsn: str, storage_root: Path) -> None:
     path.write_text(yaml.safe_dump(config, sort_keys=False))
 
 
+@pytest.fixture
+def db_dsn_for_tests(db_backend: str, db_dsn: str, tmp_path: Path) -> str:
+    if db_backend == "sqlite":
+        return f"sqlite+aiosqlite:///{tmp_path / 'cleanup.db'}"
+    return db_dsn
+
+
 @pytest.mark.asyncio
 async def test_cleanup_deletes_empty_clips(
-    postgres_dsn: str, tmp_path: Path, clean_test_db: None, monkeypatch: pytest.MonkeyPatch
+    db_dsn_for_tests: str,
+    tmp_path: Path,
+    clean_test_db: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cleanup removes clips that still have no detections."""
     # Given a clip state with empty filter result and local + storage copies
@@ -101,7 +111,7 @@ async def test_cleanup_deletes_empty_clips(
     dest_path = f"clips/front/{clip_id}.mp4"
     upload = await storage.put_file(local_path, dest_path)
 
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     empty_filter = FilterResult(
         detected_classes=[],
@@ -120,7 +130,7 @@ async def test_cleanup_deletes_empty_clips(
     await state_store.upsert(clip_id, state)
 
     config_path = tmp_path / "config.yaml"
-    _write_cleanup_config(config_path, dsn=postgres_dsn, storage_root=storage_root)
+    _write_cleanup_config(config_path, dsn=db_dsn_for_tests, storage_root=storage_root)
 
     filter_plugin = _TestFilter(detect_on=set())
     monkeypatch.setattr(
@@ -155,7 +165,10 @@ async def test_cleanup_deletes_empty_clips(
 
 @pytest.mark.asyncio
 async def test_cleanup_marks_false_negatives(
-    postgres_dsn: str, tmp_path: Path, clean_test_db: None, monkeypatch: pytest.MonkeyPatch
+    db_dsn_for_tests: str,
+    tmp_path: Path,
+    clean_test_db: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cleanup should recheck clips and skip delete when detections appear."""
     # Given a clip state that is empty on first pass
@@ -167,7 +180,7 @@ async def test_cleanup_marks_false_negatives(
     dest_path = f"clips/front/{clip_id}.mp4"
     upload = await storage.put_file(local_path, dest_path)
 
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
     empty_filter = FilterResult(
         detected_classes=[],
@@ -186,7 +199,7 @@ async def test_cleanup_marks_false_negatives(
     await state_store.upsert(clip_id, state)
 
     config_path = tmp_path / "config.yaml"
-    _write_cleanup_config(config_path, dsn=postgres_dsn, storage_root=storage_root)
+    _write_cleanup_config(config_path, dsn=db_dsn_for_tests, storage_root=storage_root)
 
     filter_plugin = _TestFilter(detect_on={"detect"})
     monkeypatch.setattr(
