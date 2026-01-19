@@ -16,10 +16,12 @@ from homesec.state.postgres import PostgresStateStore
 
 
 @pytest.mark.asyncio
-async def test_new_file_is_emitted(tmp_path: Path, postgres_dsn: str, clean_test_db: None) -> None:
+async def test_new_file_is_emitted(
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
+) -> None:
     """Test that a new file is detected and emitted."""
     # Given: LocalFolderSource with state_store
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     config = LocalFolderSourceConfig(
@@ -52,11 +54,11 @@ async def test_new_file_is_emitted(tmp_path: Path, postgres_dsn: str, clean_test
 
 @pytest.mark.asyncio
 async def test_file_already_in_cache_not_emitted(
-    tmp_path: Path, postgres_dsn: str, clean_test_db: None
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
 ) -> None:
     """Test that a file already in the in-memory cache is not reprocessed."""
     # Given: LocalFolderSource with a file already in cache
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     config = LocalFolderSourceConfig(
@@ -95,11 +97,11 @@ async def test_file_already_in_cache_not_emitted(
 
 @pytest.mark.asyncio
 async def test_file_already_processed_not_emitted(
-    tmp_path: Path, postgres_dsn: str, clean_test_db: None
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
 ) -> None:
     """Test that a file with existing clip_state is not reprocessed."""
     # Given: LocalFolderSource with state_store
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     # Create a clip_state for a file BEFORE starting source
@@ -145,11 +147,11 @@ async def test_file_already_processed_not_emitted(
 
 @pytest.mark.asyncio
 async def test_deleted_file_tombstone_prevents_reprocessing(
-    tmp_path: Path, postgres_dsn: str, clean_test_db: None
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
 ) -> None:
     """Test that a file with status='deleted' (tombstone) is not reprocessed."""
     # Given: LocalFolderSource with state_store
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     # Create a tombstone (status='deleted') for a file
@@ -190,11 +192,11 @@ async def test_deleted_file_tombstone_prevents_reprocessing(
 
 @pytest.mark.asyncio
 async def test_old_mtime_new_file_is_emitted(
-    tmp_path: Path, postgres_dsn: str, clean_test_db: None
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
 ) -> None:
     """Test that a new file with an old mtime IS emitted (no watermark bug)."""
     # Given: LocalFolderSource with state_store
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     config = LocalFolderSourceConfig(
@@ -234,11 +236,11 @@ async def test_old_mtime_new_file_is_emitted(
 
 @pytest.mark.asyncio
 async def test_cache_eviction_with_db_check_prevents_reprocessing(
-    tmp_path: Path, postgres_dsn: str, clean_test_db: None
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
 ) -> None:
     """Test that evicted files from cache are not reprocessed (DB check prevents it)."""
     # Given: LocalFolderSource with state_store and small cache size
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     config = LocalFolderSourceConfig(
@@ -350,11 +352,11 @@ async def test_no_state_store_falls_back_to_cache_only(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_multiple_files_some_seen_some_new(
-    tmp_path: Path, postgres_dsn: str, clean_test_db: None
+    tmp_path: Path, db_dsn_for_tests: str, clean_test_db: None
 ) -> None:
     """Test mixed scenario: some files new, some already processed."""
     # Given: LocalFolderSource with state_store
-    state_store = PostgresStateStore(postgres_dsn)
+    state_store = PostgresStateStore(db_dsn_for_tests)
     await state_store.initialize()
 
     # Create clip_states for some files

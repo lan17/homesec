@@ -1,42 +1,127 @@
-"""Tests for PostgresStateStore."""
+"""Tests for SQLAlchemyStateStore.
 
-import os
+These tests run against both SQLite and PostgreSQL backends via parametrized
+fixtures. Use SKIP_POSTGRES_TESTS=1 to run only SQLite tests locally.
+"""
+
+from __future__ import annotations
 
 import pytest
-from sqlalchemy import delete
 
+from homesec.db import DialectHelper
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterResult
-from homesec.state import PostgresStateStore
-from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
+from homesec.state import SQLAlchemyStateStore
+from homesec.state.postgres import _normalize_async_dsn, _parse_json_payload
 
-# Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://homesec:homesec@localhost:5432/homesec"
-
-
-def get_test_dsn() -> str:
-    """Get test database DSN from environment or use default."""
-    return os.environ.get("TEST_DB_DSN", DEFAULT_DSN)
+# =============================================================================
+# Unit Tests (no database required)
+# =============================================================================
 
 
-@pytest.fixture
-async def state_store() -> PostgresStateStore:
-    """Create and initialize a PostgresStateStore for testing."""
-    dsn = get_test_dsn()
-    assert dsn is not None
-    store = PostgresStateStore(dsn)
-    initialized = await store.initialize()
-    assert initialized, "Failed to initialize state store"
-    if store._engine is not None:
-        async with store._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-    yield store
-    # Cleanup: drop test data
-    if store._engine is not None:
-        async with store._engine.begin() as conn:
-            await conn.execute(delete(ClipState).where(ClipState.clip_id.like("test_%")))
-    await store.shutdown()
+def test_parse_json_payload_accepts_dict() -> None:
+    """Test JSON parsing handles dicts."""
+    # Given: A dict payload
+    payload = {"status": "uploaded", "camera_name": "front_door"}
+
+    # When: Parsing the payload
+    result = _parse_json_payload(payload)
+
+    # Then: Dict is returned as-is
+    assert result == payload
+
+
+def test_parse_json_payload_accepts_str() -> None:
+    """Test JSON parsing handles JSON strings."""
+    # Given: A JSON string
+    json_str = '{"status": "uploaded", "camera_name": "front_door"}'
+
+    # When: Parsing the JSON string
+    result = _parse_json_payload(json_str)
+
+    # Then: String is parsed to dict
+    assert result == {"status": "uploaded", "camera_name": "front_door"}
+
+
+def test_parse_json_payload_accepts_bytes() -> None:
+    """Test JSON parsing handles bytes payloads."""
+    # Given: A JSON payload as bytes
+    json_bytes = b'{"status": "uploaded", "camera_name": "front_door"}'
+
+    # When: Parsing bytes
+    result = _parse_json_payload(json_bytes)
+
+    # Then: Bytes are parsed to dict
+    assert result == {"status": "uploaded", "camera_name": "front_door"}
+
+
+def test_normalize_async_dsn_postgresql() -> None:
+    """Test DSN normalization adds asyncpg driver for PostgreSQL."""
+    # Given: Different Postgres DSN formats
+    dsn_plain = "postgresql://user:pass@localhost/db"
+    dsn_short = "postgres://user:pass@localhost/db"
+    dsn_async = "postgresql+asyncpg://user:pass@localhost/db"
+
+    # When: Normalizing DSNs
+    norm_plain = _normalize_async_dsn(dsn_plain)
+    norm_short = _normalize_async_dsn(dsn_short)
+    norm_async = _normalize_async_dsn(dsn_async)
+
+    # Then: asyncpg is used
+    assert norm_plain == "postgresql+asyncpg://user:pass@localhost/db"
+    assert norm_short == "postgresql+asyncpg://user:pass@localhost/db"
+    assert norm_async == dsn_async
+
+
+def test_normalize_async_dsn_sqlite() -> None:
+    """Test DSN normalization adds aiosqlite driver for SQLite."""
+    # Given: Different SQLite DSN formats
+    dsn_plain = "sqlite:///test.db"
+    dsn_memory = "sqlite:///:memory:"
+    dsn_async = "sqlite+aiosqlite:///:memory:"
+
+    # When: Normalizing DSNs
+    norm_plain = _normalize_async_dsn(dsn_plain)
+    norm_memory = _normalize_async_dsn(dsn_memory)
+    norm_async = _normalize_async_dsn(dsn_async)
+
+    # Then: aiosqlite is used
+    assert norm_plain == "sqlite+aiosqlite:///test.db"
+    assert norm_memory == "sqlite+aiosqlite:///:memory:"
+    assert norm_async == dsn_async
+
+
+def test_dialect_helper_detects_postgresql() -> None:
+    """Test DialectHelper correctly detects PostgreSQL dialect."""
+    # Given: A PostgreSQL DSN
+    dsn = "postgresql://user:pass@localhost/db"
+
+    # When: Creating DialectHelper
+    helper = DialectHelper.from_dsn(dsn)
+
+    # Then: Dialect is PostgreSQL
+    assert helper.dialect_name == "postgresql"
+    assert helper.is_postgres is True
+    assert helper.is_sqlite is False
+
+
+def test_dialect_helper_detects_sqlite() -> None:
+    """Test DialectHelper correctly detects SQLite dialect."""
+    # Given: A SQLite DSN
+    dsn = "sqlite:///:memory:"
+
+    # When: Creating DialectHelper
+    helper = DialectHelper.from_dsn(dsn)
+
+    # Then: Dialect is SQLite
+    assert helper.dialect_name == "sqlite"
+    assert helper.is_postgres is False
+    assert helper.is_sqlite is True
+
+
+# =============================================================================
+# Integration Tests (parametrized for both backends)
+# =============================================================================
 
 
 def sample_state(clip_id: str = "test_clip_001") -> ClipStateData:
@@ -48,87 +133,38 @@ def sample_state(clip_id: str = "test_clip_001") -> ClipStateData:
     )
 
 
-def test_parse_state_data_accepts_dict_and_str() -> None:
-    """Test JSONB parsing handles dicts and JSON strings."""
-    # Given a clip state dict and JSON string
-    state = sample_state()
-    raw_dict = state.model_dump()
-    raw_str = state.model_dump_json()
-
-    # When parsing raw JSONB payloads
-    parsed_dict = PostgresStateStore._parse_state_data(raw_dict)
-    parsed_str = PostgresStateStore._parse_state_data(raw_str)
-
-    # Then both parse to dicts
-    assert parsed_dict == raw_dict
-    assert parsed_str == raw_dict
-    ClipStateData.model_validate(parsed_str)
-
-
-def test_parse_state_data_accepts_bytes() -> None:
-    """Test JSONB parsing handles bytes payloads."""
-    # Given a JSON payload as bytes
-    state = sample_state()
-    raw_bytes = state.model_dump_json().encode("utf-8")
-
-    # When parsing bytes
-    parsed = PostgresStateStore._parse_state_data(raw_bytes)
-
-    # Then bytes parse to dict
-    assert parsed["camera_name"] == "front_door"
-    ClipStateData.model_validate(parsed)
-
-
-def test_normalize_async_dsn() -> None:
-    """Test DSN normalization adds asyncpg driver."""
-    # Given different Postgres DSN formats
-    dsn_plain = "postgresql://user:pass@localhost/db"
-    dsn_short = "postgres://user:pass@localhost/db"
-    dsn_async = "postgresql+asyncpg://user:pass@localhost/db"
-
-    # When normalizing DSNs
-    norm_plain = _normalize_async_dsn(dsn_plain)
-    norm_short = _normalize_async_dsn(dsn_short)
-    norm_async = _normalize_async_dsn(dsn_async)
-
-    # Then asyncpg is used
-    assert norm_plain.startswith("postgresql+asyncpg://")
-    assert norm_short.startswith("postgresql+asyncpg://")
-    assert norm_async == dsn_async
-
-
 @pytest.mark.asyncio
-async def test_upsert_and_get_roundtrip(state_store: PostgresStateStore) -> None:
+async def test_upsert_and_get_roundtrip(state_store: SQLAlchemyStateStore) -> None:
     """Test that upsert and get work correctly."""
-    # Given a clip state
+    # Given: A clip state
     clip_id = "test_roundtrip_001"
     state = sample_state(clip_id)
 
-    # When upserting and fetching
+    # When: Upserting and fetching
     await state_store.upsert(clip_id, state)
     retrieved = await state_store.get(clip_id)
 
-    # Then the roundtrip returns the state
+    # Then: The roundtrip returns the state
     assert retrieved is not None
     assert retrieved.camera_name == "front_door"
     assert retrieved.status == "queued_local"
 
 
 @pytest.mark.asyncio
-async def test_upsert_updates_existing(state_store: PostgresStateStore) -> None:
+async def test_upsert_updates_existing(state_store: SQLAlchemyStateStore) -> None:
     """Test that upsert updates existing records."""
-    # Given an existing clip state
+    # Given: An existing clip state
     clip_id = "test_update_001"
     state = sample_state(clip_id)
 
-    # When inserting and updating
+    # When: Inserting and updating
     await state_store.upsert(clip_id, state)
 
     state.status = "uploaded"
     state.storage_uri = "dropbox:/front_door/test.mp4"
     await state_store.upsert(clip_id, state)
 
-    # Then the updated fields are persisted
+    # Then: The updated fields are persisted
     retrieved = await state_store.get(clip_id)
     assert retrieved is not None
     assert retrieved.status == "uploaded"
@@ -136,37 +172,43 @@ async def test_upsert_updates_existing(state_store: PostgresStateStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_returns_none_for_missing(state_store: PostgresStateStore) -> None:
+async def test_get_returns_none_for_missing(state_store: SQLAlchemyStateStore) -> None:
     """Test that get returns None for non-existent clip_id."""
-    # Given a missing clip id
-    # When retrieving a missing clip id
+    # Given: A missing clip id
+    # When: Retrieving a missing clip id
     result = await state_store.get("test_nonexistent_999")
-    # Then None is returned
+
+    # Then: None is returned
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_ping_returns_true(state_store: PostgresStateStore) -> None:
+async def test_ping_returns_true(state_store: SQLAlchemyStateStore) -> None:
     """Test that ping returns True when connected."""
-    # Given an initialized store
-    # When ping is called
+    # Given: An initialized store
+    # When: Ping is called
     result = await state_store.ping()
-    # Then ping is True
+
+    # Then: Ping is True
     assert result is True
 
 
 @pytest.mark.asyncio
-async def test_graceful_degradation_uninitialized() -> None:
+async def test_graceful_degradation_uninitialized(db_backend: str) -> None:
     """Test graceful degradation when store is not initialized."""
-    # Given an uninitialized store
-    store = PostgresStateStore("postgresql://invalid:5432/nonexistent")
+    # Given: An uninitialized store with invalid DSN
+    if db_backend == "postgresql":
+        store = SQLAlchemyStateStore("postgresql://invalid:5432/nonexistent")
+    else:
+        # For SQLite, use a path that doesn't exist and can't be created
+        store = SQLAlchemyStateStore("sqlite:////nonexistent/path/db.sqlite")
 
-    # When operations are called
+    # When: Operations are called without initialization
     await store.upsert("test_fail", sample_state())
     result = await store.get("test_fail")
     ping = await store.ping()
 
-    # Then operations degrade gracefully
+    # Then: Operations degrade gracefully
     assert result is None
     assert ping is False
 
@@ -174,20 +216,25 @@ async def test_graceful_degradation_uninitialized() -> None:
 
 
 @pytest.mark.asyncio
-async def test_initialize_returns_false_on_bad_dsn() -> None:
+async def test_initialize_returns_false_on_bad_dsn(db_backend: str) -> None:
     """Test that initialize returns False for invalid DSN."""
-    # Given an invalid DSN
-    store = PostgresStateStore("postgresql://invalid:5432/nonexistent")
-    # When initializing
+    # Given: An invalid DSN
+    if db_backend == "postgresql":
+        store = SQLAlchemyStateStore("postgresql://invalid:5432/nonexistent")
+    else:
+        store = SQLAlchemyStateStore("sqlite:////nonexistent/path/db.sqlite")
+
+    # When: Initializing
     result = await store.initialize()
-    # Then initialization fails
+
+    # Then: Initialization fails
     assert result is False
     await store.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_list_candidate_clips_for_cleanup_skips_deleted_and_filters_camera(
-    state_store: PostgresStateStore,
+    state_store: SQLAlchemyStateStore,
 ) -> None:
     """Cleanup listing should skip deleted clips and respect camera filter."""
     # Given: Three clip states (one deleted)
@@ -257,3 +304,47 @@ async def test_list_candidate_clips_for_cleanup_skips_deleted_and_filters_camera
 
     # Then: Only that camera's non-deleted rows are returned
     assert ids_front == {"test-cleanup-a"}
+
+
+@pytest.mark.asyncio
+async def test_event_store_append_and_get(state_store: SQLAlchemyStateStore) -> None:
+    """Test that events can be appended and retrieved."""
+    from datetime import datetime, timezone
+
+    from homesec.models.events import ClipRecordedEvent
+
+    # Given: A clip state and an event
+    clip_id = "test_events_001"
+    state = sample_state(clip_id)
+    await state_store.upsert(clip_id, state)
+
+    event_store = state_store.create_event_store()
+    event = ClipRecordedEvent(
+        clip_id=clip_id,
+        timestamp=datetime.now(timezone.utc),
+        camera_name="front_door",
+        local_path="/tmp/test.mp4",
+        duration_s=10.5,
+        source_type="rtsp",
+    )
+
+    # When: Appending and retrieving the event
+    await event_store.append(event)
+    events = await event_store.get_events(clip_id)
+
+    # Then: The event is retrieved
+    assert len(events) == 1
+    assert events[0].clip_id == clip_id
+    assert events[0].event_type == "clip_recorded"
+
+
+@pytest.mark.asyncio
+async def test_dialect_is_set_after_initialization(state_store: SQLAlchemyStateStore) -> None:
+    """Test that dialect helper is properly set after initialization."""
+    # Given: An initialized state store
+    # When: Checking the dialect
+    dialect = state_store.dialect
+
+    # Then: Dialect is set and valid
+    assert dialect is not None
+    assert dialect.dialect_name in ("postgresql", "sqlite")
