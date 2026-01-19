@@ -8,11 +8,11 @@
 
 HomeSec is a self-hosted, extensible video pipeline for home security cameras. Connect cameras directly via RTSP with motion detection, receive clips over FTP, or watch a folder—then filter with AI and get smart notifications. Your footage stays private and off third-party clouds.
 
-## Philosophy
+## Design Principles
 
-- **Privacy First**: Your footage never leaves your LAN unless you explicitly configure a cloud sink (like Dropbox). No "cloud by default."
-- **Plugin First**: Every component—source, filter, analyzer, notifier—is a plugin. Don't like our AI? Swap it out in 5 lines of Python.
-- **Robustness**: Designed for the real world of flaky consumer cameras and unstable networks.
+- **Local-Only Data Processing**: Video footage remains on the local network by default. Cloud storage is opt-in via storage backends.
+- **Modular Architecture**: All major components (sources, filters, analyzers, notifiers) are decoupled plugins defined by strict interfaces.
+- **Resilience**: The pipeline handles intermittent stream failures and network instability without crashing or stalling.
 
 ## Pipeline at a glance
 
