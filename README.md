@@ -6,13 +6,13 @@
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 [![codecov](https://codecov.io/gh/lan17/HomeSec/branch/main/graph/badge.svg)](https://codecov.io/gh/lan17/HomeSec)
 
-HomeSec is a self-hosted, extensible video pipeline for home security cameras. Connect cameras directly via RTSP with motion detection, receive clips over FTP, or watch a folder—then filter with AI and get smart notifications. Your footage stays private and off third-party clouds.
+HomeSec is a self-hosted, extensible video pipeline for home security cameras. Connect cameras directly via RTSP with motion detection, receive clips over FTP, or implement your own ClipSource—then filter with AI and get smart notifications. Your footage stays private and off third-party clouds.
 
 ## Design Principles
 
-- **Local-Only Data Processing**: Video footage remains on the local network by default. Cloud storage is opt-in via storage backends.
+- **Local-Only Data Processing**: Video footage remains on the local network by default. Cloud usage (Storage, VLM/OpenAI) is strictly opt-in.
 - **Modular Architecture**: All major components (sources, filters, analyzers, notifiers) are decoupled plugins defined by strict interfaces.
-- **Resilience**: The pipeline handles intermittent stream failures and network instability without crashing or stalling.
+- **Resilience**: The primary resilience feature is backing up clips to storage. The pipeline handles intermittent stream failures and network instability without crashing or stalling.
 
 ## Pipeline at a glance
 
