@@ -150,7 +150,7 @@ cameras:
     source:
       type: rtsp
       config:
-        rtsp_url_env: FRONT_DOOR_RTSP_URL
+        rtsp_url_env: DRIVEWAY_RTSP_URL
         output_dir: "./recordings"
         # Critical for camera compatibility:
         ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
@@ -165,7 +165,7 @@ filter:
 
 In your `.env`:
 ```bash
-FRONT_DOOR_RTSP_URL="rtsp://user:pass@192.168.1.100:554/stream"
+DRIVEWAY_RTSP_URL="rtsp://user:pass@192.168.1.100:554/stream"
 ```
 
 #### 2. The "Cloud Storage" (Dropbox)
