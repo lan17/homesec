@@ -150,7 +150,7 @@ cameras:
     source:
       type: rtsp
       config:
-        rtsp_url_env: CAM_URL
+        rtsp_url_env: FRONT_DOOR_RTSP_URL
         output_dir: "./recordings"
         # Critical for camera compatibility:
         ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
@@ -161,6 +161,11 @@ filter:
   config:
     classes: ["person", "car"]
     min_confidence: 0.6
+```
+
+In your `.env`:
+```bash
+FRONT_DOOR_RTSP_URL="rtsp://user:pass@192.168.1.100:554/stream"
 ```
 
 #### 2. The "Cloud Storage" (Dropbox)
@@ -176,8 +181,15 @@ storage:
 notifiers:
     - backend: sendgrid_email
       config:
-        api_key_env: EMAIL_KEY
+        api_key_env: SENDGRID_API_KEY
         to_emails: ["me@example.com"]
+```
+
+In your `.env`:
+```bash
+DROPBOX_TOKEN="sl.Al..."
+SENDGRID_API_KEY="SG.xyz..."
+EMAIL_KEY="SG.xyz..."
 ```
 
 See [`config/example.yaml`](config/example.yaml) for a complete reference of all options.
