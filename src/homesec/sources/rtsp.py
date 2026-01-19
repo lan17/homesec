@@ -219,6 +219,7 @@ class RTSPSource(ThreadedClipSource):
         self.reconnect_backoff_s = float(config.reconnect_backoff_s)
         self.rtsp_connect_timeout_s = float(config.rtsp_connect_timeout_s)
         self.rtsp_io_timeout_s = float(config.rtsp_io_timeout_s)
+        self.ffmpeg_flags = list(config.ffmpeg_flags)
 
         if config.disable_hwaccel:
             logger.info("Hardware acceleration manually disabled")
@@ -551,8 +552,30 @@ class RTSPSource(ThreadedClipSource):
             "-f",
             "mp4",
             "-y",
-            str(output_file),
         ]
+
+        user_flags = self.ffmpeg_flags
+
+        # Naive check to see if user overrode defaults
+        # If user supplies ANY -loglevel, we don't add ours.
+        # If user supplies ANY -fflags, we don't add ours (to avoid concatenation complexity).
+        # This allows full user control.
+        has_loglevel = any(x == "-loglevel" for x in user_flags)
+        if not has_loglevel:
+            cmd.extend(["-loglevel", "warning"])
+
+        has_fflags = any(x == "-fflags" for x in user_flags)
+        if not has_fflags:
+            cmd.extend(["-fflags", "+genpts+igndts"])
+
+        has_fps_mode = any(x == "-fps_mode" or x == "-vsync" for x in user_flags)
+        if not has_fps_mode:
+            cmd.extend(["-vsync", "0"])
+
+        # Add user flags last so they can potentially override or add to the above
+        cmd.extend(user_flags)
+
+        cmd.extend([str(output_file)])
 
         safe_cmd = list(cmd)
         try:
@@ -753,6 +776,7 @@ class RTSPSource(ThreadedClipSource):
 
         cmd = ["ffmpeg"]
 
+        # 1. Global Flags (Hardware Acceleration)
         if self.hwaccel_config.is_available and not self._hwaccel_failed:
             hwaccel = self.hwaccel_config.hwaccel
             if hwaccel is not None:
@@ -761,6 +785,23 @@ class RTSPSource(ThreadedClipSource):
                 cmd.extend(["-hwaccel_device", self.hwaccel_config.hwaccel_device])
         elif self._hwaccel_failed:
             logger.info("Hardware acceleration disabled due to previous failures")
+
+        # 2. Global Flags (Robustness & Logging)
+        user_flags = self.ffmpeg_flags
+
+        has_loglevel = any(x == "-loglevel" for x in user_flags)
+        if not has_loglevel:
+            cmd.extend(["-loglevel", "warning"])
+
+        has_fflags = any(x == "-fflags" for x in user_flags)
+        if not has_fflags:
+            cmd.extend(["-fflags", "+genpts+igndts"])
+
+        # Add all user flags to global scope.
+        # Users who want input-specific flags (before -i) must rely on ffmpeg parsing them correctly
+        # or we would need a more complex config structure.
+        # For now, most robustness flags (-re, -rtsp_transport, etc) work as global or are handled below.
+        cmd.extend(user_flags)
 
         base_input_args = [
             "-rtsp_transport",
@@ -778,11 +819,10 @@ class RTSPSource(ThreadedClipSource):
         ]
 
         timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-        timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
         attempts: list[tuple[str, list[str]]] = [
             (
-                "stimeout+rw_timeout",
-                ["-stimeout", timeout_us_connect, "-rw_timeout", timeout_us_io] + base_input_args,
+                "stimeout",
+                ["-stimeout", timeout_us_connect] + base_input_args,
             ),
             ("stimeout", ["-stimeout", timeout_us_connect] + base_input_args),
             ("no_timeouts", base_input_args),
@@ -790,6 +830,7 @@ class RTSPSource(ThreadedClipSource):
 
         process: subprocess.Popen[bytes] | None = None
         stderr_file: Any | None = None
+
         for label, extra_args in attempts:
             cmd_attempt = list(cmd) + extra_args
             logger.debug("Starting frame pipeline (%s), logging to: %s", label, stderr_log)
