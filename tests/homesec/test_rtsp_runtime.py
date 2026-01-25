@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,12 +30,14 @@ class FakeFramePipeline:
         frames: list[bytes] | None = None,
         fail_start_times: int = 0,
         fail_urls: set[str] | None = None,
+        on_empty: Callable[[], None] | None = None,
     ) -> None:
         self.frame_width = 2
         self.frame_height = 2
         self._frames = list(frames or [])
         self._fail_start_times = int(fail_start_times)
         self._fail_urls = set(fail_urls or set())
+        self._on_empty = on_empty
         self.start_calls: list[str] = []
         self._running = False
         self._exit_code: int | None = None
@@ -59,6 +62,8 @@ class FakeFramePipeline:
             return None
         if self._frames:
             return self._frames.pop(0)
+        if self._on_empty:
+            self._on_empty()
         return None
 
     def is_running(self) -> bool:
@@ -217,3 +222,86 @@ def test_recording_restarts_when_dead(tmp_path: Path) -> None:
     # Then: a new recording is started
     assert source.recording_process is not dead_proc
     assert len(recorder.started) == 1
+
+
+def test_recording_survives_short_stall(tmp_path: Path) -> None:
+    """Recording should remain active during brief frame stalls."""
+
+    class TestRTSPSource(RTSPSource):
+        def _log_startup_info(self) -> None:
+            return
+
+        def cleanup(self) -> None:
+            return
+
+    # Given: a pipeline that detects motion then stalls briefly
+    frame_a = np.zeros((2, 2), dtype=np.uint8)
+    frame_b = frame_a.copy()
+    frame_b[0, 0] = 255
+    pipeline = FakeFramePipeline(frames=[frame_a.tobytes(), frame_b.tobytes()])
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(
+        tmp_path,
+        blur_kernel=0,
+        min_changed_pct=1.0,
+        stop_delay=10.0,
+        frame_timeout_s=0.1,
+        max_reconnect_attempts=1,
+    )
+    source = TestRTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+    pipeline._on_empty = source._stop_event.set
+    source._stop_event.clear()
+
+    # When: running until the first stall
+    source._run()
+
+    # Then: recording is still active and never stopped
+    assert recorder.started
+    assert not recorder.stopped
+    assert source.recording_process is not None
+
+
+def test_detect_stream_recovers_after_probe(tmp_path: Path) -> None:
+    """Detect fallback should restore the detect stream after a successful probe."""
+    # Given: fallback active with a successful detect probe
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        detect_fallback_attempts=1,
+    )
+    pipeline = FakeFramePipeline(frames=[b"0000"])
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+    now = clock.now()
+    source._activate_detect_fallback(now)
+    source._detect_next_probe_at = now
+
+    def _probe(rtsp_url: str, *, timeout_s: float = 10.0) -> dict[str, object] | None:
+        _ = rtsp_url
+        _ = timeout_s
+        return {"width": 640, "height": 480, "avg_frame_rate": "30/1"}
+
+    source._probe_stream_info = _probe  # type: ignore[assignment]
+
+    # When: attempting to recover the detect stream
+    ok = source._maybe_recover_detect_stream(now)
+
+    # Then: detect stream is restored
+    assert ok
+    assert not source._detect_fallback_active
+    assert source._motion_rtsp_url == source.detect_rtsp_url
+    assert pipeline.start_calls[-1] == source.detect_rtsp_url
