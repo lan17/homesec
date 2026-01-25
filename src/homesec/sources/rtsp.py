@@ -284,6 +284,12 @@ class MotionDetector:
 
 
 class FramePipeline(Protocol):
+    """Decode RTSP frames for motion detection.
+
+    Implementations should assume `start()` is called only after `stop()`,
+    and `stop()` must be safe to call when already stopped.
+    """
+
     frame_width: int | None
     frame_height: int | None
 
@@ -332,8 +338,6 @@ class FfmpegFramePipeline:
         self._frame_size: int | None = None
 
     def start(self, rtsp_url: str) -> None:
-        self.stop()
-
         (
             self._process,
             self._stderr,
@@ -1217,6 +1221,10 @@ class RTSPSource(ThreadedClipSource):
             return 1920, 1080
 
     def _start_frame_pipeline(self) -> None:
+        try:
+            self._frame_pipeline.stop()
+        except Exception:
+            logger.exception("Error stopping frame pipeline before start")
         self._frame_pipeline.start(self._motion_rtsp_url)
         self._motion_detector.reset()
 
@@ -1404,7 +1412,6 @@ class RTSPSource(ThreadedClipSource):
 
         self._motion_rtsp_url = self.detect_rtsp_url
         try:
-            self._stop_frame_pipeline()
             self._start_frame_pipeline()
             startup_timeout_s = min(2.0, max(0.5, float(self.frame_timeout_s)))
             if self._wait_for_first_frame(startup_timeout_s):
