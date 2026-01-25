@@ -1265,19 +1265,6 @@ class RTSPSource(ThreadedClipSource):
                         motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
                     ),
                 )
-                if self.reconnect_count >= self.max_reconnect_attempts:
-                    logger.error(
-                        "Max reconnect attempts reached. Camera may be offline.",
-                        extra=self._event_extra(
-                            "rtsp_reconnect_failed",
-                            attempt=self.reconnect_count,
-                            max_attempts=self.max_reconnect_attempts,
-                            mode="aggressive" if aggressive else "normal",
-                            detect_is_fallback=self._detect_fallback_active,
-                            motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
-                        ),
-                    )
-                    return False
 
             if first_attempt and aggressive:
                 sleep_s = 0.0
@@ -1294,7 +1281,10 @@ class RTSPSource(ThreadedClipSource):
                 self._start_frame_pipeline()
             except Exception as exc:
                 logger.warning("Failed to restart frame pipeline: %s", exc, exc_info=True)
-                if self._note_detect_failure(self._clock.now()):
+                triggered_fallback = self._note_detect_failure(self._clock.now())
+                if self._reconnect_exhausted(aggressive=aggressive):
+                    return False
+                if triggered_fallback:
                     backoff_s = initial_backoff_s
                     first_attempt = True
                     continue
@@ -1328,10 +1318,30 @@ class RTSPSource(ThreadedClipSource):
                     exc,
                     exc_info=True,
                 )
+            if self._reconnect_exhausted(aggressive=aggressive):
+                return False
             if aggressive:
                 backoff_s = min(backoff_s * 1.6, backoff_cap_s)
 
         return False
+
+    def _reconnect_exhausted(self, *, aggressive: bool) -> bool:
+        if self.max_reconnect_attempts <= 0:
+            return False
+        if self.reconnect_count < self.max_reconnect_attempts:
+            return False
+        logger.error(
+            "Max reconnect attempts reached. Camera may be offline.",
+            extra=self._event_extra(
+                "rtsp_reconnect_failed",
+                attempt=self.reconnect_count,
+                max_attempts=self.max_reconnect_attempts,
+                mode="aggressive" if aggressive else "normal",
+                detect_is_fallback=self._detect_fallback_active,
+                motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
+            ),
+        )
+        return True
 
     def _note_detect_failure(self, now: float) -> bool:
         if not self._detect_stream_available:

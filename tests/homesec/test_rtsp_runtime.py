@@ -134,6 +134,29 @@ def test_reconnect_retries_until_success(tmp_path: Path) -> None:
     assert len(pipeline.start_calls) == 3
 
 
+def test_reconnect_respects_max_attempts_exact(tmp_path: Path) -> None:
+    """Reconnect should attempt exactly max_reconnect_attempts times."""
+    # Given: a pipeline that always fails to start
+    pipeline = FakeFramePipeline(fail_start_times=5)
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, max_reconnect_attempts=2)
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+
+    # When: reconnecting aggressively with a finite max
+    ok = source._reconnect_frame_pipeline(aggressive=True)
+
+    # Then: reconnect fails after exactly max attempts
+    assert not ok
+    assert len(pipeline.start_calls) == 2
+
+
 def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     """Detect fallback should switch to main stream after failures."""
     # Given: a derived detect stream that fails and a main stream that works
