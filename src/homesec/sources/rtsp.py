@@ -1184,42 +1184,6 @@ class RTSPSource(ThreadedClipSource):
         self._finalize_clip(old_output, old_started_wall, old_started_mono)
         self.start_recording()
 
-    def probe_stream_resolution(self) -> tuple[int, int]:
-        """Probe RTSP stream to get native resolution."""
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "json",
-            "-rtsp_transport",
-            "tcp",
-        ]
-        if self.rtsp_connect_timeout_s > 0:
-            timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-            cmd.extend(["-stimeout", timeout_us_connect])
-        if self.rtsp_io_timeout_s > 0:
-            timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
-            cmd.extend(["-rw_timeout", timeout_us_io])
-        cmd.append(self.rtsp_url)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
-            data = json.loads(result.stdout)
-            width = data["streams"][0]["width"]
-            height = data["streams"][0]["height"]
-            return int(width), int(height)
-        except Exception as e:
-            logger.warning(
-                "Failed to probe stream, using default 1920x1080: %s",
-                e,
-                exc_info=True,
-            )
-            return 1920, 1080
-
     def _start_frame_pipeline(self) -> None:
         try:
             self._frame_pipeline.stop()
@@ -1274,11 +1238,11 @@ class RTSPSource(ThreadedClipSource):
                     ),
                 )
 
-            if first_attempt and aggressive:
-                sleep_s = 0.0
-            else:
-                jitter = random.uniform(0.0, min(0.25, backoff_s * 0.25))
-                sleep_s = backoff_s + jitter
+            sleep_s = self._reconnect_sleep_s(
+                backoff_s=backoff_s,
+                aggressive=aggressive,
+                first_attempt=first_attempt,
+            )
             first_attempt = False
 
             if sleep_s > 0:
@@ -1296,8 +1260,11 @@ class RTSPSource(ThreadedClipSource):
                     backoff_s = initial_backoff_s
                     first_attempt = True
                     continue
-                if aggressive:
-                    backoff_s = min(backoff_s * 1.6, backoff_cap_s)
+                backoff_s = self._bump_reconnect_backoff(
+                    backoff_s,
+                    backoff_cap_s,
+                    aggressive=aggressive,
+                )
                 continue
 
             startup_timeout_s = min(2.0, max(0.5, float(self.frame_timeout_s)))
@@ -1328,10 +1295,36 @@ class RTSPSource(ThreadedClipSource):
                 )
             if self._reconnect_exhausted(aggressive=aggressive):
                 return False
-            if aggressive:
-                backoff_s = min(backoff_s * 1.6, backoff_cap_s)
+            backoff_s = self._bump_reconnect_backoff(
+                backoff_s,
+                backoff_cap_s,
+                aggressive=aggressive,
+            )
 
         return False
+
+    def _reconnect_sleep_s(
+        self,
+        *,
+        backoff_s: float,
+        aggressive: bool,
+        first_attempt: bool,
+    ) -> float:
+        if first_attempt and aggressive:
+            return 0.0
+        jitter = random.uniform(0.0, min(0.25, backoff_s * 0.25))
+        return backoff_s + jitter
+
+    def _bump_reconnect_backoff(
+        self,
+        backoff_s: float,
+        backoff_cap_s: float,
+        *,
+        aggressive: bool,
+    ) -> float:
+        if not aggressive:
+            return backoff_s
+        return min(backoff_s * 1.6, backoff_cap_s)
 
     def _reconnect_exhausted(self, *, aggressive: bool) -> bool:
         if self.max_reconnect_attempts <= 0:
@@ -1604,7 +1597,15 @@ class RTSPSource(ThreadedClipSource):
             logger.info("Hardware acceleration: disabled (using software decoding)")
 
         logger.info("Detecting camera resolution...")
-        native_width, native_height = self.probe_stream_resolution()
+        info = self._probe_stream_info(self.rtsp_url)
+        width = info.get("width") if info else None
+        height = info.get("height") if info else None
+        if isinstance(width, (int, str)) and isinstance(height, (int, str)):
+            native_width = int(width)
+            native_height = int(height)
+        else:
+            logger.warning("Failed to probe stream, using default 1920x1080")
+            native_width, native_height = 1920, 1080
         logger.info("Camera resolution: %sx%s", native_width, native_height)
 
         if self.detect_rtsp_url != self.rtsp_url:
@@ -1656,6 +1657,117 @@ class RTSPSource(ThreadedClipSource):
             return 0.0
         return max(0.0, self.motion_stop_delay - (now - self.last_motion_time))
 
+    def _enter_stalled(self, now: float, remaining: float) -> None:
+        self._stall_grace_until = now + remaining
+        logger.warning(
+            "Frame pipeline stalled; keeping recording alive for %.1fs",
+            remaining,
+        )
+
+    def _handle_stalled_wait(self, now: float) -> bool:
+        if self._stall_grace_until is None or now >= self._stall_grace_until:
+            return False
+        self._set_run_state(RTSPRunState.STALLED)
+        self._clock.sleep(min(0.5, self._stall_grace_until - now))
+        return True
+
+    def _handle_reconnect_needed(self, now: float) -> tuple[bool, bool]:
+        self._set_run_state(RTSPRunState.RECONNECTING)
+        if self._handle_frame_timeout():
+            return True, False
+        remaining = self._stall_grace_remaining(now)
+        if remaining > 0:
+            self._enter_stalled(now, remaining)
+            self._handle_stalled_wait(now)
+            return True, True
+        return False, False
+
+    def _handle_heartbeat(
+        self,
+        now: float,
+        frame_count: int,
+        last_heartbeat: float,
+    ) -> tuple[bool, bool, float]:
+        if now - last_heartbeat <= self.heartbeat_s:
+            return True, False, last_heartbeat
+
+        logger.debug(
+            "[HEARTBEAT] Processed %s frames, recording=%s",
+            frame_count,
+            self.recording_process is not None,
+        )
+        if not self._frame_pipeline.is_running():
+            logger.error(
+                "Frame pipeline died! Exit code: %s",
+                self._frame_pipeline.exit_code(),
+            )
+            ok, stalled = self._handle_reconnect_needed(now)
+            if not ok:
+                return False, False, last_heartbeat
+            return True, stalled, now
+
+        return True, False, now
+
+    def _handle_missing_dimensions(self, now: float) -> bool:
+        logger.warning("Frame pipeline missing dimensions; reconnecting")
+        ok, _ = self._handle_reconnect_needed(now)
+        return ok
+
+    def _recording_motion_threshold(self) -> float:
+        if self.recording_process:
+            return self._keepalive_threshold()
+        return self.min_changed_pct
+
+    def _handle_motion_detected(self, now: float, frame_count: int) -> None:
+        logger.debug(
+            "[MOTION DETECTED at frame %s] changed_pct=%.3f%%",
+            frame_count,
+            self._motion_detector.last_changed_pct,
+        )
+        self.last_motion_time = now
+        if not self.recording_process:
+            logger.debug("-> Starting new recording...")
+            self.start_recording()
+            if not self.recording_process:
+                logger.error("-> Recording failed to start!")
+
+    def _update_recording_state(self, now: float) -> None:
+        if self.recording_process and self.last_motion_time is not None:
+            if now - self.last_motion_time > self.motion_stop_delay:
+                logger.info(
+                    "No motion for %.1fs > stop_delay=%.1fs (last changed_pct=%.3f%%), stopping",
+                    now - self.last_motion_time,
+                    self.motion_stop_delay,
+                    self._motion_detector.last_changed_pct,
+                )
+                self.stop_recording()
+                self.last_motion_time = None
+                self._set_run_state(RTSPRunState.IDLE)
+                return
+
+            self._rotate_recording_if_needed()
+            self._set_run_state(RTSPRunState.RECORDING)
+            return
+
+        self._set_run_state(RTSPRunState.IDLE)
+
+    def _process_frame(
+        self,
+        frame: npt.NDArray[np.uint8],
+        now: float,
+        frame_count: int,
+    ) -> None:
+        threshold = self._recording_motion_threshold()
+        motion_detected = self.detect_motion(frame, threshold=threshold)
+
+        if motion_detected:
+            self._handle_motion_detected(now, frame_count)
+
+        if self.recording_process or self.last_motion_time is not None:
+            self._ensure_recording(now)
+
+        self._update_recording_state(now)
+
     def _run(self) -> None:
         """Start monitoring camera for motion and recording videos."""
         self._log_startup_info()
@@ -1677,30 +1789,18 @@ class RTSPSource(ThreadedClipSource):
 
             while not self._stop_event.is_set():
                 now = self._clock.now()
-                if now - last_heartbeat > self.heartbeat_s:
-                    logger.debug(
-                        "[HEARTBEAT] Processed %s frames, recording=%s",
-                        frame_count,
-                        self.recording_process is not None,
-                    )
-                    if not self._frame_pipeline.is_running():
-                        logger.error(
-                            "Frame pipeline died! Exit code: %s",
-                            self._frame_pipeline.exit_code(),
-                        )
-                        self._set_run_state(RTSPRunState.RECONNECTING)
-                        if not self._handle_frame_timeout():
-                            remaining = self._stall_grace_remaining(now)
-                            if remaining > 0:
-                                self._stall_grace_until = now + remaining
-                                logger.warning(
-                                    "Frame pipeline stalled; keeping recording alive for %.1fs",
-                                    remaining,
-                                )
-                                self._clock.sleep(min(0.5, remaining))
-                                continue
-                            break
-                    last_heartbeat = now
+                if self._handle_stalled_wait(now):
+                    continue
+
+                ok, stalled, last_heartbeat = self._handle_heartbeat(
+                    now,
+                    frame_count,
+                    last_heartbeat,
+                )
+                if not ok:
+                    break
+                if stalled:
+                    continue
 
                 if self._maybe_recover_detect_stream(now):
                     self._set_run_state(RTSPRunState.RECONNECTING)
@@ -1711,34 +1811,20 @@ class RTSPSource(ThreadedClipSource):
                 raw_frame = self._frame_pipeline.read_frame(timeout_s=self.frame_timeout_s)
                 if raw_frame is None:
                     now = self._clock.now()
-                    if self._stall_grace_until is not None and now < self._stall_grace_until:
-                        self._set_run_state(RTSPRunState.STALLED)
-                        self._clock.sleep(min(0.5, self._stall_grace_until - now))
+                    if self._handle_stalled_wait(now):
                         continue
 
-                    if not self._handle_frame_timeout():
-                        remaining = self._stall_grace_remaining(now)
-                        if remaining > 0:
-                            self._stall_grace_until = now + remaining
-                            logger.warning(
-                                "Frame pipeline stalled; keeping recording alive for %.1fs",
-                                remaining,
-                            )
-                            self._set_run_state(RTSPRunState.STALLED)
-                            self._clock.sleep(min(0.5, remaining))
-                            continue
+                    ok, _ = self._handle_reconnect_needed(now)
+                    if not ok:
                         break
 
-                    self._set_run_state(RTSPRunState.RECONNECTING)
                     continue
 
                 self._stall_grace_until = None
                 frame_width = self._frame_pipeline.frame_width
                 frame_height = self._frame_pipeline.frame_height
                 if frame_width is None or frame_height is None:
-                    logger.warning("Frame pipeline missing dimensions; reconnecting")
-                    self._set_run_state(RTSPRunState.RECONNECTING)
-                    if not self._handle_frame_timeout():
+                    if not self._handle_missing_dimensions(now):
                         break
                     continue
 
@@ -1746,43 +1832,7 @@ class RTSPSource(ThreadedClipSource):
                     (frame_height, frame_width)
                 )
                 now = self._clock.now()
-                threshold = self.min_changed_pct
-                if self.recording_process:
-                    threshold = self._keepalive_threshold()
-                motion_detected = self.detect_motion(frame, threshold=threshold)
-
-                if motion_detected:
-                    logger.debug(
-                        "[MOTION DETECTED at frame %s] changed_pct=%.3f%%",
-                        frame_count,
-                        self._motion_detector.last_changed_pct,
-                    )
-                    self.last_motion_time = now
-                    if not self.recording_process:
-                        logger.debug("-> Starting new recording...")
-                        self.start_recording()
-                        if not self.recording_process:
-                            logger.error("-> Recording failed to start!")
-
-                if self.recording_process or self.last_motion_time is not None:
-                    self._ensure_recording(now)
-
-                if self.recording_process and self.last_motion_time is not None:
-                    if now - self.last_motion_time > self.motion_stop_delay:
-                        logger.info(
-                            "No motion for %.1fs > stop_delay=%.1fs (last changed_pct=%.3f%%), stopping",
-                            now - self.last_motion_time,
-                            self.motion_stop_delay,
-                            self._motion_detector.last_changed_pct,
-                        )
-                        self.stop_recording()
-                        self.last_motion_time = None
-                        self._set_run_state(RTSPRunState.IDLE)
-                    else:
-                        self._rotate_recording_if_needed()
-                        self._set_run_state(RTSPRunState.RECORDING)
-                else:
-                    self._set_run_state(RTSPRunState.IDLE)
+                self._process_frame(frame, now, frame_count)
 
         except Exception as e:
             logger.exception("Unexpected error: %s", e)
