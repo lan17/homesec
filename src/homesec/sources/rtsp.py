@@ -199,6 +199,90 @@ class SystemClock:
         time.sleep(seconds)
 
 
+class MotionDetector:
+    def __init__(
+        self,
+        *,
+        pixel_threshold: int,
+        min_changed_pct: float,
+        blur_kernel: int,
+        debug: bool,
+    ) -> None:
+        self._pixel_threshold = int(pixel_threshold)
+        self._min_changed_pct = float(min_changed_pct)
+        self._blur_kernel = int(blur_kernel)
+        self._debug = bool(debug)
+
+        self._prev_frame: npt.NDArray[np.uint8] | None = None
+        self._last_changed_pct = 0.0
+        self._last_changed_pixels = 0
+        self._debug_frame_count = 0
+
+    @property
+    def last_changed_pct(self) -> float:
+        return self._last_changed_pct
+
+    @property
+    def last_changed_pixels(self) -> int:
+        return self._last_changed_pixels
+
+    def reset(self) -> None:
+        self._prev_frame = None
+        self._last_changed_pct = 0.0
+        self._last_changed_pixels = 0
+        self._debug_frame_count = 0
+
+    def detect(self, frame: npt.NDArray[np.uint8], *, threshold: float | None = None) -> bool:
+        if frame.ndim == 3:
+            gray = cast(npt.NDArray[np.uint8], cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+        else:
+            gray = frame
+
+        if self._blur_kernel > 1:
+            gray = cast(
+                npt.NDArray[np.uint8],
+                cv2.GaussianBlur(gray, (self._blur_kernel, self._blur_kernel), 0),
+            )
+
+        if self._prev_frame is None:
+            self._prev_frame = gray
+            self._last_changed_pct = 0.0
+            self._last_changed_pixels = 0
+            return False
+
+        diff = cv2.absdiff(self._prev_frame, gray)
+        _, mask = cv2.threshold(diff, self._pixel_threshold, 255, cv2.THRESH_BINARY)
+        changed_pixels = int(cv2.countNonZero(mask))
+
+        total_pixels = int(gray.shape[0]) * int(gray.shape[1])
+        changed_pct = (changed_pixels / total_pixels * 100.0) if total_pixels else 0.0
+
+        self._prev_frame = gray
+        self._last_changed_pct = changed_pct
+        self._last_changed_pixels = changed_pixels
+
+        if threshold is None:
+            threshold = self._min_changed_pct
+        if threshold < 0:
+            threshold = 0.0
+
+        motion = changed_pct >= float(threshold)
+
+        if self._debug:
+            self._debug_frame_count += 1
+            if self._debug_frame_count % 100 == 0:
+                logger.debug(
+                    "Motion check: changed_pct=%.3f%% changed_px=%s pixel_threshold=%s min_changed_pct=%.3f%% blur=%s",
+                    changed_pct,
+                    changed_pixels,
+                    self._pixel_threshold,
+                    self._min_changed_pct,
+                    self._blur_kernel,
+                )
+
+        return motion
+
+
 class FramePipeline(Protocol):
     frame_width: int | None
     frame_height: int | None
@@ -708,11 +792,12 @@ class RTSPSource(ThreadedClipSource):
         self._stderr_log: Path | None = None
         self._recording_id: str | None = None
         self._stall_grace_until: float | None = None
-
-        self._prev_motion_frame: npt.NDArray[np.uint8] | None = None
-        self._last_changed_pct = 0.0
-        self._last_changed_pixels = 0
-        self._debug_frame_count = 0
+        self._motion_detector = MotionDetector(
+            pixel_threshold=self.pixel_threshold,
+            min_changed_pct=self.min_changed_pct,
+            blur_kernel=self.blur_kernel,
+            debug=self.debug_motion,
+        )
 
         self._frame_pipeline: FramePipeline = frame_pipeline or FfmpegFramePipeline(
             output_dir=self.output_dir,
@@ -891,53 +976,7 @@ class RTSPSource(ThreadedClipSource):
         self, frame: npt.NDArray[np.uint8], *, threshold: float | None = None
     ) -> bool:
         """Return True if motion detected in frame."""
-        if frame.ndim == 3:
-            gray = cast(npt.NDArray[np.uint8], cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-        else:
-            gray = frame
-
-        if self.blur_kernel > 1:
-            gray = cast(
-                npt.NDArray[np.uint8],
-                cv2.GaussianBlur(gray, (self.blur_kernel, self.blur_kernel), 0),
-            )
-
-        if self._prev_motion_frame is None:
-            self._prev_motion_frame = gray
-            self._last_changed_pct = 0.0
-            self._last_changed_pixels = 0
-            return False
-
-        diff = cv2.absdiff(self._prev_motion_frame, gray)
-        _, mask = cv2.threshold(diff, self.pixel_threshold, 255, cv2.THRESH_BINARY)
-        changed_pixels = int(cv2.countNonZero(mask))
-
-        total_pixels = int(gray.shape[0]) * int(gray.shape[1])
-        changed_pct = (changed_pixels / total_pixels * 100.0) if total_pixels else 0.0
-
-        self._prev_motion_frame = gray
-        self._last_changed_pct = changed_pct
-        self._last_changed_pixels = changed_pixels
-
-        if threshold is None:
-            threshold = self.min_changed_pct
-        if threshold < 0:
-            threshold = 0.0
-        motion = changed_pct >= float(threshold)
-
-        if self.debug_motion:
-            self._debug_frame_count += 1
-            if self._debug_frame_count % 100 == 0:
-                logger.debug(
-                    "Motion check: changed_pct=%.3f%% changed_px=%s pixel_threshold=%s min_changed_pct=%.3f%% blur=%s",
-                    changed_pct,
-                    changed_pixels,
-                    self.pixel_threshold,
-                    self.min_changed_pct,
-                    self.blur_kernel,
-                )
-
-        return motion
+        return self._motion_detector.detect(frame, threshold=threshold)
 
     def check_recording_health(self) -> bool:
         """Check if recording process is still alive."""
@@ -1064,8 +1103,8 @@ class RTSPSource(ThreadedClipSource):
                     recording_id=output_file.name,
                     recording_path=str(output_file),
                     duration_s=duration_s,
-                    last_changed_pct=getattr(self, "_last_changed_pct", None),
-                    last_changed_pixels=getattr(self, "_last_changed_pixels", None),
+                    last_changed_pct=self._motion_detector.last_changed_pct,
+                    last_changed_pixels=self._motion_detector.last_changed_pixels,
                 ),
             )
 
@@ -1179,9 +1218,11 @@ class RTSPSource(ThreadedClipSource):
 
     def _start_frame_pipeline(self) -> None:
         self._frame_pipeline.start(self._motion_rtsp_url)
+        self._motion_detector.reset()
 
     def _stop_frame_pipeline(self) -> None:
         self._frame_pipeline.stop()
+        self._motion_detector.reset()
 
     def _wait_for_first_frame(self, timeout_s: float) -> bool:
         return self._frame_pipeline.read_frame(timeout_s) is not None
@@ -1697,7 +1738,7 @@ class RTSPSource(ThreadedClipSource):
                     logger.debug(
                         "[MOTION DETECTED at frame %s] changed_pct=%.3f%%",
                         frame_count,
-                        self._last_changed_pct,
+                        self._motion_detector.last_changed_pct,
                     )
                     self.last_motion_time = now
                     if not self.recording_process:
@@ -1715,7 +1756,7 @@ class RTSPSource(ThreadedClipSource):
                             "No motion for %.1fs > stop_delay=%.1fs (last changed_pct=%.3f%%), stopping",
                             now - self.last_motion_time,
                             self.motion_stop_delay,
-                            self._last_changed_pct,
+                            self._motion_detector.last_changed_pct,
                         )
                         self.stop_recording()
                         self.last_motion_time = None
