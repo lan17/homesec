@@ -30,11 +30,14 @@ cameras:
         # Motion detection settings
         pixel_threshold: 45        # Pixel difference threshold (0-255)
         min_changed_pct: 1.0       # Min % of frame that must change
+        recording_sensitivity_factor: 2.0  # Recording keepalive sensitivity (2x by default)
         blur_kernel: 5             # Blur kernel size (reduces noise)
         stop_delay: 10             # Seconds of no motion before stopping
         max_recording_s: 60        # Max clip length
         frame_timeout_s: 2.0       # Timeout waiting for frames
         reconnect_backoff_s: 1.0   # Backoff between reconnects
+        max_reconnect_attempts: 0  # 0 = retry forever
+        detect_fallback_attempts: 3  # Switch detect stream to main after N failures
 
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera

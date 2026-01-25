@@ -13,12 +13,14 @@ import random
 import shlex
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Thread
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import cv2
 import numpy as np
@@ -29,6 +31,24 @@ from homesec.models.source import RTSPSourceConfig
 from homesec.sources.base import ThreadedClipSource
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_rtsp_url(url: str) -> str:
+    if "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    if "@" not in rest:
+        return url
+    _creds, host = rest.split("@", 1)
+    return f"{scheme}://***:***@{host}"
+
+
+def _format_cmd(cmd: list[str]) -> str:
+    try:
+        return shlex.join([str(x) for x in cmd])
+    except Exception as exc:
+        logger.warning("Failed to format command with shlex.join: %s", exc, exc_info=True)
+        return " ".join([str(x) for x in cmd])
 
 
 @dataclass
@@ -165,6 +185,443 @@ class HardwareAccelDetector:
             return False
 
 
+class Clock(Protocol):
+    def now(self) -> float: ...
+
+    def sleep(self, seconds: float) -> None: ...
+
+
+class SystemClock:
+    def now(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+class FramePipeline(Protocol):
+    frame_width: int | None
+    frame_height: int | None
+
+    def start(self, rtsp_url: str) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def read_frame(self, timeout_s: float) -> bytes | None: ...
+
+    def is_running(self) -> bool: ...
+
+    def exit_code(self) -> int | None: ...
+
+
+class FfmpegFramePipeline:
+    def __init__(
+        self,
+        *,
+        output_dir: Path,
+        frame_queue_size: int,
+        rtsp_connect_timeout_s: float,
+        rtsp_io_timeout_s: float,
+        ffmpeg_flags: list[str],
+        hwaccel_config: HardwareAccelConfig,
+        hwaccel_failed: bool,
+        on_frame: Callable[[], None],
+        clock: Clock,
+    ) -> None:
+        self._output_dir = output_dir
+        self._frame_queue_size = frame_queue_size
+        self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
+        self._rtsp_io_timeout_s = rtsp_io_timeout_s
+        self._ffmpeg_flags = ffmpeg_flags
+        self._hwaccel_config = hwaccel_config
+        self._hwaccel_failed = hwaccel_failed
+        self._on_frame = on_frame
+        self._clock = clock
+
+        self._process: subprocess.Popen[bytes] | None = None
+        self._stderr: Any | None = None
+        self._reader_thread: Thread | None = None
+        self._reader_stop: Event | None = None
+        self._frame_queue: Queue[bytes] | None = None
+        self.frame_width: int | None = None
+        self.frame_height: int | None = None
+        self._frame_size: int | None = None
+
+    def start(self, rtsp_url: str) -> None:
+        self.stop()
+
+        (
+            self._process,
+            self._stderr,
+            self.frame_width,
+            self.frame_height,
+        ) = self._get_frame_pipe(rtsp_url)
+        self._frame_size = int(self.frame_width) * int(self.frame_height)
+        self._frame_queue = Queue(maxsize=self._frame_queue_size)
+        self._reader_stop = Event()
+
+        process = self._process
+        frame_size = self._frame_size
+        frame_queue = self._frame_queue
+        stop_event = self._reader_stop
+
+        def reader_loop() -> None:
+            stdout = process.stdout if process else None
+            if stdout is None:
+                logger.error("Frame pipeline stdout is None")
+                return
+
+            while not stop_event.is_set():
+                try:
+                    raw = stdout.read(frame_size)
+                except Exception:
+                    logger.exception("Error reading from frame pipeline stdout")
+                    return
+
+                if not raw or len(raw) != frame_size:
+                    return
+
+                self._on_frame()
+
+                try:
+                    frame_queue.put_nowait(raw)
+                except Full:
+                    try:
+                        _ = frame_queue.get_nowait()
+                    except Empty:
+                        pass
+                    try:
+                        frame_queue.put_nowait(raw)
+                    except Full:
+                        pass
+
+        self._reader_thread = Thread(target=reader_loop, name="frame-reader", daemon=True)
+        self._reader_thread.start()
+
+    def stop(self) -> None:
+        if self._reader_stop is not None:
+            self._reader_stop.set()
+
+        if self._process is not None:
+            try:
+                self._stop_process(self._process, "Frame pipeline", terminate_timeout_s=2)
+            except Exception:
+                logger.exception("Error stopping frame pipeline process")
+            self._process = None
+
+        if self._reader_thread is not None:
+            try:
+                self._reader_thread.join(timeout=5)
+            except Exception:
+                logger.exception("Error joining frame reader thread")
+            self._reader_thread = None
+
+        self._reader_stop = None
+
+        if self._stderr is not None:
+            try:
+                self._stderr.close()
+            except Exception:
+                logger.exception("Error closing frame pipeline stderr log")
+            self._stderr = None
+
+        self._frame_queue = None
+        self.frame_width = None
+        self.frame_height = None
+        self._frame_size = None
+
+    def read_frame(self, timeout_s: float) -> bytes | None:
+        if not self._frame_queue:
+            return None
+        try:
+            return self._frame_queue.get(timeout=float(timeout_s))
+        except Empty:
+            return None
+
+    def is_running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def exit_code(self) -> int | None:
+        if self._process is None:
+            return None
+        return self._process.poll()
+
+    def _get_frame_pipe(self, rtsp_url: str) -> tuple[subprocess.Popen[bytes], Any, int, int]:
+        detect_width, detect_height = 320, 240
+
+        stderr_log = self._output_dir / "frame_pipeline.log"
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        def _read_tail(path: Path, max_bytes: int = 4000) -> str:
+            try:
+                data = path.read_bytes()
+            except Exception as exc:
+                logger.warning("Failed to read stderr tail: %s", exc, exc_info=True)
+                return ""
+            if len(data) <= max_bytes:
+                return data.decode(errors="replace")
+            return data[-max_bytes:].decode(errors="replace")
+
+        cmd = ["ffmpeg"]
+
+        # 1. Global Flags (Hardware Acceleration)
+        if self._hwaccel_config.is_available and not self._hwaccel_failed:
+            hwaccel = self._hwaccel_config.hwaccel
+            if hwaccel is not None:
+                cmd.extend(["-hwaccel", hwaccel])
+            if self._hwaccel_config.hwaccel_device:
+                cmd.extend(["-hwaccel_device", self._hwaccel_config.hwaccel_device])
+        elif self._hwaccel_failed:
+            logger.info("Hardware acceleration disabled due to previous failures")
+
+        # 2. Global Flags (Robustness & Logging)
+        user_flags = self._ffmpeg_flags
+
+        has_loglevel = any(x == "-loglevel" for x in user_flags)
+        if not has_loglevel:
+            cmd.extend(["-loglevel", "warning"])
+
+        has_fflags = any(x == "-fflags" for x in user_flags)
+        if not has_fflags:
+            cmd.extend(["-fflags", "+genpts+igndts"])
+
+        # Add all user flags to global scope.
+        cmd.extend(user_flags)
+
+        has_stimeout = any(x == "-stimeout" for x in user_flags)
+        has_rw_timeout = any(x == "-rw_timeout" for x in user_flags)
+
+        timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
+        timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
+
+        base_input_prefix = ["-rtsp_transport", "tcp"]
+        base_input_args = [
+            "-i",
+            rtsp_url,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "-vf",
+            f"fps=10,scale={detect_width}:{detect_height}",
+            "-an",
+            "-",
+        ]
+
+        timeout_args: list[str] = []
+        if not has_stimeout and self._rtsp_connect_timeout_s > 0:
+            timeout_args.extend(["-stimeout", timeout_us_connect])
+        if not has_rw_timeout and self._rtsp_io_timeout_s > 0:
+            timeout_args.extend(["-rw_timeout", timeout_us_io])
+
+        attempts: list[tuple[str, list[str]]] = []
+        if timeout_args:
+            attempts.append(("timeouts", base_input_prefix + timeout_args + base_input_args))
+        attempts.append(("no_timeouts", base_input_prefix + base_input_args))
+
+        process: subprocess.Popen[bytes] | None = None
+        stderr_file: Any | None = None
+
+        for label, extra_args in attempts:
+            cmd_attempt = list(cmd) + extra_args
+            logger.debug("Starting frame pipeline (%s), logging to: %s", label, stderr_log)
+            safe_cmd = list(cmd_attempt)
+            try:
+                idx = safe_cmd.index("-i")
+                safe_cmd[idx + 1] = _redact_rtsp_url(str(safe_cmd[idx + 1]))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to redact frame pipeline RTSP URL: %s",
+                    exc,
+                    exc_info=True,
+                )
+            logger.debug("Frame pipeline ffmpeg (%s): %s", label, _format_cmd(safe_cmd))
+
+            try:
+                stderr_file = open(stderr_log, "w")
+                process = subprocess.Popen(
+                    cmd_attempt,
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                    bufsize=detect_width * detect_height,
+                )
+            except Exception:
+                try:
+                    if stderr_file:
+                        stderr_file.close()
+                except Exception as exc:
+                    logger.warning("Failed to close stderr log: %s", exc, exc_info=True)
+                logger.exception("Failed to start frame pipeline subprocess (%s)", label)
+                continue
+
+            self._clock.sleep(1)
+            if process.poll() is None:
+                return process, stderr_file, detect_width, detect_height
+
+            try:
+                stderr_file.close()
+            except Exception as exc:
+                logger.warning("Failed to close stderr log: %s", exc, exc_info=True)
+            stderr_tail = _read_tail(stderr_log)
+            logger.error(
+                "Frame pipeline died immediately (%s, exit code: %s)", label, process.returncode
+            )
+            if stderr_tail:
+                logger.error("Frame pipeline stderr tail (%s):\n%s", label, stderr_tail)
+            process = None
+            stderr_file = None
+            continue
+
+        raise RuntimeError("Frame pipeline failed to start")
+
+    def _stop_process(
+        self, proc: subprocess.Popen[bytes], name: str, terminate_timeout_s: float
+    ) -> None:
+        if proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=terminate_timeout_s)
+        except subprocess.TimeoutExpired:
+            logger.warning("%s did not terminate, killing (PID: %s)", name, proc.pid)
+            proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                logger.exception("Failed waiting after kill for %s (PID: %s)", name, proc.pid)
+
+
+class Recorder(Protocol):
+    def start(self, output_file: Path, stderr_log: Path) -> subprocess.Popen[bytes] | None: ...
+
+    def stop(self, proc: subprocess.Popen[bytes], output_file: Path | None) -> None: ...
+
+    def is_alive(self, proc: subprocess.Popen[bytes]) -> bool: ...
+
+
+class FfmpegRecorder:
+    def __init__(
+        self,
+        *,
+        rtsp_url: str,
+        ffmpeg_flags: list[str],
+        rtsp_connect_timeout_s: float,
+        rtsp_io_timeout_s: float,
+        clock: Clock,
+    ) -> None:
+        self._rtsp_url = rtsp_url
+        self._ffmpeg_flags = ffmpeg_flags
+        self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
+        self._rtsp_io_timeout_s = rtsp_io_timeout_s
+        self._clock = clock
+
+    def start(self, output_file: Path, stderr_log: Path) -> subprocess.Popen[bytes] | None:
+        cmd = [
+            "ffmpeg",
+            "-rtsp_transport",
+            "tcp",
+            "-rtsp_flags",
+            "prefer_tcp",
+            "-user_agent",
+            "Lavf",
+        ]
+
+        user_flags = self._ffmpeg_flags
+        has_stimeout = any(x == "-stimeout" for x in user_flags)
+        has_rw_timeout = any(x == "-rw_timeout" for x in user_flags)
+        timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
+        timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
+
+        if not has_stimeout and self._rtsp_connect_timeout_s > 0:
+            cmd.extend(["-stimeout", timeout_us_connect])
+        if not has_rw_timeout and self._rtsp_io_timeout_s > 0:
+            cmd.extend(["-rw_timeout", timeout_us_io])
+
+        cmd.extend(["-i", self._rtsp_url, "-c", "copy", "-f", "mp4", "-y"])
+
+        # Naive check to see if user overrode defaults
+        # If user supplies ANY -loglevel, we don't add ours.
+        # If user supplies ANY -fflags, we don't add ours (to avoid concatenation complexity).
+        # This allows full user control.
+        has_loglevel = any(x == "-loglevel" for x in user_flags)
+        if not has_loglevel:
+            cmd.extend(["-loglevel", "warning"])
+
+        has_fflags = any(x == "-fflags" for x in user_flags)
+        if not has_fflags:
+            cmd.extend(["-fflags", "+genpts+igndts"])
+
+        has_fps_mode = any(x == "-fps_mode" or x == "-vsync" for x in user_flags)
+        if not has_fps_mode:
+            cmd.extend(["-vsync", "0"])
+
+        # Add user flags last so they can potentially override or add to the above
+        cmd.extend(user_flags)
+
+        cmd.extend([str(output_file)])
+
+        safe_cmd = list(cmd)
+        try:
+            idx = safe_cmd.index("-i")
+            safe_cmd[idx + 1] = _redact_rtsp_url(str(safe_cmd[idx + 1]))
+        except Exception as exc:
+            logger.warning("Failed to redact recording RTSP URL: %s", exc, exc_info=True)
+        logger.debug("Recording ffmpeg: %s", _format_cmd(safe_cmd))
+
+        try:
+            with open(stderr_log, "w") as stderr_file:
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+
+            self._clock.sleep(0.5)
+            if proc.poll() is not None:
+                logger.error("Recording process died immediately (exit code: %s)", proc.returncode)
+                logger.error("Check logs at: %s", stderr_log)
+                try:
+                    with open(stderr_log) as f:
+                        error_lines = f.read()
+                    if error_lines:
+                        logger.error("Error output: %s", error_lines[:500])
+                except Exception:
+                    logger.exception("Failed reading recording log: %s", stderr_log)
+                return None
+
+            return proc
+        except Exception:
+            logger.exception("Failed to start recording")
+            return None
+
+    def stop(self, proc: subprocess.Popen[bytes], output_file: Path | None) -> None:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning("Recording process did not terminate, killing (PID: %s)", proc.pid)
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                logger.exception("Failed to kill recording process (PID: %s)", proc.pid)
+        except Exception:
+            logger.exception("Failed while stopping recording process (PID: %s)", proc.pid)
+
+        logger.debug(
+            "Stopped recording: %s",
+            output_file,
+            extra={"recording_id": output_file.name if output_file else None},
+        )
+
+    def is_alive(self, proc: subprocess.Popen[bytes]) -> bool:
+        return proc.poll() is None
+
+
+class RTSPRunState(str, Enum):
+    IDLE = "idle"
+    RECORDING = "recording"
+    STALLED = "stalled"
+    RECONNECTING = "reconnecting"
+
+
 class RTSPSource(ThreadedClipSource):
     """RTSP clip source with motion detection.
 
@@ -172,9 +629,18 @@ class RTSPSource(ThreadedClipSource):
     downscaled grayscale frames and emits clips when recordings finish.
     """
 
-    def __init__(self, config: RTSPSourceConfig, camera_name: str) -> None:
+    def __init__(
+        self,
+        config: RTSPSourceConfig,
+        camera_name: str,
+        *,
+        frame_pipeline: FramePipeline | None = None,
+        recorder: Recorder | None = None,
+        clock: Clock | None = None,
+    ) -> None:
         """Initialize RTSP source."""
         super().__init__()
+        self._clock = clock or SystemClock()
         rtsp_url = config.rtsp_url
         if config.rtsp_url_env:
             env_value = os.getenv(config.rtsp_url_env)
@@ -208,10 +674,12 @@ class RTSPSource(ThreadedClipSource):
 
         self.pixel_threshold = int(config.pixel_threshold)
         self.min_changed_pct = float(config.min_changed_pct)
+        self.recording_sensitivity_factor = max(1.0, float(config.recording_sensitivity_factor))
         self.blur_kernel = self._normalize_blur_kernel(config.blur_kernel)
         self.motion_stop_delay = float(config.stop_delay)
         self.max_recording_s = float(config.max_recording_s)
         self.max_reconnect_attempts = int(config.max_reconnect_attempts)
+        self.detect_fallback_attempts = int(config.detect_fallback_attempts)
         self.debug_motion = bool(config.debug_motion)
         self.heartbeat_s = float(config.heartbeat_s)
         self.frame_timeout_s = float(config.frame_timeout_s)
@@ -246,16 +714,35 @@ class RTSPSource(ThreadedClipSource):
         self._last_changed_pixels = 0
         self._debug_frame_count = 0
 
-        self.frame_pipe: subprocess.Popen[bytes] | None = None
-        self._frame_pipe_stderr: Any | None = None
-        self._frame_reader_thread: Thread | None = None
-        self._frame_reader_stop: Event | None = None
-        self._frame_queue: Queue[bytes] | None = None
-        self._frame_width: int | None = None
-        self._frame_height: int | None = None
-        self._frame_size: int | None = None
+        self._frame_pipeline: FramePipeline = frame_pipeline or FfmpegFramePipeline(
+            output_dir=self.output_dir,
+            frame_queue_size=self.frame_queue_size,
+            rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+            rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+            ffmpeg_flags=self.ffmpeg_flags,
+            hwaccel_config=self.hwaccel_config,
+            hwaccel_failed=self._hwaccel_failed,
+            on_frame=self._touch_heartbeat,
+            clock=self._clock,
+        )
+        self._recorder: Recorder = recorder or FfmpegRecorder(
+            rtsp_url=self.rtsp_url,
+            ffmpeg_flags=self.ffmpeg_flags,
+            rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+            rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+            clock=self._clock,
+        )
+        self._run_state = RTSPRunState.IDLE
+        self._motion_rtsp_url = self.detect_rtsp_url
+        self._detect_stream_available = self.detect_rtsp_url != self.rtsp_url
+        self._detect_fallback_active = False
+        self._detect_failure_count = 0
+        self._detect_next_probe_at: float | None = None
+        self._detect_probe_interval_s = 25.0
+        self._detect_probe_backoff_s = self._detect_probe_interval_s
+        self._detect_probe_backoff_max_s = 60.0
         self.reconnect_count = 0
-        self.last_successful_frame = self._last_heartbeat
+        self.last_successful_frame = self._clock.now()
 
         logger.info(
             "RTSPSource initialized: camera=%s, output_dir=%s",
@@ -268,11 +755,11 @@ class RTSPSource(ThreadedClipSource):
         if not self._thread_is_healthy():
             return False
 
-        age = time.monotonic() - self.last_successful_frame
+        age = self._clock.now() - self.last_successful_frame
         return age < (self.frame_timeout_s * 3)
 
     def _touch_heartbeat(self) -> None:
-        self.last_successful_frame = time.monotonic()
+        self.last_successful_frame = self._clock.now()
         super()._touch_heartbeat()
 
     def _stop_timeout(self) -> float:
@@ -326,9 +813,11 @@ class RTSPSource(ThreadedClipSource):
         return {
             "pixel_threshold": self.pixel_threshold,
             "min_changed_pct": self.min_changed_pct,
+            "recording_sensitivity_factor": self.recording_sensitivity_factor,
             "blur_kernel": self.blur_kernel,
             "stop_delay": self.motion_stop_delay,
             "max_recording_s": self.max_recording_s,
+            "detect_fallback_attempts": self.detect_fallback_attempts,
             "hwaccel": self.hwaccel_config.hwaccel,
             "hwaccel_device": self.hwaccel_config.hwaccel_device,
         }
@@ -344,7 +833,12 @@ class RTSPSource(ThreadedClipSource):
         extra.update(fields)
         return extra
 
-    def _probe_stream_info(self, rtsp_url: str) -> dict[str, object] | None:
+    def _probe_stream_info(
+        self,
+        rtsp_url: str,
+        *,
+        timeout_s: float = 10.0,
+    ) -> dict[str, object] | None:
         cmd = [
             "ffprobe",
             "-v",
@@ -357,10 +851,22 @@ class RTSPSource(ThreadedClipSource):
             "json",
             "-rtsp_transport",
             "tcp",
-            rtsp_url,
         ]
+        if self.rtsp_connect_timeout_s > 0:
+            timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
+            cmd.extend(["-stimeout", timeout_us_connect])
+        if self.rtsp_io_timeout_s > 0:
+            timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
+            cmd.extend(["-rw_timeout", timeout_us_io])
+        cmd.append(rtsp_url)
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                check=False,
+            )
             data = json.loads(result.stdout)
             if not data.get("streams"):
                 return None
@@ -376,20 +882,10 @@ class RTSPSource(ThreadedClipSource):
             return None
 
     def _redact_rtsp_url(self, url: str) -> str:
-        if "://" not in url:
-            return url
-        scheme, rest = url.split("://", 1)
-        if "@" not in rest:
-            return url
-        _creds, host = rest.split("@", 1)
-        return f"{scheme}://***:***@{host}"
+        return _redact_rtsp_url(url)
 
     def _format_cmd(self, cmd: list[str]) -> str:
-        try:
-            return shlex.join([str(x) for x in cmd])
-        except Exception as exc:
-            logger.warning("Failed to format command with shlex.join: %s", exc, exc_info=True)
-            return " ".join([str(x) for x in cmd])
+        return _format_cmd(cmd)
 
     def detect_motion(self, frame: npt.NDArray[np.uint8]) -> bool:
         """Return True if motion detected in frame."""
@@ -439,10 +935,10 @@ class RTSPSource(ThreadedClipSource):
 
     def check_recording_health(self) -> bool:
         """Check if recording process is still alive."""
-        if self.recording_process and self.recording_process.poll() is not None:
+        if self.recording_process and not self._recorder.is_alive(self.recording_process):
             proc = self.recording_process
             output_file = self.output_file
-            exit_code = proc.returncode
+            exit_code = getattr(proc, "returncode", None)
             logger.warning("Recording process died unexpectedly (exit code: %s)", exit_code)
             if output_file:
                 logger.error(
@@ -499,7 +995,7 @@ class RTSPSource(ThreadedClipSource):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file, stderr_log = self._make_recording_paths(timestamp)
 
-        proc = self._spawn_recording_process(output_file, stderr_log)
+        proc = self._recorder.start(output_file, stderr_log)
         if not proc:
             logger.error(
                 "Recording failed to start",
@@ -515,7 +1011,7 @@ class RTSPSource(ThreadedClipSource):
         self.recording_process = proc
         self.output_file = output_file
         self._stderr_log = stderr_log
-        self.recording_start_time = time.monotonic()
+        self.recording_start_time = self._clock.now()
         self.recording_start_wall = datetime.now()
         self._recording_id = output_file.name
 
@@ -533,79 +1029,6 @@ class RTSPSource(ThreadedClipSource):
                 detect_stream_is_same=(self.detect_rtsp_url == self.rtsp_url),
             ),
         )
-
-    def _spawn_recording_process(
-        self, output_file: Path, stderr_log: Path
-    ) -> subprocess.Popen[bytes] | None:
-        cmd = [
-            "ffmpeg",
-            "-rtsp_transport",
-            "tcp",
-            "-rtsp_flags",
-            "prefer_tcp",
-            "-user_agent",
-            "Lavf",
-            "-i",
-            self.rtsp_url,
-            "-c",
-            "copy",
-            "-f",
-            "mp4",
-            "-y",
-        ]
-
-        user_flags = self.ffmpeg_flags
-
-        # Naive check to see if user overrode defaults
-        # If user supplies ANY -loglevel, we don't add ours.
-        # If user supplies ANY -fflags, we don't add ours (to avoid concatenation complexity).
-        # This allows full user control.
-        has_loglevel = any(x == "-loglevel" for x in user_flags)
-        if not has_loglevel:
-            cmd.extend(["-loglevel", "warning"])
-
-        has_fflags = any(x == "-fflags" for x in user_flags)
-        if not has_fflags:
-            cmd.extend(["-fflags", "+genpts+igndts"])
-
-        has_fps_mode = any(x == "-fps_mode" or x == "-vsync" for x in user_flags)
-        if not has_fps_mode:
-            cmd.extend(["-vsync", "0"])
-
-        # Add user flags last so they can potentially override or add to the above
-        cmd.extend(user_flags)
-
-        cmd.extend([str(output_file)])
-
-        safe_cmd = list(cmd)
-        try:
-            idx = safe_cmd.index("-i")
-            safe_cmd[idx + 1] = self._redact_rtsp_url(str(safe_cmd[idx + 1]))
-        except Exception as exc:
-            logger.warning("Failed to redact recording RTSP URL: %s", exc, exc_info=True)
-        logger.debug("Recording ffmpeg: %s", self._format_cmd(safe_cmd))
-
-        try:
-            with open(stderr_log, "w") as stderr_file:
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
-
-            time.sleep(0.5)
-            if proc.poll() is not None:
-                logger.error("Recording process died immediately (exit code: %s)", proc.returncode)
-                logger.error("Check logs at: %s", stderr_log)
-                try:
-                    with open(stderr_log) as f:
-                        error_lines = f.read()
-                    if error_lines:
-                        logger.error("Error output: %s", error_lines[:500])
-                except Exception:
-                    logger.exception("Failed reading recording log: %s", stderr_log)
-                return None
-
-            return proc
-        except Exception:
-            logger.exception("Failed to start recording")
-            return None
 
     def stop_recording(self) -> None:
         """Stop ffmpeg recording process."""
@@ -627,7 +1050,7 @@ class RTSPSource(ThreadedClipSource):
         self._finalize_clip(output_file, started_wall, started_at)
 
         if output_file:
-            duration_s = (time.monotonic() - started_at) if started_at else None
+            duration_s = (self._clock.now() - started_at) if started_at else None
             logger.info(
                 "Recording stopped",
                 extra=self._event_extra(
@@ -644,34 +1067,19 @@ class RTSPSource(ThreadedClipSource):
         self, proc: subprocess.Popen[bytes], output_file: Path | None
     ) -> None:
         try:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            logger.warning("Recording process did not terminate, killing (PID: %s)", proc.pid)
-            try:
-                proc.kill()
-                proc.wait(timeout=2)
-            except Exception:
-                logger.exception("Failed to kill recording process (PID: %s)", proc.pid)
+            self._recorder.stop(proc, output_file)
         except Exception:
             logger.exception("Failed while stopping recording process (PID: %s)", proc.pid)
 
-        logger.debug(
-            "Stopped recording: %s",
-            output_file,
-            extra={"recording_id": output_file.name if output_file else None},
-        )
-
     def _rotate_recording_if_needed(self) -> None:
-        if not self.recording_process or not self.recording_start_time:
+        if self.recording_process is None or self.recording_start_time is None:
             return
 
-        now = time.monotonic()
+        now = self._clock.now()
         if (now - self.recording_start_time) < self.max_recording_s:
             return
 
-        if not self.last_motion_time:
+        if self.last_motion_time is None:
             return
 
         if (now - self.last_motion_time) > self.motion_stop_delay:
@@ -691,7 +1099,7 @@ class RTSPSource(ThreadedClipSource):
             new_output,
         )
 
-        new_proc = self._spawn_recording_process(new_output, new_log)
+        new_proc = self._recorder.start(new_output, new_log)
         if new_proc:
             self.last_motion_time = now
             self.recording_process = new_proc
@@ -741,8 +1149,14 @@ class RTSPSource(ThreadedClipSource):
             "json",
             "-rtsp_transport",
             "tcp",
-            self.rtsp_url,
         ]
+        if self.rtsp_connect_timeout_s > 0:
+            timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
+            cmd.extend(["-stimeout", timeout_us_connect])
+        if self.rtsp_io_timeout_s > 0:
+            timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
+            cmd.extend(["-rw_timeout", timeout_us_io])
+        cmd.append(self.rtsp_url)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
             data = json.loads(result.stdout)
@@ -757,240 +1171,14 @@ class RTSPSource(ThreadedClipSource):
             )
             return 1920, 1080
 
-    def get_frame_pipe(self) -> tuple[subprocess.Popen[bytes], Any, int, int]:
-        """Create ffmpeg process to get frames for motion detection."""
-        detect_width, detect_height = 320, 240
-
-        stderr_log = self.output_dir / "frame_pipeline.log"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        def _read_tail(path: Path, max_bytes: int = 4000) -> str:
-            try:
-                data = path.read_bytes()
-            except Exception as exc:
-                logger.warning("Failed to read stderr tail: %s", exc, exc_info=True)
-                return ""
-            if len(data) <= max_bytes:
-                return data.decode(errors="replace")
-            return data[-max_bytes:].decode(errors="replace")
-
-        cmd = ["ffmpeg"]
-
-        # 1. Global Flags (Hardware Acceleration)
-        if self.hwaccel_config.is_available and not self._hwaccel_failed:
-            hwaccel = self.hwaccel_config.hwaccel
-            if hwaccel is not None:
-                cmd.extend(["-hwaccel", hwaccel])
-            if self.hwaccel_config.hwaccel_device:
-                cmd.extend(["-hwaccel_device", self.hwaccel_config.hwaccel_device])
-        elif self._hwaccel_failed:
-            logger.info("Hardware acceleration disabled due to previous failures")
-
-        # 2. Global Flags (Robustness & Logging)
-        user_flags = self.ffmpeg_flags
-
-        has_loglevel = any(x == "-loglevel" for x in user_flags)
-        if not has_loglevel:
-            cmd.extend(["-loglevel", "warning"])
-
-        has_fflags = any(x == "-fflags" for x in user_flags)
-        if not has_fflags:
-            cmd.extend(["-fflags", "+genpts+igndts"])
-
-        # Add all user flags to global scope.
-        # Users who want input-specific flags (before -i) must rely on ffmpeg parsing them correctly
-        # or we would need a more complex config structure.
-        # For now, most robustness flags (-re, -rtsp_transport, etc) work as global or are handled below.
-        cmd.extend(user_flags)
-
-        base_input_args = [
-            "-rtsp_transport",
-            "tcp",
-            "-i",
-            self.detect_rtsp_url,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "gray",
-            "-vf",
-            f"fps=10,scale={detect_width}:{detect_height}",
-            "-an",
-            "-",
-        ]
-
-        timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-        attempts: list[tuple[str, list[str]]] = [
-            (
-                "stimeout",
-                ["-stimeout", timeout_us_connect] + base_input_args,
-            ),
-            ("stimeout", ["-stimeout", timeout_us_connect] + base_input_args),
-            ("no_timeouts", base_input_args),
-        ]
-
-        process: subprocess.Popen[bytes] | None = None
-        stderr_file: Any | None = None
-
-        for label, extra_args in attempts:
-            cmd_attempt = list(cmd) + extra_args
-            logger.debug("Starting frame pipeline (%s), logging to: %s", label, stderr_log)
-            safe_cmd = list(cmd_attempt)
-            try:
-                idx = safe_cmd.index("-i")
-                safe_cmd[idx + 1] = self._redact_rtsp_url(str(safe_cmd[idx + 1]))
-            except Exception as exc:
-                logger.warning(
-                    "Failed to redact frame pipeline RTSP URL: %s",
-                    exc,
-                    exc_info=True,
-                )
-            logger.debug("Frame pipeline ffmpeg (%s): %s", label, self._format_cmd(safe_cmd))
-
-            try:
-                stderr_file = open(stderr_log, "w")
-                process = subprocess.Popen(
-                    cmd_attempt,
-                    stdout=subprocess.PIPE,
-                    stderr=stderr_file,
-                    bufsize=detect_width * detect_height,
-                )
-            except Exception:
-                try:
-                    if stderr_file:
-                        stderr_file.close()
-                except Exception as exc:
-                    logger.warning("Failed to close stderr log: %s", exc, exc_info=True)
-                logger.exception("Failed to start frame pipeline subprocess (%s)", label)
-                continue
-
-            time.sleep(1)
-            if process.poll() is None:
-                return process, stderr_file, detect_width, detect_height
-
-            try:
-                stderr_file.close()
-            except Exception as exc:
-                logger.warning("Failed to close stderr log: %s", exc, exc_info=True)
-            stderr_tail = _read_tail(stderr_log)
-            logger.error(
-                "Frame pipeline died immediately (%s, exit code: %s)", label, process.returncode
-            )
-            if stderr_tail:
-                logger.error("Frame pipeline stderr tail (%s):\n%s", label, stderr_tail)
-            process = None
-            stderr_file = None
-            continue
-
-        raise RuntimeError("Frame pipeline failed to start")
-
-    def _stop_process(
-        self, proc: subprocess.Popen[bytes], name: str, terminate_timeout_s: float
-    ) -> None:
-        if proc.poll() is not None:
-            return
-        try:
-            proc.terminate()
-            proc.wait(timeout=terminate_timeout_s)
-        except subprocess.TimeoutExpired:
-            logger.warning("%s did not terminate, killing (PID: %s)", name, proc.pid)
-            proc.kill()
-            try:
-                proc.wait(timeout=2)
-            except Exception:
-                logger.exception("Failed waiting after kill for %s (PID: %s)", name, proc.pid)
+    def _start_frame_pipeline(self) -> None:
+        self._frame_pipeline.start(self._motion_rtsp_url)
 
     def _stop_frame_pipeline(self) -> None:
-        if self._frame_reader_stop is not None:
-            self._frame_reader_stop.set()
-
-        if self.frame_pipe is not None:
-            try:
-                self._stop_process(self.frame_pipe, "Frame pipeline", terminate_timeout_s=2)
-            except Exception:
-                logger.exception("Error stopping frame pipeline process")
-            self.frame_pipe = None
-
-        if self._frame_reader_thread is not None:
-            try:
-                self._frame_reader_thread.join(timeout=5)
-            except Exception:
-                logger.exception("Error joining frame reader thread")
-            self._frame_reader_thread = None
-
-        self._frame_reader_stop = None
-
-        if self._frame_pipe_stderr is not None:
-            try:
-                self._frame_pipe_stderr.close()
-            except Exception:
-                logger.exception("Error closing frame pipeline stderr log")
-            self._frame_pipe_stderr = None
-
-        self._frame_queue = None
-        self._frame_width = None
-        self._frame_height = None
-        self._frame_size = None
-
-    def _start_frame_pipeline(self) -> None:
-        self._stop_frame_pipeline()
-
-        self.frame_pipe, self._frame_pipe_stderr, self._frame_width, self._frame_height = (
-            self.get_frame_pipe()
-        )
-        self._frame_size = int(self._frame_width) * int(self._frame_height)
-        self._frame_queue = Queue(maxsize=self.frame_queue_size)
-        self._frame_reader_stop = Event()
-
-        frame_pipe = self.frame_pipe
-        frame_size = self._frame_size
-        frame_queue = self._frame_queue
-        stop_event = self._frame_reader_stop
-
-        def reader_loop() -> None:
-            stdout = frame_pipe.stdout if frame_pipe else None
-            if stdout is None:
-                logger.error("Frame pipeline stdout is None")
-                return
-
-            while not stop_event.is_set():
-                try:
-                    raw = stdout.read(frame_size)
-                except Exception:
-                    logger.exception("Error reading from frame pipeline stdout")
-                    return
-
-                if not raw or len(raw) != frame_size:
-                    return
-
-                self._touch_heartbeat()
-
-                try:
-                    frame_queue.put_nowait(raw)
-                except Full:
-                    try:
-                        _ = frame_queue.get_nowait()
-                    except Empty:
-                        pass
-                    try:
-                        frame_queue.put_nowait(raw)
-                    except Full:
-                        pass
-
-        self._frame_reader_thread = Thread(target=reader_loop, name="frame-reader", daemon=True)
-        self._frame_reader_thread.start()
+        self._frame_pipeline.stop()
 
     def _wait_for_first_frame(self, timeout_s: float) -> bool:
-        if not self._frame_queue:
-            return False
-        try:
-            raw = self._frame_queue.get(timeout=float(timeout_s))
-        except Empty:
-            return False
-        try:
-            self._frame_queue.put_nowait(raw)
-        except Full:
-            pass
-        return True
+        return self._frame_pipeline.read_frame(timeout_s) is not None
 
     def _reconnect_frame_pipeline(self, *, aggressive: bool) -> bool:
         initial_backoff_s = 0.2 if aggressive else float(self.reconnect_backoff_s)
@@ -1006,6 +1194,14 @@ class RTSPSource(ThreadedClipSource):
                     "Reconnect attempt %s (mode=%s max=inf)...",
                     self.reconnect_count,
                     "aggressive" if aggressive else "normal",
+                    extra=self._event_extra(
+                        "rtsp_reconnect_attempt",
+                        attempt=self.reconnect_count,
+                        max_attempts=None,
+                        mode="aggressive" if aggressive else "normal",
+                        detect_is_fallback=self._detect_fallback_active,
+                        motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
+                    ),
                 )
             else:
                 logger.warning(
@@ -1013,9 +1209,27 @@ class RTSPSource(ThreadedClipSource):
                     self.reconnect_count,
                     self.max_reconnect_attempts,
                     "aggressive" if aggressive else "normal",
+                    extra=self._event_extra(
+                        "rtsp_reconnect_attempt",
+                        attempt=self.reconnect_count,
+                        max_attempts=self.max_reconnect_attempts,
+                        mode="aggressive" if aggressive else "normal",
+                        detect_is_fallback=self._detect_fallback_active,
+                        motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
+                    ),
                 )
                 if self.reconnect_count >= self.max_reconnect_attempts:
-                    logger.error("Max reconnect attempts reached. Camera may be offline.")
+                    logger.error(
+                        "Max reconnect attempts reached. Camera may be offline.",
+                        extra=self._event_extra(
+                            "rtsp_reconnect_failed",
+                            attempt=self.reconnect_count,
+                            max_attempts=self.max_reconnect_attempts,
+                            mode="aggressive" if aggressive else "normal",
+                            detect_is_fallback=self._detect_fallback_active,
+                            motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
+                        ),
+                    )
                     return False
 
             if first_attempt and aggressive:
@@ -1027,23 +1241,38 @@ class RTSPSource(ThreadedClipSource):
 
             if sleep_s > 0:
                 logger.debug("Waiting %.2fs before reconnect...", sleep_s)
-                time.sleep(sleep_s)
+                self._clock.sleep(sleep_s)
 
             try:
                 self._start_frame_pipeline()
             except Exception as exc:
                 logger.warning("Failed to restart frame pipeline: %s", exc, exc_info=True)
+                if self._note_detect_failure(self._clock.now()):
+                    backoff_s = initial_backoff_s
+                    first_attempt = True
+                    continue
                 if aggressive:
                     backoff_s = min(backoff_s * 1.6, backoff_cap_s)
                 continue
 
             startup_timeout_s = min(2.0, max(0.5, float(self.frame_timeout_s)))
             if self._wait_for_first_frame(startup_timeout_s):
-                logger.info("Reconnected successfully")
+                logger.info(
+                    "Reconnected successfully",
+                    extra=self._event_extra(
+                        "rtsp_reconnect_success",
+                        attempt=self.reconnect_count,
+                        mode="aggressive" if aggressive else "normal",
+                        detect_is_fallback=self._detect_fallback_active,
+                        motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
+                    ),
+                )
                 self.reconnect_count = 0
+                self._detect_failure_count = 0
                 return True
 
             logger.warning("Frame pipeline restarted but still no frames; retrying...")
+            self._note_detect_failure(self._clock.now())
             try:
                 self._stop_frame_pipeline()
             except Exception as exc:
@@ -1056,6 +1285,167 @@ class RTSPSource(ThreadedClipSource):
                 backoff_s = min(backoff_s * 1.6, backoff_cap_s)
 
         return False
+
+    def _note_detect_failure(self, now: float) -> bool:
+        if not self._detect_stream_available:
+            return False
+        if self._detect_fallback_active:
+            return False
+        if self.detect_fallback_attempts <= 0:
+            return False
+
+        self._detect_failure_count += 1
+        if self._detect_failure_count < self.detect_fallback_attempts:
+            return False
+
+        self._activate_detect_fallback(now)
+        return True
+
+    def _activate_detect_fallback(self, now: float) -> None:
+        self._detect_fallback_active = True
+        self._detect_failure_count = 0
+        self._motion_rtsp_url = self.rtsp_url
+        self._detect_next_probe_at = now + self._detect_probe_interval_s
+        self._detect_probe_backoff_s = self._detect_probe_interval_s
+        logger.warning(
+            "Detect stream failed; falling back to main RTSP stream",
+            extra=self._event_extra(
+                "detect_fallback_enabled",
+                detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                detect_stream_is_same=False,
+            ),
+        )
+
+    def _schedule_detect_probe(self, now: float) -> None:
+        self._detect_next_probe_at = now + self._detect_probe_backoff_s
+        self._detect_probe_backoff_s = min(
+            self._detect_probe_backoff_s * 1.6,
+            self._detect_probe_backoff_max_s,
+        )
+
+    def _maybe_recover_detect_stream(self, now: float) -> bool:
+        if not self._detect_fallback_active:
+            return False
+        if not self._detect_stream_available:
+            return False
+        if self._detect_next_probe_at is not None and now < self._detect_next_probe_at:
+            return False
+
+        info = self._probe_stream_info(self.detect_rtsp_url, timeout_s=3.0)
+        if not info or not info.get("width") or not info.get("height"):
+            self._schedule_detect_probe(now)
+            return False
+
+        logger.info(
+            "Detect stream recovered; attempting switch back",
+            extra=self._event_extra(
+                "detect_fallback_recovering",
+                detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                detect_stream_is_same=False,
+            ),
+        )
+
+        self._motion_rtsp_url = self.detect_rtsp_url
+        try:
+            self._stop_frame_pipeline()
+            self._start_frame_pipeline()
+            startup_timeout_s = min(2.0, max(0.5, float(self.frame_timeout_s)))
+            if self._wait_for_first_frame(startup_timeout_s):
+                self._detect_fallback_active = False
+                self._detect_next_probe_at = None
+                self._detect_probe_backoff_s = self._detect_probe_interval_s
+                logger.info(
+                    "Detect stream restored; using detect stream again",
+                    extra=self._event_extra(
+                        "detect_fallback_recovered",
+                        detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                        detect_stream_is_same=False,
+                    ),
+                )
+                return True
+        except Exception as exc:
+            logger.warning("Detect stream switch failed: %s", exc, exc_info=True)
+
+        self._motion_rtsp_url = self.rtsp_url
+        self._detect_fallback_active = True
+        self._schedule_detect_probe(now)
+        try:
+            self._start_frame_pipeline()
+        except Exception as exc:
+            logger.warning(
+                "Failed to restart fallback pipeline after detect switch: %s",
+                exc,
+                exc_info=True,
+            )
+        return False
+
+    def _keepalive_threshold(self) -> float:
+        if self.recording_sensitivity_factor <= 0:
+            return self.min_changed_pct
+        return max(0.0, self.min_changed_pct / self.recording_sensitivity_factor)
+
+    def _apply_keepalive(self, now: float) -> None:
+        if self.recording_process and self.last_motion_time is not None:
+            if self._last_changed_pct >= self._keepalive_threshold():
+                self.last_motion_time = now
+
+    def _set_run_state(self, state: RTSPRunState) -> None:
+        if self._run_state == state:
+            return
+        logger.debug("RTSP state change: %s -> %s", self._run_state, state)
+        self._run_state = state
+
+    def _ensure_recording(self, now: float) -> None:
+        if self.recording_process:
+            if not self.check_recording_health():
+                logger.warning(
+                    "Recording died, attempting restart",
+                    extra=self._event_extra(
+                        "recording_restart_attempt",
+                        reason="health_check",
+                    ),
+                )
+                if self.last_motion_time is not None and (
+                    (now - self.last_motion_time) <= self.motion_stop_delay
+                ):
+                    self.start_recording()
+                    if self.recording_process:
+                        logger.info(
+                            "Recording restarted",
+                            extra=self._event_extra(
+                                "recording_restart",
+                                reason="health_check",
+                            ),
+                        )
+                else:
+                    self.last_motion_time = None
+            return
+
+        if (
+            self.last_motion_time is not None
+            and (now - self.last_motion_time) <= self.motion_stop_delay
+        ):
+            logger.warning(
+                "Recording missing while motion is recent; restarting",
+                extra=self._event_extra(
+                    "recording_restart_attempt",
+                    reason="missing",
+                ),
+            )
+            self.start_recording()
+            if self.recording_process:
+                logger.info(
+                    "Recording restarted",
+                    extra=self._event_extra(
+                        "recording_restart",
+                        reason="missing",
+                    ),
+                )
+        elif (
+            self.last_motion_time is not None
+            and (now - self.last_motion_time) > self.motion_stop_delay
+        ):
+            self.last_motion_time = None
 
     def cleanup(self) -> None:
         """Clean up resources."""
@@ -1132,9 +1522,16 @@ class RTSPSource(ThreadedClipSource):
             self.motion_stop_delay,
             self.max_recording_s,
         )
+        logger.info(
+            "Motion keepalive: threshold=%.3f%% (recording_sensitivity_factor=%.2f)",
+            self._keepalive_threshold(),
+            self.recording_sensitivity_factor,
+        )
         logger.info("Max reconnect attempts: %s", self.max_reconnect_attempts)
         if self.max_reconnect_attempts == 0:
             logger.info("Reconnect policy: retry forever")
+        if self._detect_stream_available:
+            logger.info("Detect fallback attempts: %s", self.detect_fallback_attempts)
 
         if self.hwaccel_config.is_available:
             device_info = (
@@ -1162,17 +1559,22 @@ class RTSPSource(ThreadedClipSource):
                     info.get("avg_frame_rate"),
                 )
             else:
-                logger.warning(
-                    "Motion RTSP stream (%s) did not probe cleanly; falling back to main RTSP stream",
-                    self._detect_rtsp_url_source,
-                )
-                self.detect_rtsp_url = self.rtsp_url
-                self._detect_rtsp_url_source = "fallback_to_rtsp_url"
+                if self.detect_fallback_attempts > 0:
+                    logger.warning(
+                        "Motion RTSP stream (%s) did not probe cleanly; falling back to main RTSP stream",
+                        self._detect_rtsp_url_source,
+                    )
+                    self._activate_detect_fallback(self._clock.now())
+                else:
+                    logger.warning(
+                        "Motion RTSP stream (%s) did not probe cleanly; fallback disabled",
+                        self._detect_rtsp_url_source,
+                    )
 
         logger.info("Motion detection: 320x240@10fps (downscaled for efficiency)")
 
     def _handle_frame_timeout(self) -> bool:
-        pipe_status = self.frame_pipe.poll() if self.frame_pipe else None
+        pipe_status = self._frame_pipeline.exit_code()
         if pipe_status is not None:
             logger.error(
                 "Frame pipeline exited (code: %s). Check logs: %s/frame_pipeline.log",
@@ -1183,14 +1585,14 @@ class RTSPSource(ThreadedClipSource):
             logger.warning(
                 "No frames received for %.1fs (stall). Last frame %.1fs ago.",
                 self.frame_timeout_s,
-                time.monotonic() - self.last_successful_frame,
+                self._clock.now() - self.last_successful_frame,
             )
 
         aggressive = self.recording_process is None
         return self._reconnect_frame_pipeline(aggressive=aggressive)
 
     def _stall_grace_remaining(self, now: float) -> float:
-        if not self.recording_process or not self.last_motion_time:
+        if not self.recording_process or self.last_motion_time is None:
             return 0.0
         return max(0.0, self.motion_stop_delay - (now - self.last_motion_time))
 
@@ -1199,43 +1601,59 @@ class RTSPSource(ThreadedClipSource):
         self._log_startup_info()
 
         try:
-            self._start_frame_pipeline()
+            try:
+                self._start_frame_pipeline()
+            except Exception as exc:
+                logger.warning("Initial frame pipeline start failed: %s", exc, exc_info=True)
+                if not self._reconnect_frame_pipeline(aggressive=True):
+                    return
+
             logger.info("Connected, monitoring for motion...")
             self.reconnect_count = 0
+            self._set_run_state(RTSPRunState.IDLE)
 
             frame_count = 0
-            last_heartbeat = time.monotonic()
+            last_heartbeat = self._clock.now()
 
             while not self._stop_event.is_set():
-                if time.monotonic() - last_heartbeat > self.heartbeat_s:
+                now = self._clock.now()
+                if now - last_heartbeat > self.heartbeat_s:
                     logger.debug(
                         "[HEARTBEAT] Processed %s frames, recording=%s",
                         frame_count,
                         self.recording_process is not None,
                     )
-                    if self.frame_pipe and self.frame_pipe.poll() is not None:
+                    if not self._frame_pipeline.is_running():
                         logger.error(
-                            "Frame pipeline died! Exit code: %s", self.frame_pipe.returncode
+                            "Frame pipeline died! Exit code: %s",
+                            self._frame_pipeline.exit_code(),
                         )
-                        break
-                    last_heartbeat = time.monotonic()
+                        self._set_run_state(RTSPRunState.RECONNECTING)
+                        if not self._handle_frame_timeout():
+                            remaining = self._stall_grace_remaining(now)
+                            if remaining > 0:
+                                self._stall_grace_until = now + remaining
+                                logger.warning(
+                                    "Frame pipeline stalled; keeping recording alive for %.1fs",
+                                    remaining,
+                                )
+                                self._clock.sleep(min(0.5, remaining))
+                                continue
+                            break
+                    last_heartbeat = now
+
+                if self._maybe_recover_detect_stream(now):
+                    self._set_run_state(RTSPRunState.RECONNECTING)
+                    continue
 
                 frame_count += 1
 
-                if (
-                    not self._frame_queue
-                    or not self._frame_width
-                    or not self._frame_height
-                    or not self._frame_size
-                ):
-                    break
-
-                try:
-                    raw_frame = self._frame_queue.get(timeout=self.frame_timeout_s)
-                except Empty:
-                    now = time.monotonic()
+                raw_frame = self._frame_pipeline.read_frame(timeout_s=self.frame_timeout_s)
+                if raw_frame is None:
+                    now = self._clock.now()
                     if self._stall_grace_until is not None and now < self._stall_grace_until:
-                        time.sleep(min(0.5, self._stall_grace_until - now))
+                        self._set_run_state(RTSPRunState.STALLED)
+                        self._clock.sleep(min(0.5, self._stall_grace_until - now))
                         continue
 
                     if not self._handle_frame_timeout():
@@ -1246,16 +1664,28 @@ class RTSPSource(ThreadedClipSource):
                                 "Frame pipeline stalled; keeping recording alive for %.1fs",
                                 remaining,
                             )
-                            time.sleep(min(0.5, remaining))
+                            self._set_run_state(RTSPRunState.STALLED)
+                            self._clock.sleep(min(0.5, remaining))
                             continue
                         break
+
+                    self._set_run_state(RTSPRunState.RECONNECTING)
                     continue
 
                 self._stall_grace_until = None
+                frame_width = self._frame_pipeline.frame_width
+                frame_height = self._frame_pipeline.frame_height
+                if frame_width is None or frame_height is None:
+                    logger.warning("Frame pipeline missing dimensions; reconnecting")
+                    self._set_run_state(RTSPRunState.RECONNECTING)
+                    if not self._handle_frame_timeout():
+                        break
+                    continue
+
                 frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
-                    (self._frame_height, self._frame_width)
+                    (frame_height, frame_width)
                 )
-                now = time.monotonic()
+                now = self._clock.now()
                 motion_detected = self.detect_motion(frame)
 
                 if motion_detected:
@@ -1270,23 +1700,13 @@ class RTSPSource(ThreadedClipSource):
                         self.start_recording()
                         if not self.recording_process:
                             logger.error("-> Recording failed to start!")
-                    else:
-                        if not self.check_recording_health():
-                            logger.warning("-> Recording was dead, trying to restart...")
-                            self.recording_process = None
-                            self.start_recording()
 
-                if self.recording_process and self.last_motion_time:
-                    keepalive_threshold = self.min_changed_pct * 0.5
-                    if self._last_changed_pct >= keepalive_threshold:
-                        self.last_motion_time = now
+                self._apply_keepalive(now)
+                if self.recording_process or self.last_motion_time is not None:
+                    self._ensure_recording(now)
 
-                if self.recording_process and self.last_motion_time:
-                    if not self.check_recording_health():
-                        logger.warning("Recording died, stopping...")
-                        self.stop_recording()
-                        self.last_motion_time = None
-                    elif now - self.last_motion_time > self.motion_stop_delay:
+                if self.recording_process and self.last_motion_time is not None:
+                    if now - self.last_motion_time > self.motion_stop_delay:
                         logger.info(
                             "No motion for %.1fs > stop_delay=%.1fs (last changed_pct=%.3f%%), stopping",
                             now - self.last_motion_time,
@@ -1295,8 +1715,12 @@ class RTSPSource(ThreadedClipSource):
                         )
                         self.stop_recording()
                         self.last_motion_time = None
+                        self._set_run_state(RTSPRunState.IDLE)
                     else:
                         self._rotate_recording_if_needed()
+                        self._set_run_state(RTSPRunState.RECORDING)
+                else:
+                    self._set_run_state(RTSPRunState.IDLE)
 
         except Exception as e:
             logger.exception("Unexpected error: %s", e)
