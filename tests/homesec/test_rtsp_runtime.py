@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from homesec.models.source import RTSPSourceConfig
 from homesec.sources.rtsp import RTSPSource
 
@@ -158,30 +160,36 @@ def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     assert source._detect_fallback_active
 
 
-def test_keepalive_uses_recording_sensitivity_factor(tmp_path: Path) -> None:
-    """Keepalive should refresh last_motion_time using the sensitivity factor."""
+def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
+    """Recording threshold should be lower than idle threshold."""
     # Given: a source with a 2x recording sensitivity factor
-    config = _make_config(tmp_path, min_changed_pct=2.0, recording_sensitivity_factor=2.0)
-    source = RTSPSource(config, camera_name="cam")
-    source.recording_process = DummyProc(pid=1)
-    source.last_motion_time = 1.0
-    source._last_changed_pct = 1.1
+    config = _make_config(
+        tmp_path,
+        min_changed_pct=30.0,
+        recording_sensitivity_factor=2.0,
+        pixel_threshold=1,
+        blur_kernel=0,
+    )
+    idle_source = RTSPSource(config, camera_name="cam")
+    recording_source = RTSPSource(config, camera_name="cam")
+    frame_a = np.zeros((2, 2), dtype=np.uint8)
+    frame_b = frame_a.copy()
+    frame_b[0, 0] = 255
 
-    # When: applying keepalive with a changed_pct above threshold
-    source._apply_keepalive(5.0)
+    # When: detecting motion while idle (threshold 30%)
+    _ = idle_source.detect_motion(frame_a, threshold=idle_source.min_changed_pct)
+    idle_motion = idle_source.detect_motion(frame_b, threshold=idle_source.min_changed_pct)
 
-    # Then: last_motion_time updates to the new timestamp
-    assert source.last_motion_time == 5.0
+    # Then: idle detection does not trigger (25% < 30%)
+    assert not idle_motion
 
-    # Given: changed_pct below the threshold
-    source.last_motion_time = 5.0
-    source._last_changed_pct = 0.5
+    # When: detecting motion while recording (threshold 15%)
+    recording_threshold = recording_source._keepalive_threshold()
+    _ = recording_source.detect_motion(frame_a, threshold=recording_threshold)
+    recording_motion = recording_source.detect_motion(frame_b, threshold=recording_threshold)
 
-    # When: applying keepalive again
-    source._apply_keepalive(10.0)
-
-    # Then: last_motion_time does not change
-    assert source.last_motion_time == 5.0
+    # Then: recording detection triggers (25% >= 15%)
+    assert recording_motion
 
 
 def test_recording_restarts_when_dead(tmp_path: Path) -> None:

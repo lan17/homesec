@@ -887,7 +887,9 @@ class RTSPSource(ThreadedClipSource):
     def _format_cmd(self, cmd: list[str]) -> str:
         return _format_cmd(cmd)
 
-    def detect_motion(self, frame: npt.NDArray[np.uint8]) -> bool:
+    def detect_motion(
+        self, frame: npt.NDArray[np.uint8], *, threshold: float | None = None
+    ) -> bool:
         """Return True if motion detected in frame."""
         if frame.ndim == 3:
             gray = cast(npt.NDArray[np.uint8], cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
@@ -917,7 +919,11 @@ class RTSPSource(ThreadedClipSource):
         self._last_changed_pct = changed_pct
         self._last_changed_pixels = changed_pixels
 
-        motion = changed_pct >= self.min_changed_pct
+        if threshold is None:
+            threshold = self.min_changed_pct
+        if threshold < 0:
+            threshold = 0.0
+        motion = changed_pct >= float(threshold)
 
         if self.debug_motion:
             self._debug_frame_count += 1
@@ -1384,11 +1390,6 @@ class RTSPSource(ThreadedClipSource):
             return self.min_changed_pct
         return max(0.0, self.min_changed_pct / self.recording_sensitivity_factor)
 
-    def _apply_keepalive(self, now: float) -> None:
-        if self.recording_process and self.last_motion_time is not None:
-            if self._last_changed_pct >= self._keepalive_threshold():
-                self.last_motion_time = now
-
     def _set_run_state(self, state: RTSPRunState) -> None:
         if self._run_state == state:
             return
@@ -1523,7 +1524,8 @@ class RTSPSource(ThreadedClipSource):
             self.max_recording_s,
         )
         logger.info(
-            "Motion keepalive: threshold=%.3f%% (recording_sensitivity_factor=%.2f)",
+            "Motion thresholds: idle=%.3f%% recording=%.3f%% (recording_sensitivity_factor=%.2f)",
+            self.min_changed_pct,
             self._keepalive_threshold(),
             self.recording_sensitivity_factor,
         )
@@ -1686,7 +1688,10 @@ class RTSPSource(ThreadedClipSource):
                     (frame_height, frame_width)
                 )
                 now = self._clock.now()
-                motion_detected = self.detect_motion(frame)
+                threshold = self.min_changed_pct
+                if self.recording_process:
+                    threshold = self._keepalive_threshold()
+                motion_detected = self.detect_motion(frame, threshold=threshold)
 
                 if motion_detected:
                     logger.debug(
@@ -1701,7 +1706,6 @@ class RTSPSource(ThreadedClipSource):
                         if not self.recording_process:
                             logger.error("-> Recording failed to start!")
 
-                self._apply_keepalive(now)
                 if self.recording_process or self.last_motion_time is not None:
                     self._ensure_recording(now)
 
