@@ -58,6 +58,10 @@ def _is_timeout_option_error(stderr_text: str) -> bool:
     )
 
 
+def _next_backoff(backoff_s: float, cap_s: float, *, factor: float = 1.6) -> float:
+    return min(backoff_s * factor, cap_s)
+
+
 @dataclass
 class HardwareAccelConfig:
     """Configuration for hardware-accelerated video decoding."""
@@ -1387,7 +1391,7 @@ class RTSPSource(ThreadedClipSource):
     ) -> float:
         if not aggressive:
             return backoff_s
-        return min(backoff_s * 1.6, backoff_cap_s)
+        return _next_backoff(backoff_s, backoff_cap_s)
 
     def _recording_backoff_ready(self, now: float) -> bool:
         next_retry = self._recording_next_restart_at
@@ -1401,8 +1405,8 @@ class RTSPSource(ThreadedClipSource):
         if self._recording_restart_backoff_s <= 0:
             self._recording_restart_backoff_s = self._recording_restart_base_s
         else:
-            self._recording_restart_backoff_s = min(
-                self._recording_restart_backoff_s * 1.6,
+            self._recording_restart_backoff_s = _next_backoff(
+                self._recording_restart_backoff_s,
                 self._recording_restart_backoff_max_s,
             )
         self._recording_next_restart_at = now + self._recording_restart_backoff_s
@@ -1431,6 +1435,8 @@ class RTSPSource(ThreadedClipSource):
 
     def _note_detect_failure(self, now: float) -> bool:
         if not self._detect_stream_available:
+            return False
+        if self._motion_rtsp_url != self.detect_rtsp_url:
             return False
         if self._detect_fallback_active:
             return False
@@ -1478,8 +1484,8 @@ class RTSPSource(ThreadedClipSource):
 
     def _schedule_detect_probe(self, now: float) -> None:
         self._detect_next_probe_at = now + self._detect_probe_backoff_s
-        self._detect_probe_backoff_s = min(
-            self._detect_probe_backoff_s * 1.6,
+        self._detect_probe_backoff_s = _next_backoff(
+            self._detect_probe_backoff_s,
             self._detect_probe_backoff_max_s,
         )
 
@@ -1538,7 +1544,7 @@ class RTSPSource(ThreadedClipSource):
             )
         return False
 
-    def _keepalive_threshold(self) -> float:
+    def _recording_threshold(self) -> float:
         if self.recording_sensitivity_factor <= 0:
             return self.min_changed_pct
         return max(0.0, self.min_changed_pct / self.recording_sensitivity_factor)
@@ -1679,7 +1685,7 @@ class RTSPSource(ThreadedClipSource):
         logger.info(
             "Motion thresholds: idle=%.3f%% recording=%.3f%% (recording_sensitivity_factor=%.2f)",
             self.min_changed_pct,
-            self._keepalive_threshold(),
+            self._recording_threshold(),
             self.recording_sensitivity_factor,
         )
         logger.info("Max reconnect attempts: %s", self.max_reconnect_attempts)
@@ -1815,11 +1821,6 @@ class RTSPSource(ThreadedClipSource):
         ok, _ = self._handle_reconnect_needed(now)
         return ok
 
-    def _recording_motion_threshold(self) -> float:
-        if self.recording_process:
-            return self._keepalive_threshold()
-        return self.min_changed_pct
-
     def _handle_motion_detected(self, now: float, frame_count: int) -> None:
         logger.debug(
             "[MOTION DETECTED at frame %s] changed_pct=%.3f%%",
@@ -1859,7 +1860,11 @@ class RTSPSource(ThreadedClipSource):
         now: float,
         frame_count: int,
     ) -> None:
-        threshold = self._recording_motion_threshold()
+        threshold = (
+            self._recording_threshold()
+            if self.recording_process is not None
+            else self.min_changed_pct
+        )
         motion_detected = self.detect_motion(frame, threshold=threshold)
 
         if motion_detected:

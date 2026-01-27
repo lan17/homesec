@@ -262,7 +262,7 @@ def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
     assert not idle_motion
 
     # When: detecting motion while recording (threshold 15%)
-    recording_threshold = recording_source._keepalive_threshold()
+    recording_threshold = recording_source._recording_threshold()
     _ = recording_source.detect_motion(frame_a, threshold=recording_threshold)
     recording_motion = recording_source.detect_motion(frame_b, threshold=recording_threshold)
 
