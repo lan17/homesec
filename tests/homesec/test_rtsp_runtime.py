@@ -86,10 +86,15 @@ class FakeRecorder:
         self.started: list[Path] = []
         self.stopped: list[DummyProc] = []
         self.dead: set[DummyProc] = set()
+        self.fail_start = False
+        self.start_calls = 0
         self._pid = 1000
 
-    def start(self, output_file: Path, stderr_log: Path) -> DummyProc:
+    def start(self, output_file: Path, stderr_log: Path) -> DummyProc | None:
         _ = stderr_log
+        self.start_calls += 1
+        if self.fail_start:
+            return None
         proc = DummyProc(pid=self._pid)
         self._pid += 1
         self.started.append(output_file)
@@ -289,6 +294,30 @@ def test_recording_restarts_when_dead(tmp_path: Path) -> None:
     # Then: a new recording is started
     assert source.recording_process is not dead_proc
     assert len(recorder.started) == 1
+
+
+def test_recording_start_backoff_throttles_retries(tmp_path: Path) -> None:
+    """Recording start should respect backoff when failures occur."""
+    # Given: a recorder that fails to start
+    recorder = FakeRecorder()
+    recorder.fail_start = True
+    clock = FakeClock()
+    config = _make_config(tmp_path)
+    source = RTSPSource(config, camera_name="cam", recorder=recorder, clock=clock)
+
+    # When: start is called twice without advancing time
+    source.start_recording()
+    source.start_recording()
+
+    # Then: only one attempt is made
+    assert recorder.start_calls == 1
+
+    # When: time advances past the backoff window
+    clock.sleep(0.6)
+    source.start_recording()
+
+    # Then: another attempt is made (still failing)
+    assert recorder.start_calls == 2
 
 
 def test_recording_survives_short_stall(tmp_path: Path) -> None:
