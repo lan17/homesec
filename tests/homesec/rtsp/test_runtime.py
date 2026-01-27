@@ -10,7 +10,9 @@ from unittest.mock import patch
 import numpy as np
 
 from homesec.models.source import RTSPSourceConfig
-from homesec.sources.rtsp.core import RTSPSource
+from homesec.sources.rtsp.core import RTSPRunState, RTSPSource
+from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
+from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 
 
@@ -239,6 +241,52 @@ def test_detect_fallback_activates_after_recording_stops(tmp_path: Path) -> None
     assert source._motion_rtsp_url == source.rtsp_url
 
 
+def test_frame_pipeline_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None:
+    """Frame pipeline should retry without timeout options when unsupported."""
+    # Given: a frame pipeline with timeouts enabled
+    clock = FakeClock()
+    pipeline = FfmpegFramePipeline(
+        output_dir=tmp_path,
+        frame_queue_size=5,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        ffmpeg_flags=[],
+        hwaccel_config=HardwareAccelConfig(hwaccel=None),
+        hwaccel_failed=True,
+        on_frame=lambda: None,
+        clock=clock,
+    )
+
+    attempts: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self, returncode: int | None) -> None:
+            self.returncode = returncode
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+    def fake_popen(cmd: list[str], stdout=None, stderr=None, bufsize=None):  # type: ignore[no-untyped-def]
+        attempts.append(cmd)
+        if len(attempts) == 1:
+            if stderr is not None:
+                stderr.write("Option rw_timeout not found.\n")
+                stderr.flush()
+            return FakeProc(returncode=1)
+        return FakeProc(returncode=None)
+
+    # When: starting the frame pipeline
+    with patch("homesec.sources.rtsp.frame_pipeline.subprocess.Popen", side_effect=fake_popen):
+        proc, stderr_handle, _width, _height = pipeline._get_frame_pipe("rtsp://host/stream")
+
+    # Then: it retries without timeout options and succeeds
+    assert proc.poll() is None
+    assert len(attempts) == 2
+    assert "-rw_timeout" in attempts[0]
+    assert "-rw_timeout" not in attempts[1]
+    stderr_handle.close()
+
+
 def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
     """Recording threshold should be lower than idle threshold."""
     # Given: a source with a 2x recording sensitivity factor
@@ -269,6 +317,34 @@ def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
 
     # Then: recording detection triggers (25% >= 15%)
     assert recording_motion
+
+
+def test_stall_grace_applies_while_recording(tmp_path: Path) -> None:
+    """Recording should enter stall grace window when frames are missing."""
+    # Given: an active recording with recent motion
+    pipeline = FakeFramePipeline(frames=[])
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, stop_delay=10.0)
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+    source.recording_process = DummyProc(pid=1, returncode=None)
+    start_now = clock.now()
+    source.last_motion_time = start_now
+
+    # When: a missing frame triggers reconnect handling
+    with patch.object(source, "_handle_frame_timeout", return_value=False):
+        ok = source._handle_missing_frame(start_now)
+
+    # Then: stall grace is set and we enter STALLED state
+    assert ok
+    assert source._stall_grace_until == start_now + source.motion_stop_delay
+    assert source._run_state == RTSPRunState.STALLED
 
 
 def test_recording_restarts_when_dead(tmp_path: Path) -> None:
