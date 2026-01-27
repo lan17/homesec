@@ -1821,6 +1821,12 @@ class RTSPSource(ThreadedClipSource):
         ok, _ = self._handle_reconnect_needed(now)
         return ok
 
+    def _handle_missing_frame(self, now: float) -> bool:
+        if self._handle_stalled_wait(now):
+            return True
+        ok, _ = self._handle_reconnect_needed(now)
+        return ok
+
     def _handle_motion_detected(self, now: float, frame_count: int) -> None:
         logger.debug(
             "[MOTION DETECTED at frame %s] changed_pct=%.3f%%",
@@ -1922,14 +1928,9 @@ class RTSPSource(ThreadedClipSource):
                 raw_frame = self._frame_pipeline.read_frame(timeout_s=self.frame_timeout_s)
                 if raw_frame is None:
                     now = self._clock.now()
-                    if self._handle_stalled_wait(now):
+                    if self._handle_missing_frame(now):
                         continue
-
-                    ok, _ = self._handle_reconnect_needed(now)
-                    if not ok:
-                        break
-
-                    continue
+                    break
 
                 self._stall_grace_until = None
                 frame_width = self._frame_pipeline.frame_width
