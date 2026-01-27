@@ -604,7 +604,17 @@ class FfmpegRecorder:
         self._clock = clock
 
     def start(self, output_file: Path, stderr_log: Path) -> subprocess.Popen[bytes] | None:
-        cmd = [
+        def _read_tail(path: Path, max_bytes: int = 4000) -> str:
+            try:
+                data = path.read_bytes()
+            except Exception as exc:
+                logger.warning("Failed to read recording stderr tail: %s", exc, exc_info=True)
+                return ""
+            if len(data) <= max_bytes:
+                return data.decode(errors="replace")
+            return data[-max_bytes:].decode(errors="replace")
+
+        cmd_base = [
             "ffmpeg",
             "-rtsp_transport",
             "tcp",
@@ -620,12 +630,13 @@ class FfmpegRecorder:
         timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
         timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
 
+        timeout_args: list[str] = []
         if not has_stimeout and self._rtsp_connect_timeout_s > 0:
-            cmd.extend(["-stimeout", timeout_us_connect])
+            timeout_args.extend(["-stimeout", timeout_us_connect])
         if not has_rw_timeout and self._rtsp_io_timeout_s > 0:
-            cmd.extend(["-rw_timeout", timeout_us_io])
+            timeout_args.extend(["-rw_timeout", timeout_us_io])
 
-        cmd.extend(["-i", self._rtsp_url, "-c", "copy", "-f", "mp4", "-y"])
+        cmd_tail = ["-i", self._rtsp_url, "-c", "copy", "-f", "mp4", "-y"]
 
         # Naive check to see if user overrode defaults
         # If user supplies ANY -loglevel, we don't add ours.
@@ -633,50 +644,61 @@ class FfmpegRecorder:
         # This allows full user control.
         has_loglevel = any(x == "-loglevel" for x in user_flags)
         if not has_loglevel:
-            cmd.extend(["-loglevel", "warning"])
+            cmd_tail.extend(["-loglevel", "warning"])
 
         has_fflags = any(x == "-fflags" for x in user_flags)
         if not has_fflags:
-            cmd.extend(["-fflags", "+genpts+igndts"])
+            cmd_tail.extend(["-fflags", "+genpts+igndts"])
 
         has_fps_mode = any(x == "-fps_mode" or x == "-vsync" for x in user_flags)
         if not has_fps_mode:
-            cmd.extend(["-vsync", "0"])
+            cmd_tail.extend(["-vsync", "0"])
 
         # Add user flags last so they can potentially override or add to the above
-        cmd.extend(user_flags)
+        cmd_tail.extend(user_flags)
+        cmd_tail.extend([str(output_file)])
 
-        cmd.extend([str(output_file)])
+        attempts: list[tuple[str, list[str]]] = []
+        if timeout_args:
+            attempts.append(("timeouts", timeout_args))
+        attempts.append(("no_timeouts" if timeout_args else "default", []))
 
-        safe_cmd = list(cmd)
-        try:
-            idx = safe_cmd.index("-i")
-            safe_cmd[idx + 1] = _redact_rtsp_url(str(safe_cmd[idx + 1]))
-        except Exception as exc:
-            logger.warning("Failed to redact recording RTSP URL: %s", exc, exc_info=True)
-        logger.debug("Recording ffmpeg: %s", _format_cmd(safe_cmd))
+        for label, extra_args in attempts:
+            cmd = list(cmd_base) + list(extra_args) + cmd_tail
 
-        try:
-            with open(stderr_log, "w") as stderr_file:
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+            safe_cmd = list(cmd)
+            try:
+                idx = safe_cmd.index("-i")
+                safe_cmd[idx + 1] = _redact_rtsp_url(str(safe_cmd[idx + 1]))
+            except Exception as exc:
+                logger.warning("Failed to redact recording RTSP URL: %s", exc, exc_info=True)
+            logger.debug("Recording ffmpeg (%s): %s", label, _format_cmd(safe_cmd))
 
-            self._clock.sleep(0.5)
-            if proc.poll() is not None:
-                logger.error("Recording process died immediately (exit code: %s)", proc.returncode)
+            try:
+                with open(stderr_log, "w") as stderr_file:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+
+                self._clock.sleep(0.5)
+                if proc.poll() is None:
+                    return proc
+
+                logger.error(
+                    "Recording process died immediately (%s, exit code: %s)",
+                    label,
+                    proc.returncode,
+                )
                 logger.error("Check logs at: %s", stderr_log)
-                try:
-                    with open(stderr_log) as f:
-                        error_lines = f.read()
-                    if error_lines:
-                        logger.error("Error output: %s", error_lines[:500])
-                except Exception:
-                    logger.exception("Failed reading recording log: %s", stderr_log)
+                stderr_tail = _read_tail(stderr_log)
+                if stderr_tail:
+                    redacted_tail = stderr_tail.replace(
+                        self._rtsp_url, _redact_rtsp_url(self._rtsp_url)
+                    )
+                    logger.error("Recording stderr tail (%s):\n%s", label, redacted_tail)
+            except Exception:
+                logger.exception("Failed to start recording")
                 return None
 
-            return proc
-        except Exception:
-            logger.exception("Failed to start recording")
-            return None
+        return None
 
     def stop(self, proc: subprocess.Popen[bytes], output_file: Path | None) -> None:
         try:
@@ -795,6 +817,10 @@ class RTSPSource(ThreadedClipSource):
         self.output_file: Path | None = None
         self._stderr_log: Path | None = None
         self._recording_id: str | None = None
+        self._recording_restart_backoff_s = 0.0
+        self._recording_restart_backoff_max_s = 10.0
+        self._recording_restart_base_s = 0.5
+        self._recording_next_restart_at: float | None = None
         self._stall_grace_until: float | None = None
         self._motion_detector = MotionDetector(
             pixel_threshold=self.pixel_threshold,
@@ -928,7 +954,7 @@ class RTSPSource(ThreadedClipSource):
         *,
         timeout_s: float = 10.0,
     ) -> dict[str, object] | None:
-        cmd = [
+        base_cmd = [
             "ffprobe",
             "-v",
             "error",
@@ -941,34 +967,54 @@ class RTSPSource(ThreadedClipSource):
             "-rtsp_transport",
             "tcp",
         ]
+        timeout_args: list[str] = []
         if self.rtsp_connect_timeout_s > 0:
             timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-            cmd.extend(["-stimeout", timeout_us_connect])
+            timeout_args.extend(["-stimeout", timeout_us_connect])
         if self.rtsp_io_timeout_s > 0:
             timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
-            cmd.extend(["-rw_timeout", timeout_us_io])
-        cmd.append(rtsp_url)
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-                check=False,
-            )
-            data = json.loads(result.stdout)
-            if not data.get("streams"):
+            timeout_args.extend(["-rw_timeout", timeout_us_io])
+
+        attempts: list[tuple[str, list[str]]] = []
+        if timeout_args:
+            attempts.append(("timeouts", base_cmd + timeout_args + [rtsp_url]))
+        attempts.append(("no_timeouts" if timeout_args else "default", base_cmd + [rtsp_url]))
+
+        for label, cmd in attempts:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_s,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    if "Option rw_timeout not found" in result.stderr or (
+                        "Unrecognized option" in result.stderr and "rw_timeout" in result.stderr
+                    ):
+                        logger.debug("ffprobe missing rw_timeout (%s), retrying", label)
+                    else:
+                        logger.debug(
+                            "ffprobe failed (%s) with exit code %s", label, result.returncode
+                        )
+                    continue
+
+                data = json.loads(result.stdout)
+                if not data.get("streams"):
+                    continue
+                stream = data["streams"][0]
+                return {
+                    "codec_name": stream.get("codec_name"),
+                    "width": stream.get("width"),
+                    "height": stream.get("height"),
+                    "avg_frame_rate": stream.get("avg_frame_rate"),
+                }
+            except Exception as exc:
+                logger.warning("Failed to probe stream info: %s", exc, exc_info=True)
                 return None
-            stream = data["streams"][0]
-            return {
-                "codec_name": stream.get("codec_name"),
-                "width": stream.get("width"),
-                "height": stream.get("height"),
-                "avg_frame_rate": stream.get("avg_frame_rate"),
-            }
-        except Exception as exc:
-            logger.warning("Failed to probe stream info: %s", exc, exc_info=True)
-            return None
+
+        return None
 
     def _redact_rtsp_url(self, url: str) -> str:
         return _redact_rtsp_url(url)
@@ -1039,6 +1085,9 @@ class RTSPSource(ThreadedClipSource):
         """Start ffmpeg recording process with audio."""
         if self.recording_process:
             return
+        now = self._clock.now()
+        if not self._recording_backoff_ready(now):
+            return
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1046,6 +1095,7 @@ class RTSPSource(ThreadedClipSource):
 
         proc = self._recorder.start(output_file, stderr_log)
         if not proc:
+            self._bump_recording_backoff(now)
             logger.error(
                 "Recording failed to start",
                 extra=self._event_extra(
@@ -1063,6 +1113,7 @@ class RTSPSource(ThreadedClipSource):
         self.recording_start_time = self._clock.now()
         self.recording_start_wall = datetime.now()
         self._recording_id = output_file.name
+        self._reset_recording_backoff()
 
         logger.info("Started recording: %s (PID: %s)", output_file, proc.pid)
         logger.debug("Recording logs: %s", stderr_log)
@@ -1325,6 +1376,28 @@ class RTSPSource(ThreadedClipSource):
         if not aggressive:
             return backoff_s
         return min(backoff_s * 1.6, backoff_cap_s)
+
+    def _recording_backoff_ready(self, now: float) -> bool:
+        next_retry = self._recording_next_restart_at
+        if next_retry is None or now >= next_retry:
+            return True
+        remaining = next_retry - now
+        logger.debug("Recording restart backoff active (%.2fs remaining)", remaining)
+        return False
+
+    def _bump_recording_backoff(self, now: float) -> None:
+        if self._recording_restart_backoff_s <= 0:
+            self._recording_restart_backoff_s = self._recording_restart_base_s
+        else:
+            self._recording_restart_backoff_s = min(
+                self._recording_restart_backoff_s * 1.6,
+                self._recording_restart_backoff_max_s,
+            )
+        self._recording_next_restart_at = now + self._recording_restart_backoff_s
+
+    def _reset_recording_backoff(self) -> None:
+        self._recording_restart_backoff_s = 0.0
+        self._recording_next_restart_at = None
 
     def _reconnect_exhausted(self, *, aggressive: bool) -> bool:
         if self.max_reconnect_attempts <= 0:
