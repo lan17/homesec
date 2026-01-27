@@ -366,6 +366,41 @@ def test_recording_retries_without_timeouts_when_unsupported(tmp_path: Path) -> 
     assert "-rw_timeout" not in calls[1]
 
 
+def test_probe_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None:
+    """Stream probe should retry without timeouts when ffprobe rejects them."""
+    # Given: an RTSP source and a fake ffprobe error on timeout options
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam")
+    calls: list[list[str]] = []
+
+    class FakeResult:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd: list[str], **kwargs: object) -> FakeResult:
+        _ = kwargs
+        calls.append(list(cmd))
+        if "-rw_timeout" in cmd or "-stimeout" in cmd:
+            return FakeResult(returncode=1, stderr="Option rw_timeout not found")
+        return FakeResult(
+            returncode=0,
+            stdout='{"streams":[{"codec_name":"h264","width":640,"height":480,"avg_frame_rate":"30/1"}]}',
+        )
+
+    # When: probing the stream info
+    with patch("homesec.sources.rtsp.subprocess.run", side_effect=fake_run):
+        info = source._probe_stream_info(source.rtsp_url)
+
+    # Then: probe retries without timeouts and succeeds
+    assert info is not None
+    assert info["width"] == 640
+    assert len(calls) == 2
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+    assert "-rw_timeout" not in calls[1]
+
+
 def test_recording_survives_short_stall(tmp_path: Path) -> None:
     """Recording should remain active during brief frame stalls."""
 
