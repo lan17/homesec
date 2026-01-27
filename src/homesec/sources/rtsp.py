@@ -943,6 +943,42 @@ class RTSPSource(ThreadedClipSource):
         stderr_log = self.output_dir / f"{prefix}recording_{timestamp}.log"
         return output_file, stderr_log
 
+    def _set_recording_state(
+        self,
+        *,
+        proc: subprocess.Popen[bytes],
+        output_file: Path,
+        stderr_log: Path,
+        start_mono: float,
+        start_wall: datetime,
+    ) -> None:
+        self.recording_process = proc
+        self.output_file = output_file
+        self._stderr_log = stderr_log
+        self.recording_start_time = start_mono
+        self.recording_start_wall = start_wall
+        self._recording_id = output_file.name
+
+    def _clear_recording_state(
+        self,
+    ) -> tuple[
+        subprocess.Popen[bytes] | None,
+        Path | None,
+        float | None,
+        datetime | None,
+    ]:
+        proc = self.recording_process
+        output_file = self.output_file
+        start_mono = self.recording_start_time
+        start_wall = self.recording_start_wall
+        self.recording_process = None
+        self.output_file = None
+        self._stderr_log = None
+        self.recording_start_time = None
+        self.recording_start_wall = None
+        self._recording_id = None
+        return proc, output_file, start_mono, start_wall
+
     def _telemetry_common_fields(self) -> dict[str, object]:
         return {
             "pixel_threshold": self.pixel_threshold,
@@ -1082,17 +1118,10 @@ class RTSPSource(ThreadedClipSource):
                 except Exception as e:
                     logger.warning("Could not read log file: %s", e, exc_info=True)
 
-            start_wall = self.recording_start_wall
-            start_mono = self.recording_start_time
-            self.recording_process = None
-            self.output_file = None
-            self._stderr_log = None
-            self.recording_start_time = None
-            self.recording_start_wall = None
-            self._recording_id = None
-
-            self._stop_recording_process(proc, output_file)
-            self._finalize_clip(output_file, start_wall, start_mono)
+            cleared_proc, cleared_output, start_mono, start_wall = self._clear_recording_state()
+            if cleared_proc is not None:
+                self._stop_recording_process(cleared_proc, cleared_output)
+            self._finalize_clip(cleared_output, start_wall, start_mono)
             return False
         return True
 
@@ -1122,12 +1151,13 @@ class RTSPSource(ThreadedClipSource):
             )
             return
 
-        self.recording_process = proc
-        self.output_file = output_file
-        self._stderr_log = stderr_log
-        self.recording_start_time = self._clock.now()
-        self.recording_start_wall = datetime.now()
-        self._recording_id = output_file.name
+        self._set_recording_state(
+            proc=proc,
+            output_file=output_file,
+            stderr_log=stderr_log,
+            start_mono=self._clock.now(),
+            start_wall=datetime.now(),
+        )
         self._reset_recording_backoff()
 
         logger.info("Started recording: %s (PID: %s)", output_file, proc.pid)
@@ -1150,18 +1180,9 @@ class RTSPSource(ThreadedClipSource):
         if not self.recording_process:
             return
 
-        proc = self.recording_process
-        output_file = self.output_file
-        started_at = self.recording_start_time
-        started_wall = self.recording_start_wall
-        self.recording_process = None
-        self.output_file = None
-        self._stderr_log = None
-        self.recording_start_time = None
-        self.recording_start_wall = None
-        self._recording_id = None
-
-        self._stop_recording_process(proc, output_file)
+        proc, output_file, started_at, started_wall = self._clear_recording_state()
+        if proc is not None:
+            self._stop_recording_process(proc, output_file)
         self._finalize_clip(output_file, started_wall, started_at)
 
         if output_file:
@@ -1217,12 +1238,13 @@ class RTSPSource(ThreadedClipSource):
         new_proc = self._recorder.start(new_output, new_log)
         if new_proc:
             self.last_motion_time = now
-            self.recording_process = new_proc
-            self.output_file = new_output
-            self._stderr_log = new_log
-            self.recording_start_time = now
-            self.recording_start_wall = datetime.now()
-            self._recording_id = new_output.name
+            self._set_recording_state(
+                proc=new_proc,
+                output_file=new_output,
+                stderr_log=new_log,
+                start_mono=now,
+                start_wall=datetime.now(),
+            )
 
             if old_output:
                 logger.info(
@@ -1241,13 +1263,10 @@ class RTSPSource(ThreadedClipSource):
             return
 
         logger.warning("Rotation start failed; stopping current recording and retrying")
-        self.recording_process = None
-        self.output_file = None
-        self.recording_start_time = None
-        self.recording_start_wall = None
-        self._recording_id = None
-        self._stop_recording_process(old_proc, old_output)
-        self._finalize_clip(old_output, old_started_wall, old_started_mono)
+        proc, output_file, started_mono, started_wall = self._clear_recording_state()
+        if proc is not None:
+            self._stop_recording_process(proc, output_file)
+        self._finalize_clip(output_file, started_wall, started_mono)
         self.start_recording()
 
     def _start_frame_pipeline(self) -> None:
