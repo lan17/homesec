@@ -199,6 +199,38 @@ def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     assert source._detect_fallback_active
 
 
+def test_reconnect_defers_detect_fallback_while_recording(tmp_path: Path) -> None:
+    """Reconnect should defer detect fallback when recording is active."""
+    # Given: detect stream always fails while recording is active
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        detect_fallback_attempts=1,
+        max_reconnect_attempts=1,
+    )
+    detect_url = RTSPSource(config, camera_name="cam").detect_rtsp_url
+    pipeline = FakeFramePipeline(fail_urls={detect_url})
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+    source.recording_process = DummyProc(pid=1, returncode=None)
+
+    # When: reconnecting hits detect failures
+    ok = source._reconnect_frame_pipeline(aggressive=True)
+
+    # Then: reconnect fails, fallback is deferred, and detect URL is retained
+    assert not ok
+    assert source._detect_fallback_deferred
+    assert not source._detect_fallback_active
+    assert source._motion_rtsp_url == detect_url
+
+
 def test_detect_fallback_deferred_while_recording(tmp_path: Path) -> None:
     """Detect fallback should defer while recording is active."""
     # Given: detect stream failures during an active recording

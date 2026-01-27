@@ -136,7 +136,14 @@ Build a reliable, pluggable pipeline to:
 
 ## Current Building Blocks (Repo)
 
-- Motion + recording: `src/homesec/sources/rtsp.py` (OpenCV motion detection + ffmpeg recording).
+- Motion + recording: `src/homesec/sources/rtsp/core.py` (OpenCV motion detection + ffmpeg recording).
+  - RTSP helpers live in `src/homesec/sources/rtsp/`:
+    - `frame_pipeline.py` (ffmpeg frame reader + stall/reconnect support)
+    - `recorder.py` (ffmpeg recording process)
+    - `motion.py` (motion detection logic)
+    - `hardware.py` (hwaccel detection)
+    - `clock.py` (clock abstraction for tests)
+    - `utils.py` (shared helpers)
 - Object detection plugin (reference): `src/homesec/plugins/filters/yolo.py` (YOLOv8 sampling to detect people/animals).
 - VLM plugin (reference): `src/homesec/plugins/analyzers/openai.py` (structured output with `risk_level`, `activity_type`, timeline).
 - Postgres (workflow state when available): Alembic migrations (`alembic/`) + telemetry logging (`src/db_log_handler.py`) + workflow state table `clip_states` (best-effort; DB outages may drop state updates).
