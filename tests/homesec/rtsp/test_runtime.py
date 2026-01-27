@@ -921,3 +921,42 @@ def test_detect_switch_failure_falls_back(tmp_path: Path) -> None:
     assert source._motion_rtsp_url == source.rtsp_url
     assert source._detect_next_probe_at == now + 25.0
     assert source._detect_probe_backoff_s == 40.0
+
+
+def test_probe_stream_info_returns_none_on_error(tmp_path: Path) -> None:
+    """ffprobe errors should return None and stop retries."""
+    # Given: a source and an ffprobe failure without timeout option errors
+    config = _make_config(tmp_path)
+    source = RTSPSource(config, camera_name="cam")
+
+    def _fake_run(*_args: object, **_kwargs: object) -> object:
+        class Result:
+            returncode = 1
+            stdout = ""
+            stderr = "Some other ffprobe error"
+
+        return Result()
+
+    # When: probing stream info
+    with patch("homesec.sources.rtsp.core.subprocess.run", side_effect=_fake_run):
+        info = source._probe_stream_info(source.rtsp_url)
+
+    # Then: probe fails and returns None
+    assert info is None
+
+
+def test_probe_stream_info_handles_exception(tmp_path: Path) -> None:
+    """ffprobe exceptions should return None."""
+    # Given: a source and an ffprobe exception
+    config = _make_config(tmp_path)
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: probing stream info raises
+    with patch(
+        "homesec.sources.rtsp.core.subprocess.run",
+        side_effect=RuntimeError("ffprobe crashed"),
+    ):
+        info = source._probe_stream_info(source.rtsp_url)
+
+    # Then: probe fails and returns None
+    assert info is None
