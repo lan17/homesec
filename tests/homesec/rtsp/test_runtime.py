@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from homesec.models.source.rtsp import RTSPSourceConfig
 from homesec.sources.rtsp.core import RTSPRunState, RTSPSource
@@ -127,6 +128,80 @@ def _make_config(tmp_path: Path, **overrides: object) -> RTSPSourceConfig:
     return RTSPSourceConfig.model_validate(data)
 
 
+def test_rtsp_url_env_overrides_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RTSP URL env var should override explicit config."""
+    # Given: a config RTSP URL and a matching env var
+    monkeypatch.setenv("RTSP_URL", "rtsp://env/stream")
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://config/stream",
+        rtsp_url_env="RTSP_URL",
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: the env var value wins
+    assert source.rtsp_url == "rtsp://env/stream"
+
+
+def test_rtsp_url_env_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RTSP source should raise when env var is missing and no URL is provided."""
+    # Given: only an env var name with no value set
+    monkeypatch.delenv("MISSING_RTSP_URL", raising=False)
+    config = _make_config(tmp_path, rtsp_url=None, rtsp_url_env="MISSING_RTSP_URL")
+
+    # When/Then: initialization fails due to missing URL
+    with pytest.raises(ValueError, match="rtsp_url_env or rtsp_url required"):
+        RTSPSource(config, camera_name="cam")
+
+
+def test_detect_stream_explicit_overrides_derived(tmp_path: Path) -> None:
+    """Explicit detect stream should be used even when subtype=0 is present."""
+    # Given: an explicit detect stream URL alongside subtype=0
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        detect_rtsp_url="rtsp://host/stream?subtype=2",
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: explicit detect stream is chosen
+    assert source.detect_rtsp_url == "rtsp://host/stream?subtype=2"
+    assert source._detect_rtsp_url_source == "explicit"
+    assert source._detect_stream_available
+
+
+def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
+    """Subtype=0 URLs should derive a subtype=1 detect stream."""
+    # Given: a subtype=0 main stream with no explicit detect stream
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream?subtype=0")
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: detect stream is derived
+    assert source.detect_rtsp_url == "rtsp://host/stream?subtype=1"
+    assert source._detect_rtsp_url_source == "derived_subtype=1"
+    assert source._detect_stream_available
+
+
+def test_detect_stream_defaults_to_main(tmp_path: Path) -> None:
+    """Detect stream should default to main stream when no subtype is available."""
+    # Given: a main stream without subtype and no detect stream
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: detect stream equals main stream
+    assert source.detect_rtsp_url == source.rtsp_url
+    assert source._detect_rtsp_url_source == "same_as_rtsp_url"
+    assert not source._detect_stream_available
+
+
 def test_reconnect_retries_until_success(tmp_path: Path) -> None:
     """Reconnect should retry until a pipeline starts when attempts are infinite."""
     # Given: a pipeline that fails twice then succeeds
@@ -171,6 +246,36 @@ def test_reconnect_respects_max_attempts_exact(tmp_path: Path) -> None:
     # Then: reconnect fails after exactly max attempts
     assert not ok
     assert len(pipeline.start_calls) == 2
+
+
+def test_reconnect_exhausted_returns_true(tmp_path: Path) -> None:
+    """Reconnect exhaustion should return true once max attempts are reached."""
+    # Given: a source with a finite reconnect limit
+    pipeline = FakeFramePipeline()
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, reconnect={"max_attempts": 2})
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+
+    # When: below the max attempt threshold
+    source.reconnect_count = 1
+    exhausted_before = source._reconnect_exhausted(aggressive=True)
+
+    # Then: reconnect is not exhausted yet
+    assert not exhausted_before
+
+    # When: attempts reach the max
+    source.reconnect_count = 2
+    exhausted_after = source._reconnect_exhausted(aggressive=True)
+
+    # Then: reconnect is exhausted
+    assert exhausted_after
 
 
 def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
