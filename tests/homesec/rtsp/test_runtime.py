@@ -156,6 +156,48 @@ def test_rtsp_url_env_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
         RTSPSource(config, camera_name="cam")
 
 
+def test_detect_rtsp_url_env_overrides_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detect RTSP env var should override explicit detect URL."""
+    # Given: a detect RTSP URL and a matching env var
+    monkeypatch.setenv("DETECT_URL", "rtsp://env/detect")
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream",
+        detect_rtsp_url="rtsp://config/detect",
+        detect_rtsp_url_env="DETECT_URL",
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: detect URL comes from the env var
+    assert source.detect_rtsp_url == "rtsp://env/detect"
+    assert source._detect_rtsp_url_source == "explicit"
+
+
+def test_detect_rtsp_url_env_missing_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing detect env var should fall back to explicit detect URL."""
+    # Given: a detect RTSP URL and a missing env var
+    monkeypatch.delenv("DETECT_URL", raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        detect_rtsp_url="rtsp://config/detect",
+        detect_rtsp_url_env="DETECT_URL",
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: explicit detect URL is used
+    assert source.detect_rtsp_url == "rtsp://config/detect"
+    assert source._detect_rtsp_url_source == "explicit"
+
+
 def test_detect_stream_explicit_overrides_derived(tmp_path: Path) -> None:
     """Explicit detect stream should be used even when subtype=0 is present."""
     # Given: an explicit detect stream URL alongside subtype=0
@@ -172,6 +214,44 @@ def test_detect_stream_explicit_overrides_derived(tmp_path: Path) -> None:
     assert source.detect_rtsp_url == "rtsp://host/stream?subtype=2"
     assert source._detect_rtsp_url_source == "explicit"
     assert source._detect_stream_available
+
+
+def test_disable_hwaccel_skips_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disabling hwaccel should skip detection and force software decode."""
+
+    # Given: hardware accel disabled
+    def _boom(_: str) -> HardwareAccelConfig:
+        raise AssertionError("HardwareAccelDetector.detect should not run")
+
+    monkeypatch.setattr("homesec.sources.rtsp.core.HardwareAccelDetector.detect", _boom)
+    config = _make_config(tmp_path, stream={"disable_hwaccel": True})
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: software decode is forced
+    assert source.hwaccel_config.hwaccel is None
+    assert not source.hwaccel_config.is_available
+
+
+def test_hwaccel_detection_used_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hardware accel detection should run when not disabled."""
+
+    # Given: a detector that returns a CUDA config
+    def _detect(_: str) -> HardwareAccelConfig:
+        return HardwareAccelConfig(hwaccel="cuda")
+
+    monkeypatch.setattr("homesec.sources.rtsp.core.HardwareAccelDetector.detect", _detect)
+    config = _make_config(tmp_path, stream={"disable_hwaccel": False})
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: hwaccel config is applied
+    assert source.hwaccel_config.hwaccel == "cuda"
+    assert source.hwaccel_config.is_available
 
 
 def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
@@ -246,6 +326,30 @@ def test_reconnect_respects_max_attempts_exact(tmp_path: Path) -> None:
     # Then: reconnect fails after exactly max attempts
     assert not ok
     assert len(pipeline.start_calls) == 2
+
+
+def test_reconnect_no_frames_exhausts(tmp_path: Path) -> None:
+    """Reconnect should stop when no frames arrive and attempts are exhausted."""
+    # Given: a frame pipeline that starts but yields no frames
+    pipeline = FakeFramePipeline(frames=[])
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, reconnect={"max_attempts": 1})
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+
+    # When: reconnecting aggressively with no frames available
+    ok = source._reconnect_frame_pipeline(aggressive=True)
+
+    # Then: reconnect stops after the single attempt
+    assert not ok
+    assert pipeline.start_calls == [source.detect_rtsp_url]
+    assert not pipeline.is_running()
 
 
 def test_reconnect_exhausted_returns_true(tmp_path: Path) -> None:
@@ -763,3 +867,27 @@ def test_detect_stream_recovers_after_probe(tmp_path: Path) -> None:
     assert not source._detect_fallback_active
     assert source._motion_rtsp_url == source.detect_rtsp_url
     assert pipeline.start_calls[-1] == source.detect_rtsp_url
+
+
+def test_detect_probe_schedules_backoff(tmp_path: Path) -> None:
+    """Failed detect probe should schedule a backoff before retry."""
+    # Given: detect fallback active and a failing probe
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream?subtype=0")
+    source = RTSPSource(config, camera_name="cam")
+    now = 0.0
+    source._activate_detect_fallback(now)
+    source._detect_next_probe_at = 0.0
+
+    def _probe(_: str, *, timeout_s: float = 3.0) -> dict[str, object] | None:
+        _ = timeout_s
+        return None
+
+    source._probe_stream_info = _probe  # type: ignore[assignment]
+
+    # When: attempting to recover the detect stream
+    ok = source._maybe_recover_detect_stream(now)
+
+    # Then: probe is scheduled with backoff and recovery fails
+    assert not ok
+    assert source._detect_next_probe_at == now + 25.0
+    assert source._detect_probe_backoff_s == 40.0
