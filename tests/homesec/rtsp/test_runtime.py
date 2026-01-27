@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -353,6 +354,68 @@ def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
 
     # Then: recording detection triggers (25% >= 15%)
     assert recording_motion
+
+
+def test_stop_delay_resets_on_motion(tmp_path: Path) -> None:
+    """Motion should reset the stop-delay countdown while recording."""
+    # Given: an active recording with a stop_delay of 10s
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, recording={"stop_delay": 10.0})
+    source = RTSPSource(config, camera_name="cam", recorder=recorder, clock=clock)
+    proc = DummyProc(pid=1, returncode=None)
+    source.recording_process = proc
+    source.last_motion_time = 0.0
+
+    # When: motion is detected again at t=9s
+    source._handle_motion_detected(9.0, frame_count=1)
+
+    # Then: the stop-delay window is reset
+    assert source.last_motion_time == 9.0
+
+    # When: updating state shortly after (t=10.5s)
+    source._update_recording_state(10.5)
+
+    # Then: recording is still active
+    assert source.recording_process is proc
+
+    # When: updating state after the new stop-delay expires (t=19.1s)
+    source._update_recording_state(19.1)
+
+    # Then: recording stops
+    assert source.recording_process is None
+    assert source.last_motion_time is None
+
+
+def test_recording_rotates_after_max_duration(tmp_path: Path) -> None:
+    """Recording should rotate when max duration is exceeded during motion."""
+    # Given: a recording that has exceeded max_recording_s with recent motion
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, recording={"max_recording_s": 5.0, "stop_delay": 10.0})
+    source = RTSPSource(config, camera_name="cam", recorder=recorder, clock=clock)
+    old_proc = DummyProc(pid=42, returncode=None)
+    old_output = tmp_path / "old_motion.mp4"
+    old_log = tmp_path / "old_recording.log"
+    source._set_recording_state(
+        proc=old_proc,
+        output_file=old_output,
+        stderr_log=old_log,
+        start_mono=0.0,
+        start_wall=datetime.now(),
+    )
+    source.last_motion_time = 4.0
+    clock.sleep(6.0)
+
+    # When: checking for rotation at t=6s
+    source._rotate_recording_if_needed()
+
+    # Then: a new recording is started and the old one is stopped
+    assert recorder.started
+    assert recorder.stopped == [old_proc]
+    assert source.recording_process is not old_proc
+    assert source.recording_start_time == clock.now()
+    assert source.last_motion_time == clock.now()
 
 
 def test_stall_grace_applies_while_recording(tmp_path: Path) -> None:
