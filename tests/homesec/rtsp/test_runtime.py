@@ -891,3 +891,33 @@ def test_detect_probe_schedules_backoff(tmp_path: Path) -> None:
     assert not ok
     assert source._detect_next_probe_at == now + 25.0
     assert source._detect_probe_backoff_s == 40.0
+
+
+def test_detect_switch_failure_falls_back(tmp_path: Path) -> None:
+    """Detect switch failure should fall back to main stream and reschedule probes."""
+    # Given: detect fallback active and a successful probe result
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream?subtype=0")
+    source = RTSPSource(config, camera_name="cam")
+    now = 0.0
+    source._activate_detect_fallback(now)
+    source._detect_next_probe_at = now
+
+    def _probe(_: str, *, timeout_s: float = 3.0) -> dict[str, object] | None:
+        _ = timeout_s
+        return {"width": 640, "height": 480}
+
+    def _fail_start() -> None:
+        raise RuntimeError("switch failed")
+
+    source._probe_stream_info = _probe  # type: ignore[assignment]
+    source._start_frame_pipeline = _fail_start  # type: ignore[assignment]
+
+    # When: attempting to recover the detect stream
+    ok = source._maybe_recover_detect_stream(now)
+
+    # Then: fallback remains active and a new probe is scheduled
+    assert not ok
+    assert source._detect_fallback_active
+    assert source._motion_rtsp_url == source.rtsp_url
+    assert source._detect_next_probe_at == now + 25.0
+    assert source._detect_probe_backoff_s == 40.0
