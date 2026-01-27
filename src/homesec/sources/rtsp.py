@@ -762,7 +762,7 @@ class RTSPSource(ThreadedClipSource):
 
         self.pixel_threshold = int(config.pixel_threshold)
         self.min_changed_pct = float(config.min_changed_pct)
-        self.recording_sensitivity_factor = max(1.0, float(config.recording_sensitivity_factor))
+        self.recording_sensitivity_factor = float(config.recording_sensitivity_factor)
         self.blur_kernel = self._normalize_blur_kernel(config.blur_kernel)
         self.motion_stop_delay = float(config.stop_delay)
         self.max_recording_s = float(config.max_recording_s)
@@ -1768,6 +1768,10 @@ class RTSPSource(ThreadedClipSource):
 
         self._update_recording_state(now)
 
+    # State flow (simplified):
+    # Idle -> Recording (motion)
+    # Recording -> Stalled (frame timeout) -> Reconnecting -> Recording/Idle
+    # Recording -> Idle (no motion for stop_delay)
     def _run(self) -> None:
         """Start monitoring camera for motion and recording videos."""
         self._log_startup_info()

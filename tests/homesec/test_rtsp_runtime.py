@@ -41,6 +41,7 @@ class FakeFramePipeline:
         self.start_calls: list[str] = []
         self._running = False
         self._exit_code: int | None = None
+        self.frames_read = 0
 
     def start(self, rtsp_url: str) -> None:
         self.start_calls.append(rtsp_url)
@@ -61,6 +62,7 @@ class FakeFramePipeline:
         if not self._running:
             return None
         if self._frames:
+            self.frames_read += 1
             return self._frames.pop(0)
         if self._on_empty:
             self._on_empty()
@@ -289,6 +291,7 @@ def test_recording_survives_short_stall(tmp_path: Path) -> None:
     assert recorder.started
     assert not recorder.stopped
     assert source.recording_process is not None
+    assert pipeline.frames_read == 2
 
 
 def test_detect_stream_recovers_after_probe(tmp_path: Path) -> None:

@@ -30,7 +30,7 @@ cameras:
         # Motion detection settings
         pixel_threshold: 45        # Pixel difference threshold (0-255)
         min_changed_pct: 1.0       # Min % of frame that must change
-        recording_sensitivity_factor: 2.0  # Recording keepalive sensitivity (2x by default)
+        recording_sensitivity_factor: 2.0  # Recording keepalive sensitivity (>=1.0, 2x by default)
         blur_kernel: 5             # Blur kernel size (reduces noise)
         stop_delay: 10             # Seconds of no motion before stopping
         max_recording_s: 60        # Max clip length

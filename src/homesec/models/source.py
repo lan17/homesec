@@ -18,7 +18,7 @@ class RTSPSourceConfig(BaseModel):
     output_dir: str = "./recordings"
     pixel_threshold: int = 45
     min_changed_pct: float = 1.0
-    recording_sensitivity_factor: float = Field(default=2.0, gt=0)
+    recording_sensitivity_factor: float = Field(default=2.0, ge=1.0)
     blur_kernel: int = 5
     stop_delay: float = 10.0
     max_recording_s: float = 60.0
