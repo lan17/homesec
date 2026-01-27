@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from homesec.models.source import RTSPSourceConfig
+from homesec.models.source.rtsp import RTSPSourceConfig
 from homesec.sources.rtsp.core import RTSPSource
 
 
@@ -12,7 +12,7 @@ def _make_source(tmp_path: Path) -> RTSPSource:
     config = RTSPSourceConfig(
         rtsp_url="rtsp://user:pass@camera/stream?subtype=0",
         output_dir=str(tmp_path),
-        disable_hwaccel=True,
+        stream={"disable_hwaccel": True},
     )
     return RTSPSource(config, camera_name="Front Door #1")
 

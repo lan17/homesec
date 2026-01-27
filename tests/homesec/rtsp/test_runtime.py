@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from homesec.models.source import RTSPSourceConfig
+from homesec.models.source.rtsp import RTSPSourceConfig
 from homesec.sources.rtsp.core import RTSPRunState, RTSPSource
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
@@ -116,8 +116,12 @@ def _make_config(tmp_path: Path, **overrides: object) -> RTSPSourceConfig:
     data: dict[str, object] = {
         "rtsp_url": "rtsp://host/stream",
         "output_dir": str(tmp_path),
-        "disable_hwaccel": True,
+        "stream": {"disable_hwaccel": True},
     }
+    for key in ("motion", "recording", "stream", "reconnect", "runtime"):
+        if key in overrides:
+            data.setdefault(key, {})
+            data[key].update(overrides.pop(key))
     data.update(overrides)
     return RTSPSourceConfig.model_validate(data)
 
@@ -128,7 +132,7 @@ def test_reconnect_retries_until_success(tmp_path: Path) -> None:
     pipeline = FakeFramePipeline(frames=[b"0000"], fail_start_times=2)
     recorder = FakeRecorder()
     clock = FakeClock()
-    config = _make_config(tmp_path, max_reconnect_attempts=0)
+    config = _make_config(tmp_path, reconnect={"max_attempts": 0})
     source = RTSPSource(
         config,
         camera_name="cam",
@@ -146,12 +150,12 @@ def test_reconnect_retries_until_success(tmp_path: Path) -> None:
 
 
 def test_reconnect_respects_max_attempts_exact(tmp_path: Path) -> None:
-    """Reconnect should attempt exactly max_reconnect_attempts times."""
+    """Reconnect should attempt exactly max_attempts times."""
     # Given: a pipeline that always fails to start
     pipeline = FakeFramePipeline(fail_start_times=5)
     recorder = FakeRecorder()
     clock = FakeClock()
-    config = _make_config(tmp_path, max_reconnect_attempts=2)
+    config = _make_config(tmp_path, reconnect={"max_attempts": 2})
     source = RTSPSource(
         config,
         camera_name="cam",
@@ -174,8 +178,7 @@ def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     config = _make_config(
         tmp_path,
         rtsp_url="rtsp://host/stream?subtype=0",
-        detect_fallback_attempts=2,
-        max_reconnect_attempts=5,
+        reconnect={"detect_fallback_attempts": 2, "max_attempts": 5},
     )
     detect_url = RTSPSource(config, camera_name="cam").detect_rtsp_url
     pipeline = FakeFramePipeline(frames=[b"0000"], fail_urls={detect_url})
@@ -205,8 +208,7 @@ def test_reconnect_defers_detect_fallback_while_recording(tmp_path: Path) -> Non
     config = _make_config(
         tmp_path,
         rtsp_url="rtsp://host/stream?subtype=0",
-        detect_fallback_attempts=1,
-        max_reconnect_attempts=1,
+        reconnect={"detect_fallback_attempts": 1, "max_attempts": 1},
     )
     detect_url = RTSPSource(config, camera_name="cam").detect_rtsp_url
     pipeline = FakeFramePipeline(fail_urls={detect_url})
@@ -237,7 +239,7 @@ def test_detect_fallback_deferred_while_recording(tmp_path: Path) -> None:
     config = _make_config(
         tmp_path,
         rtsp_url="rtsp://host/stream?subtype=0",
-        detect_fallback_attempts=1,
+        reconnect={"detect_fallback_attempts": 1},
     )
     source = RTSPSource(config, camera_name="cam")
     source.recording_process = DummyProc(pid=7, returncode=None)
@@ -257,7 +259,7 @@ def test_detect_fallback_activates_after_recording_stops(tmp_path: Path) -> None
     config = _make_config(
         tmp_path,
         rtsp_url="rtsp://host/stream?subtype=0",
-        detect_fallback_attempts=1,
+        reconnect={"detect_fallback_attempts": 1},
     )
     source = RTSPSource(config, camera_name="cam")
     source.recording_process = DummyProc(pid=9, returncode=None)
@@ -324,10 +326,12 @@ def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
     # Given: a source with a 2x recording sensitivity factor
     config = _make_config(
         tmp_path,
-        min_changed_pct=30.0,
-        recording_sensitivity_factor=2.0,
-        pixel_threshold=1,
-        blur_kernel=0,
+        motion={
+            "min_changed_pct": 30.0,
+            "recording_sensitivity_factor": 2.0,
+            "pixel_threshold": 1,
+            "blur_kernel": 0,
+        },
     )
     idle_source = RTSPSource(config, camera_name="cam")
     recording_source = RTSPSource(config, camera_name="cam")
@@ -357,7 +361,7 @@ def test_stall_grace_applies_while_recording(tmp_path: Path) -> None:
     pipeline = FakeFramePipeline(frames=[])
     recorder = FakeRecorder()
     clock = FakeClock()
-    config = _make_config(tmp_path, stop_delay=10.0)
+    config = _make_config(tmp_path, recording={"stop_delay": 10.0})
     source = RTSPSource(
         config,
         camera_name="cam",
@@ -529,11 +533,10 @@ def test_recording_survives_short_stall(tmp_path: Path) -> None:
     clock = FakeClock()
     config = _make_config(
         tmp_path,
-        blur_kernel=0,
-        min_changed_pct=1.0,
-        stop_delay=10.0,
-        frame_timeout_s=0.1,
-        max_reconnect_attempts=1,
+        motion={"blur_kernel": 0, "min_changed_pct": 1.0},
+        recording={"stop_delay": 10.0},
+        runtime={"frame_timeout_s": 0.1},
+        reconnect={"max_attempts": 1},
     )
     source = TestRTSPSource(
         config,
@@ -561,7 +564,7 @@ def test_detect_stream_recovers_after_probe(tmp_path: Path) -> None:
     config = _make_config(
         tmp_path,
         rtsp_url="rtsp://host/stream?subtype=0",
-        detect_fallback_attempts=1,
+        reconnect={"detect_fallback_attempts": 1},
     )
     pipeline = FakeFramePipeline(frames=[b"0000"])
     recorder = FakeRecorder()

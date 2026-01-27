@@ -25,7 +25,9 @@ from homesec.models.config import (
 )
 from homesec.models.enums import RiskLevel, RiskLevelField
 from homesec.models.filter import FilterConfig, FilterOverrides, FilterResult, YoloFilterSettings
-from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSPSourceConfig
+from homesec.models.source.ftp import FtpSourceConfig
+from homesec.models.source.local_folder import LocalFolderSourceConfig
+from homesec.models.source.rtsp import RTSPSourceConfig
 from homesec.models.vlm import (
     AnalysisResult,
     EntityTimeline,

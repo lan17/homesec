@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homesec.interfaces import ClipSource
-from homesec.models.source import LocalFolderSourceConfig
+from homesec.models.source.local_folder import LocalFolderSourceConfig
 from homesec.plugins.registry import PluginType, plugin
 from homesec.sources.local_folder import LocalFolderSource as LocalFolderSourceImpl
 

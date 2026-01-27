@@ -24,20 +24,30 @@ cameras:
         rtsp_url_env: FRONT_DOOR_RTSP_URL
         # Optional: separate low-res stream for motion detection
         # detect_rtsp_url_env: FRONT_DOOR_RTSP_SUB_URL
-        # Customize ffmpeg behavior (e.g., for flaky TCP streams)
-        ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
         output_dir: "./recordings"
-        # Motion detection settings
-        pixel_threshold: 45        # Pixel difference threshold (0-255)
-        min_changed_pct: 1.0       # Min % of frame that must change
-        recording_sensitivity_factor: 2.0  # Recording keepalive sensitivity (>=1.0, 2x by default)
-        blur_kernel: 5             # Blur kernel size (reduces noise)
-        stop_delay: 10             # Seconds of no motion before stopping
-        max_recording_s: 60        # Max clip length
-        frame_timeout_s: 2.0       # Timeout waiting for frames
-        reconnect_backoff_s: 1.0   # Backoff between reconnects
-        max_reconnect_attempts: 0  # 0 = retry forever
-        detect_fallback_attempts: 3  # Switch detect stream to main after N failures
+        stream:
+          # Customize ffmpeg behavior (e.g., for flaky TCP streams)
+          ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
+          connect_timeout_s: 2.0  # RTSP connect timeout (seconds)
+          io_timeout_s: 2.0       # RTSP I/O timeout (seconds)
+          disable_hwaccel: false
+        motion:
+          pixel_threshold: 45        # Pixel difference threshold (0-255)
+          min_changed_pct: 1.0       # Min % of frame that must change (idle)
+          recording_sensitivity_factor: 2.0  # Recording keepalive sensitivity (>=1.0)
+          blur_kernel: 5             # Blur kernel size (reduces noise)
+        recording:
+          stop_delay: 10             # Seconds of no motion before stopping
+          max_recording_s: 60        # Max clip length before rotation
+        runtime:
+          frame_timeout_s: 2.0       # Timeout waiting for frames
+          frame_queue_size: 20       # Frame queue size
+          heartbeat_s: 30.0          # Heartbeat log interval
+          debug_motion: false
+        reconnect:
+          backoff_s: 1.0             # Backoff between reconnects
+          max_attempts: 0            # 0 = retry forever
+          detect_fallback_attempts: 3  # Switch detect stream to main after N failures
 
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera

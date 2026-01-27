@@ -16,7 +16,7 @@ from homesec.models.config import (
     StorageConfig,
 )
 from homesec.models.filter import FilterConfig, YoloFilterSettings
-from homesec.models.source import LocalFolderSourceConfig
+from homesec.models.source.local_folder import LocalFolderSourceConfig
 from homesec.models.storage import StorageUploadResult
 from homesec.models.vlm import OpenAILLMConfig, VLMConfig
 from homesec.plugins.notifiers import MultiplexNotifier

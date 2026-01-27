@@ -19,7 +19,7 @@ import numpy as np
 import numpy.typing as npt
 
 from homesec.models.clip import Clip
-from homesec.models.source import RTSPSourceConfig
+from homesec.models.source.rtsp import RTSPSourceConfig
 from homesec.sources.base import ThreadedClipSource
 from homesec.sources.rtsp.clock import Clock, SystemClock
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeline
@@ -93,24 +93,24 @@ class RTSPSource(ThreadedClipSource):
         sanitized_name = self._sanitize_camera_name(camera_name)
         self.camera_name = sanitized_name or camera_name
 
-        self.pixel_threshold = int(config.pixel_threshold)
-        self.min_changed_pct = float(config.min_changed_pct)
-        self.recording_sensitivity_factor = float(config.recording_sensitivity_factor)
-        self.blur_kernel = self._normalize_blur_kernel(config.blur_kernel)
-        self.motion_stop_delay = float(config.stop_delay)
-        self.max_recording_s = float(config.max_recording_s)
-        self.max_reconnect_attempts = int(config.max_reconnect_attempts)
-        self.detect_fallback_attempts = int(config.detect_fallback_attempts)
-        self.debug_motion = bool(config.debug_motion)
-        self.heartbeat_s = float(config.heartbeat_s)
-        self.frame_timeout_s = float(config.frame_timeout_s)
-        self.frame_queue_size = int(config.frame_queue_size)
-        self.reconnect_backoff_s = float(config.reconnect_backoff_s)
-        self.rtsp_connect_timeout_s = float(config.rtsp_connect_timeout_s)
-        self.rtsp_io_timeout_s = float(config.rtsp_io_timeout_s)
-        self.ffmpeg_flags = list(config.ffmpeg_flags)
+        self.pixel_threshold = int(config.motion.pixel_threshold)
+        self.min_changed_pct = float(config.motion.min_changed_pct)
+        self.recording_sensitivity_factor = float(config.motion.recording_sensitivity_factor)
+        self.blur_kernel = self._normalize_blur_kernel(config.motion.blur_kernel)
+        self.motion_stop_delay = float(config.recording.stop_delay)
+        self.max_recording_s = float(config.recording.max_recording_s)
+        self.max_reconnect_attempts = int(config.reconnect.max_attempts)
+        self.detect_fallback_attempts = int(config.reconnect.detect_fallback_attempts)
+        self.debug_motion = bool(config.runtime.debug_motion)
+        self.heartbeat_s = float(config.runtime.heartbeat_s)
+        self.frame_timeout_s = float(config.runtime.frame_timeout_s)
+        self.frame_queue_size = int(config.runtime.frame_queue_size)
+        self.reconnect_backoff_s = float(config.reconnect.backoff_s)
+        self.rtsp_connect_timeout_s = float(config.stream.connect_timeout_s)
+        self.rtsp_io_timeout_s = float(config.stream.io_timeout_s)
+        self.ffmpeg_flags = list(config.stream.ffmpeg_flags)
 
-        if config.disable_hwaccel:
+        if config.stream.disable_hwaccel:
             logger.info("Hardware acceleration manually disabled")
             self.hwaccel_config = HardwareAccelConfig(hwaccel=None)
             self._hwaccel_failed = True

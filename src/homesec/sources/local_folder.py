@@ -14,7 +14,7 @@ from pathlib import Path
 from anyio import Path as AsyncPath
 
 from homesec.models.clip import Clip
-from homesec.models.source import LocalFolderSourceConfig
+from homesec.models.source.local_folder import LocalFolderSourceConfig
 from homesec.sources.base import AsyncClipSource
 
 logger = logging.getLogger(__name__)
