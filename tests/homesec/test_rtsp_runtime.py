@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 from homesec.models.source import RTSPSourceConfig
-from homesec.sources.rtsp import RTSPSource
+from homesec.sources.rtsp import FfmpegRecorder, RTSPSource
 
 
 class FakeClock:
@@ -318,6 +319,51 @@ def test_recording_start_backoff_throttles_retries(tmp_path: Path) -> None:
 
     # Then: another attempt is made (still failing)
     assert recorder.start_calls == 2
+
+
+def test_recording_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None:
+    """Recording should retry without timeout flags when ffmpeg rejects them."""
+    # Given: a recorder and a fake ffmpeg that rejects timeout flags
+    clock = FakeClock()
+    recorder = FfmpegRecorder(
+        rtsp_url="rtsp://host/stream",
+        ffmpeg_flags=[],
+        rtsp_connect_timeout_s=1.0,
+        rtsp_io_timeout_s=1.0,
+        clock=clock,
+    )
+    output_file = tmp_path / "clip.mp4"
+    stderr_log = tmp_path / "clip.log"
+    calls: list[list[str]] = []
+
+    class DummyPopen:
+        def __init__(self, returncode: int | None) -> None:
+            self._returncode = returncode
+            self.returncode = returncode
+            self.pid = 1234
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> DummyPopen:
+        calls.append(list(cmd))
+        stderr = kwargs.get("stderr")
+        if "-rw_timeout" in cmd or "-stimeout" in cmd:
+            if hasattr(stderr, "write"):
+                stderr.write("Option rw_timeout not found.\n")
+                stderr.flush()
+            return DummyPopen(returncode=1)
+        return DummyPopen(returncode=None)
+
+    # When: starting a recording
+    with patch("homesec.sources.rtsp.subprocess.Popen", side_effect=fake_popen):
+        proc = recorder.start(output_file, stderr_log)
+
+    # Then: fallback removes timeout flags and succeeds
+    assert proc is not None
+    assert len(calls) == 2
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+    assert "-rw_timeout" not in calls[1]
 
 
 def test_recording_survives_short_stall(tmp_path: Path) -> None:
