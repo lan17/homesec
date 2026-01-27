@@ -2,6 +2,112 @@
 
 <!-- version list -->
 
+## v1.2.2 (2026-01-27)
+
+### Bug Fixes
+
+- Align recording sensitivity constraints ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Defer rtsp detect fallback while recording ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Harden rtsp recording retries ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Honor exact rtsp reconnect attempts ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Improve rtsp reconnect and fallback ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Make recording motion threshold more sensitive ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+### Chores
+
+- Remove rtsp improvements plan from repo ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+### Documentation
+
+- Add homesec db logs skill ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+### Refactoring
+
+- Centralize rtsp recording state ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Export rtsp public api ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Extract rtsp motion detector ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Make rtsp pipeline lifecycle explicit ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Reorganize source configs ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Restrict rtsp package exports ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Simplify rtsp run loop ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Simplify rtsp run loop and probes ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Split rtsp into package modules ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Tighten rtsp detect fallback and backoff ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+### Testing
+
+- Add rtsp reconnect deferral coverage ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Add rtsp stall and detect recovery coverage ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover detect switch fallback ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover ffmpeg timeout fallback ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover ffprobe error handling ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover ffprobe timeout fallback ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover recording start backoff ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover rtsp frame pipeline edge cases ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Cover rtsp recording timers ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Expand rtsp config coverage ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Expand rtsp coverage and regroup tests ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Harden rtsp config paths ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+- Harden rtsp hardware detection ([#16](https://github.com/lan17/homesec/pull/16),
+  [`8ac42d2`](https://github.com/lan17/homesec/commit/8ac42d2e828cf2c5e9f7c0cc5da32b677ddbbd54))
+
+
 ## v1.2.1 (2026-01-19)
 
 ### Bug Fixes
