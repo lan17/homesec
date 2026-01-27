@@ -51,6 +51,13 @@ def _format_cmd(cmd: list[str]) -> str:
         return " ".join([str(x) for x in cmd])
 
 
+def _is_timeout_option_error(stderr_text: str) -> bool:
+    text = stderr_text.lower()
+    return ("rw_timeout" in text and ("not found" in text or "unrecognized option" in text)) or (
+        "stimeout" in text and ("not found" in text or "unrecognized option" in text)
+    )
+
+
 @dataclass
 class HardwareAccelConfig:
     """Configuration for hardware-accelerated video decoding."""
@@ -694,6 +701,13 @@ class FfmpegRecorder:
                         self._rtsp_url, _redact_rtsp_url(self._rtsp_url)
                     )
                     logger.error("Recording stderr tail (%s):\n%s", label, redacted_tail)
+                    if label == "timeouts" and _is_timeout_option_error(stderr_tail):
+                        logger.warning(
+                            "Recording ffmpeg missing timeout options; retrying without timeouts"
+                        )
+                        continue
+                if label == "timeouts":
+                    return None
             except Exception:
                 logger.exception("Failed to start recording")
                 return None
@@ -851,6 +865,7 @@ class RTSPSource(ThreadedClipSource):
         self._motion_rtsp_url = self.detect_rtsp_url
         self._detect_stream_available = self.detect_rtsp_url != self.rtsp_url
         self._detect_fallback_active = False
+        self._detect_fallback_deferred = False
         self._detect_failure_count = 0
         self._detect_next_probe_at: float | None = None
         self._detect_probe_interval_s = 25.0
@@ -990,15 +1005,11 @@ class RTSPSource(ThreadedClipSource):
                     check=False,
                 )
                 if result.returncode != 0:
-                    if "Option rw_timeout not found" in result.stderr or (
-                        "Unrecognized option" in result.stderr and "rw_timeout" in result.stderr
-                    ):
-                        logger.debug("ffprobe missing rw_timeout (%s), retrying", label)
-                    else:
-                        logger.debug(
-                            "ffprobe failed (%s) with exit code %s", label, result.returncode
-                        )
-                    continue
+                    if _is_timeout_option_error(result.stderr):
+                        logger.debug("ffprobe missing timeout options (%s), retrying", label)
+                        continue
+                    logger.debug("ffprobe failed (%s) with exit code %s", label, result.returncode)
+                    break
 
                 data = json.loads(result.stdout)
                 if not data.get("streams"):
@@ -1332,6 +1343,7 @@ class RTSPSource(ThreadedClipSource):
                 )
                 self.reconnect_count = 0
                 self._detect_failure_count = 0
+                self._detect_fallback_deferred = False
                 return True
 
             logger.warning("Frame pipeline restarted but still no frames; retrying...")
@@ -1425,8 +1437,24 @@ class RTSPSource(ThreadedClipSource):
         if self.detect_fallback_attempts <= 0:
             return False
 
-        self._detect_failure_count += 1
+        self._detect_failure_count = min(
+            self._detect_failure_count + 1,
+            self.detect_fallback_attempts,
+        )
         if self._detect_failure_count < self.detect_fallback_attempts:
+            return False
+
+        if self.recording_process is not None:
+            if not self._detect_fallback_deferred:
+                logger.warning(
+                    "Detect fallback deferred while recording",
+                    extra=self._event_extra(
+                        "detect_fallback_deferred",
+                        detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                        detect_stream_is_same=False,
+                    ),
+                )
+                self._detect_fallback_deferred = True
             return False
 
         self._activate_detect_fallback(now)
@@ -1434,6 +1462,7 @@ class RTSPSource(ThreadedClipSource):
 
     def _activate_detect_fallback(self, now: float) -> None:
         self._detect_fallback_active = True
+        self._detect_fallback_deferred = False
         self._detect_failure_count = 0
         self._motion_rtsp_url = self.rtsp_url
         self._detect_next_probe_at = now + self._detect_probe_interval_s

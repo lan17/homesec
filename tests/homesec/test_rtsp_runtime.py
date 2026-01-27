@@ -190,6 +190,48 @@ def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     assert source._detect_fallback_active
 
 
+def test_detect_fallback_deferred_while_recording(tmp_path: Path) -> None:
+    """Detect fallback should defer while recording is active."""
+    # Given: detect stream failures during an active recording
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        detect_fallback_attempts=1,
+    )
+    source = RTSPSource(config, camera_name="cam")
+    source.recording_process = DummyProc(pid=7, returncode=None)
+
+    # When: a detect failure is noted
+    triggered = source._note_detect_failure(0.0)
+
+    # Then: fallback is deferred
+    assert not triggered
+    assert not source._detect_fallback_active
+    assert source._detect_failure_count == source.detect_fallback_attempts
+
+
+def test_detect_fallback_activates_after_recording_stops(tmp_path: Path) -> None:
+    """Detect fallback should activate once recording stops."""
+    # Given: a deferred detect fallback while recording
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        detect_fallback_attempts=1,
+    )
+    source = RTSPSource(config, camera_name="cam")
+    source.recording_process = DummyProc(pid=9, returncode=None)
+    _ = source._note_detect_failure(0.0)
+    source.recording_process = None
+
+    # When: another detect failure occurs after recording stops
+    triggered = source._note_detect_failure(1.0)
+
+    # Then: fallback activates to the main stream
+    assert triggered
+    assert source._detect_fallback_active
+    assert source._motion_rtsp_url == source.rtsp_url
+
+
 def test_recording_threshold_is_more_sensitive(tmp_path: Path) -> None:
     """Recording threshold should be lower than idle threshold."""
     # Given: a source with a 2x recording sensitivity factor
