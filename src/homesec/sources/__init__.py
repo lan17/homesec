@@ -4,7 +4,7 @@ from homesec.models.source import FtpSourceConfig, LocalFolderSourceConfig, RTSP
 from homesec.sources.base import ThreadedClipSource
 from homesec.sources.ftp import FtpSource
 from homesec.sources.local_folder import LocalFolderSource
-from homesec.sources.rtsp import RTSPSource
+from homesec.sources.rtsp.core import RTSPSource
 
 __all__ = [
     "FtpSource",

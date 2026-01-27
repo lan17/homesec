@@ -10,7 +10,8 @@ from unittest.mock import patch
 import numpy as np
 
 from homesec.models.source import RTSPSourceConfig
-from homesec.sources.rtsp import FfmpegRecorder, RTSPSource
+from homesec.sources.rtsp.core import RTSPSource
+from homesec.sources.rtsp.recorder import FfmpegRecorder
 
 
 class FakeClock:
@@ -356,7 +357,7 @@ def test_recording_retries_without_timeouts_when_unsupported(tmp_path: Path) -> 
         return DummyPopen(returncode=None)
 
     # When: starting a recording
-    with patch("homesec.sources.rtsp.subprocess.Popen", side_effect=fake_popen):
+    with patch("homesec.sources.rtsp.recorder.subprocess.Popen", side_effect=fake_popen):
         proc = recorder.start(output_file, stderr_log)
 
     # Then: fallback removes timeout flags and succeeds
@@ -390,7 +391,7 @@ def test_probe_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None
         )
 
     # When: probing the stream info
-    with patch("homesec.sources.rtsp.subprocess.run", side_effect=fake_run):
+    with patch("homesec.sources.rtsp.core.subprocess.run", side_effect=fake_run):
         info = source._probe_stream_info(source.rtsp_url)
 
     # Then: probe retries without timeouts and succeeds
