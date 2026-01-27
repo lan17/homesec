@@ -1,5 +1,5 @@
 """RTSP source package."""
 
-from homesec.sources.rtsp.core import RTSPRunState, RTSPSource
+from homesec.sources.rtsp.core import RTSPSource
 
-__all__ = ["RTSPRunState", "RTSPSource"]
+__all__ = ["RTSPSource"]
