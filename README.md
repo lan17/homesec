@@ -161,9 +161,11 @@ cameras:
       config:
         rtsp_url_env: DRIVEWAY_RTSP_URL
         output_dir: "./recordings"
-        # Critical for camera compatibility:
-        ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
-        reconnect_backoff_s: 5
+        stream:
+          # Critical for camera compatibility:
+          ffmpeg_flags: ["-rtsp_transport", "tcp", "-vsync", "0"]
+        reconnect:
+          backoff_s: 5
 
 filter:
   plugin: yolo
@@ -245,7 +247,7 @@ HomeSec uses a plugin architecture where every component is discovered at runtim
 
 | Type | Plugins |
 |------|---------|
-| Sources | [`rtsp`](src/homesec/sources/rtsp.py), [`ftp`](src/homesec/sources/ftp.py), [`local_folder`](src/homesec/sources/local_folder.py) |
+| Sources | [`rtsp`](src/homesec/sources/rtsp/core.py), [`ftp`](src/homesec/sources/ftp.py), [`local_folder`](src/homesec/sources/local_folder.py) |
 | Filters | [`yolo`](src/homesec/plugins/filters/yolo.py) |
 | Storage | [`dropbox`](src/homesec/plugins/storage/dropbox.py), [`local`](src/homesec/plugins/storage/local.py) |
 | VLM analyzers | [`openai`](src/homesec/plugins/analyzers/openai.py) |

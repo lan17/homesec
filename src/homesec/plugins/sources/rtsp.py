@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homesec.interfaces import ClipSource
-from homesec.models.source import RTSPSourceConfig
+from homesec.models.source.rtsp import RTSPSourceConfig
 from homesec.plugins.registry import PluginType, plugin
-from homesec.sources.rtsp import RTSPSource as RTSPSourceImpl
+from homesec.sources.rtsp.core import RTSPSource as RTSPSourceImpl
 
 if TYPE_CHECKING:
     pass

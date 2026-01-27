@@ -10,7 +10,7 @@ from threading import Thread
 from typing import Any
 
 from homesec.models.clip import Clip
-from homesec.models.source import FtpSourceConfig
+from homesec.models.source.ftp import FtpSourceConfig
 from homesec.sources.base import ThreadedClipSource
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from homesec.models.clip import Clip
-from homesec.models.source import FtpSourceConfig
+from homesec.models.source.ftp import FtpSourceConfig
 from homesec.sources.ftp import FtpSource, _parse_passive_ports
 
 
