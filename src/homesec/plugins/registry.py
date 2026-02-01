@@ -95,6 +95,19 @@ class PluginRegistry(Generic[ConfigT, PluginInterfaceT]):
         # 3. Create instance
         return plugin_cls.create(validated_config)
 
+    def validate(self, name: str, config_dict: dict[str, Any], **runtime_context: Any) -> BaseModel:
+        """Validate configuration for a plugin without instantiating it."""
+        if name not in self._plugins:
+            available = ", ".join(sorted(self._plugins.keys()))
+            raise ValueError(f"Unknown {self.plugin_type} plugin: '{name}'. Available: {available}")
+
+        plugin_cls = self._plugins[name]
+
+        merged_config = config_dict.copy()
+        merged_config.update(runtime_context)
+
+        return plugin_cls.config_cls.model_validate(merged_config)
+
     def get_all(self) -> dict[str, type[PluginProtocol[ConfigT, PluginInterfaceT]]]:
         """Return all registered plugins."""
         return self._plugins.copy()
@@ -153,6 +166,20 @@ def load_plugin(
         config_dict = config
 
     return registry.load(name, config_dict, **runtime_context)
+
+
+def validate_plugin(
+    plugin_type: PluginType, name: str, config: dict[str, Any] | BaseModel, **runtime_context: Any
+) -> BaseModel:
+    """Validate plugin configuration without instantiating it."""
+    registry = _REGISTRIES[plugin_type]
+
+    if isinstance(config, BaseModel):
+        config_dict = config.model_dump()
+    else:
+        config_dict = config
+
+    return registry.validate(name, config_dict, **runtime_context)
 
 
 def get_plugin_names(plugin_type: PluginType) -> list[str]:

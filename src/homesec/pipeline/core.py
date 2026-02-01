@@ -16,7 +16,7 @@ from homesec.models.clip import Clip
 from homesec.models.config import Config
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
-from homesec.plugins.notifiers.multiplex import NotifierEntry
+from homesec.notifiers.multiplex import NotifierEntry
 from homesec.repository import ClipRepository
 from homesec.storage_paths import build_clip_path
 
@@ -194,7 +194,7 @@ class ClipPipeline:
             # Stage 3: VLM (conditional)
             analysis_result: AnalysisResult | None = None
             vlm_failed = False
-            if self._should_run_vlm(clip.camera_name, filter_res):
+            if self._should_run_vlm(filter_res):
                 vlm_result = await self._vlm_stage(clip, filter_res)
                 match vlm_result:
                     case VLMError() as vlm_err:
@@ -418,7 +418,7 @@ class ClipPipeline:
                 on_attempt_failure=on_attempt_failure,
             )
         except Exception as e:
-            return FilterError(clip.clip_id, plugin_name=self._config.filter.plugin, cause=e)
+            return FilterError(clip.clip_id, plugin_name=self._config.filter.backend, cause=e)
 
     async def _vlm_stage(
         self, clip: Clip, filter_result: FilterResult
@@ -564,15 +564,14 @@ class ClipPipeline:
                 return type(exc.cause).__name__
         return type(exc).__name__
 
-    def _should_run_vlm(self, camera_name: str, filter_result: FilterResult) -> bool:
+    def _should_run_vlm(self, filter_result: FilterResult) -> bool:
         """Check if VLM should run based on detected classes and config."""
-        if self._config.alert_policy.backend == "default":
-            alert_config = self._config.get_default_alert_policy(camera_name)
-            # If notify_on_motion enabled, always run VLM for richer context
-            if alert_config.notify_on_motion:
-                return True
+        run_mode = self._config.vlm.run_mode
+        if run_mode == "never":
+            return False
+        if run_mode == "always":
+            return True
 
-        # Otherwise check if detected classes intersect trigger classes
         detected = set(filter_result.detected_classes)
         trigger = set(self._config.vlm.trigger_classes)
         return bool(detected & trigger)

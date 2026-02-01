@@ -7,10 +7,9 @@ from datetime import datetime
 import pytest
 
 from homesec.models.alert import Alert
-from homesec.models.config import SendGridEmailConfig
 from homesec.models.vlm import SequenceAnalysis
-from homesec.plugins.notifiers import MultiplexNotifier, NotifierEntry
-from homesec.plugins.notifiers.sendgrid_email import SendGridEmailNotifier
+from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
+from homesec.plugins.notifiers.sendgrid_email import SendGridEmailConfig, SendGridEmailNotifier
 
 
 class _StubNotifier:

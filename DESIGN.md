@@ -10,6 +10,21 @@
 6. **Errors as values.** Stage methods return `Result | StageError` instead of raising exceptions. This enables partial failures (e.g., upload fails but filter succeeds → still send alert). Stack traces are preserved in error objects. **Strict type checking required** (mypy --strict or pyright) to prevent runtime errors from missing `isinstance()` checks.
 7. **Type-safe enums for domain values.** Use `StrEnum`/`IntEnum` from `models/enums.py` for type safety, IDE support, and maintainability. See [Type Safety & Enums](#type-safety--enums) below.
 
+## Architecture Constraints (Separation of Concerns & Abstraction Boundaries)
+
+**Separation of concerns**: each component has a single responsibility. The core pipeline orchestrates *what* happens; plugins and backends implement *how* it happens.  
+**Abstraction boundaries**: the core depends only on stable contracts (interfaces, registries, repository APIs, and Pydantic models). Concrete implementations may depend on core abstractions, but the core must never depend on concrete implementations.
+
+### Constraints (Non‑Negotiable)
+
+1. **Dependency direction**: core modules (`pipeline`, `app`, `repository`, `models`) must not import concrete plugin/backends. Use interfaces + registry loaders only (e.g., `load_*_plugin()`).
+2. **Config boundary**: core sees only `backend` + opaque config payload. Plugin loaders validate/instantiate using plugin‑specific Pydantic config models. Core must not reference backend‑specific fields.
+3. **Persistence boundary**: all state/event writes go through `ClipRepository`; never touch `StateStore`/`EventStore` directly.
+4. **Plugin boundary**: plugins may import core interfaces/models; the core may not import plugin modules.
+5. **Boundary validation**: external inputs (config, DB JSONB, VLM outputs, MQTT payloads) must be validated at the boundary with Pydantic before entering core logic.
+
+Violations are architecture bugs and should be treated as such during reviews.
+
 ## Type Safety & Enums
 
 Domain values that appear in multiple places use centralized enums in `models/enums.py`:
@@ -64,8 +79,9 @@ HomeSec employs a **Class-Based Plugin Architecture (V2)** designed for strict t
 In V1, plugins were factories accepting raw dictionaries and loose context objects. In V2, the **Configuration Model** (Pydantic) defines the entire contract for a plugin.
 
 -   **Type Safety**: Every plugin defines a `config_cls` (Pydantic model). The registry validates raw JSON/YAML against this model *before* the plugin is instantiated.
--   **Dependency Injection**: Runtime dependencies (like `camera_name` for sources, or `trigger_classes` for analyzers) are injected into the configuration dictionary *before* validation.
-    -   *Benefit*: The plugin implementation doesn't need a separate `context` argument. It just declares `camera_name: str` in its config model, and the system ensures it's present.
+-   **Backend/Config Boundary**: Core config models expose only `backend` + opaque `config` payloads. Plugin‑specific fields live in the plugin’s config model (defined alongside the implementation).
+-   **Runtime Context (when needed)**: For plugin types that require runtime data (e.g., `camera_name`/timezone for sources, default alert policy `trigger_classes`), the loader injects those fields into the config dict *before* validation.
+    -   *Benefit*: The plugin implementation doesn’t need a separate `context` argument; required runtime fields are validated alongside static config.
 -   **Fail Fast**: Invalid configs cause a `ValidationError` at loading time, preventing partial start-ups.
 
 ### 2. The Unified Registry Pattern
@@ -203,16 +219,19 @@ Build a reliable, pluggable pipeline to:
 
 4. **Object Detection Filter (Pluggable)**
    - Uses pluggable object detection to decide "needs VLM".
-   - Plugin interface: `ObjectFilter.detect(video_path, config) -> FilterResult`
+   - Plugin interface: `ObjectFilter.detect(video_path, overrides=None) -> FilterResult`
    - Reference implementation: YOLOv8 with configurable classes (default: person), frame sampling, early exit on detection.
    - Output: `FilterResult` (detected_classes, confidence, sampled_frames, model).
    - VLM trigger classes are configured globally (default: person only) based on `filter_result.detected_classes`.
 
 5. **VLM Analyzer (Pluggable)**
-   - Consumes clips that match `vlm.trigger_classes` and produces structured analysis.
+   - Consumes clips (depending on `vlm.run_mode`) and produces structured analysis.
    - Plugin interface: `VLMAnalyzer.analyze(video_path, filter_result, config) -> AnalysisResult`
    - Reference implementation: OpenAI-compatible API (GPT-4o or similar).
-   - Trigger rule: run VLM if `filter_result.detected_classes` intersects `vlm.trigger_classes`.
+   - Trigger rule:
+     - `run_mode: always` → run for every clip (after filter succeeds)
+     - `run_mode: trigger_only` → run if `filter_result.detected_classes` intersects `vlm.trigger_classes`
+     - `run_mode: never` → skip VLM
    - Output: `AnalysisResult` (risk_level, activity_type, summary, entities_timeline, requires_review, etc.).
    - Stores `analysis.json` in the same storage backend, next to the clip.
    - Prompting is configured globally (same for all cameras); per-camera alert policy decides which `activity_type` values trigger notifications.
@@ -222,12 +241,11 @@ Build a reliable, pluggable pipeline to:
    - MVP logic:
      - Default: notify if `risk_level > low` (or a configurable global threshold).
      - Additionally: allow per-camera `notify_on_activity_types` list that can trigger notifications even when `risk_level` is low.
-     - Optional per-camera `notify_on_motion` to alert on any clip (bypasses VLM gating).
-     - If VLM is skipped because no trigger classes are detected, default to `notify=false` unless `notify_on_motion` is enabled.
-     - Notifications wait for upload so a `view_url` can be included.
-   - Configuration:
-     - `default`: `min_risk_level` + `notify_on_activity_types` list.
-     - `per_camera`: overrides keyed by `camera_name` to tune alert thresholds and activity triggers.
+    - Optional per-camera `notify_on_motion` to alert on any clip (VLM may still be skipped).
+    - If VLM is skipped (run_mode=never or no trigger classes detected), default to `notify=false` unless `notify_on_motion` is enabled.
+    - Notifications wait for upload so a `view_url` can be included.
+  - Configuration:
+    - `config`: `min_risk_level` + `notify_on_activity_types` list, plus `overrides` keyed by `camera_name`.
    - Example use cases:
      - Front door: notify on `activity_type == "person_at_door"` or `"delivery"` even at low risk
      - Backyard: notify on `activity_type == "animal_running"` at medium+ risk
@@ -305,7 +323,7 @@ class Clip(BaseModel):
     start_ts: datetime
     end_ts: datetime
     duration_s: float
-    source_type: str  # "rtsp", "ftp", etc.
+    source_backend: str  # "rtsp", "ftp", etc.
 
 class ClipSource(Protocol):
     """Produces finalized clips and notifies pipeline via callback."""
@@ -386,7 +404,7 @@ class ObjectFilter(Shutdownable, Protocol):
         - MUST be async (use asyncio.to_thread or run_in_executor for blocking code)
         - CPU/GPU-bound plugins should manage their own ProcessPoolExecutor internally
         - I/O-bound plugins can use async HTTP clients directly
-        - Should respect the instance config max_workers if managing worker pool
+        - If managing a worker pool, use concurrency settings from the plugin's config model
         - Should support early exit on first detection for efficiency
         - overrides apply per-call (model path cannot be overridden)
         
@@ -414,7 +432,7 @@ class VLMAnalyzer(Shutdownable, Protocol):
         - MUST be async (use asyncio.to_thread or run_in_executor for blocking code)
         - Local models: manage ProcessPoolExecutor internally
         - API-based: use async HTTP clients (aiohttp, httpx)
-        - Should respect config.max_workers if managing worker pool
+        - If managing a worker pool, use concurrency settings from the plugin's config model
         - Should use filter_result to focus analysis (e.g., detected person at timestamp X)
         
         Returns:
@@ -443,59 +461,42 @@ class VLMAnalyzer(Shutdownable, Protocol):
 
 Prefer a single YAML file for non-secret configuration (cameras, sources, policies, MQTT). Keep secrets in `.env` and reference them by env var name from YAML.
 
-### Configuration Hierarchy & Merging
+### Configuration Hierarchy & Overrides
 
-**Use Pydantic models** for all config to handle per-camera alert overrides correctly. Do NOT attempt manual dict merging (error-prone).
+Per-camera alert overrides live inside `alert_policy.config.overrides` and are merged by
+the alert policy implementation (not the core config). The core remains backend-agnostic.
 
-**Pattern for per-camera alert overrides (filter/VLM config is global):**
-```python
-class AlertPolicyConfig(BaseModel):
-    min_risk_level: RiskLevel = "medium"
-    notify_on_activity_types: list[str] = Field(default_factory=list)
-    notify_on_motion: bool = False
-
-class AlertPolicyOverrides(BaseModel):
-    """Per-camera alert policy overrides (only non-None fields override base)."""
-    min_risk_level: RiskLevel | None = None
-    notify_on_activity_types: list[str] | None = None
-    notify_on_motion: bool | None = None
-
-class Config(BaseModel):
-    """Main config (simplified example - full config includes storage, mqtt, etc.)."""
-    filter: FilterConfig
-    vlm: VLMConfig
-    alert_policy: AlertPolicyConfig
-    per_camera_alert: dict[str, AlertPolicyOverrides] = Field(default_factory=dict)
-    # ... other fields (storage, mqtt, concurrency, etc.)
-
-    def get_alert_policy(self, camera_name: str) -> AlertPolicyConfig:
-        """Get merged alert policy for a specific camera."""
-        if camera_name not in self.per_camera_alert:
-            return self.alert_policy
-        return self.alert_policy.model_copy(
-            update=self.per_camera_alert[camera_name].model_dump(exclude_none=True)
-        )
+**Example (default alert policy):**
+```yaml
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: medium
+    notify_on_motion: false
+    overrides:
+      front_door:
+        min_risk_level: low
+        notify_on_activity_types: [delivery]
 ```
-
-**Benefits:**
-- Type-safe merging
-- Explicit override semantics (`None` means "use default")
-- No manual dict manipulation
 
 ### Config Structure
 
-- `cameras[]`: `{name, source: {type, config}}` (source-specific config is validated by each source implementation)
+- `cameras[]`: `{name, source: {backend, config}}` (source-specific config is validated by each source implementation)
   - Default MQTT topic if not specified: `homecam/alerts/{name}`
-- `storage`: Dropbox folder root, upload path template, and view URL policy (no post-upload moves)
+- `storage`: `{backend, config, paths}` (backend config validated by storage plugin)
 - `retention`: local disk limits and cleanup strategy
 - `mqtt`: broker host/port/credentials env var names
 - `filter`: plugin selection + defaults (global for all cameras)
-  - `plugin`: name of object detection plugin (e.g., "yolo", "mock")
+  - `backend`: name of object detection plugin (e.g., "yolo", "mock")
   - `config`: plugin-specific config (classes to detect, model name, etc.)
 - `vlm`: plugin selection + defaults (global for all cameras)
-  - `plugin`: name of VLM plugin (e.g., "openai", "anthropic", "mock")
+  - `backend`: name of VLM plugin (e.g., "openai", "anthropic", "mock")
+  - `run_mode`: `trigger_only | always | never`
+  - `trigger_classes`: object classes that gate VLM in `trigger_only` mode
   - `config`: plugin-specific config (model, prompts, activity_types, etc.)
-- `alert_policy`: defaults + per-camera overrides (supports "notify even if low risk" via `notify_on_activity_types`)
+  - `preprocessing`: frame extraction config
+- `alert_policy`: backend selection + config (defaults + per-camera overrides live in `config`)
 - `concurrency`: per-stage parallel processing limits (upload, filter, vlm) + global limit
 - `retry`: max attempts, backoff delay, behavior on exhaustion
 - `health`: HTTP health check endpoint config
@@ -506,11 +507,15 @@ version: 1
 
 storage:
   backend: dropbox
-  dropbox:
+  config:
     root: "/homecam"
     path_template: "{camera_name}/{filename}"
     token_env: "DROPBOX_TOKEN"
     web_url_prefix: "https://www.dropbox.com/home"
+  paths:
+    clips_dir: "clips"
+    backups_dir: "backups"
+    artifacts_dir: "artifacts"
 
 retention:
   max_local_size: "10GB"
@@ -526,7 +531,7 @@ mqtt:
   retain: false
 
 filter:
-  plugin: "yolo"  # Options: "yolo", "mock" (add more as needed)
+  backend: "yolo"  # Options: "yolo", "mock" (add more as needed)
   config:
     model: "yolov8n"
     classes: ["person", "animal"]
@@ -536,38 +541,42 @@ filter:
   # per-camera overrides for filter are not supported in MVP
 
 vlm:
-  plugin: "openai"  # Options: "openai", "anthropic", "mock" (add more as needed)
+  backend: "openai"  # Options: "openai", "anthropic", "mock" (add more as needed)
+  run_mode: "trigger_only"
+  trigger_classes: ["person"]
   config:
     model: "gpt-4o"
     api_key_env: "OPENAI_API_KEY"
     base_prompt: "Summarize activity and risk; be concise and structured."
     activity_types: ["delivery", "doorbell", "person_at_door", "unknown"]
-    max_workers: 2
-  trigger_classes: ["person"]
+  preprocessing:
+    max_frames: 10
+    max_size: 1024
+    quality: 85
   # per-camera overrides for VLM are not supported in MVP
 
 alert_policy:
-  default:
+  backend: "default"
+  enabled: true
+  config:
     min_risk_level: "medium"
     notify_on_activity_types: []
     notify_on_motion: false
-  mqtt_is_critical: false  # If true, MQTT failure = unhealthy (not degraded)
-  mqtt_retry_interval_s: 60  # Retry failed notifications
-  per_camera:
-    front_door:
-      min_risk_level: "low"
-      notify_on_activity_types: ["person_at_door", "delivery"]
-      notify_on_motion: false
-    backyard:
-      min_risk_level: "medium"
-      notify_on_activity_types: ["animal_running"]
-      notify_on_motion: false
+    overrides:
+      front_door:
+        min_risk_level: "low"
+        notify_on_activity_types: ["person_at_door", "delivery"]
+        notify_on_motion: false
+      backyard:
+        min_risk_level: "medium"
+        notify_on_activity_types: ["animal_running"]
+        notify_on_motion: false
 
 concurrency:
   max_clips_in_flight: 10  # Global limit (prevents OOM when many cameras trigger)
-  upload: 3                # Per-stage limits (within global limit)
-  filter: 4
-  vlm: 2
+  upload_workers: 3        # Per-stage limits (within global limit)
+  filter_workers: 4
+  vlm_workers: 2
 
 retry:
   max_attempts: 3
@@ -582,12 +591,12 @@ health:
 cameras:
   - name: "front_door"
     source:
-      type: "rtsp"
+      backend: "rtsp"
       config:
         rtsp_url_env: "FRONT_DOOR_RTSP_URL"
   - name: "driveway"
     source:
-      type: "ftp"
+      backend: "ftp"
       config:
         ftp_subdir: "driveway"
 ```
@@ -668,16 +677,16 @@ class Alert(BaseModel):
 
 class FilterConfig(BaseModel):
     """Base filter configuration (plugin-agnostic)."""
-    plugin: str  # e.g., "yolo", "mock"
-    max_workers: int = 4
+    backend: str  # e.g., "yolo", "mock"
     config: dict[str, Any]  # Plugin-specific config (validated by plugin at load time)
 
 class VLMConfig(BaseModel):
     """Base VLM configuration (plugin-agnostic)."""
-    plugin: str  # e.g., "openai", "anthropic", "mock"
+    backend: str  # e.g., "openai", "anthropic", "mock"
     trigger_classes: list[str] = Field(default_factory=lambda: ["person"])
-    max_workers: int = 2
+    run_mode: Literal["trigger_only", "always", "never"] = "trigger_only"
     config: dict[str, Any]  # Plugin-specific config (validated by plugin at load time)
+    preprocessing: VLMPreprocessConfig = Field(default_factory=VLMPreprocessConfig)
 
 # Note: Plugin-specific config validation:
 # - Each plugin receives the config dict and validates/transforms it during initialization
@@ -808,11 +817,11 @@ class ClipStateData(BaseModel):
   - CPU/GPU-bound plugins (e.g., YOLO) should use `ProcessPoolExecutor` internally to avoid blocking the event loop.
   - I/O-bound plugins (e.g., OpenAI API) should use async HTTP clients.
   - Plugins manage their own resources (process pools, GPU allocation, API rate limits).
-- VLM is the expensive step; only run it when `filter_result.detected_classes` intersects `vlm.trigger_classes`.
+- VLM is the expensive step; in `run_mode: trigger_only`, only run it when `filter_result.detected_classes` intersects `vlm.trigger_classes`.
 - Prefer local processing when available to minimize Dropbox transfers, while still uploading clips ASAP.
 
 ### Dropbox URLs (No Share Links)
-- Use Dropbox web URLs derived from `storage_uri` and `web_url_prefix` (requires Dropbox login; not public).
+- The Dropbox storage backend should derive `view_url` from its configured `web_url_prefix` and the uploaded path (requires Dropbox login; not public).
   - Example: `view_url = "{web_url_prefix}{dropbox_path}"` where `dropbox_path` is the path inside the Dropbox root.
 - Prefer using the `path_display` returned by the Dropbox upload response to build `view_url` (no extra API call).
 - URLs are stable as long as files are not moved; MVP assumes no post-upload moves.
@@ -860,43 +869,28 @@ async def recover_incomplete_clips(self):
 *Note: The following is PSEUDOCODE for illustration only. It demonstrates the design pattern but omits retry logic, comprehensive error handling, logging details, state management helper methods, and other production concerns. Actual implementation will include proper type annotations, error handling, logging, and resource cleanup as specified in AGENTS.md and throughout this document.*
 
 ```python
-# Plugin loading (simple registry pattern)
-FILTER_REGISTRY = {
-    "yolo": YOLOv8Filter,
-    "mock": MockFilter,
-}
+# Plugin loading (registry pattern)
+def load_filter(config: FilterConfig) -> ObjectFilter:
+    return load_plugin(PluginType.FILTER, config.backend, config.config)
 
-VLM_REGISTRY = {
-    "openai": OpenAIVLM,
-    "anthropic": AnthropicVLM,
-    "mock": MockVLM,
-}
-
-def load_filter_plugin(config: FilterConfig) -> ObjectFilter:
-    if config.plugin not in FILTER_REGISTRY:
-        raise ValueError(f"Unknown filter plugin: {config.plugin}")
-    return FILTER_REGISTRY[config.plugin](config)
-
-def load_vlm_plugin(config: VLMConfig) -> VLMAnalyzer:
-    if config.plugin not in VLM_REGISTRY:
-        raise ValueError(f"Unknown VLM plugin: {config.plugin}")
-    return VLM_REGISTRY[config.plugin](config)
+def load_analyzer(config: VLMConfig) -> VLMAnalyzer:
+    return load_plugin(PluginType.ANALYZER, config.backend, config.config)
 
 # Future: Support setuptools entry points for third-party plugins (see Open Questions)
 
 class ClipPipeline:
     def __init__(self, config: Config):
         # ... other init
-        self.filter_plugin = load_filter_plugin(config.filter)
-        self.vlm_plugin = load_vlm_plugin(config.vlm)
+        self.filter_plugin = load_filter(config.filter)
+        self.vlm_plugin = load_analyzer(config.vlm)
         
         # Global concurrency limit (prevents OOM)
         self.global_semaphore = asyncio.Semaphore(config.concurrency.max_clips_in_flight)
         
         # Per-stage limits (within global limit)
-        self.upload_semaphore = asyncio.Semaphore(config.concurrency.upload)
-        self.filter_semaphore = asyncio.Semaphore(config.concurrency.filter)
-        self.vlm_semaphore = asyncio.Semaphore(config.concurrency.vlm)
+        self.upload_semaphore = asyncio.Semaphore(config.concurrency.upload_workers)
+        self.filter_semaphore = asyncio.Semaphore(config.concurrency.filter_workers)
+        self.vlm_semaphore = asyncio.Semaphore(config.concurrency.vlm_workers)
     
     def _on_new_clip(self, clip: Clip) -> None:
         """Callback from ClipSource when new clip is ready."""
@@ -908,21 +902,20 @@ class ClipPipeline:
         async with self.global_semaphore:
             await self._process_clip(clip)
     
-    async def _upload_stage(self, clip: Clip) -> str | UploadError:
-        """Upload clip. Returns storage_uri on success, UploadError on failure."""
+    async def _upload_stage(self, clip: Clip) -> StorageUploadResult | UploadError:
+        """Upload clip. Returns StorageUploadResult on success, UploadError on failure."""
         try:
-            storage_uri = await self.storage.put(clip.local_path, f"{clip.camera_name}/{clip.clip_id}")
-            return storage_uri
+            return await self.storage.put_file(clip.local_path, f"{clip.camera_name}/{clip.clip_id}")
         except Exception as e:
             return UploadError(clip.clip_id, storage_uri=None, cause=e)
     
     async def _filter_stage(self, clip: Clip) -> FilterResult | FilterError:
         """Run filter. Returns FilterResult on success, FilterError on failure."""
         try:
-            result = await self.filter_plugin.detect(clip.local_path, self.config.filter)
+            result = await self.filter_plugin.detect(clip.local_path)
             return result
         except Exception as e:
-            return FilterError(clip.clip_id, plugin_name=self.config.filter.plugin, cause=e)
+            return FilterError(clip.clip_id, plugin_name=self.config.filter.backend, cause=e)
     
     async def _process_clip(self, clip: Clip) -> None:
         # Stage 1 & 2: Upload and Filter in parallel
@@ -951,14 +944,14 @@ class ClipPipeline:
                 self._update_state_stage(clip.clip_id, "upload", status="error", last_error=str(err))
                 storage_uri = None
                 view_url = None
-            case str() as uri:
-                storage_uri = uri
-                view_url = self._compute_view_url(storage_uri)
+            case StorageUploadResult() as result:
+                storage_uri = result.storage_uri
+                view_url = result.view_url
                 self._update_state_stage(clip.clip_id, "upload", status="ok")
         
         # Stage 3: VLM (conditional)
         analysis_result = None
-        if self._should_run_vlm(clip.camera_name, filter_result):
+        if self._should_run_vlm(filter_result):
             vlm_res = await self._vlm_stage(clip, filter_result)
             match vlm_res:
                 case VLMError() as err:
@@ -987,24 +980,17 @@ class ClipPipeline:
         self._update_state(clip.clip_id, status="done")
         self._cleanup_local_file(clip.local_path, alert_decision.notify)
     
-    def _should_run_vlm(self, camera_name: str, filter_result: FilterResult) -> bool:
-        """Check if VLM should run based on detected classes and config."""
-        alert_config = self.config.get_alert_policy(camera_name)
-        
-        # If notify_on_motion enabled, always run VLM for richer context
-        if alert_config.notify_on_motion:
-            return True
-        
-        # Otherwise check if detected classes intersect trigger classes
-        detected = set(filter_result.detected_classes)
-        trigger = set(self.config.vlm.trigger_classes)
-        return bool(detected & trigger)
-    
-    def _compute_view_url(self, storage_uri: str) -> str:
-        """Compute Dropbox web URL from storage_uri."""
-        # Example: dropbox:/front_door/clip.mp4 -> https://www.dropbox.com/home/homecam/front_door/clip.mp4
-        dropbox_path = storage_uri.removeprefix("dropbox:")
-        return f"{self.config.storage.dropbox.web_url_prefix}{dropbox_path}"
+    def _should_run_vlm(self, filter_result: FilterResult) -> bool:
+        """Check if VLM should run based on run_mode + detected classes."""
+        match self.config.vlm.run_mode:
+            case "never":
+                return False
+            case "always":
+                return True
+            case "trigger_only":
+                detected = set(filter_result.detected_classes)
+                trigger = set(self.config.vlm.trigger_classes)
+                return bool(detected & trigger)
     
     # Note: The following helper methods are omitted from pseudocode for brevity:
     # - _vlm_stage(clip, filter_result) -> AnalysisResult | VLMError
@@ -1121,7 +1107,7 @@ async def main():
 **Non-critical checks (degraded if fail):**
 - `db`: Postgres unavailable (state tracking disabled, but processing continues)
 - `mqtt`: MQTT broker unreachable (notifications disabled, but processing continues)
-  - Configurable via `alert_policy.mqtt_is_critical`: if `true`, MQTT failure is treated as critical (unhealthy)
+  - Configurable via `health.mqtt_is_critical`: if `true`, MQTT failure is treated as critical (unhealthy)
   - Failed notifications are retried at `alert_policy.mqtt_retry_interval_s` intervals
 
 **Activity monitoring:**
@@ -1149,7 +1135,7 @@ class HealthServer:
         status = "healthy"
         if not checks["sources"] or not checks["storage"]:
             status = "unhealthy"  # Critical failure
-        elif not checks["mqtt"] and self.config.alert_policy.mqtt_is_critical:
+        elif not checks["mqtt"] and self.config.health.mqtt_is_critical:
             status = "unhealthy"  # MQTT failure treated as critical (configurable)
         elif not checks["db"] or not checks["mqtt"]:
             status = "degraded"  # Non-critical failure

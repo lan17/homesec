@@ -7,12 +7,19 @@ import logging
 import shutil
 from pathlib import Path, PurePosixPath
 
+from pydantic import BaseModel
+
 from homesec.interfaces import StorageBackend
-from homesec.models.config import LocalStorageConfig
 from homesec.models.storage import StorageUploadResult
 from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
+
+
+class LocalStorageConfig(BaseModel):
+    """Local storage configuration."""
+
+    root: str = "./storage"
 
 
 @plugin(plugin_type=PluginType.STORAGE, name="local")

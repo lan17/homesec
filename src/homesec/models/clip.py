@@ -25,7 +25,7 @@ class Clip(BaseModel):
     start_ts: datetime
     end_ts: datetime
     duration_s: float
-    source_type: str  # "rtsp", "ftp", etc.
+    source_backend: str  # "rtsp", "ftp", etc.
 
 
 class ClipStateData(BaseModel):

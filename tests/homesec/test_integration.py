@@ -13,10 +13,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from homesec.config import load_config_from_dict
-from homesec.models.config import DefaultAlertPolicySettings
 from homesec.models.filter import FilterResult
 from homesec.pipeline import ClipPipeline
-from homesec.plugins.alert_policies.default import DefaultAlertPolicy
+from homesec.plugins.alert_policies.default import DefaultAlertPolicy, DefaultAlertPolicySettings
 from homesec.repository import ClipRepository
 from homesec.sources import (
     FtpSource,
@@ -59,7 +58,7 @@ def integration_config() -> Config:
                 {
                     "name": "test_camera",
                     "source": {
-                        "type": "local_folder",
+                        "backend": "local_folder",
                         "config": {
                             "watch_dir": "recordings",
                             "poll_interval": 0.1,
@@ -70,7 +69,7 @@ def integration_config() -> Config:
             ],
             "storage": {
                 "backend": "dropbox",
-                "dropbox": {
+                "config": {
                     "root": "/homecam",
                 },
             },
@@ -87,17 +86,16 @@ def integration_config() -> Config:
                 }
             ],
             "filter": {
-                "plugin": "yolo",
-                "max_workers": 1,
+                "backend": "yolo",
                 "config": {
                     "model_path": "yolov8n.pt",
+                    "max_workers": 1,
                 },
             },
             "vlm": {
                 "backend": "openai",
                 "trigger_classes": ["person"],
-                "max_workers": 1,
-                "llm": {
+                "config": {
                     "api_key_env": "OPENAI_API_KEY",
                     "model": "gpt-4o",
                 },
@@ -115,9 +113,7 @@ def integration_config() -> Config:
 
 def make_alert_policy(config: Config) -> DefaultAlertPolicy:
     settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
-    settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
-    settings.overrides = config.per_camera_alert
-    settings.trigger_classes = set(config.vlm.trigger_classes)
+    settings.trigger_classes = list(config.vlm.trigger_classes)
     return DefaultAlertPolicy(settings)
 
 
@@ -305,7 +301,7 @@ class TestFtpSourceIntegration:
             assert len(clips) == 1
             clip = clips[0]
             assert clip.camera_name == "ftp_cam"
-            assert clip.source_type == "ftp"
+            assert clip.source_backend == "ftp"
             assert clip.local_path.exists()
         finally:
             try:

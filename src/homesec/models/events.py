@@ -26,7 +26,7 @@ class ClipRecordedEvent(ClipEvent):
     event_type: Literal[EventType.CLIP_RECORDED] = EventType.CLIP_RECORDED
     camera_name: str
     duration_s: float
-    source_type: str
+    source_backend: str
 
 
 class ClipDeletedEvent(ClipEvent):

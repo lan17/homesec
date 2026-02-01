@@ -19,9 +19,10 @@ from pydantic import BaseModel, Field
 from homesec.config import load_config, resolve_env_var
 from homesec.interfaces import ObjectFilter, StorageBackend
 from homesec.models.clip import ClipStateData
-from homesec.models.filter import FilterConfig, YoloFilterSettings
+from homesec.models.filter import FilterConfig
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.filters import load_filter
+from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository.clip_repository import ClipRepository
 from homesec.state.postgres import PostgresStateStore
@@ -115,7 +116,17 @@ def _base_payload(
 
 def _recheck_settings(config: FilterConfig) -> dict[str, object]:
     match config.config:
-        case YoloFilterSettings() as settings:
+        case YoloFilterConfig() as settings:
+            return {
+                "model_path": str(settings.model_path),
+                "min_confidence": float(settings.min_confidence),
+                "sample_fps": int(settings.sample_fps),
+                "min_box_h_ratio": float(settings.min_box_h_ratio),
+                "min_hits": int(settings.min_hits),
+                "classes": list(settings.classes),
+            }
+        case dict() as raw:
+            settings = YoloFilterConfig.model_validate(raw)
             return {
                 "model_path": str(settings.model_path),
                 "min_confidence": float(settings.min_confidence),
@@ -130,8 +141,10 @@ def _recheck_settings(config: FilterConfig) -> dict[str, object]:
 
 def _build_recheck_filter_config(base: FilterConfig, opts: CleanupOptions) -> FilterConfig:
     match base.config:
-        case YoloFilterSettings() as yolo:
+        case YoloFilterConfig() as yolo:
             settings = yolo.model_copy(deep=True)
+        case dict() as raw:
+            settings = YoloFilterConfig.model_validate(raw)
         case _:
             raise ValueError(f"Unsupported filter config type: {type(base.config).__name__}")
 
@@ -144,9 +157,9 @@ def _build_recheck_filter_config(base: FilterConfig, opts: CleanupOptions) -> Fi
         settings.min_box_h_ratio = opts.recheck_min_box_h_ratio
     if opts.recheck_min_hits is not None:
         settings.min_hits = opts.recheck_min_hits
+    settings.max_workers = int(opts.workers)
 
     merged = base.model_copy(deep=True)
-    merged.max_workers = int(opts.workers)
     merged.config = settings
     return merged
 

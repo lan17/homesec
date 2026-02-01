@@ -20,7 +20,7 @@ def _minimal_config() -> dict[str, object]:
             {
                 "name": "front_door",
                 "source": {
-                    "type": "local_folder",
+                    "backend": "local_folder",
                     "config": {
                         "watch_dir": "recordings",
                         "poll_interval": 1.0,
@@ -30,7 +30,7 @@ def _minimal_config() -> dict[str, object]:
         ],
         "storage": {
             "backend": "dropbox",
-            "dropbox": {
+            "config": {
                 "root": "/homecam",
             },
         },
@@ -47,14 +47,12 @@ def _minimal_config() -> dict[str, object]:
             }
         ],
         "filter": {
-            "plugin": "yolo",
-            "max_workers": 1,
+            "backend": "yolo",
             "config": {},
         },
         "vlm": {
             "backend": "openai",
-            "max_workers": 1,
-            "llm": {
+            "config": {
                 "api_key_env": "OPENAI_API_KEY",
                 "model": "gpt-4o",
             },
@@ -109,8 +107,8 @@ class TestHomeSecValidate:
         # Mock discover_all_plugins (imported inside function) and validation functions
         with (
             patch("homesec.plugins.discover_all_plugins"),
-            patch("homesec.cli.validate_camera_references"),
             patch("homesec.cli.validate_plugin_names"),
+            patch("homesec.cli.validate_config"),
         ):
             # When: Validating the config
             cli = HomeSec()

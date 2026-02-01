@@ -143,7 +143,7 @@ class TestLocalFolderSource:
         assert detected_clips[0].clip_id == "test_clip"
         assert detected_clips[0].camera_name == "test"
         assert detected_clips[0].local_path == clip_file
-        assert detected_clips[0].source_type == "local_folder"
+        assert detected_clips[0].source_backend == "local_folder"
 
         # Cleanup
         await source.shutdown()
@@ -294,7 +294,7 @@ class TestFtpSource:
         # Then a clip is emitted
         assert len(emitted) == 1
         assert emitted[0].clip_id == "upload"
-        assert emitted[0].source_type == "ftp"
+        assert emitted[0].source_backend == "ftp"
 
     @pytest.mark.asyncio
     async def test_incomplete_upload_deletes_when_enabled(self, tmp_path: Path) -> None:

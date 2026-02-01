@@ -248,7 +248,7 @@ class ObjectFilter(Shutdownable, ABC):
         - MUST be async (use asyncio.to_thread or run_in_executor for blocking code)
         - CPU/GPU-bound plugins should manage their own ProcessPoolExecutor internally
         - I/O-bound plugins can use async HTTP clients directly
-        - Should respect the instance config max_workers if managing worker pool
+        - If managing a worker pool, use concurrency settings from the plugin's config model
         - Should support early exit on first detection for efficiency
         - overrides apply per-call (model path cannot be overridden)
 
@@ -282,7 +282,7 @@ class VLMAnalyzer(Shutdownable, ABC):
         - MUST be async (use asyncio.to_thread or run_in_executor for blocking code)
         - Local models: manage ProcessPoolExecutor internally
         - API-based: use async HTTP clients (aiohttp, httpx)
-        - Should respect config.max_workers if managing worker pool
+        - If managing a worker pool, use concurrency settings from the plugin's config model
         - Should use filter_result to focus analysis (e.g., detected person at timestamp X)
 
         Returns:

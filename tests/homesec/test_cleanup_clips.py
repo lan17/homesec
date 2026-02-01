@@ -10,9 +10,8 @@ import yaml
 from homesec.interfaces import ObjectFilter
 from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
 from homesec.models.clip import ClipStateData
-from homesec.models.config import LocalStorageConfig
 from homesec.models.filter import FilterOverrides, FilterResult
-from homesec.plugins.storage.local import LocalStorage
+from homesec.plugins.storage.local import LocalStorage, LocalStorageConfig
 from homesec.state.postgres import PostgresStateStore
 
 
@@ -58,14 +57,14 @@ def _write_cleanup_config(path: Path, *, dsn: str, storage_root: Path) -> None:
             {
                 "name": "front",
                 "source": {
-                    "type": "local_folder",
+                    "backend": "local_folder",
                     "config": {"watch_dir": "recordings", "poll_interval": 1.0},
                 },
             }
         ],
         "storage": {
             "backend": "local",
-            "local": {"root": str(storage_root)},
+            "config": {"root": str(storage_root)},
         },
         "state_store": {"dsn": dsn},
         "notifiers": [
@@ -75,13 +74,13 @@ def _write_cleanup_config(path: Path, *, dsn: str, storage_root: Path) -> None:
             }
         ],
         "filter": {
-            "plugin": "yolo",
+            "backend": "yolo",
             "config": {},
         },
         "vlm": {
             "backend": "openai",
             "trigger_classes": ["person"],
-            "llm": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+            "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
         },
         "alert_policy": {
             "backend": "default",
