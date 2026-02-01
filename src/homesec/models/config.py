@@ -152,4 +152,3 @@ class Config(BaseModel):
         if not self.notifiers:
             raise ValueError("notifiers must include at least one notifier")
         return self
-

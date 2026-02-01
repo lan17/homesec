@@ -35,6 +35,7 @@ from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
+
 class YoloFilterConfig(BaseModel):
     """YOLO filter settings.
 
@@ -50,6 +51,7 @@ class YoloFilterConfig(BaseModel):
     min_box_h_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     min_hits: int = Field(default=1, ge=1)
     max_workers: int = Field(default=4, ge=1)
+
 
 # COCO classes for humans and animals
 HUMAN_ANIMAL_CLASSES = {

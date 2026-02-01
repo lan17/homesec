@@ -5,7 +5,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 from pydantic import BaseModel
 
 from homesec.config import (

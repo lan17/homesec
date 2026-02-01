@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from anyio import Path as AsyncPath
-
 from pydantic import BaseModel, Field
 
 from homesec.models.clip import Clip

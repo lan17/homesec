@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from homesec.interfaces import ClipSource
-from homesec.sources.local_folder import LocalFolderSourceConfig
 from homesec.plugins.registry import PluginType, plugin
 from homesec.sources.local_folder import LocalFolderSource as LocalFolderSourceImpl
+from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
 @plugin(plugin_type=PluginType.SOURCE, name="local_folder")

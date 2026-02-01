@@ -6,8 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from homesec.plugins.storage.local import LocalStorageConfig
-from homesec.plugins.storage.local import LocalStorage
+from homesec.plugins.storage.local import LocalStorage, LocalStorageConfig
 
 
 def _make_storage(tmp_path: Path) -> LocalStorage:

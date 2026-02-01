@@ -20,9 +20,9 @@ from homesec.config import load_config, resolve_env_var
 from homesec.interfaces import ObjectFilter, StorageBackend
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterConfig
-from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.filters import load_filter
+from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository.clip_repository import ClipRepository
 from homesec.state.postgres import PostgresStateStore

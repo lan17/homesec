@@ -20,8 +20,8 @@ from homesec.models.config import (
 )
 from homesec.models.filter import FilterConfig, FilterResult
 from homesec.models.vlm import AnalysisResult, VLMConfig
-from homesec.pipeline import ClipPipeline
 from homesec.notifiers.multiplex import NotifierEntry
+from homesec.pipeline import ClipPipeline
 from homesec.plugins.alert_policies.default import DefaultAlertPolicy, DefaultAlertPolicySettings
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig

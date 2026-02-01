@@ -11,8 +11,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from homesec.sources.rtsp.core import RTSPSourceConfig
-from homesec.sources.rtsp.core import RTSPRunState, RTSPSource
+from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recorder import FfmpegRecorder
