@@ -748,10 +748,10 @@ class TestClipPipelineAlertOverrides:
     """Test per-camera alert policy overrides."""
 
     @pytest.mark.asyncio
-    async def test_per_camera_notify_on_motion_sends_alert_without_vlm(
+    async def test_notify_on_motion_override_alerts_when_vlm_skipped(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:
-        """Per-camera notify_on_motion should send alert even without VLM."""
+        """Per-camera notify_on_motion should alert even when VLM is skipped."""
         # Given per-camera override enables notify_on_motion
         base_config = Config(
             cameras=base_config.cameras,
@@ -770,7 +770,7 @@ class TestClipPipelineAlertOverrides:
             ),
         )
 
-        # Given filter detects class not in trigger_classes
+        # Given filter detects class not in trigger_classes (VLM skipped)
         motion_result = FilterResult(
             detected_classes=["dog"],
             confidence=0.9,
@@ -794,7 +794,7 @@ class TestClipPipelineAlertOverrides:
         pipeline.on_new_clip(sample_clip)
         await pipeline.shutdown()
 
-        # Then alert is sent even though VLM did not run
+        # Then alert is sent even though VLM was skipped
         notifier: MockNotifier = mocks.notifier
         assert len(notifier.sent_alerts) == 1
         assert notifier.sent_alerts[0].notify_reason == "notify_on_motion=true"

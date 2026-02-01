@@ -8,13 +8,7 @@ import signal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from homesec.config import (
-    load_config,
-    resolve_env_var,
-    validate_camera_references,
-    validate_plugin_names,
-    validate_plugin_configs,
-)
+from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
 from homesec.health import HealthServer
 from homesec.interfaces import EventStore
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
@@ -274,7 +268,6 @@ class Application:
         return self._config
 
     def _validate_config(self, config: Config) -> None:
-        validate_camera_references(config)
         validate_plugin_names(
             config,
             valid_filters=get_plugin_names(PluginType.FILTER),
@@ -284,7 +277,7 @@ class Application:
             valid_alert_policies=get_plugin_names(PluginType.ALERT_POLICY),
             valid_sources=get_plugin_names(PluginType.SOURCE),
         )
-        validate_plugin_configs(config)
+        validate_config(config)
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""

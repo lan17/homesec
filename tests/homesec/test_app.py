@@ -168,7 +168,7 @@ def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
         pass
 
     monkeypatch.setattr("homesec.app.validate_plugin_names", _mock_validate)
-    monkeypatch.setattr("homesec.app.validate_plugin_configs", _mock_validate)
+    monkeypatch.setattr("homesec.app.validate_config", _mock_validate)
 
     # Mock notifier loading loop in app.py manually if needed,
     # but app.py uses load_notifier_plugin.

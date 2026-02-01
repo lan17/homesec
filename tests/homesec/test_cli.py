@@ -107,9 +107,8 @@ class TestHomeSecValidate:
         # Mock discover_all_plugins (imported inside function) and validation functions
         with (
             patch("homesec.plugins.discover_all_plugins"),
-            patch("homesec.cli.validate_camera_references"),
             patch("homesec.cli.validate_plugin_names"),
-            patch("homesec.cli.validate_plugin_configs"),
+            patch("homesec.cli.validate_config"),
         ):
             # When: Validating the config
             cli = HomeSec()

@@ -190,3 +190,9 @@ def validate_plugin_configs(config: Config) -> None:
 
     if errors:
         raise ConfigError("Invalid plugin config:\n  " + "\n  ".join(errors))
+
+
+def validate_config(config: Config, camera_names: list[str] | None = None) -> None:
+    """Validate config boundaries and plugin configs."""
+    validate_camera_references(config, camera_names)
+    validate_plugin_configs(config)

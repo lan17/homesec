@@ -53,12 +53,11 @@ def load_config(path: Path) -> Config:
         raise ConfigError(format_validation_error(e, path), path=path) from e
 
     # Discover plugins and validate plugin-specific config
-    from homesec.config.validation import validate_camera_references, validate_plugin_configs
+    from homesec.config.validation import validate_config
     from homesec.plugins import discover_all_plugins
 
     discover_all_plugins()
-    validate_camera_references(config)
-    validate_plugin_configs(config)
+    validate_config(config)
     return config
 
 
@@ -79,12 +78,11 @@ def load_config_from_dict(data: dict[str, Any]) -> Config:
     except ValidationError as e:
         raise ConfigError(format_validation_error(e, path=None)) from e
 
-    from homesec.config.validation import validate_camera_references, validate_plugin_configs
+    from homesec.config.validation import validate_config
     from homesec.plugins import discover_all_plugins
 
     discover_all_plugins()
-    validate_camera_references(config)
-    validate_plugin_configs(config)
+    validate_config(config)
     return config
 
 
