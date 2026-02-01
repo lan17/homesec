@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from homesec.models.clip import Clip
-from homesec.models.source.ftp import FtpSourceConfig
+from homesec.sources.ftp import FtpSourceConfig
 from homesec.sources.ftp import FtpSource, _parse_passive_ports
 
 
@@ -120,7 +120,7 @@ class TestFtpSourceFileHandling:
         clip = emitted[0]
         assert clip.clip_id == "recording_2024_01_15"
         assert clip.camera_name == "test_cam"
-        assert clip.source_type == "ftp"
+        assert clip.source_backend == "ftp"
         assert clip.end_ts == mtime
         assert clip.start_ts == mtime - timedelta(seconds=30.0)
         assert clip.duration_s == 30.0

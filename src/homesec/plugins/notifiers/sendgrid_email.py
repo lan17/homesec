@@ -19,13 +19,64 @@ else:
     aiohttp = _aiohttp
 
 
+from pydantic import BaseModel, Field, model_validator
+
 from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
-from homesec.models.config import SendGridEmailConfig
 from homesec.models.vlm import SequenceAnalysis
 from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
+
+
+class SendGridEmailConfig(BaseModel):
+    """SendGrid email notifier configuration."""
+
+    api_key_env: str = "SENDGRID_API_KEY"
+    from_email: str
+    from_name: str | None = None
+    to_emails: list[str] = Field(min_length=1)
+    cc_emails: list[str] = Field(default_factory=list)
+    bcc_emails: list[str] = Field(default_factory=list)
+    subject_template: str = "[HomeSec] {camera_name}: {activity_type} ({risk_level})"
+    text_template: str = (
+        "HomeSec alert\n"
+        "Camera: {camera_name}\n"
+        "Clip: {clip_id}\n"
+        "Risk: {risk_level}\n"
+        "Activity: {activity_type}\n"
+        "Reason: {notify_reason}\n"
+        "Summary: {summary}\n"
+        "View: {view_url}\n"
+        "Storage: {storage_uri}\n"
+        "Time: {ts}\n"
+        "Upload failed: {upload_failed}\n"
+    )
+    html_template: str = (
+        "<html><body>"
+        "<h2>HomeSec alert</h2>"
+        "<p><strong>Camera:</strong> {camera_name}</p>"
+        "<p><strong>Clip:</strong> {clip_id}</p>"
+        "<p><strong>Risk:</strong> {risk_level}</p>"
+        "<p><strong>Activity:</strong> {activity_type}</p>"
+        "<p><strong>Reason:</strong> {notify_reason}</p>"
+        "<p><strong>Summary:</strong> {summary}</p>"
+        '<p><strong>View:</strong> <a href="{view_url}">{view_url}</a></p>'
+        "<p><strong>Storage:</strong> {storage_uri}</p>"
+        "<p><strong>Time:</strong> {ts}</p>"
+        "<p><strong>Upload failed:</strong> {upload_failed}</p>"
+        "<h3>Structured analysis</h3>"
+        "{analysis_html}"
+        "</body></html>"
+    )
+    request_timeout_s: float = 10.0
+    api_base: str = "https://api.sendgrid.com/v3"
+
+    @model_validator(mode="after")
+    def _validate_templates(self) -> SendGridEmailConfig:
+        if not self.text_template and not self.html_template:
+            raise ValueError("sendgrid_email requires at least one of text_template/html_template")
+        return self
 
 
 def _ensure_sendgrid_dependencies() -> None:

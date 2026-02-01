@@ -9,6 +9,7 @@
 
 - **Strict type checking required**: Run `make typecheck` before committing. Error-as-value pattern requires explicit type narrowing via match/isinstance.
 - **Program to interfaces**: Use factory/registry helpers (e.g., `load_filter_plugin()`). Avoid direct instantiation of plugins.
+- **Architecture constraints**: See `DESIGN.md` → “Architecture Constraints”. Boundary violations (core ↔ concrete plugins, backend-specific config in core) are bugs.
 - **Repository pattern**: Use `ClipRepository` for all state/event writes. Never touch `StateStore`/`EventStore` directly.
 - **Preserve stack traces**: Custom errors must set `self.__cause__ = cause` to preserve original exception.
 - **Tests must use Given/When/Then comments**: Every test must include these comments and follow behavioral testing principles (see `TESTING.md`).
@@ -42,7 +43,7 @@ async def _filter_stage(self, clip: Clip) -> FilterResult | FilterError:
         async with self._sem_filter:
             return await self._filter.detect(clip.local_path)
     except Exception as e:
-        return FilterError(clip.clip_id, self._config.filter.plugin, cause=e)
+        return FilterError(clip.clip_id, self._config.filter.backend, cause=e)
 
 # Caller uses match for type narrowing
 filter_result = await self._filter_stage(clip)

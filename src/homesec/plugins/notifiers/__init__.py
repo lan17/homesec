@@ -8,7 +8,6 @@ from typing import cast
 from pydantic import BaseModel
 
 from homesec.interfaces import Notifier
-from homesec.plugins.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.plugins.registry import PluginType, load_plugin
 
 logger = logging.getLogger(__name__)
@@ -38,8 +37,4 @@ def load_notifier_plugin(backend: str, config: dict[str, object] | BaseModel) ->
     )
 
 
-__all__ = [
-    "MultiplexNotifier",
-    "NotifierEntry",
-    "load_notifier_plugin",
-]
+__all__ = ["load_notifier_plugin"]

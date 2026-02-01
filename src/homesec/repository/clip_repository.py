@@ -73,7 +73,7 @@ class ClipRepository:
             timestamp=datetime.now(),
             camera_name=clip.camera_name,
             duration_s=clip.duration_s,
-            source_type=clip.source_type,
+            source_backend=clip.source_backend,
         )
 
         await self._safe_upsert(clip.clip_id, state)

@@ -29,9 +29,8 @@ def load_filter(config: FilterConfig) -> ObjectFilter:
         ObjectFilter,
         load_plugin(
             PluginType.FILTER,
-            config.plugin,
+            config.backend,
             config.config,
-            max_workers=config.max_workers,
         ),
     )
 

@@ -12,27 +12,22 @@ from homesec.errors import NotifyError
 from homesec.models.clip import Clip, ClipStateData
 from homesec.models.config import (
     AlertPolicyConfig,
-    AlertPolicyOverrides,
     CameraConfig,
     CameraSourceConfig,
     Config,
-    DefaultAlertPolicySettings,
-    DropboxStorageConfig,
     NotifierConfig,
     RetryConfig,
     StateStoreConfig,
     StorageConfig,
 )
 from homesec.models.enums import RiskLevel
-from homesec.models.filter import (
-    FilterConfig,
-    FilterOverrides,
-    FilterResult,
-    YoloFilterSettings,
-)
-from homesec.models.vlm import AnalysisResult, OpenAILLMConfig, VLMConfig
+from homesec.models.filter import FilterConfig, FilterOverrides, FilterResult
+from homesec.models.vlm import AnalysisResult, VLMConfig
 from homesec.pipeline import ClipPipeline
-from homesec.plugins.alert_policies.default import DefaultAlertPolicy
+from homesec.plugins.alert_policies.default import DefaultAlertPolicy, DefaultAlertPolicySettings
+from homesec.plugins.analyzers.openai import OpenAIConfig
+from homesec.plugins.filters.yolo import YoloFilterConfig
+from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.repository import ClipRepository
 from tests.homesec.mocks import (
     MockEventStore,
@@ -63,8 +58,7 @@ def make_alert_policy(config: Config) -> DefaultAlertPolicy:
     """Build the default alert policy from config."""
     settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
     # Inject runtime fields as the registry would
-    settings.overrides = config.per_camera_alert
-    settings.trigger_classes = set(config.vlm.trigger_classes)
+    settings.trigger_classes = list(config.vlm.trigger_classes)
     return DefaultAlertPolicy(settings)
 
 
@@ -75,7 +69,7 @@ def base_config() -> Config:
         CameraConfig(
             name="front_door",
             source=CameraSourceConfig(
-                type="local_folder",
+                backend="local_folder",
                 config={
                     "watch_dir": "recordings",
                     "poll_interval": 1.0,
@@ -87,7 +81,7 @@ def base_config() -> Config:
         cameras=cameras,
         storage=StorageConfig(
             backend="dropbox",
-            dropbox=DropboxStorageConfig(root="/homecam"),
+            config=DropboxStorageConfig(root="/homecam"),
         ),
         state_store=StateStoreConfig(dsn="postgresql://user:pass@localhost/db"),
         notifiers=[
@@ -97,13 +91,13 @@ def base_config() -> Config:
             )
         ],
         filter=FilterConfig(
-            plugin="yolo",
-            config=YoloFilterSettings(model_path="yolov8n.pt"),
+            backend="yolo",
+            config=YoloFilterConfig(model_path="yolov8n.pt"),
         ),
         vlm=VLMConfig(
             backend="openai",
             trigger_classes=["person", "car"],
-            llm=OpenAILLMConfig(
+            config=OpenAIConfig(
                 api_key_env="OPENAI_API_KEY",
                 model="gpt-4o",
             ),
@@ -134,7 +128,7 @@ def sample_clip(tmp_path: Path) -> Clip:
         start_ts=start_ts,
         end_ts=start_ts + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="mock",
+        source_backend="mock",
     )
 
 
@@ -234,23 +228,23 @@ class TestClipPipelineHappyPath:
         assert state.analysis_result is None
 
     @pytest.mark.asyncio
-    async def test_notify_on_motion_runs_vlm_regardless(
+    async def test_run_mode_always_runs_vlm_regardless(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:
-        """When notify_on_motion=True, VLM runs even without trigger classes."""
-        # Given notify_on_motion enabled and a non-trigger filter result
+        """When run_mode=always, VLM runs even without trigger classes."""
+        # Given run_mode=always and a non-trigger filter result
         base_config = Config(
             cameras=base_config.cameras,
             storage=base_config.storage,
             state_store=base_config.state_store,
             notifiers=base_config.notifiers,
             filter=base_config.filter,
-            vlm=base_config.vlm,
+            vlm=base_config.vlm.model_copy(update={"run_mode": "always"}),
             alert_policy=AlertPolicyConfig(
                 backend="default",
                 config={
                     "min_risk_level": "low",
-                    "notify_on_motion": True,
+                    "notify_on_motion": False,
                 },
             ),
         )
@@ -754,11 +748,11 @@ class TestClipPipelineAlertOverrides:
     """Test per-camera alert policy overrides."""
 
     @pytest.mark.asyncio
-    async def test_per_camera_notify_on_motion_forces_vlm(
+    async def test_per_camera_notify_on_motion_sends_alert_without_vlm(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:
-        """Per-camera notify_on_motion should force VLM even without trigger classes."""
-        # Given per-camera override forces notify_on_motion
+        """Per-camera notify_on_motion should send alert even without VLM."""
+        # Given per-camera override enables notify_on_motion
         base_config = Config(
             cameras=base_config.cameras,
             storage=base_config.storage,
@@ -766,12 +760,14 @@ class TestClipPipelineAlertOverrides:
             notifiers=base_config.notifiers,
             filter=base_config.filter,
             vlm=base_config.vlm,
-            alert_policy=base_config.alert_policy,
-            per_camera_alert={
-                "front_door": AlertPolicyOverrides(
-                    notify_on_motion=True,
-                )
-            },
+            alert_policy=AlertPolicyConfig(
+                backend="default",
+                config={
+                    "min_risk_level": "low",
+                    "notify_on_motion": False,
+                    "overrides": {"front_door": {"notify_on_motion": True}},
+                },
+            ),
         )
 
         # Given filter detects class not in trigger_classes
@@ -798,10 +794,10 @@ class TestClipPipelineAlertOverrides:
         pipeline.on_new_clip(sample_clip)
         await pipeline.shutdown()
 
-        # Then VLM runs due to override
-        state_store: MockStateStore = mocks.state_store
-        state = await state_store.get(sample_clip.clip_id)
-        assert state is not None
+        # Then alert is sent even though VLM did not run
+        notifier: MockNotifier = mocks.notifier
+        assert len(notifier.sent_alerts) == 1
+        assert notifier.sent_alerts[0].notify_reason == "notify_on_motion=true"
 
 
 class TestClipPipelineConcurrency:
@@ -828,7 +824,7 @@ class TestClipPipelineConcurrency:
                     start_ts=start_ts,
                     end_ts=start_ts + timedelta(seconds=10),
                     duration_s=10.0,
-                    source_type="mock",
+                    source_backend="mock",
                 )
             )
 
@@ -1004,7 +1000,7 @@ class TestClipPipelineSemaphores:
             start_ts=datetime.now(),
             end_ts=datetime.now(),
             duration_s=1,
-            source_type="test",
+            source_backend="test",
         )
         clip2 = Clip(
             clip_id="c2",
@@ -1013,7 +1009,7 @@ class TestClipPipelineSemaphores:
             start_ts=datetime.now(),
             end_ts=datetime.now(),
             duration_s=1,
-            source_type="test",
+            source_backend="test",
         )
 
         # When clip 1 starts processing
@@ -1078,7 +1074,7 @@ class TestClipPipelineSemaphores:
             start_ts=datetime.now(),
             end_ts=datetime.now(),
             duration_s=1,
-            source_type="test",
+            source_backend="test",
         )
         clip2 = Clip(
             clip_id="c2",
@@ -1087,7 +1083,7 @@ class TestClipPipelineSemaphores:
             start_ts=datetime.now(),
             end_ts=datetime.now(),
             duration_s=1,
-            source_type="test",
+            source_backend="test",
         )
 
         # When clip 1 starts uploading

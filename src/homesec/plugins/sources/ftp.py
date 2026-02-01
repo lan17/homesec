@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homesec.interfaces import ClipSource
-from homesec.models.source.ftp import FtpSourceConfig
+from homesec.sources.ftp import FtpSourceConfig
 from homesec.plugins.registry import PluginType, plugin
 
 # Import the actual implementation from sources module

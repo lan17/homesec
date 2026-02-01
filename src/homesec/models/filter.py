@@ -16,23 +16,6 @@ class FilterResult(BaseModel):
     sampled_frames: int
 
 
-class YoloFilterSettings(BaseModel):
-    """YOLO filter settings.
-
-    model_path accepts a filename; bare names resolve under ./yolo_cache.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    model_path: str = "yolo11n.pt"
-    classes: list[str] = Field(default_factory=lambda: ["person"], min_length=1)
-    min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    sample_fps: int = Field(default=2, ge=1)
-    min_box_h_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
-    min_hits: int = Field(default=1, ge=1)
-    max_workers: int = Field(default=4, ge=1)
-
-
 class FilterOverrides(BaseModel):
     """Runtime overrides for filter settings (model path not allowed)."""
 
@@ -58,13 +41,12 @@ class FilterConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    plugin: str
-    max_workers: int = Field(default=4, ge=1)
+    backend: str
     config: dict[str, Any] | BaseModel  # Dict before validation, BaseModel after
 
-    @field_validator("plugin", mode="before")
+    @field_validator("backend", mode="before")
     @classmethod
-    def _normalize_plugin(cls, value: Any) -> Any:
+    def _normalize_backend(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower()
         return value

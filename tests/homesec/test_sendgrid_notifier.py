@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from homesec.models.alert import Alert
-from homesec.models.config import SendGridEmailConfig
+from homesec.plugins.notifiers.sendgrid_email import SendGridEmailConfig
 from homesec.models.vlm import SequenceAnalysis
 from homesec.plugins.notifiers.sendgrid_email import SendGridEmailNotifier
 

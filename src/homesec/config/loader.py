@@ -48,9 +48,18 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"Config must be a YAML mapping, got {type(raw).__name__}", path=path)
 
     try:
-        return Config.model_validate(raw)
+        config = Config.model_validate(raw)
     except ValidationError as e:
         raise ConfigError(format_validation_error(e, path), path=path) from e
+
+    # Discover plugins and validate plugin-specific config
+    from homesec.config.validation import validate_camera_references, validate_plugin_configs
+    from homesec.plugins import discover_all_plugins
+
+    discover_all_plugins()
+    validate_camera_references(config)
+    validate_plugin_configs(config)
+    return config
 
 
 def load_config_from_dict(data: dict[str, Any]) -> Config:
@@ -66,9 +75,17 @@ def load_config_from_dict(data: dict[str, Any]) -> Config:
         ConfigError: If validation fails
     """
     try:
-        return Config.model_validate(data)
+        config = Config.model_validate(data)
     except ValidationError as e:
         raise ConfigError(format_validation_error(e, path=None)) from e
+
+    from homesec.config.validation import validate_camera_references, validate_plugin_configs
+    from homesec.plugins import discover_all_plugins
+
+    discover_all_plugins()
+    validate_camera_references(config)
+    validate_plugin_configs(config)
+    return config
 
 
 def resolve_env_var(env_var_name: str, required: bool = True) -> str | None:

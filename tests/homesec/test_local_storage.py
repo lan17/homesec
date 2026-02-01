@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from homesec.models.config import LocalStorageConfig
+from homesec.plugins.storage.local import LocalStorageConfig
 from homesec.plugins.storage.local import LocalStorage
 
 

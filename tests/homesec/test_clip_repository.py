@@ -35,7 +35,7 @@ async def test_initialize_clip(postgres_dsn: str, tmp_path: Path, clean_test_db:
         start_ts=datetime.now(),
         end_ts=datetime.now() + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="test",
+        source_backend="test",
     )
 
     # When: We initialize a clip
@@ -73,7 +73,7 @@ async def test_record_upload_completed(
         start_ts=datetime.now(),
         end_ts=datetime.now() + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="test",
+        source_backend="test",
     )
     await repository.initialize_clip(clip)
 
@@ -119,7 +119,7 @@ async def test_record_filter_completed(
         start_ts=datetime.now(),
         end_ts=datetime.now() + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="test",
+        source_backend="test",
     )
     await repository.initialize_clip(clip)
 
@@ -168,7 +168,7 @@ async def test_record_clip_rechecked_updates_state_and_event(
         start_ts=datetime.now(),
         end_ts=datetime.now() + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="test",
+        source_backend="test",
     )
     await repository.initialize_clip(clip)
 
@@ -226,7 +226,7 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
         start_ts=datetime.now(),
         end_ts=datetime.now() + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="test",
+        source_backend="test",
     )
     await repository.initialize_clip(clip)
 
@@ -284,7 +284,7 @@ async def test_record_notification_sent(
         start_ts=datetime.now(),
         end_ts=datetime.now() + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="test",
+        source_backend="test",
     )
     await repository.initialize_clip(clip)
 

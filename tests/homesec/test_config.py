@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from pydantic import BaseModel
+
 from homesec.config import (
     ConfigError,
     load_config,
@@ -14,8 +16,33 @@ from homesec.config import (
     validate_camera_references,
     validate_plugin_names,
 )
-from homesec.models.enums import RiskLevel
-from homesec.models.filter import YoloFilterSettings
+from homesec.plugins.registry import PluginType, plugin
+
+
+class CustomFilterConfig(BaseModel):
+    model_config = {"extra": "allow"}
+
+
+@plugin(plugin_type=PluginType.FILTER, name="custom_filter")
+class CustomFilterPlugin:
+    config_cls = CustomFilterConfig
+
+    @classmethod
+    def create(cls, config: CustomFilterConfig) -> object:
+        return object()
+
+
+class CustomVLMConfig(BaseModel):
+    model_config = {"extra": "allow"}
+
+
+@plugin(plugin_type=PluginType.ANALYZER, name="custom_vlm")
+class CustomVLMPlugin:
+    config_cls = CustomVLMConfig
+
+    @classmethod
+    def create(cls, config: CustomVLMConfig) -> object:
+        return object()
 
 
 def minimal_config() -> dict[str, object]:
@@ -26,7 +53,7 @@ def minimal_config() -> dict[str, object]:
             {
                 "name": "front_door",
                 "source": {
-                    "type": "local_folder",
+                    "backend": "local_folder",
                     "config": {
                         "watch_dir": "recordings",
                         "poll_interval": 1.0,
@@ -36,7 +63,7 @@ def minimal_config() -> dict[str, object]:
         ],
         "storage": {
             "backend": "dropbox",
-            "dropbox": {
+            "config": {
                 "root": "/homecam",
             },
         },
@@ -53,14 +80,12 @@ def minimal_config() -> dict[str, object]:
             }
         ],
         "filter": {
-            "plugin": "yolo",
-            "max_workers": 1,
+            "backend": "yolo",
             "config": {},
         },
         "vlm": {
             "backend": "openai",
-            "max_workers": 1,
-            "llm": {
+            "config": {
                 "api_key_env": "OPENAI_API_KEY",
                 "model": "gpt-4o",
             },
@@ -82,17 +107,17 @@ def test_load_config_from_dict_success() -> None:
     config = load_config_from_dict(minimal_config())
 
     # Then it loads successfully
-    assert config.filter.plugin == "yolo"
-    assert config.filter.config.model_path == "yolo11n.pt"
+    assert config.filter.backend == "yolo"
+    assert isinstance(config.filter.config, dict)
     assert config.vlm.backend == "openai"
     assert config.alert_policy.backend == "default"
-    assert config.get_default_alert_policy("front_door").min_risk_level == RiskLevel.MEDIUM
+    assert config.alert_policy.config["min_risk_level"] == "medium"
 
 
 def test_load_config_from_dict_missing_required_field() -> None:
     """Test that missing required field raises ConfigError."""
     # Given a config missing required sections
-    invalid = {"filter": {"plugin": "yolo"}}  # Missing vlm and alert_policy
+    invalid = {"filter": {"backend": "yolo"}}  # Missing vlm and alert_policy
 
     # When loading the config
     with pytest.raises(ConfigError) as exc_info:
@@ -126,14 +151,14 @@ def test_load_config_from_yaml_file() -> None:
 cameras:
   - name: front_door
     source:
-      type: local_folder
+      backend: local_folder
       config:
         watch_dir: recordings
         poll_interval: 1.0
 
 storage:
   backend: dropbox
-  dropbox:
+  config:
     root: /homecam
 
 state_store:
@@ -145,14 +170,12 @@ notifiers:
       host: localhost
 
 filter:
-  plugin: yolo
-  max_workers: 4
+  backend: yolo
   config: {}
 
 vlm:
   backend: openai
-  max_workers: 2
-  llm:
+  config:
     api_key_env: OPENAI_API_KEY
     model: gpt-4o
 
@@ -172,11 +195,10 @@ alert_policy:
         # Then fields are parsed and validated
         assert config.cameras[0].name == "front_door"
         assert config.storage.backend == "dropbox"
-        assert config.filter.plugin == "yolo"
-        assert isinstance(config.filter.config, YoloFilterSettings)
-        assert config.filter.config.model_path == "yolo11n.pt"
+        assert config.filter.backend == "yolo"
+        assert isinstance(config.filter.config, dict)
         assert config.vlm.backend == "openai"
-        assert config.get_default_alert_policy("front_door").min_risk_level == RiskLevel.LOW
+        assert config.alert_policy.config["min_risk_level"] == "low"
     finally:
         path.unlink()
 
@@ -229,10 +251,10 @@ def test_load_config_empty_file() -> None:
 
 
 def test_per_camera_override_merge() -> None:
-    """Test that per-camera overrides merge correctly."""
+    """Test that per-camera overrides are preserved in config."""
     # Given a config with per-camera alert overrides
     data = minimal_config()
-    data["per_camera_alert"] = {
+    data["alert_policy"]["config"]["overrides"] = {
         "front_door": {
             "min_risk_level": "low",
             "notify_on_activity_types": ["delivery"],
@@ -242,15 +264,10 @@ def test_per_camera_override_merge() -> None:
     # When loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then default camera uses base config
-    default_policy = config.get_default_alert_policy("unknown_camera")
-    assert default_policy.min_risk_level == RiskLevel.MEDIUM
-    assert default_policy.notify_on_activity_types == []
-
-    # Then front_door uses merged config
-    front_door_policy = config.get_default_alert_policy("front_door")
-    assert front_door_policy.min_risk_level == RiskLevel.LOW
-    assert front_door_policy.notify_on_activity_types == ["delivery"]
+    # Then overrides remain available in the alert policy config
+    overrides = config.alert_policy.config["overrides"]
+    assert overrides["front_door"]["min_risk_level"] == "low"
+    assert overrides["front_door"]["notify_on_activity_types"] == ["delivery"]
 
 
 def test_resolve_env_var_success() -> None:
@@ -290,7 +307,7 @@ def test_validate_camera_references_valid() -> None:
     """Test validation passes when camera names are valid."""
     # Given per-camera overrides for known cameras
     data = minimal_config()
-    data["per_camera_alert"] = {"front_door": {"min_risk_level": "low"}}
+    data["alert_policy"]["config"]["overrides"] = {"front_door": {"min_risk_level": "low"}}
 
     # When loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
@@ -303,14 +320,11 @@ def test_validate_camera_references_invalid() -> None:
     """Test validation fails when camera names are invalid."""
     # Given per-camera overrides for unknown cameras
     data = minimal_config()
-    data["per_camera_alert"] = {"unknown_camera": {"min_risk_level": "low"}}
+    data["alert_policy"]["config"]["overrides"] = {"unknown_camera": {"min_risk_level": "low"}}
 
     # When loading the config
-    config = load_config_from_dict(data)  # type: ignore[arg-type]
-
-    # Then validation fails with unknown camera
     with pytest.raises(ConfigError) as exc_info:
-        validate_camera_references(config, ["front_door"])
+        load_config_from_dict(data)  # type: ignore[arg-type]
 
     assert "unknown_camera" in str(exc_info.value)
 
@@ -330,7 +344,7 @@ def test_validate_plugin_names_valid() -> None:
         valid_alert_policies=["default"],
     )
     # Then validation succeeds without errors
-    assert config.filter.plugin == "yolo"
+    assert config.filter.backend == "yolo"
 
 
 def test_validate_plugin_names_invalid() -> None:
@@ -357,12 +371,12 @@ def test_validate_plugin_names_case_insensitive() -> None:
     """Test validation allows plugin names with different casing."""
     # Given a config with uppercase plugin names
     data = minimal_config()
-    data["filter"]["plugin"] = "YOLO"
+    data["filter"]["backend"] = "YOLO"
     data["vlm"]["backend"] = "OPENAI"
     data["storage"]["backend"] = "DROPBOX"
     data["notifiers"][0]["backend"] = "MQTT"
     data["alert_policy"]["backend"] = "DEFAULT"
-    data["cameras"][0]["source"]["type"] = "LOCAL_FOLDER"
+    data["cameras"][0]["source"]["backend"] = "LOCAL_FOLDER"
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
     # When validating plugin names
@@ -377,12 +391,12 @@ def test_validate_plugin_names_case_insensitive() -> None:
     )
 
     # Then validation succeeds regardless of casing
-    assert config.filter.plugin == "yolo"
+    assert config.filter.backend == "yolo"
     assert config.vlm.backend == "openai"
     assert config.storage.backend == "dropbox"
     assert config.notifiers[0].backend == "mqtt"
     assert config.alert_policy.backend == "default"
-    assert config.cameras[0].source.type == "local_folder"
+    assert config.cameras[0].source.backend == "local_folder"
 
 
 def test_load_example_config() -> None:
@@ -395,7 +409,7 @@ def test_load_example_config() -> None:
     # When loading the config
     config = load_config(example_path)
     # Then expected fields are present
-    assert config.filter.plugin == "yolo"
+    assert config.filter.backend == "yolo"
     assert config.vlm.backend == "openai"
 
 
@@ -408,8 +422,7 @@ def test_third_party_filter_config_preserved_through_config_load() -> None:
     # Given a config with a third-party filter plugin (not yolo)
     data = minimal_config()
     data["filter"] = {
-        "plugin": "custom_filter",
-        "max_workers": 2,
+        "backend": "custom_filter",
         "config": {
             "custom_field_1": "value1",
             "custom_field_2": 42,
@@ -431,14 +444,13 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
     """Test that third-party VLM plugin configs (dicts) survive Config load.
 
     This tests the fix for the bug where third-party configs were silently dropped
-    because VLMConfig.llm accepted BaseModel which created empty objects.
+    because VLMConfig.config accepted BaseModel which created empty objects.
     """
     # Given a config with a third-party VLM plugin (not openai)
     data = minimal_config()
     data["vlm"] = {
         "backend": "custom_vlm",
-        "max_workers": 2,
-        "llm": {
+        "config": {
             "custom_api_key": "secret123",
             "custom_model": "custom-model-v1",
             "custom_setting": True,
@@ -448,8 +460,8 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
     # When loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then the llm config should be preserved as a dict (not empty BaseModel)
-    assert isinstance(config.vlm.llm, dict)
-    assert config.vlm.llm["custom_api_key"] == "secret123"
-    assert config.vlm.llm["custom_model"] == "custom-model-v1"
-    assert config.vlm.llm["custom_setting"] is True
+    # Then the config should be preserved as a dict (not empty BaseModel)
+    assert isinstance(config.vlm.config, dict)
+    assert config.vlm.config["custom_api_key"] == "secret123"
+    assert config.vlm.config["custom_model"] == "custom-model-v1"
+    assert config.vlm.config["custom_setting"] is True

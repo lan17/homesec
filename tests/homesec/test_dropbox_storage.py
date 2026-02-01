@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from homesec.models.config import DropboxStorageConfig
+from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.plugins.storage.dropbox import DropboxStorage
 
 

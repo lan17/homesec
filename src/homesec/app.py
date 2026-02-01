@@ -13,18 +13,16 @@ from homesec.config import (
     resolve_env_var,
     validate_camera_references,
     validate_plugin_names,
+    validate_plugin_configs,
 )
 from homesec.health import HealthServer
 from homesec.interfaces import EventStore
+from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.pipeline import ClipPipeline
 from homesec.plugins.alert_policies import load_alert_policy
 from homesec.plugins.analyzers import load_analyzer
 from homesec.plugins.filters import load_filter
-from homesec.plugins.notifiers import (
-    MultiplexNotifier,
-    NotifierEntry,
-    load_notifier_plugin,
-)
+from homesec.plugins.notifiers import load_notifier_plugin
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.plugins.sources import load_source_plugin
 from homesec.plugins.storage import load_storage_plugin
@@ -252,7 +250,6 @@ class Application:
         """Create alert policy using the plugin registry."""
         return load_alert_policy(
             config.alert_policy,
-            per_camera_overrides=config.per_camera_alert,
             trigger_classes=config.vlm.trigger_classes,
         )
 
@@ -263,7 +260,7 @@ class Application:
         for camera in config.cameras:
             source_cfg = camera.source
             source = load_source_plugin(
-                source_type=source_cfg.type,
+                source_backend=source_cfg.backend,
                 config=source_cfg.config,
                 camera_name=camera.name,
             )
@@ -287,6 +284,7 @@ class Application:
             valid_alert_policies=get_plugin_names(PluginType.ALERT_POLICY),
             valid_sources=get_plugin_names(PluginType.SOURCE),
         )
+        validate_plugin_configs(config)
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""

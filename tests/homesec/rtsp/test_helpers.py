@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from homesec.models.source.rtsp import RTSPSourceConfig
+from homesec.sources.rtsp.core import RTSPSourceConfig
 from homesec.sources.rtsp.core import RTSPSource
 
 

@@ -27,11 +27,29 @@ else:
     torch = _torch
     YOLO_CLASS = _YOLO
 
+from pydantic import BaseModel, Field
+
 from homesec.interfaces import ObjectFilter
-from homesec.models.filter import FilterOverrides, FilterResult, YoloFilterSettings
+from homesec.models.filter import FilterOverrides, FilterResult
 from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
+
+class YoloFilterConfig(BaseModel):
+    """YOLO filter settings.
+
+    model_path accepts a filename; bare names resolve under ./yolo_cache.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    model_path: str = "yolo11n.pt"
+    classes: list[str] = Field(default_factory=lambda: ["person"], min_length=1)
+    min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    sample_fps: int = Field(default=2, ge=1)
+    min_box_h_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
+    min_hits: int = Field(default=1, ge=1)
+    max_workers: int = Field(default=4, ge=1)
 
 # COCO classes for humans and animals
 HUMAN_ANIMAL_CLASSES = {
@@ -159,13 +177,13 @@ class YOLOFilter(ObjectFilter):
     Bare model filenames resolve under ./yolo_cache and auto-download if missing.
     """
 
-    config_cls = YoloFilterSettings
+    config_cls = YoloFilterConfig
 
     @classmethod
-    def create(cls, config: YoloFilterSettings) -> ObjectFilter:
+    def create(cls, config: YoloFilterConfig) -> ObjectFilter:
         return cls(config)
 
-    def __init__(self, settings: YoloFilterSettings) -> None:
+    def __init__(self, settings: YoloFilterConfig) -> None:
         """Initialize YOLO filter with validated settings.
 
         Args:
@@ -243,7 +261,7 @@ class YOLOFilter(ObjectFilter):
         # Executor is considered healthy if not shut down
         return True
 
-    def _apply_overrides(self, overrides: FilterOverrides | None) -> YoloFilterSettings:
+    def _apply_overrides(self, overrides: FilterOverrides | None) -> YoloFilterConfig:
         if overrides is None:
             return self._settings
         update = overrides.model_dump(exclude_none=True)

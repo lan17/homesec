@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel, ValidationError
+
 from homesec.config.loader import ConfigError
 from homesec.models.config import Config
+from homesec.plugins.registry import PluginType, validate_plugin
 
 
 def validate_camera_references(config: Config, camera_names: list[str] | None = None) -> None:
@@ -22,9 +25,17 @@ def validate_camera_references(config: Config, camera_names: list[str] | None = 
     camera_set = set(camera_names)
     errors = []
 
-    for camera in config.per_camera_alert:
+    overrides: dict[str, object] = {}
+    if config.alert_policy.backend == "default":
+        raw = config.alert_policy.config
+        if isinstance(raw, BaseModel):
+            overrides = getattr(raw, "overrides", {}) or {}
+        elif isinstance(raw, dict):
+            overrides = raw.get("overrides", {}) or {}
+
+    for camera in overrides:
         if camera not in camera_set:
-            errors.append(f"per_camera_alert references unknown camera: {camera}")
+            errors.append(f"alert_policy.overrides references unknown camera: {camera}")
 
     if errors:
         raise ConfigError("Invalid camera references:\n  " + "\n  ".join(errors))
@@ -56,9 +67,9 @@ def validate_plugin_names(
     errors = []
 
     valid_filters_lower = {name.lower() for name in valid_filters}
-    if config.filter.plugin.lower() not in valid_filters_lower:
+    if config.filter.backend.lower() not in valid_filters_lower:
         errors.append(
-            f"Unknown filter plugin: {config.filter.plugin} (valid: {sorted(valid_filters_lower)})"
+            f"Unknown filter plugin: {config.filter.backend} (valid: {sorted(valid_filters_lower)})"
         )
 
     valid_vlms_lower = {name.lower() for name in valid_vlms}
@@ -95,11 +106,87 @@ def validate_plugin_names(
     if valid_sources is not None:
         valid_sources_lower = {name.lower() for name in valid_sources}
         for camera in config.cameras:
-            if camera.source.type.lower() not in valid_sources_lower:
+            if camera.source.backend.lower() not in valid_sources_lower:
                 errors.append(
                     f"Unknown source type for camera '{camera.name}': "
-                    f"{camera.source.type} (valid: {sorted(valid_sources_lower)})"
+                    f"{camera.source.backend} (valid: {sorted(valid_sources_lower)})"
                 )
 
     if errors:
         raise ConfigError("Invalid plugin configuration:\n  " + "\n  ".join(errors))
+
+
+def validate_plugin_configs(config: Config) -> None:
+    """Validate plugin configs against registered plugin config models."""
+    errors: list[str] = []
+
+    def _add_error(prefix: str, err: Exception) -> None:
+        if isinstance(err, ValidationError):
+            errors.append(f"{prefix}: {err}")
+        else:
+            errors.append(f"{prefix}: {err}")
+
+    try:
+        validate_plugin(
+            PluginType.STORAGE,
+            config.storage.backend,
+            config.storage.config,
+        )
+    except Exception as exc:
+        _add_error(f"storage[{config.storage.backend}]", exc)
+
+    try:
+        validate_plugin(
+            PluginType.FILTER,
+            config.filter.backend,
+            config.filter.config,
+        )
+    except Exception as exc:
+        _add_error(f"filter[{config.filter.backend}]", exc)
+
+    try:
+        validate_plugin(
+            PluginType.ANALYZER,
+            config.vlm.backend,
+            config.vlm.config,
+        )
+    except Exception as exc:
+        _add_error(f"vlm[{config.vlm.backend}]", exc)
+
+    if config.alert_policy.enabled:
+        try:
+            runtime_context = {}
+            if config.alert_policy.backend == "default":
+                runtime_context["trigger_classes"] = list(config.vlm.trigger_classes)
+            validate_plugin(
+                PluginType.ALERT_POLICY,
+                config.alert_policy.backend,
+                config.alert_policy.config,
+                **runtime_context,
+            )
+        except Exception as exc:
+            _add_error(f"alert_policy[{config.alert_policy.backend}]", exc)
+
+    for index, notifier in enumerate(config.notifiers):
+        try:
+            validate_plugin(
+                PluginType.NOTIFIER,
+                notifier.backend,
+                notifier.config,
+            )
+        except Exception as exc:
+            _add_error(f"notifier[{index}:{notifier.backend}]", exc)
+
+    for camera in config.cameras:
+        try:
+            validate_plugin(
+                PluginType.SOURCE,
+                camera.source.backend,
+                camera.source.config,
+                camera_name=camera.name,
+            )
+        except Exception as exc:
+            _add_error(f"source[{camera.name}:{camera.source.backend}]", exc)
+
+    if errors:
+        raise ConfigError("Invalid plugin config:\n  " + "\n  ".join(errors))

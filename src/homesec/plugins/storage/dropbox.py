@@ -18,14 +18,26 @@ else:
     dropbox = _dropbox
 
 
+from pydantic import BaseModel
+
 from homesec.interfaces import StorageBackend
-from homesec.models.config import DropboxStorageConfig
 from homesec.models.storage import StorageUploadResult
 from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 4 * 1024 * 1024
+
+
+class DropboxStorageConfig(BaseModel):
+    """Dropbox storage configuration."""
+
+    root: str
+    token_env: str = "DROPBOX_TOKEN"
+    app_key_env: str = "DROPBOX_APP_KEY"
+    app_secret_env: str = "DROPBOX_APP_SECRET"
+    refresh_token_env: str = "DROPBOX_REFRESH_TOKEN"
+    web_url_prefix: str = "https://www.dropbox.com/home"
 
 
 @plugin(plugin_type=PluginType.STORAGE, name="dropbox")

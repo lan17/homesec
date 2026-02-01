@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from homesec.models.alert import Alert
-from homesec.models.config import MQTTAuthConfig, MQTTConfig
+from homesec.plugins.notifiers.mqtt import MQTTAuthConfig, MQTTConfig
 from homesec.plugins.notifiers.mqtt import MQTTNotifier
 
 
