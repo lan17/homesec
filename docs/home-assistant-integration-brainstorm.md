@@ -12,9 +12,27 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 
 ---
 
+## Decision Snapshot (2026-02-01)
+
+- Chosen direction: Add-on + native integration (Option A below) with HomeSec as the runtime.
+- Required: runtime add/remove cameras and other config changes from HA.
+- API stack: FastAPI, async endpoints only, async SQLAlchemy only.
+- Restart is acceptable: API writes validated config to disk and returns `restart_required`; HA may trigger restart.
+- Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
+- Tests: Given/When/Then comments required for all new tests.
+- P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
+
+## Constraints and Non-Goals
+
+- No blocking work in API endpoints; file I/O and long operations must use `asyncio.to_thread`.
+- Avoid in-process hot-reload of pipeline components in v1; prefer restart after config changes.
+- Do not move heavy inference into Home Assistant (keep compute inside HomeSec runtime).
+
+---
+
 ## Integration Architecture Options
 
-### Option A: Add-on + Native Integration (Recommended)
+### Option A: Add-on + Native Integration (Chosen)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -92,6 +110,14 @@ Move core homesec logic into a Home Assistant integration (runs in HA's Python e
 
 ## Recommended Implementation Plan
 
+Execution order for Option A:
+
+1. REST API + config persistence (control plane)
+2. Native HA integration (config flow + entities)
+3. Home Assistant add-on packaging
+4. MQTT discovery (optional parallel track)
+5. Advanced UX (optional)
+
 ### Phase 1: MQTT Discovery Enhancement (Quick Win)
 
 Enhance the existing MQTT notifier to publish discovery configs:
@@ -113,7 +139,7 @@ Enhance the existing MQTT notifier to publish discovery configs:
 
 ### Phase 2: REST API for Configuration
 
-Add a new REST API to homesec for remote configuration:
+Add a new REST API to homesec for remote configuration. All endpoints are `async def` and use async SQLAlchemy only.
 
 ```yaml
 # New endpoints
@@ -130,6 +156,8 @@ GET  /api/v1/clips/{id}                # Get clip details
 GET  /api/v1/events                    # Event history
 WS   /api/v1/ws                        # Real-time events
 ```
+
+Config updates are validated with Pydantic, written to disk, and return `restart_required: true`. HA can then call a restart endpoint or restart the add-on.
 
 ### Phase 3: Home Assistant Add-on
 
@@ -349,8 +377,8 @@ User edits YAML → HomeSec → MQTT Discovery → HA entities created
 ### Option C: Hybrid (Recommended)
 
 - **Core config** (storage, database, VLM provider): HomeSec YAML
-- **Camera config**: Editable from both, synced via API
-- **Alert policies**: Editable from HA, stored in homesec
+- **Camera config**: Editable from HA via API, persisted to YAML; restart required
+- **Alert policies**: Editable from HA, stored in homesec; restart required
 
 ---
 
@@ -388,10 +416,10 @@ For custom integration distribution:
 
 | Phase | Effort | Value | Description |
 |-------|--------|-------|-------------|
-| **1. MQTT Discovery** | Low | High | Auto-create entities from existing MQTT |
-| **2. REST API** | Medium | High | Enable remote configuration |
+| **1. REST API** | Medium | High | Enable remote configuration and control plane |
+| **2. Integration** | High | Very High | Full HA UI configuration |
 | **3. Add-on** | Medium | High | One-click install for HA OS users |
-| **4. Integration** | High | Very High | Full HA UI configuration |
+| **4. MQTT Discovery (optional)** | Low | Medium | Auto-create entities for non-integration users |
 | **5. Dashboard Cards** | Medium | Medium | Rich visualization |
 
 ---

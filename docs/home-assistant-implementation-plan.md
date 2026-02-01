@@ -4,15 +4,37 @@ This document provides a comprehensive, step-by-step implementation plan for int
 
 ---
 
+## Decision Snapshot (2026-02-01)
+
+- Chosen approach: Add-on + native integration with HomeSec as the runtime.
+- Required: runtime add/remove cameras and other config changes from HA.
+- API stack: FastAPI, async endpoints only, async SQLAlchemy only.
+- Restart is acceptable: API writes validated config to disk and returns `restart_required`; HA can trigger restart.
+- Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
+- Tests: Given/When/Then comments required for all new tests.
+- P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
+
+## Execution Order (Option A)
+
+1. Phase 2: REST API for Configuration (control plane)
+2. Phase 4: Native Home Assistant Integration
+3. Phase 3: Home Assistant Add-on
+4. Phase 1: MQTT Discovery Enhancement (optional parallel track)
+5. Phase 5: Advanced Features
+
+---
+
 ## Table of Contents
 
-1. [Phase 1: MQTT Discovery Enhancement](#phase-1-mqtt-discovery-enhancement)
-2. [Phase 2: REST API for Configuration](#phase-2-rest-api-for-configuration)
-3. [Phase 3: Home Assistant Add-on](#phase-3-home-assistant-add-on)
-4. [Phase 4: Native Home Assistant Integration](#phase-4-native-home-assistant-integration)
-5. [Phase 5: Advanced Features](#phase-5-advanced-features)
-6. [Testing Strategy](#testing-strategy)
-7. [Migration Guide](#migration-guide)
+1. [Decision Snapshot](#decision-snapshot-2026-02-01)
+2. [Execution Order](#execution-order-option-a)
+3. [Phase 1: MQTT Discovery Enhancement](#phase-1-mqtt-discovery-enhancement)
+4. [Phase 2: REST API for Configuration](#phase-2-rest-api-for-configuration)
+5. [Phase 3: Home Assistant Add-on](#phase-3-home-assistant-add-on)
+6. [Phase 4: Native Home Assistant Integration](#phase-4-native-home-assistant-integration)
+7. [Phase 5: Advanced Features](#phase-5-advanced-features)
+8. [Testing Strategy](#testing-strategy)
+9. [Migration Guide](#migration-guide)
 
 ---
 
@@ -48,8 +70,7 @@ class MQTTConfig(BaseModel):
 
     host: str
     port: int = 1883
-    username: str | None = None
-    password_env: str | None = None
+    auth: MQTTAuthConfig | None = None
     topic_template: str = "homecam/alerts/{camera_name}"
     qos: int = 1
     retain: bool = False
@@ -290,261 +311,38 @@ class MQTTDiscoveryBuilder:
 
 **File:** `src/homesec/plugins/notifiers/mqtt.py`
 
-Extend the existing MQTT notifier to support discovery:
+Extend the existing `paho-mqtt` notifier (do not switch libraries). Key changes:
 
-```python
-"""Enhanced MQTT Notifier with Home Assistant Discovery support."""
+- Keep the `Notifier.send()` interface and use `asyncio.to_thread` for publish operations.
+- Add discovery publish helpers using `MQTTDiscoveryBuilder` (new file).
+- Store camera names in-memory to publish discovery per camera.
+- On HA birth message, republish discovery and current state topics.
+- Keep backward-compatible alert topic publishing.
 
-from __future__ import annotations
+Implementation notes:
 
-import asyncio
-import json
-import logging
-from typing import TYPE_CHECKING
-
-import aiomqtt
-
-from homesec.interfaces import Notifier
-from homesec.models.alert import Alert
-from homesec.models.config import MQTTConfig
-from homesec.plugins.registry import plugin, PluginType
-
-from .mqtt_discovery import MQTTDiscoveryBuilder
-
-if TYPE_CHECKING:
-    from homesec.models.clip import Clip
-
-logger = logging.getLogger(__name__)
-
-
-@plugin(plugin_type=PluginType.NOTIFIER, name="mqtt")
-class MQTTNotifier(Notifier):
-    """MQTT notifier with Home Assistant discovery support."""
-
-    config_cls = MQTTConfig
-
-    def __init__(self, config: MQTTConfig, version: str = "1.0.0"):
-        self.config = config
-        self.version = version
-        self._client: aiomqtt.Client | None = None
-        self._discovery_builder: MQTTDiscoveryBuilder | None = None
-        self._cameras: set[str] = set()
-        self._discovery_published: bool = False
-
-        if config.discovery.enabled:
-            self._discovery_builder = MQTTDiscoveryBuilder(
-                config.discovery, version
-            )
-
-    async def start(self) -> None:
-        """Start the MQTT client and publish discovery if enabled."""
-        self._client = aiomqtt.Client(
-            hostname=self.config.host,
-            port=self.config.port,
-            username=self.config.username,
-            password=self._get_password(),
-        )
-        await self._client.__aenter__()
-
-        if self.config.discovery.enabled and self.config.discovery.subscribe_to_birth:
-            # Subscribe to HA birth topic to republish discovery on HA restart
-            await self._client.subscribe(self.config.discovery.birth_topic)
-            asyncio.create_task(self._listen_for_birth())
-
-    async def _listen_for_birth(self) -> None:
-        """Listen for Home Assistant birth messages to republish discovery."""
-        async for message in self._client.messages:
-            if message.topic.matches(self.config.discovery.birth_topic):
-                if message.payload.decode() == "online":
-                    logger.info("Home Assistant came online, republishing discovery")
-                    await self._publish_discovery()
-
-    async def register_camera(self, camera_name: str) -> None:
-        """Register a camera for discovery."""
-        self._cameras.add(camera_name)
-        if self.config.discovery.enabled and self._discovery_published:
-            # Publish discovery for new camera immediately
-            await self._publish_camera_discovery(camera_name)
-
-    async def _publish_discovery(self) -> None:
-        """Publish all discovery messages."""
-        if not self._discovery_builder or not self._client:
-            return
-
-        # Publish hub entities
-        for entity in self._discovery_builder.build_hub_entities():
-            topic = self._discovery_builder.get_discovery_topic(entity)
-            payload = self._discovery_builder.get_discovery_payload(entity)
-            await self._client.publish(topic, payload, retain=True)
-            logger.debug(f"Published discovery: {topic}")
-
-        # Publish camera entities
-        for camera_name in self._cameras:
-            await self._publish_camera_discovery(camera_name)
-
-        self._discovery_published = True
-        logger.info(f"Published MQTT discovery for {len(self._cameras)} cameras")
-
-    async def _publish_camera_discovery(self, camera_name: str) -> None:
-        """Publish discovery messages for a single camera."""
-        if not self._discovery_builder or not self._client:
-            return
-
-        for entity in self._discovery_builder.build_camera_entities(camera_name):
-            topic = self._discovery_builder.get_discovery_topic(entity)
-            payload = self._discovery_builder.get_discovery_payload(entity)
-            await self._client.publish(topic, payload, retain=True)
-
-    async def notify(self, alert: Alert) -> None:
-        """Send alert and update entity states."""
-        if not self._client:
-            raise RuntimeError("MQTT client not started")
-
-        camera = alert.camera_name
-        base_topic = f"homesec/{camera}"
-
-        # Original alert topic (backwards compatible)
-        alert_topic = self.config.topic_template.format(camera_name=camera)
-        await self._client.publish(
-            alert_topic,
-            alert.model_dump_json(),
-            qos=self.config.qos,
-            retain=self.config.retain,
-        )
-
-        # If discovery is enabled, also publish to state topics
-        if self.config.discovery.enabled:
-            # Motion state
-            await self._client.publish(
-                f"{base_topic}/motion",
-                "ON",
-                retain=True,
-            )
-
-            # Person detection (if detected)
-            if alert.analysis and "person" in (alert.analysis.detected_objects or []):
-                await self._client.publish(
-                    f"{base_topic}/person",
-                    "ON",
-                    retain=True,
-                )
-
-            # Activity details
-            activity_payload = {
-                "activity_type": alert.activity_type or "unknown",
-                "summary": alert.summary,
-                "risk_level": alert.risk_level.value if alert.risk_level else None,
-                "timestamp": alert.ts.isoformat(),
-                "clip_id": alert.clip_id,
-            }
-            await self._client.publish(
-                f"{base_topic}/activity",
-                json.dumps(activity_payload),
-                retain=True,
-            )
-
-            # Risk level
-            await self._client.publish(
-                f"{base_topic}/risk",
-                alert.risk_level.value if alert.risk_level else "UNKNOWN",
-                retain=True,
-            )
-
-            # Clip info
-            clip_payload = {
-                "clip_id": alert.clip_id,
-                "view_url": alert.view_url,
-                "storage_uri": alert.storage_uri,
-                "timestamp": alert.ts.isoformat(),
-            }
-            await self._client.publish(
-                f"{base_topic}/clip",
-                json.dumps(clip_payload),
-                retain=True,
-            )
-
-            # Device trigger for automations
-            await self._client.publish(
-                f"{base_topic}/alert",
-                json.dumps({"event_type": "alert", **activity_payload}),
-            )
-
-            # Schedule motion reset after 30 seconds
-            asyncio.create_task(self._reset_motion_state(camera))
-
-    async def _reset_motion_state(self, camera_name: str, delay: float = 30.0) -> None:
-        """Reset motion binary sensor after delay."""
-        await asyncio.sleep(delay)
-        if self._client:
-            await self._client.publish(
-                f"homesec/{camera_name}/motion",
-                "OFF",
-                retain=True,
-            )
-            await self._client.publish(
-                f"homesec/{camera_name}/person",
-                "OFF",
-                retain=True,
-            )
-
-    async def publish_health(self, camera_name: str, health: str) -> None:
-        """Publish camera health state."""
-        if self._client and self.config.discovery.enabled:
-            await self._client.publish(
-                f"homesec/{camera_name}/health",
-                health,
-                retain=True,
-            )
-
-    async def publish_hub_stats(self, clips_today: int, alerts_today: int) -> None:
-        """Publish hub statistics."""
-        if self._client and self.config.discovery.enabled:
-            await self._client.publish(
-                "homesec/hub/status",
-                "online",
-                retain=True,
-            )
-            await self._client.publish(
-                "homesec/hub/stats",
-                json.dumps({
-                    "clips_today": clips_today,
-                    "alerts_today": alerts_today,
-                }),
-                retain=True,
-            )
-
-    async def stop(self) -> None:
-        """Stop the MQTT client."""
-        if self._client:
-            # Publish offline status
-            if self.config.discovery.enabled:
-                await self._client.publish(
-                    "homesec/hub/status",
-                    "offline",
-                    retain=True,
-                )
-            await self._client.__aexit__(None, None, None)
-            self._client = None
-```
+- Use `MQTTConfig.auth.username_env` and `MQTTConfig.auth.password_env` for credentials.
+- Avoid blocking `loop_start`/`loop_stop` in the event loop (wrap in `asyncio.to_thread`).
 
 ### 1.4 Application Integration
 
 **File:** `src/homesec/app.py`
 
-Update the application to register cameras with the MQTT notifier:
+Update the application to register cameras with the MQTT notifier. Prefer a small
+`DiscoveryNotifier` Protocol (or `isinstance` check) over `hasattr` on private methods.
 
 ```python
-# In HomesecApp.start() method, after initializing sources:
+# In Application._create_components(), after sources are created:
 
-# Register cameras with MQTT notifier for discovery
-for notifier in self.notifiers:
-    if hasattr(notifier, 'register_camera'):
-        for source in self.sources:
+# Register cameras with discovery-capable notifier(s)
+for entry in self._notifier_entries:
+    notifier = entry.notifier
+    if isinstance(notifier, DiscoveryNotifier):
+        for source in self._sources:
             await notifier.register_camera(source.camera_name)
 
         # Publish initial discovery
-        if hasattr(notifier, '_publish_discovery'):
-            await notifier._publish_discovery()
+        await notifier.publish_discovery()
 ```
 
 ### 1.5 Configuration Example
@@ -556,8 +354,9 @@ notifiers:
   - type: mqtt
     host: localhost
     port: 1883
-    username: homeassistant
-    password_env: MQTT_PASSWORD
+    auth:
+      username_env: MQTT_USERNAME
+      password_env: MQTT_PASSWORD
     topic_template: "homecam/alerts/{camera_name}"
     qos: 1
     retain: false
@@ -649,6 +448,15 @@ class TestMQTTDiscoveryBuilder:
 
 **Estimated Effort:** 5-7 days
 
+### 2.0 Control Plane Requirements
+
+- FastAPI only; all endpoints are `async def`.
+- Use async SQLAlchemy only for DB access (no sync engines or blocking DB calls).
+- No blocking operations inside endpoints; use `asyncio.to_thread` for file I/O and restarts.
+- API must not write directly to `StateStore`/`EventStore`. Add read methods on `ClipRepository`.
+- Config updates are validated with Pydantic, persisted to disk, and return `restart_required: true`.
+- API provides a restart endpoint to request a graceful shutdown.
+
 ### 2.1 API Framework Setup
 
 **New File:** `src/homesec/api/__init__.py`
@@ -678,18 +486,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routes import cameras, clips, config, events, health, websocket
 
 if TYPE_CHECKING:
-    from homesec.app import HomesecApp
+    from homesec.app import Application
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(homesec_app: HomesecApp) -> FastAPI:
+def create_app(app_instance: Application) -> FastAPI:
     """Create the FastAPI application."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Store reference to HomeSec app
-        app.state.homesec = homesec_app
+        # Store reference to Application
+        app.state.homesec = app_instance
         yield
 
     app = FastAPI(
@@ -747,7 +555,42 @@ class APIServer:
             self._server.should_exit = True
 ```
 
-### 2.2 API Routes
+**Port coordination:** The current `HealthServer` defaults to port 8080. Either:
+
+- Move health to a new default (e.g., 8081) when API is enabled, or
+- Replace the aiohttp health server with a FastAPI `/api/v1/health` endpoint.
+
+### 2.2 Config Persistence + Restart
+
+**New File:** `src/homesec/config/manager.py`
+
+Responsibilities:
+
+- Load and validate config via existing `load_config()` and Pydantic models.
+- Persist updated config atomically (write temp file, fsync, rename).
+- Return `restart_required: true` for any config-changing endpoints.
+- Expose methods:
+  - `get_config() -> Config`
+  - `update_config(new_config: dict) -> ConfigUpdateResult`
+  - `update_camera(...) -> ConfigUpdateResult`
+  - `remove_camera(...) -> ConfigUpdateResult`
+- Use `asyncio.to_thread` for file I/O to keep endpoints non-blocking.
+
+**Repository extensions:**
+
+- Add read APIs to `ClipRepository`:
+  - `get_clip(clip_id)`
+  - `list_clips(...)`
+  - `list_events(...)`
+  - `delete_clip(clip_id)` (mark deleted + emit event)
+- Implement with async SQLAlchemy in `PostgresStateStore` / `PostgresEventStore`.
+
+**New Endpoint:** `POST /api/v1/system/restart`
+
+- Triggers graceful shutdown (`Application.request_shutdown()`).
+- HA can call this after config update, or restart the add-on.
+
+### 2.3 API Routes
 
 **New File:** `src/homesec/api/routes/cameras.py`
 
@@ -764,6 +607,9 @@ from pydantic import BaseModel
 from ..dependencies import get_homesec_app
 
 router = APIRouter(prefix="/cameras")
+
+# Note: All config-mutating endpoints return restart_required=True and do not
+# attempt hot-reload. HA may call /api/v1/system/restart or restart the add-on.
 
 
 class CameraCreate(BaseModel):
@@ -793,6 +639,12 @@ class CameraListResponse(BaseModel):
     """Response model for camera list."""
     cameras: list[CameraResponse]
     total: int
+
+
+class ConfigChangeResponse(BaseModel):
+    """Response model for config changes."""
+    restart_required: bool = True
+    camera: CameraResponse | None = None
 
 
 @router.get("", response_model=CameraListResponse)
@@ -830,7 +682,7 @@ async def get_camera(camera_name: str, app=Depends(get_homesec_app)):
     )
 
 
-@router.post("", response_model=CameraResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ConfigChangeResponse, status_code=status.HTTP_201_CREATED)
 async def create_camera(camera: CameraCreate, app=Depends(get_homesec_app)):
     """Add a new camera."""
     if app.get_source(camera.name):
@@ -845,13 +697,16 @@ async def create_camera(camera: CameraCreate, app=Depends(get_homesec_app)):
             source_type=camera.type,
             config=camera.config,
         )
-        return CameraResponse(
-            name=source.camera_name,
-            type=source.source_type,
-            healthy=source.is_healthy(),
-            last_heartbeat=source.last_heartbeat(),
-            config=source.get_config(),
-            alert_policy=None,
+        return ConfigChangeResponse(
+            restart_required=True,
+            camera=CameraResponse(
+                name=source.camera_name,
+                type=source.source_type,
+                healthy=source.is_healthy(),
+                last_heartbeat=source.last_heartbeat(),
+                config=source.get_config(),
+                alert_policy=None,
+            ),
         )
     except ValueError as e:
         raise HTTPException(
@@ -860,7 +715,7 @@ async def create_camera(camera: CameraCreate, app=Depends(get_homesec_app)):
         )
 
 
-@router.put("/{camera_name}", response_model=CameraResponse)
+@router.put("/{camera_name}", response_model=ConfigChangeResponse)
 async def update_camera(
     camera_name: str,
     update: CameraUpdate,
@@ -881,17 +736,20 @@ async def update_camera(
         await app.update_camera_alert_policy(camera_name, update.alert_policy)
 
     source = app.get_source(camera_name)
-    return CameraResponse(
-        name=source.camera_name,
-        type=source.source_type,
-        healthy=source.is_healthy(),
-        last_heartbeat=source.last_heartbeat(),
-        config=source.get_config(),
-        alert_policy=app.get_camera_alert_policy(camera_name),
+    return ConfigChangeResponse(
+        restart_required=True,
+        camera=CameraResponse(
+            name=source.camera_name,
+            type=source.source_type,
+            healthy=source.is_healthy(),
+            last_heartbeat=source.last_heartbeat(),
+            config=source.get_config(),
+            alert_policy=app.get_camera_alert_policy(camera_name),
+        ),
     )
 
 
-@router.delete("/{camera_name}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{camera_name}", response_model=ConfigChangeResponse)
 async def delete_camera(camera_name: str, app=Depends(get_homesec_app)):
     """Remove a camera."""
     source = app.get_source(camera_name)
@@ -902,6 +760,7 @@ async def delete_camera(camera_name: str, app=Depends(get_homesec_app)):
         )
 
     await app.remove_camera(camera_name)
+    return ConfigChangeResponse(restart_required=True, camera=None)
 
 
 @router.get("/{camera_name}/status")
@@ -1118,7 +977,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 if TYPE_CHECKING:
-    from homesec.app import HomesecApp
+    from homesec.app import Application
 
 logger = logging.getLogger(__name__)
 
@@ -1155,7 +1014,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time events."""
     await manager.connect(websocket)
 
-    app: HomesecApp = websocket.app.state.homesec
+    app: Application = websocket.app.state.homesec
 
     # Subscribe to app events
     event_queue = asyncio.Queue()
@@ -1199,7 +1058,7 @@ async def websocket_endpoint(websocket: WebSocket):
         app.unsubscribe_events(event_handler)
 ```
 
-### 2.3 API Configuration
+### 2.4 API Configuration
 
 **File:** `src/homesec/models/config.py` (add)
 
@@ -1220,13 +1079,15 @@ class APIConfig(BaseModel):
     rate_limit_window_seconds: int = 60
 ```
 
-### 2.4 OpenAPI Documentation
+### 2.5 OpenAPI Documentation
 
 The FastAPI app automatically generates OpenAPI docs at `/api/v1/docs` (Swagger UI) and `/api/v1/redoc` (ReDoc).
 
-### 2.5 Acceptance Criteria
+### 2.6 Acceptance Criteria
 
 - [ ] All CRUD operations for cameras work
+- [ ] Config changes are validated, persisted, and return `restart_required: true`
+- [ ] Restart endpoint triggers graceful shutdown
 - [ ] Clip listing with filtering works
 - [ ] Event history API works
 - [ ] WebSocket broadcasts real-time events
@@ -1266,6 +1127,12 @@ homesec-ha-addons/
 ### 3.2 Add-on Manifest
 
 **File:** `homesec/config.yaml`
+
+Note: Update to current Home Assistant add-on schema:
+
+- Use `addon_config` mapping instead of `config:rw` where possible.
+- Read runtime options from `/data/options.json` via Bashio.
+- Keep secrets out of the generated config (env vars only).
 
 ```yaml
 name: HomeSec
@@ -1831,6 +1698,12 @@ class CannotConnect(Exception):
 class InvalidAuth(Exception):
     """Error to indicate there is invalid auth."""
 ```
+
+Integration behavior for config changes:
+
+- When users add/update/remove cameras in HA, call the HomeSec API.
+- If `restart_required: true`, show a confirmation and invoke `/api/v1/system/restart`
+  (or instruct the user to restart the add-on).
 
 ### 4.5 Data Coordinator
 
@@ -2674,6 +2547,8 @@ Create a custom panel for viewing event history with timeline visualization.
 
 ## Testing Strategy
 
+All new tests must include Given/When/Then comments (per `TESTING.md`).
+
 ### Unit Tests
 
 ```
@@ -2756,6 +2631,7 @@ tests/
 
 ### Phase 2: REST API
 - `src/homesec/api/` - New package (server.py, routes/*, dependencies.py)
+- `src/homesec/config/manager.py` - Config persistence + restart signaling
 - `src/homesec/models/config.py` - Add APIConfig
 - `src/homesec/app.py` - Integrate API server
 - `pyproject.toml` - Add fastapi, uvicorn dependencies
@@ -2788,4 +2664,4 @@ tests/
 
 **Total: 22-31 days**
 
-Phases 1 and 2 can run in parallel. Phase 3 and 4 can run in parallel after Phase 2.
+Execution order for Option A: Phase 2 -> Phase 4 -> Phase 3, with Phase 1 optional/parallel. Phase 5 follows Phase 4.
