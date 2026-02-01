@@ -194,7 +194,7 @@ class ClipPipeline:
             # Stage 3: VLM (conditional)
             analysis_result: AnalysisResult | None = None
             vlm_failed = False
-            if self._should_run_vlm(clip.camera_name, filter_res):
+            if self._should_run_vlm(filter_res):
                 vlm_result = await self._vlm_stage(clip, filter_res)
                 match vlm_result:
                     case VLMError() as vlm_err:
@@ -564,7 +564,7 @@ class ClipPipeline:
                 return type(exc.cause).__name__
         return type(exc).__name__
 
-    def _should_run_vlm(self, camera_name: str, filter_result: FilterResult) -> bool:
+    def _should_run_vlm(self, filter_result: FilterResult) -> bool:
         """Check if VLM should run based on detected classes and config."""
         run_mode = self._config.vlm.run_mode
         if run_mode == "never":

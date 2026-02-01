@@ -13,8 +13,10 @@ from homesec.config import (
     load_config_from_dict,
     resolve_env_var,
     validate_camera_references,
+    validate_config,
     validate_plugin_names,
 )
+from homesec.models.config import Config
 from homesec.plugins.registry import PluginType, plugin
 
 
@@ -326,6 +328,44 @@ def test_validate_camera_references_invalid() -> None:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
     assert "unknown_camera" in str(exc_info.value)
+
+
+def test_validate_config_rejects_unknown_camera_override() -> None:
+    """Validate_config should reject overrides for unknown cameras."""
+    # Given: A config with an override referencing an unknown camera
+    data = minimal_config()
+    data["alert_policy"]["config"]["overrides"] = {"unknown_camera": {"min_risk_level": "low"}}
+    config = Config.model_validate(data)
+
+    from homesec.plugins import discover_all_plugins
+
+    discover_all_plugins()
+
+    # When: validating the config
+    with pytest.raises(ConfigError) as exc_info:
+        validate_config(config)
+
+    # Then: unknown camera is reported
+    assert "unknown_camera" in str(exc_info.value)
+
+
+def test_validate_config_rejects_unknown_plugin_backend() -> None:
+    """validate_config should surface unknown plugin backends."""
+    # Given: A config that references a missing filter backend
+    data = minimal_config()
+    data["filter"]["backend"] = "missing_filter"
+    config = Config.model_validate(data)
+
+    from homesec.plugins import discover_all_plugins
+
+    discover_all_plugins()
+
+    # When: validating the config
+    with pytest.raises(ConfigError) as exc_info:
+        validate_config(config)
+
+    # Then: unknown backend is reported
+    assert "missing_filter" in str(exc_info.value)
 
 
 def test_validate_plugin_names_valid() -> None:
