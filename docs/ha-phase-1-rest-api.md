@@ -292,7 +292,6 @@ class ClipRepository:
 | PUT | `/api/v1/cameras/{name}` | Update camera |
 | DELETE | `/api/v1/cameras/{name}` | Delete camera |
 | GET | `/api/v1/cameras/{name}/status` | Camera status (includes health) |
-| POST | `/api/v1/cameras/{name}/test` | Test camera connection |
 | GET | `/api/v1/clips` | List clips (filterable: camera, status, alerted, risk_level, activity_type) |
 | GET | `/api/v1/clips/{id}` | Get clip |
 | DELETE | `/api/v1/clips/{id}` | Delete clip |

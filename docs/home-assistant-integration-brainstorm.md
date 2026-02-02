@@ -434,7 +434,6 @@ POST /api/v1/cameras                   # Add camera
 PUT  /api/v1/cameras/{name}            # Update camera
 DELETE /api/v1/cameras/{name}          # Remove camera
 GET  /api/v1/cameras/{name}/status     # Camera status
-POST /api/v1/cameras/{name}/test       # Test camera connection
 GET  /api/v1/clips                     # List recent clips
 GET  /api/v1/clips/{id}                # Get clip details
 POST /api/v1/system/restart            # Request graceful restart
