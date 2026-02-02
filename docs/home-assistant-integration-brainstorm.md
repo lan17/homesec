@@ -26,7 +26,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 - Tests: Given/When/Then comments required for all new tests.
 - P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
 - **Real-time events**: Use HA Events API (not MQTT). Add-on gets `SUPERVISOR_TOKEN` automatically; standalone users provide HA URL + token.
-- **No MQTT required**: MQTT Discovery is optional for users who prefer it; primary path uses HA Events API.
+- **No MQTT broker required**: Primary path uses HA Events API. Existing MQTT notifier remains available for Node-RED and other MQTT consumers.
 - **409 Conflict UX**: Show error to user when config version is stale.
 - **API during Postgres outage**: Return 503 Service Unavailable.
 
@@ -363,7 +363,9 @@ The HomeSec add-on is a Docker container managed by HA Supervisor. It bundles Po
 
 ---
 
-### Option B: MQTT Discovery (Quick Win)
+### Option B: MQTT Discovery (Quick Win) - NOT CHOSEN
+
+> **Note:** This option was not chosen. We went with Option A (Add-on + Native Integration) using the HA Events API for real-time communication.
 
 Enhance the existing MQTT notifier to publish **discovery messages** that auto-create HA entities:
 
@@ -405,31 +407,12 @@ Move core homesec logic into a Home Assistant integration (runs in HA's Python e
 Execution order for Option A:
 
 1. REST API + config persistence (control plane)
-2. Native HA integration (config flow + entities)
+2. Home Assistant notifier plugin (HA Events API)
 3. Home Assistant add-on packaging
-4. MQTT discovery (optional parallel track)
+4. Native HA integration (config flow + entities)
 5. Advanced UX (optional)
 
-### Phase 1: MQTT Discovery Enhancement (Quick Win)
-
-Enhance the existing MQTT notifier to publish discovery configs:
-
-```python
-# New entities auto-created in HA:
-- binary_sensor.homesec_{camera}_motion     # Motion detected
-- sensor.homesec_{camera}_last_activity     # "person", "delivery", etc.
-- sensor.homesec_{camera}_risk_level        # LOW/MEDIUM/HIGH/CRITICAL
-- sensor.homesec_{camera}_health            # healthy/degraded/unhealthy
-- device_tracker.homesec_{camera}           # Online/offline status
-```
-
-**Changes to homesec:**
-1. Add `mqtt_discovery: true` config option
-2. On startup, publish discovery configs for each camera
-3. Listen for HA birth message to republish discovery
-4. Publish state updates on detection events
-
-### Phase 2: REST API for Configuration
+### Phase 1: REST API for Configuration
 
 Add a new REST API to HomeSec for remote configuration. All endpoints are `async def` and use async SQLAlchemy only.
 
@@ -493,7 +476,6 @@ Note: `repository.json` lives at the repo root (not in `homeassistant/addon/`) f
 - Bundled PostgreSQL via s6-overlay (zero-config database)
 - Ingress support for web UI (if we build one)
 - Watchdog for auto-restart
-- Optional MQTT Discovery for users who prefer it
 
 Users add the add-on repo via: `https://github.com/lan17/homesec`
 
@@ -740,10 +722,9 @@ The HA integration subscribes to these events and updates entities in real-time.
 |-------|--------|-------|-------------|
 | **1. REST API** | Medium | High | Enable remote configuration and control plane |
 | **2. HA Notifier** | Low | High | New notifier plugin for HA Events API |
-| **3. Integration** | High | Very High | Full HA UI configuration + event subscriptions |
-| **4. Add-on** | Medium | High | Zero-config install for HA OS users |
-| **5. MQTT Discovery (optional)** | Low | Low | For users who prefer MQTT over native integration |
-| **6. Dashboard Cards** | Medium | Medium | Rich visualization |
+| **3. Add-on** | Medium | High | Zero-config install for HA OS users |
+| **4. Integration** | High | Very High | Full HA UI configuration + event subscriptions |
+| **5. Dashboard Cards** | Medium | Medium | Rich visualization |
 
 ---
 
@@ -753,5 +734,4 @@ The HA integration subscribes to these events and updates entities in real-time.
 - [Home Assistant Config Flow](https://developers.home-assistant.io/docs/config_entries_config_flow_handler/)
 - [Home Assistant Camera Entity](https://developers.home-assistant.io/docs/core/entity/camera/)
 - [Home Assistant DataUpdateCoordinator](https://developers.home-assistant.io/docs/integration_fetching_data/)
-- [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/)
 - [HACS Documentation](https://www.hacs.xyz/)
