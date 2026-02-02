@@ -4,18 +4,17 @@
 
 **Estimated Effort**: 5-7 days
 
-**Dependencies**: Phase 0 (Prerequisites)
+**Dependencies**: None
 
 ---
 
 ## Overview
 
 This phase adds a FastAPI-based REST API to HomeSec for:
-- Camera CRUD operations
-- Clip listing and management
-- Event history
+- Camera CRUD operations (including `enabled` field for toggling cameras)
+- Clip listing with filters (camera, status, alerted, risk_level, activity_type)
 - System stats and health
-- Configuration management with optimistic concurrency
+- Configuration management (last-write-wins)
 
 ---
 
@@ -73,6 +72,28 @@ async def verify_api_key(request: Request, app=Depends(get_homesec_app)) -> None
 - No blocking operations (use `asyncio.to_thread` for file I/O)
 - CORS origins configurable via `FastAPIServerConfig.cors_origins`
 - Port configurable, replaces old `HealthConfig`
+
+---
+
+## 1.1.1 CameraConfig.enabled Field
+
+**File**: `src/homesec/models/config.py`
+
+Add `enabled` field to allow toggling cameras via API:
+
+```python
+class CameraConfig(BaseModel):
+    """Camera configuration and clip source selection."""
+
+    name: str
+    enabled: bool = True  # Allow disabling camera via API
+    source: CameraSourceConfig
+```
+
+**Constraints:**
+- Default is `True` (backwards compatible)
+- When `enabled=False`, Application skips starting the source
+- API can toggle this field; requires restart to take effect
 
 ---
 
@@ -213,22 +234,6 @@ class ClipRepository:
         """
         ...
 
-    async def list_events(
-        self,
-        *,
-        clip_id: str | None = None,
-        event_type: str | None = None,
-        camera: str | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
-        limit: int = 100,
-    ) -> tuple[list[ClipLifecycleEvent], int]:
-        """List events with filtering.
-
-        Returns (events, total_count).
-        """
-        ...
-
     async def delete_clip(self, clip_id: str) -> None:
         """Mark clip as deleted and delete from storage.
 
@@ -258,7 +263,7 @@ class ClipRepository:
 - Must use async SQLAlchemy
 - Counts should be efficient (use SQL COUNT, not fetch all)
 - `count_alerts_since` counts events where `event_type='notification_sent'`
-- `list_clips` and `list_events` return tuple of (items, total_count) for pagination
+- `list_clips` returns tuple of (items, total_count) for pagination
 - `delete_clip` should delete from both local and cloud storage
 
 ---
@@ -270,7 +275,6 @@ class ClipRepository:
 - `src/homesec/api/routes/__init__.py`
 - `src/homesec/api/routes/cameras.py`
 - `src/homesec/api/routes/clips.py`
-- `src/homesec/api/routes/events.py`
 - `src/homesec/api/routes/stats.py`
 - `src/homesec/api/routes/health.py`
 - `src/homesec/api/routes/config.py`
@@ -281,19 +285,17 @@ class ClipRepository:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/config` | Config summary and version |
+| GET | `/api/v1/config` | Config summary |
 | GET | `/api/v1/cameras` | List cameras |
 | GET | `/api/v1/cameras/{name}` | Get camera |
 | POST | `/api/v1/cameras` | Create camera |
 | PUT | `/api/v1/cameras/{name}` | Update camera |
 | DELETE | `/api/v1/cameras/{name}` | Delete camera |
-| GET | `/api/v1/cameras/{name}/status` | Camera status |
+| GET | `/api/v1/cameras/{name}/status` | Camera status (includes health) |
 | POST | `/api/v1/cameras/{name}/test` | Test camera connection |
-| GET | `/api/v1/clips` | List clips (paginated, filterable) |
+| GET | `/api/v1/clips` | List clips (filterable: camera, status, alerted, risk_level, activity_type) |
 | GET | `/api/v1/clips/{id}` | Get clip |
 | DELETE | `/api/v1/clips/{id}` | Delete clip |
-| POST | `/api/v1/clips/{id}/reprocess` | Reprocess clip |
-| GET | `/api/v1/events` | List events (filterable) |
 | GET | `/api/v1/stats` | System statistics |
 | POST | `/api/v1/system/restart` | Request graceful restart |
 | GET | `/api/v1/system/health/detailed` | Detailed health with error codes |
@@ -469,7 +471,6 @@ open http://localhost:8080/docs
 - [ ] Config changes return `restart_required: true`
 - [ ] `/api/v1/system/restart` triggers graceful shutdown
 - [ ] Clip listing with pagination and filtering works
-- [ ] Event history API works
 - [ ] Stats endpoint returns correct counts
 - [ ] OpenAPI documentation is accurate at `/docs`
 - [ ] CORS works for configured origins

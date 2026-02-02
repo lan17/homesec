@@ -113,8 +113,6 @@ homesec/
 | Event | Trigger | Data |
 |-------|---------|------|
 | `homesec_alert` | Detection alert | camera, clip_id, activity_type, risk_level, summary, view_url |
-| `homesec_clip_recorded` | New clip recorded | clip_id, camera |
-
 **Note**: Camera health is **not** pushed via events. The HA Integration polls the REST API (`GET /api/v1/cameras/{name}/status`) every 30-60s to get health status. This keeps the HomeSec core simple and stateless.
 
 ### Future Features (v2+)
@@ -439,7 +437,6 @@ GET  /api/v1/cameras/{name}/status     # Camera status
 POST /api/v1/cameras/{name}/test       # Test camera connection
 GET  /api/v1/clips                     # List recent clips
 GET  /api/v1/clips/{id}                # Get clip details
-GET  /api/v1/events                    # Event history
 POST /api/v1/system/restart            # Request graceful restart
 ```
 
@@ -498,7 +495,6 @@ homeassistant/integration/
         ├── sensor.py             # Sensor entities
         ├── binary_sensor.py      # Motion sensors (30s auto-reset timer)
         ├── switch.py             # Enable/disable cameras (stops RTSP)
-        ├── services.yaml         # Service definitions
         ├── strings.json          # UI strings
         └── translations/
             └── en.json
@@ -513,29 +509,6 @@ homeassistant/integration/
 | `switch` | `camera_enabled` | Enable/disable camera | ✓ |
 | `image` | Per-camera | Last snapshot | v2 |
 | `select` | `alert_sensitivity` | LOW/MEDIUM/HIGH | v2 |
-
-**Services (v1):**
-
-```yaml
-homesec.add_camera:
-  description: Add a new camera
-  fields:
-    name: Camera identifier
-    source_backend: rtsp, ftp, or local_folder
-    rtsp_url: RTSP stream URL (for rtsp backend)
-
-homesec.remove_camera:
-  description: Remove a camera
-  target:
-    device: Camera device
-```
-
-**Services (v2 - Future):**
-
-```yaml
-# homesec.set_alert_policy - requires new API endpoint
-# homesec.test_camera - requires new API endpoint
-```
 
 **Config Flow:**
 
@@ -710,9 +683,8 @@ class HomeAssistantNotifier(Notifier):
 
 **Event types fired:**
 - `homesec_alert` - Detection alert with full metadata
-- `homesec_clip_recorded` - New clip recorded
 
-The HA integration subscribes to these events and updates entities in real-time.
+The HA integration subscribes to this event and updates entities in real-time.
 
 **Note**: Camera health is polled via REST API, not pushed via events.
 

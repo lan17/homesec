@@ -15,7 +15,6 @@ This phase creates a custom Home Assistant integration that:
 - Creates entities for cameras (sensors, binary sensors, switches)
 - Creates hub-level entities (system health, alerts today, clips today)
 - Subscribes to HomeSec events for real-time updates
-- Provides services for camera management
 
 ---
 
@@ -35,7 +34,6 @@ homeassistant/integration/custom_components/homesec/
 ├── binary_sensor.py      # Binary sensor platform
 ├── switch.py             # Switch platform
 ├── diagnostics.py        # Diagnostic data
-├── services.yaml         # Service definitions
 ├── strings.json          # UI strings
 └── translations/
     └── en.json           # English translations
@@ -133,7 +131,7 @@ class OptionsFlowHandler(OptionsFlow):
     """Handle options flow for HomeSec."""
 
     async def async_step_init(self, user_input=None) -> FlowResult:
-        """Manage options: cameras, scan_interval, motion_reset_seconds."""
+        """Manage options: scan_interval, motion_reset_seconds."""
         ...
 
 
@@ -161,7 +159,7 @@ async def detect_addon(hass) -> bool:
 
 - Store `addon: bool` in config entry data to track mode
 - Unique ID: `homesec_{host}_{port}`
-- Options: cameras list, scan_interval, motion_reset_seconds
+- Options: scan_interval, motion_reset_seconds
 
 ---
 
@@ -199,7 +197,7 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_subscribe_events(self) -> None:
         """Subscribe to HomeSec events fired via HA Events API.
 
-        Events: homesec_alert, homesec_clip_recorded
+        Event: homesec_alert
 
         Note: Camera health is polled via REST API, not event-driven.
         """
@@ -317,41 +315,7 @@ HomeSec Hub (identifiers: homesec_hub)
 
 ---
 
-## 4.8 Services
-
-**File**: `services.yaml`
-
-```yaml
-add_camera:
-  name: Add Camera
-  description: Add a new camera to HomeSec
-  fields:
-    name:
-      required: true
-      selector:
-        text:
-    source_backend:
-      required: true
-      selector:
-        select:
-          options: ["rtsp", "ftp", "local_folder"]
-    rtsp_url:
-      selector:
-        text:
-
-remove_camera:
-  name: Remove Camera
-  description: Remove a camera from HomeSec
-  target:
-    device:
-      integration: homesec
-```
-
-**Note**: Service handlers to be implemented in `__init__.py`.
-
----
-
-## 4.9 Translations
+## 4.8 Translations
 
 **File**: `translations/en.json`
 
@@ -360,7 +324,6 @@ Provides translations for:
 - Error messages (cannot_connect, invalid_auth)
 - Options flow
 - Entity names
-- Service names
 
 ---
 
@@ -369,7 +332,7 @@ Provides translations for:
 | File | Change |
 |------|--------|
 | `homeassistant/integration/hacs.json` | HACS configuration |
-| `custom_components/homesec/__init__.py` | Setup entry, services |
+| `custom_components/homesec/__init__.py` | Setup entry |
 | `custom_components/homesec/manifest.json` | Integration metadata |
 | `custom_components/homesec/const.py` | Constants |
 | `custom_components/homesec/config_flow.py` | Config + options flow |
@@ -379,7 +342,6 @@ Provides translations for:
 | `custom_components/homesec/binary_sensor.py` | Binary sensor platform |
 | `custom_components/homesec/switch.py` | Switch platform |
 | `custom_components/homesec/diagnostics.py` | Diagnostic data |
-| `custom_components/homesec/services.yaml` | Service definitions |
 | `custom_components/homesec/strings.json` | UI strings |
 | `custom_components/homesec/translations/en.json` | English translations |
 
@@ -413,9 +375,6 @@ Provides translations for:
 - Given alert for "front", when check sensor.front_last_activity, then shows activity_type
 - Given switch turned off, when toggle, then API called with enabled=False
 
-**Services**
-- Given add_camera service called, when valid data, then API POST /cameras called
-
 ---
 
 ## Verification
@@ -447,7 +406,6 @@ cp -r homeassistant/integration/custom_components/homesec ~/.homeassistant/custo
 - [ ] HA Events subscription triggers refresh on alerts
 - [ ] Motion sensor auto-resets after configurable timeout
 - [ ] Camera switch enables/disables via API
-- [ ] Services work (add_camera, remove_camera)
 - [ ] Options flow allows reconfiguration
 - [ ] All strings translatable
 - [ ] HACS installation works

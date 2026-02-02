@@ -60,7 +60,7 @@ Custom panel for viewing event history with timeline visualization.
 
 ### Constraints
 
-- Requires additional API endpoint or uses existing `/api/v1/events`
+- Can use `/api/v1/clips?alerted=true` for alert history
 - May require frontend build tooling (Lit, etc.)
 
 ---

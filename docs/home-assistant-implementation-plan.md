@@ -27,16 +27,17 @@ This document provides an overview of the Home Assistant integration for HomeSec
 
 | Phase | Document | Dependencies | Estimated Effort |
 |-------|----------|--------------|------------------|
-| 0 | [Prerequisites](./ha-phase-0-prerequisites.md) | None | 2-3 days |
-| 1 | [REST API](./ha-phase-1-rest-api.md) | Phase 0 | 5-7 days |
+| 1 | [REST API](./ha-phase-1-rest-api.md) | None | 5-7 days |
 | 2 | [HA Notifier](./ha-phase-2-ha-notifier.md) | None | 2-3 days |
 | 3 | [Add-on](./ha-phase-3-addon.md) | Phase 1, 2 | 3-4 days |
 | 4 | [HA Integration](./ha-phase-4-ha-integration.md) | Phase 1, 2 | 7-10 days |
-| 5 | [Advanced Features](./ha-phase-5-advanced.md) | Phase 4 | 5-7 days |
+| 5 | [Advanced Features](./ha-phase-5-advanced.md) | Phase 4 | TBD |
 
-**Total: 24-34 days**
+**Total: 17-24 days** (v1 core)
 
 **Parallel work possible**: Phase 1 and Phase 2 can be done in parallel.
+
+**Note**: Phase 0 (Prerequisites) was merged into Phase 1. Phase 5 scope TBD.
 
 ---
 
@@ -86,6 +87,9 @@ homesec/
 
 These interfaces are defined across phases. See individual phase docs for details.
 
+### CameraConfig (Phase 1)
+- `enabled: bool = True` field (allows disabling cameras via API)
+
 ### ConfigManager (Phase 1)
 - `get_config() -> Config`
 - `update_camera(...) -> ConfigUpdateResult`
@@ -94,14 +98,10 @@ These interfaces are defined across phases. See individual phase docs for detail
 
 ### ClipRepository Extensions (Phase 1)
 - `get_clip(clip_id) -> Clip | None`
-- `list_clips(...) -> tuple[list[Clip], int]`
-- `list_events(...) -> tuple[list[Event], int]`
+- `list_clips(...) -> tuple[list[Clip], int]` (supports `alerted`, `risk_level`, `activity_type` filters)
 - `delete_clip(clip_id) -> None`
 - `count_clips_since(since: datetime) -> int`
 - `count_alerts_since(since: datetime) -> int`
-
-### CameraConfig Extensions (Phase 0)
-- `enabled: bool = True` field (allows disabling cameras via API)
 
 ---
 

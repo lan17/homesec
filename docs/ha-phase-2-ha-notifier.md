@@ -1,6 +1,6 @@
 # Phase 2: Home Assistant Notifier Plugin
 
-**Goal**: Enable real-time alert and clip event push from HomeSec to Home Assistant without requiring MQTT.
+**Goal**: Enable real-time alert push from HomeSec to Home Assistant without requiring MQTT.
 
 **Estimated Effort**: 2-3 days
 
@@ -35,7 +35,7 @@ class HomeAssistantNotifierConfig(BaseModel):
     token_env: str | None = None    # e.g., "HA_TOKEN" -> long-lived access token
 
     # Event configuration
-    event_prefix: str = "homesec"   # Events: homesec_alert, homesec_clip_recorded
+    event_prefix: str = "homesec"   # Event: homesec_alert
 ```
 
 ### Constraints
@@ -91,14 +91,6 @@ class HomeAssistantNotifier(Notifier):
         - detected_objects: list[str] (if analysis present)
         """
         ...
-
-    async def publish_clip_recorded(self, clip_id: str, camera_name: str) -> None:
-        """Send clip recorded event to Home Assistant.
-
-        Event: homesec_clip_recorded
-        Data: {clip_id: str, camera: str}
-        """
-        ...
 ```
 
 ### Internal Methods
@@ -124,7 +116,7 @@ def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
 - Use aiohttp for HTTP requests
 - Events API endpoint: `POST /api/events/{event_type}`
 - Supervisor URL: `http://supervisor/core/api/events/...`
-- Event names: `{event_prefix}_alert`, `{event_prefix}_clip_recorded`
+- Event name: `{event_prefix}_alert`
 
 ---
 
@@ -145,17 +137,6 @@ Fired when an alert is generated after VLM analysis.
   "storage_uri": "dropbox:///clips/abc123.mp4",
   "timestamp": "2026-02-01T10:30:00Z",
   "detected_objects": ["person"]
-}
-```
-
-### homesec_clip_recorded
-
-Fired when a new clip is recorded (before analysis).
-
-```json
-{
-  "clip_id": "abc123",
-  "camera": "front_door"
 }
 ```
 
@@ -235,7 +216,7 @@ pytest tests/unit/plugins/notifiers/test_home_assistant.py -v
 - [ ] Notifier auto-detects supervisor mode via `SUPERVISOR_TOKEN`
 - [ ] Zero-config works when running as HA add-on
 - [ ] Standalone mode requires `url_env` and `token_env`
-- [ ] Events fired: `homesec_alert`, `homesec_clip_recorded`
+- [ ] Event fired: `homesec_alert`
 - [ ] Notification failures don't crash the pipeline (best-effort)
 - [ ] Events contain all required metadata
 - [ ] Config example added
