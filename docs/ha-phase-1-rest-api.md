@@ -59,6 +59,7 @@ async def get_homesec_app(request: Request) -> Application:
 async def verify_api_key(request: Request, app=Depends(get_homesec_app)) -> None:
     """Verify API key if authentication is enabled.
 
+    - Skips auth for public paths: /api/v1/health, /api/v1/diagnostics
     - Checks app.config.server.auth_enabled
     - Expects Authorization: Bearer <token>
     - Raises HTTPException 401 on failure
@@ -252,13 +253,48 @@ class ClipRepository:
         return await self._state.ping()
 ```
 
+### StateStore Extensions
+
+**File**: `src/homesec/state/postgres.py`
+
+`ClipRepository` delegates to new `StateStore` methods (all DB access through StateStore for consistency):
+
+```python
+class StateStore(Protocol):
+    # ... existing methods ...
+
+    # NEW: Read methods for API
+    async def get_clip(self, clip_id: str) -> ClipStateData | None: ...
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]: ...
+
+    async def mark_clip_deleted(self, clip_id: str) -> ClipStateData: ...
+
+    async def count_clips_since(self, since: datetime) -> int: ...
+
+    async def count_alerts_since(self, since: datetime) -> int: ...
+```
+
 ### Constraints
 
 - Must use async SQLAlchemy
 - Counts should be efficient (use SQL COUNT, not fetch all)
 - `count_alerts_since` counts events where `event_type='notification_sent'`
 - `list_clips` returns tuple of (items, total_count) for pagination
-- `delete_clip` only marks deleted in DB; API route coordinates storage deletion
+- `mark_clip_deleted` only marks deleted in DB; API route coordinates storage deletion
+- All new methods added to `StateStore` interface and `PostgresStateStore` implementation
 
 ---
 
@@ -393,6 +429,30 @@ class ClipListResponse(BaseModel):
     page_size: int
 ```
 
+### Auth Bypass
+
+`/health` and `/diagnostics` are public (no auth required). This allows:
+- Add-on watchdog to check health without token
+- External monitoring tools to probe health
+
+All other endpoints require auth when `auth_enabled: true`.
+
+### DB-Down Behavior
+
+| Endpoint | DB Down Response |
+|----------|------------------|
+| `/health` | 200, `status: "degraded"`, `postgres: "unavailable"` |
+| `/diagnostics` | 200, shows component error details |
+| All other endpoints | 503 Service Unavailable |
+
+Non-health endpoints return 503 with:
+```json
+{
+  "detail": "Database unavailable",
+  "error_code": "DB_UNAVAILABLE"
+}
+```
+
 ### Constraints
 
 - All config-mutating endpoints return `restart_required: True`
@@ -503,7 +563,9 @@ async def run(self):
 | `src/homesec/api/routes/*.py` | All route modules |
 | `src/homesec/config/manager.py` | Config persistence (single file with backup) |
 | `src/homesec/models/config.py` | Add `FastAPIServerConfig`, remove `HealthConfig` |
-| `src/homesec/repository/clip_repository.py` | Add read/list/count methods |
+| `src/homesec/interfaces.py` | Add new StateStore methods to protocol |
+| `src/homesec/state/postgres.py` | Implement new StateStore methods |
+| `src/homesec/repository/clip_repository.py` | Add read/list/count methods (delegate to StateStore) |
 | `src/homesec/app.py` | Integrate API server, remove HealthServer usage |
 | `src/homesec/health/` | Remove (replaced by FastAPI) |
 | `pyproject.toml` | Add fastapi, uvicorn; remove aiohttp if unused elsewhere |
