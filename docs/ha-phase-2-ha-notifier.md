@@ -88,7 +88,8 @@ class HomeAssistantNotifier(Notifier):
         - view_url: str | None
         - storage_uri: str | None
         - timestamp: ISO8601 string
-        - detected_objects: list[str] (if analysis present)
+        - detected_objects: list[str] (normalized from filter detections; values:
+          person, vehicle, animal, package, object, unknown)
         """
         ...
 ```
@@ -112,7 +113,7 @@ def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
 
 ### Constraints
 
-- All event publishing is best-effort (log errors, don't raise)
+- All event publishing is best-effort (raise to pipeline for retry/recording; clip continues)
 - Use aiohttp for HTTP requests
 - Events API endpoint: `POST /api/events/{event_type}`
 - Supervisor URL: `http://supervisor/core/api/events/...`
@@ -124,7 +125,7 @@ def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
 
 ### homesec_alert
 
-Fired when an alert is generated after VLM analysis.
+Fired when an alert is generated.
 
 ```json
 {
@@ -136,7 +137,7 @@ Fired when an alert is generated after VLM analysis.
   "view_url": "https://dropbox.com/...",
   "storage_uri": "dropbox:///clips/abc123.mp4",
   "timestamp": "2026-02-01T10:30:00Z",
-  "detected_objects": ["person"]
+  "detected_objects": ["person", "vehicle"]
 }
 ```
 

@@ -208,6 +208,8 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Event: homesec_alert
 
         Note: Camera health is polled via REST API, not event-driven.
+        Note: Event payloads are intentionally minimal (stable taxonomy); fetch
+              richer clip details via REST using clip_id when needed.
         """
         ...
 

@@ -111,6 +111,14 @@ notifiers:
       qos: 1
       retain: false
 
+  # Home Assistant Events API (recommended for HA users)
+  # - backend: home_assistant
+  #   config:
+  #     # When running as HA add-on, no configuration needed (uses SUPERVISOR_TOKEN)
+  #     # For standalone mode, provide HA URL and token:
+  #     # url_env: HA_URL           # http://homeassistant.local:8123
+  #     # token_env: HA_TOKEN       # Long-lived access token from HA
+
   # SendGrid email
   # - backend: sendgrid_email
   #   config:

@@ -79,6 +79,17 @@ class NotifierConfig(BaseModel):
         return value
 
 
+class HomeAssistantNotifierConfig(BaseModel):
+    """Configuration for Home Assistant notifier.
+
+    When running as a Home Assistant add-on, SUPERVISOR_TOKEN is used automatically.
+    For standalone mode, url_env and token_env must be provided.
+    """
+
+    url_env: str | None = None
+    token_env: str | None = None
+
+
 class RetentionConfig(BaseModel):
     """Retention configuration for local storage."""
 

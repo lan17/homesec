@@ -29,6 +29,7 @@ class Alert(BaseModel):
     notify_reason: str
     summary: str | None
     analysis: SequenceAnalysis | None = None
+    detected_classes: list[str] | None = None
     ts: datetime
     dedupe_key: str  # Same as clip_id for MVP
     upload_failed: bool  # True if storage_uri is None due to upload failure
