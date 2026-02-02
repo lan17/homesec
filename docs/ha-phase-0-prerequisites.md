@@ -13,11 +13,10 @@
 Before implementing the HA integration, these changes are needed in the core HomeSec codebase:
 
 1. Add `enabled` field to `CameraConfig`
-2. Add `publish_camera_health()` to `Notifier` interface
+2. Add `publish_camera_health()` to `Notifier` interface (with default no-op)
 3. Implement `publish_camera_health()` in `MultiplexNotifier`
-4. Add no-op implementations to existing notifiers
+4. Add health monitoring configuration
 5. Add camera health monitoring loop in `Application`
-6. Add health monitoring configuration
 
 ---
 
