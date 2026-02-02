@@ -39,6 +39,41 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 
 ---
 
+## Repository Structure
+
+All Home Assistant code lives in the main `homesec` monorepo under `homeassistant/`:
+
+```
+homesec/
+├── src/homesec/                    # Main Python package (PyPI)
+│   ├── api/                        # REST API for HA integration
+│   ├── config/                     # Config management
+│   └── plugins/notifiers/
+│       └── home_assistant.py       # HA Events API notifier
+│
+├── homeassistant/                  # ALL HA-specific code
+│   ├── integration/                # Custom component (HACS)
+│   │   ├── hacs.json
+│   │   └── custom_components/homesec/
+│   │
+│   └── addon/                      # Add-on (HA Supervisor)
+│       ├── repository.json
+│       └── homesec/
+│           ├── config.yaml
+│           ├── Dockerfile
+│           └── rootfs/             # s6-overlay services
+│
+├── tests/
+└── docs/
+```
+
+**Distribution:**
+- **PyPI**: `src/homesec/` published as `homesec` package
+- **HACS**: Users point to `homeassistant/integration/`
+- **Add-on Store**: Users add `https://github.com/lan17/homesec/homeassistant/addon`
+
+---
+
 ## Features
 
 ### Core Features (v1)
@@ -428,54 +463,60 @@ Real-time updates use HA Events API (no WebSocket or MQTT required in v1).
 
 ### Phase 3: Home Assistant Add-on
 
-Create a Home Assistant add-on for easy installation:
+Create a Home Assistant add-on in the monorepo:
 
-```yaml
-# config.yaml (add-on manifest)
-name: HomeSec
-description: Self-hosted AI video security
-version: 1.2.2
-slug: homesec
-arch: [amd64, aarch64]
-homeassistant_api: true   # Grants SUPERVISOR_TOKEN for HA Events API
-ports:
-  8080/tcp: 8080   # API/Health
-map:
-  - addon_config:rw  # Store HomeSec config/overrides
-  - media:rw         # Store clips
-services:
-  - mqtt:want        # Optional - for MQTT Discovery if user prefers it
-options:
-  config_file: /config/homesec/config.yaml
-  override_file: /data/overrides.yaml
+```
+homeassistant/addon/
+├── repository.json
+├── README.md
+└── homesec/
+    ├── config.yaml           # Add-on manifest
+    ├── build.yaml
+    ├── Dockerfile            # Includes PostgreSQL 16
+    ├── DOCS.md
+    ├── CHANGELOG.md
+    ├── icon.png              # 512x512
+    ├── logo.png              # 256x256
+    ├── rootfs/
+    │   └── etc/
+    │       ├── s6-overlay/   # PostgreSQL + HomeSec services
+    │       └── nginx/        # Ingress config
+    └── translations/
+        └── en.yaml
 ```
 
 **Add-on features:**
 - Zero-config HA integration via `SUPERVISOR_TOKEN` (automatic)
 - Real-time event push to HA without MQTT
-- Bundled PostgreSQL (or use HA's)
+- Bundled PostgreSQL via s6-overlay (zero-config database)
 - Ingress support for web UI (if we build one)
 - Watchdog for auto-restart
 - Optional MQTT Discovery for users who prefer it
 
+Users add the add-on repo via: `https://github.com/lan17/homesec/homeassistant/addon`
+
 ### Phase 4: Native Home Assistant Integration
 
-Build a custom integration (`custom_components/homesec/`):
+Build a custom integration in the monorepo:
 
 ```
-custom_components/homesec/
-├── __init__.py           # Setup, config entry
-├── manifest.json         # Integration metadata
-├── config_flow.py        # UI-based configuration
-├── const.py              # Constants
-├── coordinator.py        # DataUpdateCoordinator
-├── sensor.py             # Sensor entities
-├── binary_sensor.py      # Motion sensors
-├── switch.py             # Enable/disable cameras
-├── services.yaml         # Service definitions
-├── strings.json          # UI strings
-└── translations/
-    └── en.json
+homeassistant/integration/
+├── hacs.json
+└── custom_components/
+    └── homesec/
+        ├── __init__.py           # Setup, config entry
+        ├── manifest.json         # Integration metadata
+        ├── config_flow.py        # UI-based configuration (auto-detects add-on)
+        ├── const.py              # Constants
+        ├── coordinator.py        # DataUpdateCoordinator + event subscriptions
+        ├── entity.py             # Base entity class
+        ├── sensor.py             # Sensor entities
+        ├── binary_sensor.py      # Motion sensors (30s auto-reset timer)
+        ├── switch.py             # Enable/disable cameras (stops RTSP)
+        ├── services.yaml         # Service definitions
+        ├── strings.json          # UI strings
+        └── translations/
+            └── en.json
 ```
 
 **Entity Platforms:**

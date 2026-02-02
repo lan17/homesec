@@ -35,6 +35,107 @@ This document provides a comprehensive, step-by-step implementation plan for int
 
 ---
 
+## Repository Structure
+
+All code lives in the main `homesec` monorepo:
+
+```
+homesec/
+├── src/homesec/                        # Main Python package (PyPI)
+│   ├── api/                            # NEW: REST API
+│   │   ├── __init__.py
+│   │   ├── server.py
+│   │   ├── dependencies.py
+│   │   └── routes/
+│   │       ├── __init__.py
+│   │       ├── health.py
+│   │       ├── config.py
+│   │       ├── cameras.py
+│   │       ├── clips.py
+│   │       ├── events.py
+│   │       ├── stats.py
+│   │       └── system.py
+│   ├── config/                         # NEW: Config management
+│   │   ├── __init__.py
+│   │   ├── loader.py
+│   │   └── manager.py
+│   ├── plugins/
+│   │   └── notifiers/
+│   │       ├── home_assistant.py       # NEW: HA Events API notifier
+│   │       └── mqtt_discovery.py       # NEW: MQTT discovery (optional)
+│   └── ...existing code...
+│
+├── homeassistant/                      # ALL HA-specific code
+│   ├── README.md
+│   │
+│   ├── integration/                    # Custom component (HACS)
+│   │   ├── hacs.json
+│   │   └── custom_components/
+│   │       └── homesec/
+│   │           ├── __init__.py
+│   │           ├── manifest.json
+│   │           ├── const.py
+│   │           ├── config_flow.py
+│   │           ├── coordinator.py
+│   │           ├── entity.py
+│   │           ├── binary_sensor.py
+│   │           ├── sensor.py
+│   │           ├── switch.py
+│   │           ├── diagnostics.py
+│   │           ├── services.yaml
+│   │           ├── strings.json
+│   │           └── translations/
+│   │               └── en.json
+│   │
+│   └── addon/                          # Add-on (HA Supervisor)
+│       ├── repository.json
+│       ├── README.md
+│       └── homesec/
+│           ├── config.yaml
+│           ├── build.yaml
+│           ├── Dockerfile
+│           ├── DOCS.md
+│           ├── CHANGELOG.md
+│           ├── icon.png
+│           ├── logo.png
+│           ├── rootfs/
+│           │   └── etc/
+│           │       ├── s6-overlay/
+│           │       │   └── s6-rc.d/
+│           │       │       ├── postgres-init/
+│           │       │       ├── postgres/
+│           │       │       ├── homesec/
+│           │       │       └── user/
+│           │       └── nginx/
+│           │           └── includes/
+│           │               └── ingress.conf
+│           └── translations/
+│               └── en.yaml
+│
+├── tests/
+│   ├── unit/
+│   │   ├── api/
+│   │   │   ├── test_routes_cameras.py
+│   │   │   ├── test_routes_clips.py
+│   │   │   └── ...
+│   │   └── plugins/
+│   │       └── notifiers/
+│   │           ├── test_home_assistant.py
+│   │           └── test_mqtt_discovery.py
+│   └── integration/
+│       └── test_ha_integration.py
+│
+├── docs/
+└── pyproject.toml                      # Add fastapi, uvicorn deps
+```
+
+**Distribution:**
+- **PyPI**: `src/homesec/` published as `homesec` package
+- **HACS**: Users point to `homeassistant/integration/`
+- **Add-on Store**: Users add repo URL `https://github.com/lan17/homesec/homeassistant/addon`
+
+---
+
 ## Table of Contents
 
 1. [Decision Snapshot](#decision-snapshot-2026-02-01)
@@ -1007,7 +1108,158 @@ async def list_events(
     )
 ```
 
-Real-time updates use MQTT topics; no WebSocket endpoint in v1.
+**New File:** `src/homesec/api/routes/stats.py`
+
+```python
+"""Statistics API routes."""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from ..dependencies import get_homesec_app
+
+router = APIRouter(prefix="/stats")
+
+
+class StatsResponse(BaseModel):
+    """Response model for statistics."""
+    clips_today: int
+    clips_total: int
+    alerts_today: int
+    alerts_total: int
+    cameras_online: int
+    cameras_total: int
+    last_alert_at: datetime | None
+    last_clip_at: datetime | None
+
+
+@router.get("", response_model=StatsResponse)
+async def get_stats(app=Depends(get_homesec_app)):
+    """Get system-wide statistics."""
+    today = date.today()
+    today_start = datetime.combine(today, datetime.min.time())
+
+    # Get clip counts
+    _, clips_today = await app.repository.list_clips(since=today_start, limit=0)
+    _, clips_total = await app.repository.list_clips(limit=0)
+
+    # Get alert counts (notifications sent)
+    _, alerts_today = await app.repository.list_events(
+        event_type="notification_sent",
+        since=today_start,
+        limit=0,
+    )
+    _, alerts_total = await app.repository.list_events(
+        event_type="notification_sent",
+        limit=0,
+    )
+
+    # Get camera health
+    cameras = app.get_all_sources()
+    cameras_online = sum(1 for c in cameras if c.is_healthy())
+
+    # Get last timestamps
+    recent_clips, _ = await app.repository.list_clips(limit=1)
+    recent_alerts, _ = await app.repository.list_events(
+        event_type="notification_sent",
+        limit=1,
+    )
+
+    return StatsResponse(
+        clips_today=clips_today,
+        clips_total=clips_total,
+        alerts_today=alerts_today,
+        alerts_total=alerts_total,
+        cameras_online=cameras_online,
+        cameras_total=len(cameras),
+        last_alert_at=recent_alerts[0].timestamp if recent_alerts else None,
+        last_clip_at=recent_clips[0].created_at if recent_clips else None,
+    )
+```
+
+**New File:** `src/homesec/api/routes/health.py`
+
+```python
+"""Health check API routes."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Response, status
+from pydantic import BaseModel
+
+from ..dependencies import get_homesec_app
+
+router = APIRouter()
+
+
+class SourceHealth(BaseModel):
+    """Health status for a single source."""
+    name: str
+    healthy: bool
+    last_heartbeat: float | None
+    last_heartbeat_age_s: float | None
+
+
+class HealthResponse(BaseModel):
+    """Response model for health check."""
+    status: str  # "healthy", "degraded", "unhealthy"
+    version: str
+    uptime_s: float
+    sources: list[SourceHealth]
+    postgres_connected: bool
+
+
+@router.get("/health", response_model=HealthResponse)
+@router.get("/api/v1/health", response_model=HealthResponse)
+async def health_check(
+    response: Response,
+    app=Depends(get_homesec_app),
+):
+    """Health check endpoint."""
+    sources = []
+    all_healthy = True
+    any_healthy = False
+
+    for source in app.get_all_sources():
+        healthy = source.is_healthy()
+        if healthy:
+            any_healthy = True
+        else:
+            all_healthy = False
+
+        sources.append(SourceHealth(
+            name=source.camera_name,
+            healthy=healthy,
+            last_heartbeat=source.last_heartbeat(),
+            last_heartbeat_age_s=source.last_heartbeat_age(),
+        ))
+
+    # Check Postgres connectivity
+    postgres_connected = await app.repository.ping()
+
+    # Determine overall status
+    if all_healthy and postgres_connected:
+        health_status = "healthy"
+    elif any_healthy:
+        health_status = "degraded"
+    else:
+        health_status = "unhealthy"
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return HealthResponse(
+        status=health_status,
+        version=app.version,
+        uptime_s=app.uptime_seconds(),
+        sources=sources,
+        postgres_connected=postgres_connected,
+    )
+```
+
+Real-time updates use HA Events API; no WebSocket endpoint in v1.
 
 ### 2.4 API Configuration
 
@@ -1353,7 +1605,7 @@ homesec-ha-addons/
 
 ### 3.2 Add-on Manifest
 
-**File:** `homesec/config.yaml`
+**File:** `homeassistant/addon/homesec/config.yaml`
 
 Note: Update to current Home Assistant add-on schema:
 
@@ -1440,7 +1692,7 @@ watchdog: http://[HOST]:[PORT:8080]/api/v1/health
 
 ### 3.3 Add-on Dockerfile
 
-**File:** `homesec/Dockerfile`
+**File:** `homeassistant/addon/homesec/Dockerfile`
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -1517,7 +1769,7 @@ rootfs/etc/s6-overlay/s6-rc.d/
 
 ### 3.5 PostgreSQL Initialization Service
 
-**File:** `rootfs/etc/s6-overlay/s6-rc.d/postgres-init/up`
+**File:** `homeassistant/addon/homesec/rootfs/etc/s6-overlay/s6-rc.d/postgres-init/up`
 
 ```bash
 #!/command/with-contenv bashio
@@ -1559,7 +1811,7 @@ bashio::log.info "PostgreSQL initialization complete"
 
 ### 3.6 PostgreSQL Service
 
-**File:** `rootfs/etc/s6-overlay/s6-rc.d/postgres/run`
+**File:** `homeassistant/addon/homesec/rootfs/etc/s6-overlay/s6-rc.d/postgres/run`
 
 ```bash
 #!/command/with-contenv bashio
@@ -1572,7 +1824,7 @@ exec su postgres -c "postgres -D /data/postgres/data"
 
 ### 3.7 HomeSec Service
 
-**File:** `rootfs/etc/s6-overlay/s6-rc.d/homesec/run`
+**File:** `homeassistant/addon/homesec/rootfs/etc/s6-overlay/s6-rc.d/homesec/run`
 
 ```bash
 #!/command/with-contenv bashio
@@ -1681,7 +1933,7 @@ exec python3 -m homesec.cli run \
 
 ### 3.8 Ingress Configuration
 
-**File:** `homesec/rootfs/etc/nginx/includes/ingress.conf`
+**File:** `homeassistant/addon/homesec/rootfs/etc/nginx/includes/ingress.conf`
 
 ```nginx
 # Proxy to HomeSec API
@@ -1744,7 +1996,7 @@ custom_components/homesec/
 
 ### 4.2 Manifest
 
-**File:** `custom_components/homesec/manifest.json`
+**File:** `homeassistant/integration/custom_components/homesec/manifest.json`
 
 ```json
 {
@@ -1765,7 +2017,7 @@ custom_components/homesec/
 
 ### 4.3 Constants
 
-**File:** `custom_components/homesec/const.py`
+**File:** `homeassistant/integration/custom_components/homesec/const.py`
 
 ```python
 """Constants for HomeSec integration."""
@@ -1783,6 +2035,10 @@ CONF_VERIFY_SSL: Final = "verify_ssl"
 # Default values
 DEFAULT_PORT: Final = 8080
 DEFAULT_VERIFY_SSL: Final = True
+ADDON_HOSTNAME: Final = "localhost"  # Add-on runs on same host as HA
+
+# Motion sensor
+DEFAULT_MOTION_RESET_SECONDS: Final = 30
 
 # Platforms
 PLATFORMS: Final = [
@@ -1812,7 +2068,9 @@ ATTR_DETECTED_OBJECTS: Final = "detected_objects"
 
 ### 4.4 Config Flow
 
-**File:** `custom_components/homesec/config_flow.py`
+**File:** `homeassistant/integration/custom_components/homesec/config_flow.py`
+
+The config flow automatically detects if the HomeSec add-on is running and offers one-click setup.
 
 ```python
 """Config flow for HomeSec integration."""
@@ -1835,6 +2093,7 @@ from .const import (
     DEFAULT_PORT,
     CONF_VERIFY_SSL,
     DEFAULT_VERIFY_SSL,
+    ADDON_HOSTNAME,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1879,6 +2138,16 @@ async def validate_connection(
         }
 
 
+async def detect_addon(hass: HomeAssistant) -> bool:
+    """Check if HomeSec add-on is running."""
+    try:
+        # Try to connect to add-on at localhost:8080
+        await validate_connection(hass, ADDON_HOSTNAME, DEFAULT_PORT, verify_ssl=False)
+        return True
+    except (CannotConnect, InvalidAuth, Exception):
+        return False
+
+
 class HomesecConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for HomeSec."""
 
@@ -1891,11 +2160,63 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._api_key: str | None = None
         self._verify_ssl: bool = DEFAULT_VERIFY_SSL
         self._cameras: list[dict] = []
+        self._addon_detected: bool = False
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial step."""
+        """Handle the initial step - check for add-on first."""
+        # Check if add-on is running
+        if await detect_addon(self.hass):
+            self._addon_detected = True
+            return await self.async_step_addon()
+
+        # No add-on found, show manual setup
+        return await self.async_step_manual(user_input)
+
+    async def async_step_addon(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle add-on auto-discovery confirmation."""
+        errors = {}
+
+        if user_input is not None:
+            # User confirmed, connect to add-on
+            self._host = ADDON_HOSTNAME
+            self._port = DEFAULT_PORT
+            self._verify_ssl = False
+
+            try:
+                info = await validate_connection(
+                    self.hass, self._host, self._port, verify_ssl=False
+                )
+                self._cameras = info.get("cameras", [])
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+                # Fall back to manual setup
+                return await self.async_step_manual()
+            except Exception:
+                _LOGGER.exception("Unexpected exception connecting to add-on")
+                errors["base"] = "unknown"
+                return await self.async_step_manual()
+            else:
+                await self.async_set_unique_id(f"homesec_{self._host}_{self._port}")
+                self._abort_if_unique_id_configured()
+                return await self.async_step_cameras()
+
+        # Show confirmation form
+        return self.async_show_form(
+            step_id="addon",
+            description_placeholders={
+                "addon_url": f"http://{ADDON_HOSTNAME}:{DEFAULT_PORT}",
+            },
+            errors=errors,
+        )
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle manual setup for standalone HomeSec."""
         errors = {}
 
         if user_input is not None:
@@ -1921,14 +2242,12 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
             else:
-                # Check if already configured
                 await self.async_set_unique_id(f"homesec_{self._host}_{self._port}")
                 self._abort_if_unique_id_configured()
-
                 return await self.async_step_cameras()
 
         return self.async_show_form(
-            step_id="user",
+            step_id="manual",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
         )
@@ -1938,28 +2257,25 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle camera configuration step."""
         if user_input is not None:
-            # Create the config entry
             return self.async_create_entry(
-                title=f"HomeSec ({self._host})",
+                title=f"HomeSec ({'Add-on' if self._addon_detected else self._host})",
                 data={
                     CONF_HOST: self._host,
                     CONF_PORT: self._port,
                     CONF_API_KEY: self._api_key,
                     CONF_VERIFY_SSL: self._verify_ssl,
+                    "addon": self._addon_detected,
                 },
                 options={
                     "cameras": user_input.get("cameras", []),
+                    "motion_reset_seconds": 30,  # Configurable motion sensor reset
                 },
             )
 
-        # Build camera selection schema
         camera_names = [c["name"] for c in self._cameras]
         schema = vol.Schema(
             {
-                vol.Optional(
-                    "cameras",
-                    default=camera_names,
-                ): vol.All(
+                vol.Optional("cameras", default=camera_names): vol.All(
                     vol.Coerce(list),
                     [vol.In(camera_names)],
                 ),
@@ -1969,9 +2285,7 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="cameras",
             data_schema=schema,
-            description_placeholders={
-                "camera_count": str(len(self._cameras)),
-            },
+            description_placeholders={"camera_count": str(len(self._cameras))},
         )
 
     @staticmethod
@@ -1997,7 +2311,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        # Fetch current cameras from HomeSec
         coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]
         camera_names = [c["name"] for c in coordinator.data.get("cameras", [])]
         current_cameras = self.config_entry.options.get("cameras", camera_names)
@@ -2006,10 +2319,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
-                        "cameras",
-                        default=current_cameras,
-                    ): vol.All(
+                    vol.Optional("cameras", default=current_cameras): vol.All(
                         vol.Coerce(list),
                         [vol.In(camera_names)],
                     ),
@@ -2017,6 +2327,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         "scan_interval",
                         default=self.config_entry.options.get("scan_interval", 30),
                     ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
+                    vol.Optional(
+                        "motion_reset_seconds",
+                        default=self.config_entry.options.get("motion_reset_seconds", 30),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
                 }
             ),
         )
@@ -2038,7 +2352,7 @@ Integration behavior for config changes:
 
 ### 4.5 Data Coordinator
 
-**File:** `custom_components/homesec/coordinator.py`
+**File:** `homeassistant/integration/custom_components/homesec/coordinator.py`
 
 ```python
 """Data coordinator for HomeSec integration."""
@@ -2069,6 +2383,7 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         host: str,
         port: int,
         api_key: str | None = None,
@@ -2085,8 +2400,11 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.port = port
         self.api_key = api_key
         self.verify_ssl = verify_ssl
+        self.config_entry = config_entry
         self._session = async_get_clientsession(hass, verify_ssl=verify_ssl)
         self._event_unsubs: list[callable] = []
+        self._motion_timers: dict[str, callable] = {}  # Camera -> cancel callback
+        self._config_version: int = 0  # Track for optimistic concurrency
 
     @property
     def base_url(self) -> str:
@@ -2121,9 +2439,19 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     response.raise_for_status()
                     cameras_data = await response.json()
 
+                # Fetch config for version tracking
+                async with self._session.get(
+                    f"{self.base_url}/config",
+                    headers=self._headers,
+                ) as response:
+                    response.raise_for_status()
+                    config_data = await response.json()
+                    self._config_version = config_data.get("config_version", 0)
+
                 return {
                     "health": health,
                     "cameras": cameras_data.get("cameras", []),
+                    "config_version": self._config_version,
                     "connected": True,
                 }
 
@@ -2138,16 +2466,41 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         from homeassistant.core import Event
+        from homeassistant.helpers.event import async_call_later
 
         async def _on_alert(event: Event) -> None:
-            """Handle homesec_alert event."""
+            """Handle homesec_alert event with motion timer."""
             _LOGGER.debug("Received homesec_alert event: %s", event.data)
-            # Store latest alert data for entities to consume
             camera = event.data.get("camera")
-            if camera:
-                self.data.setdefault("latest_alerts", {})[camera] = event.data
+            if not camera:
+                return
+
+            # Store latest alert data
+            self.data.setdefault("latest_alerts", {})[camera] = event.data
+
+            # Set motion active for this camera
+            self.data.setdefault("motion_active", {})[camera] = True
+
+            # Cancel any existing reset timer for this camera
+            cancel_key = f"motion_reset_{camera}"
+            if cancel_key in self._motion_timers:
+                self._motion_timers[cancel_key]()  # Cancel existing timer
+
+            # Schedule motion reset after configured duration
+            reset_seconds = self.config_entry.options.get("motion_reset_seconds", 30)
+
+            async def reset_motion(_now: datetime) -> None:
+                """Reset motion sensor after timeout."""
+                self.data.setdefault("motion_active", {})[camera] = False
+                self._motion_timers.pop(cancel_key, None)
+                self.async_set_updated_data(self.data)
+
+            self._motion_timers[cancel_key] = async_call_later(
+                self.hass, reset_seconds, reset_motion
+            )
+
             # Trigger immediate data refresh
-            await self.async_request_refresh()
+            self.async_set_updated_data(self.data)
 
         async def _on_camera_health(event: Event) -> None:
             """Handle homesec_camera_health event."""
@@ -2157,7 +2510,6 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async def _on_clip_recorded(event: Event) -> None:
             """Handle homesec_clip_recorded event."""
             _LOGGER.debug("Received homesec_clip_recorded event: %s", event.data)
-            # Optionally refresh, or just log
 
         # Subscribe to HomeSec events
         self._event_unsubs.append(
@@ -2195,14 +2547,24 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         camera_type: str,
         config: dict,
     ) -> dict:
-        """Add a new camera."""
+        """Add a new camera. Uses optimistic concurrency with config_version."""
+        payload = {
+            "name": name,
+            "type": camera_type,
+            "config": config,
+            "config_version": self._config_version,
+        }
         async with self._session.post(
             f"{self.base_url}/cameras",
             headers=self._headers,
-            json={"name": name, "type": camera_type, "config": config},
+            json=payload,
         ) as response:
+            if response.status == 409:
+                raise ConfigVersionConflict("Config was modified, please refresh")
             response.raise_for_status()
-            return await response.json()
+            result = await response.json()
+            self._config_version = result.get("config_version", self._config_version)
+            return result
 
     async def async_update_camera(
         self,
@@ -2210,8 +2572,8 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         config: dict | None = None,
         alert_policy: dict | None = None,
     ) -> dict:
-        """Update camera configuration."""
-        payload = {}
+        """Update camera configuration. Uses optimistic concurrency."""
+        payload = {"config_version": self._config_version}
         if config is not None:
             payload["config"] = config
         if alert_policy is not None:
@@ -2222,16 +2584,36 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             headers=self._headers,
             json=payload,
         ) as response:
+            if response.status == 409:
+                raise ConfigVersionConflict("Config was modified, please refresh")
             response.raise_for_status()
-            return await response.json()
+            result = await response.json()
+            self._config_version = result.get("config_version", self._config_version)
+            return result
 
     async def async_delete_camera(self, camera_name: str) -> None:
-        """Delete a camera."""
+        """Delete a camera. Uses optimistic concurrency."""
         async with self._session.delete(
             f"{self.base_url}/cameras/{camera_name}",
             headers=self._headers,
+            params={"config_version": self._config_version},
         ) as response:
+            if response.status == 409:
+                raise ConfigVersionConflict("Config was modified, please refresh")
             response.raise_for_status()
+            result = await response.json()
+            self._config_version = result.get("config_version", self._config_version)
+
+    async def async_set_camera_enabled(self, camera_name: str, enabled: bool) -> dict:
+        """Enable or disable a camera (stops RTSP connection when disabled)."""
+        return await self.async_update_camera(
+            camera_name,
+            config={"enabled": enabled},
+        )
+
+
+class ConfigVersionConflict(Exception):
+    """Raised when config_version is stale (409 Conflict)."""
 
     async def async_test_camera(self, camera_name: str) -> dict:
         """Test camera connection."""
@@ -2243,21 +2625,150 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return await response.json()
 ```
 
-In `async_setup_entry`, start MQTT subscription:
+### 4.6 Integration Setup
+
+**File:** `homeassistant/integration/custom_components/homesec/__init__.py`
 
 ```python
-await coordinator.async_start_mqtt()
+"""HomeSec integration for Home Assistant."""
+
+from __future__ import annotations
+
+import logging
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST, CONF_PORT, CONF_API_KEY, Platform
+from homeassistant.core import HomeAssistant
+
+from .const import DOMAIN, CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL
+from .coordinator import HomesecCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up HomeSec from a config entry."""
+    coordinator = HomesecCoordinator(
+        hass,
+        entry,
+        host=entry.data[CONF_HOST],
+        port=entry.data[CONF_PORT],
+        api_key=entry.data.get(CONF_API_KEY),
+        verify_ssl=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+    )
+
+    # Fetch initial data
+    await coordinator.async_config_entry_first_refresh()
+
+    # Subscribe to HomeSec events (via HA Events API)
+    await coordinator.async_subscribe_events()
+
+    # Store coordinator
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # Set up platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register update listener for options changes
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
+
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    # Unsubscribe from events
+    coordinator: HomesecCoordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.async_unsubscribe_events()
+
+    # Cancel any pending motion timers
+    for cancel in coordinator._motion_timers.values():
+        cancel()
+    coordinator._motion_timers.clear()
+
+    # Unload platforms
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    if unload_ok:
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    return unload_ok
+
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
 ```
 
-In `async_unload_entry`, call:
+### 4.7 Base Entity
+
+**File:** `homeassistant/integration/custom_components/homesec/entity.py`
 
 ```python
-await coordinator.async_stop_mqtt()
+"""Base entity for HomeSec integration."""
+
+from __future__ import annotations
+
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN
+from .coordinator import HomesecCoordinator
+
+
+class HomesecEntity(CoordinatorEntity[HomesecCoordinator]):
+    """Base class for HomeSec entities."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: HomesecCoordinator,
+        camera_name: str,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(coordinator)
+        self._camera_name = camera_name
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for this entity."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._camera_name)},
+            name=f"HomeSec {self._camera_name}",
+            manufacturer="HomeSec",
+            model="AI Security Camera",
+            sw_version=self.coordinator.data.get("health", {}).get("version", "unknown"),
+            via_device=(DOMAIN, "homesec_hub"),
+        )
+
+    def _get_camera_data(self) -> dict | None:
+        """Get camera data from coordinator."""
+        cameras = self.coordinator.data.get("cameras", [])
+        for camera in cameras:
+            if camera.get("name") == self._camera_name:
+                return camera
+        return None
+
+    def _is_motion_active(self) -> bool:
+        """Check if motion is currently active for this camera."""
+        return self.coordinator.data.get("motion_active", {}).get(self._camera_name, False)
+
+    def _get_latest_alert(self) -> dict | None:
+        """Get the latest alert for this camera."""
+        return self.coordinator.data.get("latest_alerts", {}).get(self._camera_name)
 ```
 
-### 4.6 Entity Platforms
+### 4.8 Entity Platforms
 
-**File:** `custom_components/homesec/sensor.py`
+**File:** `homeassistant/integration/custom_components/homesec/sensor.py`
 
 ```python
 """Sensor platform for HomeSec integration."""
@@ -2382,7 +2893,7 @@ class HomesecCameraSensor(HomesecEntity, SensorEntity):
         return attrs
 ```
 
-**File:** `custom_components/homesec/binary_sensor.py`
+**File:** `homeassistant/integration/custom_components/homesec/binary_sensor.py`
 
 ```python
 """Binary sensor platform for HomeSec integration."""
@@ -2465,18 +2976,110 @@ class HomesecCameraBinarySensor(HomesecEntity, BinarySensorEntity):
         key = self.entity_description.key
 
         if key == "motion":
-            return camera.get("motion_detected", False)
+            # Use timer-based motion state from coordinator
+            return self._is_motion_active()
         elif key == "person":
-            return camera.get("person_detected", False)
+            # Person detected based on latest alert
+            alert = self._get_latest_alert()
+            if alert and self._is_motion_active():
+                return alert.get("activity_type") == "person"
+            return False
         elif key == "online":
             return camera.get("healthy", False)
 
         return None
 ```
 
-### 4.7 Services
+**File:** `homeassistant/integration/custom_components/homesec/switch.py`
 
-**File:** `custom_components/homesec/services.yaml`
+```python
+"""Switch platform for HomeSec integration."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import DOMAIN
+from .coordinator import HomesecCoordinator
+from .entity import HomesecEntity
+
+CAMERA_SWITCHES: tuple[SwitchEntityDescription, ...] = (
+    SwitchEntityDescription(
+        key="enabled",
+        name="Enabled",
+        icon="mdi:video",
+    ),
+)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up HomeSec switches."""
+    coordinator: HomesecCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    entities: list[SwitchEntity] = []
+
+    for camera in coordinator.data.get("cameras", []):
+        camera_name = camera["name"]
+        for description in CAMERA_SWITCHES:
+            entities.append(
+                HomesecCameraSwitch(coordinator, camera_name, description)
+            )
+
+    async_add_entities(entities)
+
+
+class HomesecCameraSwitch(HomesecEntity, SwitchEntity):
+    """Representation of a HomeSec camera switch."""
+
+    def __init__(
+        self,
+        coordinator: HomesecCoordinator,
+        camera_name: str,
+        description: SwitchEntityDescription,
+    ) -> None:
+        """Initialize the switch."""
+        super().__init__(coordinator, camera_name)
+        self.entity_description = description
+        self._attr_unique_id = f"{camera_name}_{description.key}"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true if the switch is on."""
+        camera = self._get_camera_data()
+        if not camera:
+            return None
+
+        key = self.entity_description.key
+
+        if key == "enabled":
+            # Camera is enabled if it's in the config and not explicitly disabled
+            return camera.get("config", {}).get("enabled", True)
+
+        return None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the switch on (enable camera, starts RTSP connection)."""
+        await self.coordinator.async_set_camera_enabled(self._camera_name, True)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the switch off (disable camera, stops RTSP connection)."""
+        await self.coordinator.async_set_camera_enabled(self._camera_name, False)
+        await self.coordinator.async_request_refresh()
+```
+
+### 4.9 Services
+
+**File:** `homeassistant/integration/custom_components/homesec/services.yaml`
 
 ```yaml
 add_camera:
@@ -2554,9 +3157,9 @@ test_camera:
       integration: homesec
 ```
 
-### 4.8 Translations
+### 4.10 Translations
 
-**File:** `custom_components/homesec/translations/en.json`
+**File:** `homeassistant/integration/custom_components/homesec/translations/en.json`
 
 ```json
 {
@@ -2648,7 +3251,7 @@ test_camera:
 }
 ```
 
-### 4.9 Acceptance Criteria
+### 4.11 Acceptance Criteria
 
 - [ ] Config flow connects to HomeSec and discovers cameras
 - [ ] All entity platforms create entities correctly
@@ -2670,7 +3273,7 @@ test_camera:
 
 ### 5.1 Custom Lovelace Card (Optional)
 
-**File:** `custom_components/homesec/www/homesec-camera-card.js`
+**File:** `homeassistant/integration/custom_components/homesec/www/homesec-camera-card.js`
 
 ```javascript
 class HomesecCameraCard extends HTMLElement {
@@ -2858,6 +3461,8 @@ If user enables MQTT Discovery:
 
 ### Phase 2: REST API
 - `src/homesec/api/` - New package (server.py, routes/*, dependencies.py)
+- `src/homesec/api/routes/stats.py` - Stats endpoint for hub entities
+- `src/homesec/api/routes/health.py` - Health endpoint with response schema
 - `src/homesec/config/manager.py` - Config persistence + restart signaling
 - `src/homesec/models/config.py` - Add FastAPIServerConfig
 - `src/homesec/config/loader.py` - Support multiple YAML files + merge semantics
@@ -2871,15 +3476,26 @@ If user enables MQTT Discovery:
 - `config/example.yaml` - Add home_assistant notifier example
 - `tests/unit/plugins/notifiers/test_home_assistant.py` - New tests
 
-### Phase 4: Integration
-- `custom_components/homesec/` - Full integration package (uses HA event subscriptions)
-- HACS repository configuration
+### Phase 4: Integration (in `homeassistant/integration/`)
+- `homeassistant/integration/hacs.json` - HACS configuration
+- `homeassistant/integration/custom_components/homesec/__init__.py` - Setup entry
+- `homeassistant/integration/custom_components/homesec/manifest.json` - Metadata
+- `homeassistant/integration/custom_components/homesec/const.py` - Constants
+- `homeassistant/integration/custom_components/homesec/config_flow.py` - Add-on auto-discovery
+- `homeassistant/integration/custom_components/homesec/coordinator.py` - Data + event subscriptions + motion timers
+- `homeassistant/integration/custom_components/homesec/entity.py` - Base entity class
+- `homeassistant/integration/custom_components/homesec/sensor.py` - Sensors
+- `homeassistant/integration/custom_components/homesec/binary_sensor.py` - Motion (30s auto-reset)
+- `homeassistant/integration/custom_components/homesec/switch.py` - Camera enable/disable (stops RTSP)
+- `homeassistant/integration/custom_components/homesec/services.yaml` - Service definitions
+- `homeassistant/integration/custom_components/homesec/translations/en.json` - Strings
 
-### Phase 3: Add-on
-- New repository: `homesec-ha-addons/`
-- `homesec/config.yaml` - Add-on manifest (homeassistant_api: true for SUPERVISOR_TOKEN)
-- `homesec/Dockerfile` - Container build
-- `homesec/rootfs/` - Startup scripts, nginx config
+### Phase 3: Add-on (in `homeassistant/addon/`)
+- `homeassistant/addon/repository.json` - Add-on repository manifest
+- `homeassistant/addon/homesec/config.yaml` - Add-on manifest (homeassistant_api: true)
+- `homeassistant/addon/homesec/Dockerfile` - Container build with PostgreSQL 16
+- `homeassistant/addon/homesec/rootfs/` - s6-overlay services (postgres-init, postgres, homesec)
+- `homeassistant/addon/homesec/rootfs/etc/nginx/` - Ingress config
 
 ### Phase 1: MQTT Discovery (Optional)
 - `src/homesec/models/config.py` - Add MQTTDiscoveryConfig
@@ -2890,7 +3506,7 @@ If user enables MQTT Discovery:
 - `tests/unit/plugins/notifiers/test_mqtt_discovery.py` - New tests
 
 ### Phase 5: Advanced
-- `custom_components/homesec/www/` - Lovelace cards
+- `homeassistant/integration/custom_components/homesec/www/` - Lovelace cards
 
 ---
 
@@ -2903,11 +3519,10 @@ If user enables MQTT Discovery:
 | Phase 4: Integration | 7-10 days | Phase 2, 2.5 |
 | Phase 3: Add-on | 3-4 days | Phase 2, 2.5 |
 | Phase 1: MQTT Discovery (optional) | 2-3 days | None |
-| Phase 4: Integration | 7-10 days | Phase 2 |
 | Phase 5: Advanced | 5-7 days | Phase 4 |
 
-**Total: 21-30 days** (excluding optional MQTT Discovery)
+**Total: 20-27 days** (excluding optional MQTT Discovery)
 
-Execution order: Phase 2 → Phase 2.5 → Phase 4 → Phase 3. Phase 1 (MQTT Discovery) is optional. Phase 5 follows Phase 4.
+Execution order: Phase 2 → Phase 2.5 → Phase 4 → Phase 3 → Phase 5. Phase 1 (MQTT Discovery) is optional.
 
 Key benefit: No MQTT broker required. Add-on users get zero-config real-time events via `SUPERVISOR_TOKEN`.
