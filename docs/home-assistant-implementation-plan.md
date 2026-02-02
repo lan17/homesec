@@ -17,14 +17,21 @@ This document provides a comprehensive, step-by-step implementation plan for int
 - Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
 - Tests: Given/When/Then comments required for all new tests.
 - P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
+- **Real-time events**: Use HA Events API (not MQTT). Add-on gets `SUPERVISOR_TOKEN` automatically; standalone users provide HA URL + token.
+- **No MQTT required**: MQTT Discovery is optional for users who prefer it; primary path uses HA Events API.
+- **409 Conflict UX**: Show error to user when config version is stale.
+- **API during Postgres outage**: Return 503 Service Unavailable.
+- **Camera ping**: RTSP ping implementation should include TODO for real connectivity test (not part of this integration work).
+- **Delete clip**: Deletes from both local storage and cloud storage (existing pattern in cleanup_clips.py).
 
 ## Execution Order (Option A)
 
 1. Phase 2: REST API for Configuration (control plane)
-2. Phase 4: Native Home Assistant Integration
-3. Phase 3: Home Assistant Add-on
-4. Phase 1: MQTT Discovery Enhancement (optional parallel track)
-5. Phase 5: Advanced Features
+2. Phase 2.5: Home Assistant Notifier Plugin (real-time events)
+3. Phase 4: Native Home Assistant Integration
+4. Phase 3: Home Assistant Add-on
+5. Phase 1: MQTT Discovery Enhancement (optional, for users who prefer MQTT)
+6. Phase 5: Advanced Features
 
 ---
 
@@ -32,21 +39,24 @@ This document provides a comprehensive, step-by-step implementation plan for int
 
 1. [Decision Snapshot](#decision-snapshot-2026-02-01)
 2. [Execution Order](#execution-order-option-a)
-3. [Phase 1: MQTT Discovery Enhancement](#phase-1-mqtt-discovery-enhancement)
-4. [Phase 2: REST API for Configuration](#phase-2-rest-api-for-configuration)
-5. [Phase 3: Home Assistant Add-on](#phase-3-home-assistant-add-on)
-6. [Phase 4: Native Home Assistant Integration](#phase-4-native-home-assistant-integration)
-7. [Phase 5: Advanced Features](#phase-5-advanced-features)
-8. [Testing Strategy](#testing-strategy)
-9. [Migration Guide](#migration-guide)
+3. [Phase 2: REST API for Configuration](#phase-2-rest-api-for-configuration)
+4. [Phase 2.5: Home Assistant Notifier Plugin](#phase-25-home-assistant-notifier-plugin)
+5. [Phase 4: Native Home Assistant Integration](#phase-4-native-home-assistant-integration)
+6. [Phase 3: Home Assistant Add-on](#phase-3-home-assistant-add-on)
+7. [Phase 1: MQTT Discovery Enhancement (Optional)](#phase-1-mqtt-discovery-enhancement-optional)
+8. [Phase 5: Advanced Features](#phase-5-advanced-features)
+9. [Testing Strategy](#testing-strategy)
+10. [Migration Guide](#migration-guide)
 
 ---
 
-## Phase 1: MQTT Discovery Enhancement
+## Phase 1: MQTT Discovery Enhancement (Optional)
 
-**Goal:** Auto-create Home Assistant entities from HomeSec without requiring manual HA configuration.
+**Goal:** Auto-create Home Assistant entities from HomeSec without requiring the native integration. This is an optional feature for users who prefer MQTT over the primary HA Events API approach.
 
 **Estimated Effort:** 2-3 days
+
+**Note:** This phase is optional. The primary integration path uses the HA Events API (Phase 2.5) which requires no MQTT broker.
 
 ### 1.1 Configuration Model Updates
 
@@ -1034,10 +1044,283 @@ The FastAPI app automatically generates OpenAPI docs at `/api/v1/docs` (Swagger 
 - [ ] Restart endpoint triggers graceful shutdown
 - [ ] Clip listing with filtering works
 - [ ] Event history API works
-- [ ] MQTT event topics trigger HA refresh
 - [ ] OpenAPI documentation is accurate
 - [ ] CORS works for Home Assistant frontend
 - [ ] API authentication (optional) works
+- [ ] Returns 503 when Postgres is unavailable
+
+---
+
+## Phase 2.5: Home Assistant Notifier Plugin
+
+**Goal:** Enable real-time event push from HomeSec to Home Assistant without requiring MQTT.
+
+**Estimated Effort:** 2-3 days
+
+### 2.5.1 Configuration Model
+
+**File:** `src/homesec/models/config.py`
+
+```python
+class HomeAssistantNotifierConfig(BaseModel):
+    """Configuration for Home Assistant notifier."""
+
+    # For standalone mode (not running as add-on)
+    # When running as HA add-on, SUPERVISOR_TOKEN is used automatically
+    url_env: str | None = None      # e.g., "HA_URL" -> http://homeassistant.local:8123
+    token_env: str | None = None    # e.g., "HA_TOKEN" -> long-lived access token
+
+    # Event configuration
+    event_prefix: str = "homesec"   # Events will be homesec_alert, homesec_health, etc.
+```
+
+### 2.5.2 Home Assistant Notifier Implementation
+
+**New File:** `src/homesec/plugins/notifiers/home_assistant.py`
+
+```python
+"""Home Assistant notifier - pushes events directly to HA Events API."""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import TYPE_CHECKING
+
+import aiohttp
+
+from homesec.interfaces import Notifier
+from homesec.models.config import HomeAssistantNotifierConfig
+from homesec.plugins.registry import plugin, PluginType
+
+if TYPE_CHECKING:
+    from homesec.models.alert import Alert
+
+logger = logging.getLogger(__name__)
+
+
+@plugin(plugin_type=PluginType.NOTIFIER, name="home_assistant")
+class HomeAssistantNotifier(Notifier):
+    """Push events directly to Home Assistant via Events API."""
+
+    config_cls = HomeAssistantNotifierConfig
+
+    def __init__(self, config: HomeAssistantNotifierConfig):
+        self.config = config
+        self._session: aiohttp.ClientSession | None = None
+        self._supervisor_mode = False
+
+    async def start(self) -> None:
+        """Initialize the HTTP session and detect supervisor mode."""
+        self._session = aiohttp.ClientSession()
+
+        # Detect if running as HA add-on (SUPERVISOR_TOKEN is injected automatically)
+        if os.environ.get("SUPERVISOR_TOKEN"):
+            self._supervisor_mode = True
+            logger.info("HomeAssistantNotifier: Running in supervisor mode (zero-config)")
+        else:
+            # Standalone mode - validate config
+            if not self.config.url_env or not self.config.token_env:
+                raise ValueError(
+                    "HomeAssistantNotifier requires url_env and token_env in standalone mode"
+                )
+            logger.info("HomeAssistantNotifier: Running in standalone mode")
+
+    async def stop(self) -> None:
+        """Close the HTTP session."""
+        if self._session:
+            await self._session.close()
+            self._session = None
+
+    def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
+        """Get the URL and headers for the HA Events API."""
+        if self._supervisor_mode:
+            url = f"http://supervisor/core/api/events/{self.config.event_prefix}_{event_type}"
+            headers = {
+                "Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}",
+                "Content-Type": "application/json",
+            }
+        else:
+            from homesec.config import resolve_env_var
+            base_url = resolve_env_var(self.config.url_env)
+            token = resolve_env_var(self.config.token_env)
+            url = f"{base_url}/api/events/{self.config.event_prefix}_{event_type}"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+        return url, headers
+
+    async def notify(self, alert: Alert) -> None:
+        """Send alert to Home Assistant as an event."""
+        if not self._session:
+            raise RuntimeError("HomeAssistantNotifier not started")
+
+        url, headers = self._get_url_and_headers("alert")
+
+        event_data = {
+            "camera": alert.camera_name,
+            "clip_id": alert.clip_id,
+            "activity_type": alert.activity_type,
+            "risk_level": alert.risk_level.value if alert.risk_level else None,
+            "summary": alert.summary,
+            "view_url": alert.view_url,
+            "storage_uri": alert.storage_uri,
+            "timestamp": alert.ts.isoformat(),
+        }
+
+        # Add analysis details if present
+        if alert.analysis:
+            event_data["detected_objects"] = alert.analysis.detected_objects
+            event_data["analysis"] = alert.analysis.model_dump(mode="json")
+
+        try:
+            async with self._session.post(url, json=event_data, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.error(
+                        "Failed to send event to HA: %s %s - %s",
+                        resp.status,
+                        resp.reason,
+                        body,
+                    )
+                else:
+                    logger.debug("Sent homesec_alert event to HA for clip %s", alert.clip_id)
+        except aiohttp.ClientError as exc:
+            logger.error("Failed to connect to Home Assistant: %s", exc)
+            # Don't raise - notifications are best-effort
+
+    async def publish_camera_health(self, camera_name: str, healthy: bool) -> None:
+        """Publish camera health status to HA."""
+        if not self._session:
+            return
+
+        url, headers = self._get_url_and_headers("camera_health")
+        event_data = {
+            "camera": camera_name,
+            "healthy": healthy,
+            "status": "healthy" if healthy else "unhealthy",
+        }
+
+        try:
+            async with self._session.post(url, json=event_data, headers=headers) as resp:
+                if resp.status >= 400:
+                    logger.warning("Failed to send camera health to HA: %s", resp.status)
+        except aiohttp.ClientError:
+            pass  # Best effort
+
+    async def publish_clip_recorded(self, clip_id: str, camera_name: str) -> None:
+        """Publish clip recorded event to HA."""
+        if not self._session:
+            return
+
+        url, headers = self._get_url_and_headers("clip_recorded")
+        event_data = {
+            "clip_id": clip_id,
+            "camera": camera_name,
+        }
+
+        try:
+            async with self._session.post(url, json=event_data, headers=headers) as resp:
+                if resp.status >= 400:
+                    logger.warning("Failed to send clip_recorded to HA: %s", resp.status)
+        except aiohttp.ClientError:
+            pass  # Best effort
+```
+
+### 2.5.3 Configuration Example
+
+**File:** `config/example.yaml` (add section)
+
+```yaml
+notifiers:
+  # Home Assistant notifier (recommended for HA users)
+  - type: home_assistant
+    # When running as HA add-on, no configuration needed (uses SUPERVISOR_TOKEN)
+    # For standalone mode, provide HA URL and token:
+    # url_env: HA_URL           # http://homeassistant.local:8123
+    # token_env: HA_TOKEN       # Long-lived access token from HA
+```
+
+### 2.5.4 Testing
+
+**New File:** `tests/unit/plugins/notifiers/test_home_assistant.py`
+
+```python
+"""Tests for Home Assistant notifier."""
+
+import os
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from aiohttp import ClientResponseError
+
+from homesec.models.config import HomeAssistantNotifierConfig
+from homesec.plugins.notifiers.home_assistant import HomeAssistantNotifier
+
+
+class TestHomeAssistantNotifier:
+    """Tests for HomeAssistantNotifier."""
+
+    @pytest.fixture
+    def config(self):
+        return HomeAssistantNotifierConfig(
+            url_env="HA_URL",
+            token_env="HA_TOKEN",
+        )
+
+    @pytest.fixture
+    def notifier(self, config):
+        return HomeAssistantNotifier(config)
+
+    async def test_supervisor_mode_detection(self, notifier):
+        # Given: SUPERVISOR_TOKEN is set
+        with patch.dict(os.environ, {"SUPERVISOR_TOKEN": "test_token"}):
+            # When: notifier starts
+            await notifier.start()
+
+            # Then: supervisor mode is enabled
+            assert notifier._supervisor_mode is True
+
+        await notifier.stop()
+
+    async def test_standalone_mode_requires_config(self, config):
+        # Given: config without url_env
+        config.url_env = None
+
+        # When: notifier starts without SUPERVISOR_TOKEN
+        notifier = HomeAssistantNotifier(config)
+        with patch.dict(os.environ, {}, clear=True):
+            # Then: ValueError is raised
+            with pytest.raises(ValueError, match="url_env and token_env"):
+                await notifier.start()
+
+    async def test_notify_sends_event(self, notifier, alert_fixture):
+        # Given: notifier is started in standalone mode
+        with patch.dict(os.environ, {"HA_URL": "http://ha:8123", "HA_TOKEN": "token"}):
+            await notifier.start()
+
+            # When: notify is called
+            with patch.object(notifier._session, "post", new_callable=AsyncMock) as mock_post:
+                mock_post.return_value.__aenter__.return_value.status = 200
+                await notifier.notify(alert_fixture)
+
+                # Then: event is posted to HA
+                mock_post.assert_called_once()
+                call_args = mock_post.call_args
+                assert "homesec_alert" in call_args[0][0]
+
+        await notifier.stop()
+```
+
+### 2.5.5 Acceptance Criteria
+
+- [ ] Notifier auto-detects supervisor mode via `SUPERVISOR_TOKEN`
+- [ ] Zero-config when running as HA add-on
+- [ ] Standalone mode requires `url_env` and `token_env`
+- [ ] Events are fired: `homesec_alert`, `homesec_camera_health`, `homesec_clip_recorded`
+- [ ] Notification failures don't crash the pipeline (best-effort)
+- [ ] Events contain all required metadata for HA integration
 
 ---
 
@@ -1109,7 +1392,7 @@ map:
 
 # Services
 services:
-  - mqtt:want        # Use HA's MQTT broker
+  - mqtt:want        # Optional - only needed if user enables MQTT Discovery
 
 # Options schema
 schema:
@@ -1125,6 +1408,8 @@ schema:
   # VLM
   vlm_enabled: bool?
   openai_api_key: password?
+  # MQTT Discovery (optional - primary path uses HA Events API)
+  mqtt_discovery: bool?
   openai_model: str?
   # MQTT Discovery
   mqtt_discovery: bool?
@@ -1162,20 +1447,26 @@ watchdog: http://[HOST]:[PORT:8080]/api/v1/health
 ARG BUILD_FROM=ghcr.io/hassio-addons/base:15.0.8
 FROM ${BUILD_FROM}
 
-# Install runtime dependencies
+# Install runtime dependencies including PostgreSQL
 RUN apk add --no-cache \
     python3 \
     py3-pip \
     ffmpeg \
-    postgresql-client \
+    postgresql16 \
+    postgresql16-contrib \
     opencv \
+    curl \
     && rm -rf /var/cache/apk/*
+
+# Create PostgreSQL directories
+RUN mkdir -p /run/postgresql /data/postgres \
+    && chown -R postgres:postgres /run/postgresql /data/postgres
 
 # Install HomeSec
 ARG HOMESEC_VERSION=1.2.2
 RUN pip3 install --no-cache-dir homesec==${HOMESEC_VERSION}
 
-# Copy root filesystem
+# Copy root filesystem (s6-overlay services)
 COPY rootfs /
 
 # Set working directory
@@ -1194,42 +1485,139 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8080/api/v1/health || exit 1
 ```
 
-### 3.4 Startup Script
+### 3.4 s6-overlay Service Structure
 
-**File:** `homesec/rootfs/etc/services.d/homesec/run`
+The add-on uses s6-overlay to run PostgreSQL and HomeSec as two services with proper dependency ordering.
+
+**Directory structure:**
+
+```
+rootfs/etc/s6-overlay/s6-rc.d/
+├── postgres/
+│   ├── type                    # Contains: longrun
+│   ├── run                     # PostgreSQL startup script
+│   └── dependencies.d/
+│       └── base                # Depends on base setup
+├── postgres-init/
+│   ├── type                    # Contains: oneshot
+│   ├── up                      # Initialize DB if needed
+│   └── dependencies.d/
+│       └── base
+├── homesec/
+│   ├── type                    # Contains: longrun
+│   ├── run                     # HomeSec startup script
+│   └── dependencies.d/
+│       └── postgres            # Waits for PostgreSQL
+└── user/
+    └── contents.d/
+        ├── postgres-init
+        ├── postgres
+        └── homesec
+```
+
+### 3.5 PostgreSQL Initialization Service
+
+**File:** `rootfs/etc/s6-overlay/s6-rc.d/postgres-init/up`
 
 ```bash
-#!/usr/bin/with-contenv bashio
+#!/command/with-contenv bashio
+
+# Skip if already initialized
+if [[ -f /data/postgres/data/PG_VERSION ]]; then
+    bashio::log.info "PostgreSQL already initialized"
+    exit 0
+fi
+
+bashio::log.info "Initializing PostgreSQL database..."
+
+# Create data directory
+mkdir -p /data/postgres/data
+chown -R postgres:postgres /data/postgres
+
+# Initialize database cluster
+su postgres -c "initdb -D /data/postgres/data --encoding=UTF8 --locale=C"
+
+# Configure PostgreSQL for local connections only
+cat >> /data/postgres/data/postgresql.conf << EOF
+listen_addresses = 'localhost'
+max_connections = 20
+shared_buffers = 128MB
+EOF
+
+# Start PostgreSQL temporarily to create database
+su postgres -c "pg_ctl -D /data/postgres/data start -w -o '-c listen_addresses=localhost'"
+
+# Create homesec database and user
+su postgres -c "createdb homesec"
+su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'homesec';\""
+
+# Stop PostgreSQL (will be started by longrun service)
+su postgres -c "pg_ctl -D /data/postgres/data stop -w"
+
+bashio::log.info "PostgreSQL initialization complete"
+```
+
+### 3.6 PostgreSQL Service
+
+**File:** `rootfs/etc/s6-overlay/s6-rc.d/postgres/run`
+
+```bash
+#!/command/with-contenv bashio
+
+bashio::log.info "Starting PostgreSQL..."
+
+# Run PostgreSQL in foreground
+exec su postgres -c "postgres -D /data/postgres/data"
+```
+
+### 3.7 HomeSec Service
+
+**File:** `rootfs/etc/s6-overlay/s6-rc.d/homesec/run`
+
+```bash
+#!/command/with-contenv bashio
 # ==============================================================================
-# HomeSec Add-on Startup Script
+# HomeSec Service - runs after PostgreSQL is ready
 # ==============================================================================
 
-# Read options
+# Read add-on options
 CONFIG_PATH=$(bashio::config 'config_path')
 OVERRIDE_PATH=$(bashio::config 'override_path')
 LOG_LEVEL=$(bashio::config 'log_level')
-DATABASE_URL=$(bashio::config 'database_url')
+EXTERNAL_DB_URL=$(bashio::config 'database_url')
 STORAGE_TYPE=$(bashio::config 'storage_type')
 STORAGE_PATH=$(bashio::config 'storage_path')
-VLM_ENABLED=$(bashio::config 'vlm_enabled')
 MQTT_DISCOVERY=$(bashio::config 'mqtt_discovery')
 
-# Get MQTT credentials from HA if available
-if bashio::services.available "mqtt"; then
+# Wait for PostgreSQL to be ready (if using bundled)
+if [[ -z "${EXTERNAL_DB_URL}" ]]; then
+    bashio::log.info "Waiting for bundled PostgreSQL..."
+    until pg_isready -h localhost -U postgres -q; do
+        sleep 1
+    done
+    export DATABASE_URL="postgresql://postgres:homesec@localhost/homesec"
+    bashio::log.info "Bundled PostgreSQL is ready"
+else
+    export DATABASE_URL="${EXTERNAL_DB_URL}"
+    bashio::log.info "Using external database: ${EXTERNAL_DB_URL%%@*}@..."
+fi
+
+# Get MQTT credentials from HA if MQTT Discovery enabled
+if [[ "${MQTT_DISCOVERY}" == "true" ]] && bashio::services.available "mqtt"; then
     MQTT_HOST=$(bashio::services mqtt "host")
     MQTT_PORT=$(bashio::services mqtt "port")
     MQTT_USER=$(bashio::services mqtt "username")
     MQTT_PASS=$(bashio::services mqtt "password")
-
     export MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASS
-    bashio::log.info "Using Home Assistant MQTT broker at ${MQTT_HOST}:${MQTT_PORT}"
+    bashio::log.info "MQTT Discovery enabled via ${MQTT_HOST}:${MQTT_PORT}"
 fi
 
-# Create config directory if needed
+# Create directories
 mkdir -p "$(dirname "${CONFIG_PATH}")"
 mkdir -p "$(dirname "${OVERRIDE_PATH}")"
+mkdir -p "${STORAGE_PATH}"
 
-# Generate config if it doesn't exist
+# Generate base config if it doesn't exist
 if [[ ! -f "${CONFIG_PATH}" ]]; then
     bashio::log.info "Generating initial configuration at ${CONFIG_PATH}"
     cat > "${CONFIG_PATH}" << EOF
@@ -1243,22 +1631,34 @@ storage:
 
 state_store:
   type: postgres
-  url_env: DATABASE_URL
+  dsn_env: DATABASE_URL
 
 notifiers:
-  - type: mqtt
-    host_env: MQTT_HOST
-    port_env: MQTT_PORT
-    username_env: MQTT_USER
-    password_env: MQTT_PASS
-    discovery:
-      enabled: ${MQTT_DISCOVERY}
+  # Primary: Push events to HA via Events API (uses SUPERVISOR_TOKEN automatically)
+  - type: home_assistant
 
 server:
   enabled: true
   host: 0.0.0.0
   port: 8080
 EOF
+
+    # Optionally add MQTT notifier if user enabled MQTT Discovery
+    if [[ "${MQTT_DISCOVERY}" == "true" ]] && bashio::services.available "mqtt"; then
+        bashio::log.info "Adding MQTT Discovery notifier to config"
+        cat >> "${CONFIG_PATH}" << EOF
+
+  # Optional: MQTT Discovery for users who prefer MQTT entities
+  - type: mqtt
+    host_env: MQTT_HOST
+    port_env: MQTT_PORT
+    auth:
+      username_env: MQTT_USER
+      password_env: MQTT_PASS
+    discovery:
+      enabled: true
+EOF
+    fi
 fi
 
 # Create override file if missing
@@ -1270,34 +1670,16 @@ config_version: 1
 EOF
 fi
 
-# Set up database if using local PostgreSQL
-if [[ -z "${DATABASE_URL}" ]]; then
-    bashio::log.info "No database URL specified, using SQLite fallback"
-    export DATABASE_URL="sqlite:///config/homesec/homesec.db"
-fi
-
-# Export secrets from config
-if bashio::config.has_value 'dropbox_token'; then
-    export DROPBOX_TOKEN=$(bashio::config 'dropbox_token')
-fi
-
-if bashio::config.has_value 'openai_api_key'; then
-    export OPENAI_API_KEY=$(bashio::config 'openai_api_key')
-fi
-
-# Create storage directory
-mkdir -p "${STORAGE_PATH}"
-
 bashio::log.info "Starting HomeSec..."
 
-# Run HomeSec
+# Run HomeSec with both config files (base + overrides)
 exec python3 -m homesec.cli run \
     --config "${CONFIG_PATH}" \
     --config "${OVERRIDE_PATH}" \
     --log-level "${LOG_LEVEL}"
 ```
 
-### 3.5 Ingress Configuration
+### 3.8 Ingress Configuration
 
 **File:** `homesec/rootfs/etc/nginx/includes/ingress.conf`
 
@@ -1318,7 +1700,7 @@ location / {
 }
 ```
 
-### 3.6 Acceptance Criteria
+### 3.9 Acceptance Criteria
 
 - [ ] Add-on installs successfully from repository
 - [ ] Auto-configures MQTT from Home Assistant
@@ -1370,7 +1752,7 @@ custom_components/homesec/
   "name": "HomeSec",
   "codeowners": ["@lan17"],
   "config_flow": true,
-  "dependencies": ["mqtt"],
+  "dependencies": [],
   "single_config_entry": true,
   "documentation": "https://github.com/lan17/homesec",
   "integration_type": "hub",
@@ -1704,7 +2086,7 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api_key = api_key
         self.verify_ssl = verify_ssl
         self._session = async_get_clientsession(hass, verify_ssl=verify_ssl)
-        self._mqtt_unsub: callable | None = None
+        self._event_unsubs: list[callable] = []
 
     @property
     def base_url(self) -> str:
@@ -1750,35 +2132,50 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"Error communicating with HomeSec: {err}") from err
 
-    async def async_start_mqtt(self) -> None:
-        """Subscribe to HomeSec MQTT topics for push updates."""
-        if self._mqtt_unsub is not None:
+    async def async_subscribe_events(self) -> None:
+        """Subscribe to HomeSec events fired via HA Events API."""
+        if self._event_unsubs:
             return
 
-        from homeassistant.components import mqtt
+        from homeassistant.core import Event
 
-        async def _on_message(msg: mqtt.ReceiveMessage) -> None:
-            await self._handle_mqtt_event(msg.topic, msg.payload)
+        async def _on_alert(event: Event) -> None:
+            """Handle homesec_alert event."""
+            _LOGGER.debug("Received homesec_alert event: %s", event.data)
+            # Store latest alert data for entities to consume
+            camera = event.data.get("camera")
+            if camera:
+                self.data.setdefault("latest_alerts", {})[camera] = event.data
+            # Trigger immediate data refresh
+            await self.async_request_refresh()
 
-        self._mqtt_unsub = await mqtt.async_subscribe(
-            self.hass,
-            "homesec/+/alert",
-            _on_message,
+        async def _on_camera_health(event: Event) -> None:
+            """Handle homesec_camera_health event."""
+            _LOGGER.debug("Received homesec_camera_health event: %s", event.data)
+            await self.async_request_refresh()
+
+        async def _on_clip_recorded(event: Event) -> None:
+            """Handle homesec_clip_recorded event."""
+            _LOGGER.debug("Received homesec_clip_recorded event: %s", event.data)
+            # Optionally refresh, or just log
+
+        # Subscribe to HomeSec events
+        self._event_unsubs.append(
+            self.hass.bus.async_listen("homesec_alert", _on_alert)
         )
+        self._event_unsubs.append(
+            self.hass.bus.async_listen("homesec_camera_health", _on_camera_health)
+        )
+        self._event_unsubs.append(
+            self.hass.bus.async_listen("homesec_clip_recorded", _on_clip_recorded)
+        )
+        _LOGGER.info("Subscribed to HomeSec events")
 
-    async def async_stop_mqtt(self) -> None:
-        """Stop MQTT subscription."""
-        if self._mqtt_unsub is not None:
-            self._mqtt_unsub()
-            self._mqtt_unsub = None
-
-    async def _handle_mqtt_event(self, topic: str, payload: bytes) -> None:
-        """Handle incoming MQTT event."""
-        _ = topic
-        _ = payload
-
-        # Trigger immediate data refresh on alerts
-        await self.async_request_refresh()
+    async def async_unsubscribe_events(self) -> None:
+        """Unsubscribe from HomeSec events."""
+        for unsub in self._event_unsubs:
+            unsub()
+        self._event_unsubs.clear()
 
     # API Methods
 
@@ -2401,30 +2798,38 @@ tests/
 
 ### Integration Tests
 
-1. **MQTT Discovery Tests:**
-   - Publish discovery → verify entities appear in HA
-   - HA restart → verify discovery republishes
-   - Camera add → verify new entities created
-
-2. **API Tests:**
+1. **API Tests:**
    - Full CRUD cycle for cameras
-   - MQTT event topic delivery triggers HA refresh
    - Authentication flows
-   - MQTT broker unreachable does not stall clip processing
+   - Returns 503 when Postgres is unavailable
 
-3. **Add-on Tests:**
+3. **HA Notifier Tests:**
+   - Supervisor mode detection (SUPERVISOR_TOKEN)
+   - Standalone mode requires url_env + token_env
+   - Events fire correctly: homesec_alert, homesec_camera_health, homesec_clip_recorded
+   - HA unreachable does not stall clip processing (best-effort)
+
+4. **Add-on Tests:**
    - Installation on HA OS
-   - MQTT auto-configuration
-   - Ingress access
+   - SUPERVISOR_TOKEN injected automatically
+   - HA Events API works (homesec_alert reaches HA)
+   - Ingress access to API
 
 ### Manual Testing Checklist
 
 - [ ] Install add-on from repository
 - [ ] Configure via HA UI
 - [ ] Add/remove cameras
-- [ ] Verify entities update on alerts
+- [ ] Verify entities update on alerts (via HA Events)
 - [ ] Test automations with HomeSec triggers
 - [ ] Verify snapshots and links (if enabled) in dashboard
+
+### Optional: MQTT Discovery Tests (Phase 1)
+
+If user enables MQTT Discovery:
+- [ ] Publish discovery → verify entities appear in HA
+- [ ] HA restart → verify discovery republishes
+- [ ] Camera add → verify new entities created
 
 ---
 
@@ -2451,14 +2856,6 @@ tests/
 
 ## Appendix: File Change Summary
 
-### Phase 1: MQTT Discovery
-- `src/homesec/models/config.py` - Add MQTTDiscoveryConfig
-- `src/homesec/plugins/notifiers/mqtt.py` - Enhance with discovery
-- `src/homesec/plugins/notifiers/mqtt_discovery.py` - New file
-- `src/homesec/app.py` - Register cameras with notifier
-- `config/example.yaml` - Add discovery example
-- `tests/unit/plugins/notifiers/test_mqtt_discovery.py` - New tests
-
 ### Phase 2: REST API
 - `src/homesec/api/` - New package (server.py, routes/*, dependencies.py)
 - `src/homesec/config/manager.py` - Config persistence + restart signaling
@@ -2468,15 +2865,29 @@ tests/
 - `src/homesec/app.py` - Integrate API server
 - `pyproject.toml` - Add fastapi, uvicorn dependencies
 
+### Phase 2.5: Home Assistant Notifier
+- `src/homesec/models/config.py` - Add HomeAssistantNotifierConfig
+- `src/homesec/plugins/notifiers/home_assistant.py` - New file (HA Events API notifier)
+- `config/example.yaml` - Add home_assistant notifier example
+- `tests/unit/plugins/notifiers/test_home_assistant.py` - New tests
+
+### Phase 4: Integration
+- `custom_components/homesec/` - Full integration package (uses HA event subscriptions)
+- HACS repository configuration
+
 ### Phase 3: Add-on
 - New repository: `homesec-ha-addons/`
-- `homesec/config.yaml` - Add-on manifest
+- `homesec/config.yaml` - Add-on manifest (homeassistant_api: true for SUPERVISOR_TOKEN)
 - `homesec/Dockerfile` - Container build
 - `homesec/rootfs/` - Startup scripts, nginx config
 
-### Phase 4: Integration
-- `custom_components/homesec/` - Full integration package
-- HACS repository configuration
+### Phase 1: MQTT Discovery (Optional)
+- `src/homesec/models/config.py` - Add MQTTDiscoveryConfig
+- `src/homesec/plugins/notifiers/mqtt.py` - Enhance with discovery
+- `src/homesec/plugins/notifiers/mqtt_discovery.py` - New file
+- `src/homesec/app.py` - Register cameras with notifier
+- `config/example.yaml` - Add discovery example
+- `tests/unit/plugins/notifiers/test_mqtt_discovery.py` - New tests
 
 ### Phase 5: Advanced
 - `custom_components/homesec/www/` - Lovelace cards
@@ -2487,12 +2898,16 @@ tests/
 
 | Phase | Duration | Dependencies |
 |-------|----------|--------------|
-| Phase 1: MQTT Discovery | 2-3 days | None |
 | Phase 2: REST API | 5-7 days | None |
-| Phase 3: Add-on | 3-4 days | Phase 2 |
+| Phase 2.5: HA Notifier | 2-3 days | None |
+| Phase 4: Integration | 7-10 days | Phase 2, 2.5 |
+| Phase 3: Add-on | 3-4 days | Phase 2, 2.5 |
+| Phase 1: MQTT Discovery (optional) | 2-3 days | None |
 | Phase 4: Integration | 7-10 days | Phase 2 |
 | Phase 5: Advanced | 5-7 days | Phase 4 |
 
-**Total: 22-31 days**
+**Total: 21-30 days** (excluding optional MQTT Discovery)
 
-Execution order for Option A: Phase 2 -> Phase 4 -> Phase 3, with Phase 1 optional/parallel. Phase 5 follows Phase 4.
+Execution order: Phase 2 → Phase 2.5 → Phase 4 → Phase 3. Phase 1 (MQTT Discovery) is optional. Phase 5 follows Phase 4.
+
+Key benefit: No MQTT broker required. Add-on users get zero-config real-time events via `SUPERVISOR_TOKEN`.
