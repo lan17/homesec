@@ -110,6 +110,10 @@ options:
 # environment variables by the run script. Config YAML stores env var
 # names (e.g., `token_env: DROPBOX_TOKEN`), not actual secret values.
 # This follows HomeSec's existing pattern for credential management.
+#
+# Bootstrap-only: These options are used to generate the initial config.yaml.
+# After first run, use the REST API or HA integration to modify configuration.
+# Changing options here won't affect an existing config file.
 
 startup: services
 stage: stable
@@ -214,7 +218,7 @@ Waits for PostgreSQL, generates config if missing, runs HomeSec:
 - Reads options from `/data/options.json` via Bashio
 - Maps secret options (dropbox_token, openai_api_key) to environment variables
 - Waits for `pg_isready`
-- Generates initial config if not exists
+- **Bootstrap only**: Generates initial config if not exists (options used only on first run)
 - Runs `python3 -m homesec.cli run --config /config/homesec/config.yaml`
 
 ### Constraints
@@ -223,6 +227,9 @@ Waits for PostgreSQL, generates config if missing, runs HomeSec:
 - HomeSec must wait for PostgreSQL before starting
 - Generate default config with home_assistant notifier pre-configured
 - Use bundled PostgreSQL unless `database_url` option is set
+- **Options are bootstrap-only**: After initial config generation, all changes go through
+  the API. Changing add-on options won't affect an existing config file. This avoids
+  split-brain between UI options and API-managed config.
 
 ---
 

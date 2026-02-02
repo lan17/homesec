@@ -34,8 +34,8 @@ class HomeAssistantNotifierConfig(BaseModel):
     url_env: str | None = None      # e.g., "HA_URL" -> http://homeassistant.local:8123
     token_env: str | None = None    # e.g., "HA_TOKEN" -> long-lived access token
 
-    # Event configuration
-    event_prefix: str = "homesec"   # Event: homesec_alert
+    # Note: event prefix is always "homesec" (not configurable).
+    # This ensures compatibility with the HA integration which listens for homesec_alert.
 ```
 
 ### Constraints
@@ -100,11 +100,11 @@ def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
     """Get the URL and headers for the HA Events API.
 
     Supervisor mode:
-        URL: http://supervisor/core/api/events/{prefix}_{event_type}
+        URL: http://supervisor/core/api/events/homesec_{event_type}
         Auth: Bearer {SUPERVISOR_TOKEN}
 
     Standalone mode:
-        URL: {resolved_url}/api/events/{prefix}_{event_type}
+        URL: {resolved_url}/api/events/homesec_{event_type}
         Auth: Bearer {resolved_token}
     """
     ...
@@ -116,7 +116,7 @@ def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
 - Use aiohttp for HTTP requests
 - Events API endpoint: `POST /api/events/{event_type}`
 - Supervisor URL: `http://supervisor/core/api/events/...`
-- Event name: `{event_prefix}_alert`
+- Event name: `homesec_alert` (prefix is hardcoded, not configurable)
 
 ---
 
@@ -155,7 +155,6 @@ notifiers:
       # For standalone mode, provide HA URL and token:
       # url_env: HA_URL           # http://homeassistant.local:8123
       # token_env: HA_TOKEN       # Long-lived access token from HA
-      event_prefix: homesec       # Optional, default is "homesec"
 ```
 
 ---

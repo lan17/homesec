@@ -17,7 +17,7 @@ This document provides an overview of the Home Assistant integration for HomeSec
 - **Real-time events**: Use HA Events API (not MQTT). Add-on gets `SUPERVISOR_TOKEN` automatically
 - **No MQTT required**: Integration uses HA Events API directly. Existing MQTT notifier remains for Node-RED/other systems
 - **Last write wins**: No optimistic concurrency in v1 (single HA instance assumption)
-- **API during Postgres outage**: Return 503 Service Unavailable
+- **API during Postgres outage**: `/health` returns 200 with `status: "degraded"`; data endpoints (`/clips`, `/stats`) return 503
 - **Restart acceptable**: API writes validated config to disk and returns `restart_required`; HA can trigger restart
 
 ---
@@ -96,9 +96,9 @@ These interfaces are defined across phases. See individual phase docs for detail
 - `remove_camera(...) -> ConfigUpdateResult`
 
 ### ClipRepository Extensions (Phase 1)
-- `get_clip(clip_id) -> Clip | None`
-- `list_clips(...) -> tuple[list[Clip], int]` (supports `alerted`, `risk_level`, `activity_type` filters)
-- `delete_clip(clip_id) -> None`
+- `get_clip(clip_id) -> ClipStateData | None`
+- `list_clips(...) -> tuple[list[ClipStateData], int]` (supports `alerted`, `risk_level`, `activity_type` filters)
+- `delete_clip(clip_id) -> ClipStateData` (marks deleted, returns data for storage cleanup)
 - `count_clips_since(since: datetime) -> int`
 - `count_alerts_since(since: datetime) -> int`
 

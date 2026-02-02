@@ -86,7 +86,7 @@ CONF_VERIFY_SSL = "verify_ssl"
 # Defaults
 DEFAULT_PORT = 8080
 DEFAULT_VERIFY_SSL = True
-ADDON_HOSTNAME = "localhost"
+ADDON_SLUG = "homesec"  # Used for Supervisor API discovery
 
 # Motion sensor
 DEFAULT_MOTION_RESET_SECONDS = 30
@@ -143,8 +143,16 @@ async def validate_connection(hass, host, port, api_key=None, verify_ssl=True) -
     """
     ...
 
-async def detect_addon(hass) -> bool:
-    """Check if HomeSec add-on is running at localhost:8080."""
+async def detect_addon(hass) -> tuple[bool, str | None]:
+    """Detect HomeSec add-on via Supervisor API.
+
+    Uses Supervisor API to check if the homesec add-on is installed and running.
+    Returns the add-on's hostname if found.
+
+    Returns: (is_running: bool, hostname: str | None)
+        - (True, "abc123-homesec") if add-on running
+        - (False, None) if not installed or not running
+    """
     ...
 ```
 
