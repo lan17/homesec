@@ -189,6 +189,91 @@ def deep_merge(base: dict, override: dict) -> dict:
 
 ---
 
+## 1.2.1 ClipRepository Extensions
+
+**File**: `src/homesec/repository/clip_repository.py`
+
+The existing `ClipRepository` needs these additional methods for the API:
+
+### Interface
+
+```python
+class ClipRepository:
+    """Coordinates state + event writes with best-effort retries."""
+
+    # ... existing methods ...
+
+    # NEW: Read methods for API
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        """Get clip state by ID."""
+        ...
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]:
+        """List clips with filtering and pagination.
+
+        Returns (clips, total_count).
+        """
+        ...
+
+    async def list_events(
+        self,
+        *,
+        clip_id: str | None = None,
+        event_type: str | None = None,
+        camera: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 100,
+    ) -> tuple[list[ClipLifecycleEvent], int]:
+        """List events with filtering.
+
+        Returns (events, total_count).
+        """
+        ...
+
+    async def delete_clip(self, clip_id: str) -> None:
+        """Mark clip as deleted and delete from storage.
+
+        Uses existing record_clip_deleted() internally.
+        Also deletes from storage backend.
+        """
+        ...
+
+    async def count_clips_since(self, since: datetime) -> int:
+        """Count clips created since the given timestamp."""
+        ...
+
+    async def count_alerts_since(self, since: datetime) -> int:
+        """Count alert events (notification_sent) since the given timestamp."""
+        ...
+
+    async def ping(self) -> bool:
+        """Health check - verify database is reachable.
+
+        Delegates to StateStore.ping().
+        """
+        return await self._state.ping()
+```
+
+### Constraints
+
+- Must use async SQLAlchemy
+- Counts should be efficient (use SQL COUNT, not fetch all)
+- `count_alerts_since` counts events where `event_type='notification_sent'`
+- `list_clips` and `list_events` return tuple of (items, total_count) for pagination
+- `delete_clip` should delete from both local and cloud storage
+
+---
+
 ## 1.3 API Routes
 
 ### Files
@@ -329,6 +414,7 @@ class FastAPIServerConfig(BaseModel):
 | `src/homesec/config/manager.py` | Config persistence |
 | `src/homesec/config/loader.py` | Multi-file config loading |
 | `src/homesec/models/config.py` | Add `FastAPIServerConfig` |
+| `src/homesec/repository/clip_repository.py` | Add read/list/count methods |
 | `src/homesec/cli.py` | Support multiple `--config` flags |
 | `src/homesec/app.py` | Integrate API server |
 | `pyproject.toml` | Add fastapi, uvicorn dependencies |
@@ -363,6 +449,13 @@ class FastAPIServerConfig(BaseModel):
 
 **Clips**
 - Given 100 clips, when GET /clips?page=2&page_size=10, then returns clips 11-20
+
+**ClipRepository**
+- Given 5 clips created today and 10 yesterday, when `count_clips_since(today_start)`, then returns 5
+- Given 0 alerts, when `count_alerts_since(any_date)`, then returns 0
+- Given clips with mixed cameras, when `list_clips(camera="front")`, then returns only "front" clips
+- Given clip exists, when `delete_clip(clip_id)`, then clip marked deleted and storage files removed
+- Given StateStore is up, when `ping()`, then returns True
 
 ---
 
