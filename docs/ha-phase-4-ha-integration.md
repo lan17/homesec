@@ -191,8 +191,7 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "stats": {...},
                 "connected": bool,
                 "motion_active": {camera: bool},      # Event-driven
-                "latest_alerts": {camera: {...}},     # Event-driven
-                "recent_alerts": [{...}, ...],        # Last 20 alerts
+                "latest_alerts": {camera: {...}},     # Event-driven (for last_activity sensor)
             }
         """
         ...
@@ -228,8 +227,7 @@ When `homesec_alert` event received:
 
 ### Constraints
 
-- Preserve `motion_active`, `latest_alerts`, `recent_alerts` across polling updates
-- Store last 20 alerts in `recent_alerts` (newest first)
+- Preserve `motion_active`, `latest_alerts` across polling updates
 - Handle 503 gracefully (Postgres unavailable)
 
 ---
@@ -299,7 +297,6 @@ HomeSec Hub (identifiers: homesec_hub)
 - `alerts_today` - Alerts count today
 - `clips_today` - Clips count today
 - `system_health` - "healthy" / "degraded" / "unhealthy"
-- `recent_alerts` - Special sensor with last 20 alerts in attributes
 
 **Camera Sensors** (HomesecCameraEntity):
 - `last_activity` - Activity type from latest alert
@@ -320,52 +317,7 @@ HomeSec Hub (identifiers: homesec_hub)
 
 ---
 
-## 4.8 Recent Alerts Sensor
-
-**Special sensor for dashboard filtering.**
-
-```python
-class HomesecRecentAlertsSensor(HomesecHubEntity, SensorEntity):
-    """Sensor showing recent alerts with full metadata for filtering."""
-
-    @property
-    def native_value(self) -> int:
-        """Return count of alerts today."""
-        ...
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        """Return recent alerts as attributes for dashboard filtering.
-
-        Returns:
-            {
-                "alerts": [...],           # List of alert dicts
-                "alerts_count": int,
-                "last_alert_at": str | None,
-                "by_risk_level": {"low": 2, "medium": 1, ...},
-                "by_camera": {"front_door": 2, ...},
-                "by_activity_type": {"person_at_door": 1, ...},
-            }
-        """
-        ...
-```
-
-### Dashboard Usage
-
-```yaml
-# Example Lovelace template
-{% for alert in state_attr('sensor.homesec_recent_alerts', 'alerts') %}
-  {% if alert.risk_level in ['high', 'critical'] %}
-    - Camera: {{ alert.camera }}
-      Activity: {{ alert.activity_type }}
-      Time: {{ alert.timestamp }}
-  {% endif %}
-{% endfor %}
-```
-
----
-
-## 4.9 Services
+## 4.8 Services
 
 **File**: `services.yaml`
 
@@ -399,7 +351,7 @@ remove_camera:
 
 ---
 
-## 4.10 Translations
+## 4.9 Translations
 
 **File**: `translations/en.json`
 
@@ -491,7 +443,6 @@ cp -r homeassistant/integration/custom_components/homesec ~/.homeassistant/custo
 - [ ] All entity platforms create entities correctly
 - [ ] Hub device created with system-wide sensors
 - [ ] Camera devices created with via_device to hub
-- [ ] Recent Alerts sensor stores last 20 alerts with filter metadata
 - [ ] DataUpdateCoordinator fetches at correct intervals
 - [ ] HA Events subscription triggers refresh on alerts
 - [ ] Motion sensor auto-resets after configurable timeout

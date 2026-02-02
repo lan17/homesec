@@ -194,12 +194,20 @@ class ClipRepository:
         *,
         camera: str | None = None,
         status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[list[ClipStateData], int]:
         """List clips with filtering and pagination.
+
+        Filters:
+        - alerted: If True, only clips that triggered notifications
+        - risk_level: Filter by analysis risk level (low/medium/high/critical)
+        - activity_type: Filter by detected activity type
 
         Returns (clips, total_count).
         """
@@ -426,6 +434,8 @@ class FastAPIServerConfig(BaseModel):
 - Given 5 clips created today and 10 yesterday, when `count_clips_since(today_start)`, then returns 5
 - Given 0 alerts, when `count_alerts_since(any_date)`, then returns 0
 - Given clips with mixed cameras, when `list_clips(camera="front")`, then returns only "front" clips
+- Given 10 clips (5 alerted, 5 not), when `list_clips(alerted=True)`, then returns only 5 alerted clips
+- Given clips with mixed risk levels, when `list_clips(risk_level="high")`, then returns only high-risk clips
 - Given clip exists, when `delete_clip(clip_id)`, then clip marked deleted and storage files removed
 - Given StateStore is up, when `ping()`, then returns True
 
