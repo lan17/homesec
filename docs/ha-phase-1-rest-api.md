@@ -89,18 +89,12 @@ async def verify_api_key(request: Request, app=Depends(get_homesec_app)) -> None
 ```python
 class ConfigUpdateResult(BaseModel):
     """Result of a config update operation."""
-    config_version: int
     restart_required: bool = True
 
 class ConfigManager:
-    """Manages configuration persistence with optimistic concurrency."""
+    """Manages configuration persistence (last-write-wins semantics)."""
 
     def __init__(self, base_paths: list[Path], override_path: Path): ...
-
-    @property
-    def config_version(self) -> int:
-        """Current config version for optimistic concurrency."""
-        ...
 
     def get_config(self) -> Config:
         """Get the current merged configuration."""
@@ -112,13 +106,11 @@ class ConfigManager:
         enabled: bool,
         source_backend: str,
         source_config: dict,
-        config_version: int,
     ) -> ConfigUpdateResult:
         """Add a new camera to the override config.
 
         Raises:
             ValueError: If camera name already exists
-            ConfigVersionConflict: If config_version is stale
         """
         ...
 
@@ -127,32 +119,24 @@ class ConfigManager:
         camera_name: str,
         enabled: bool | None,
         source_config: dict | None,
-        config_version: int,
     ) -> ConfigUpdateResult:
         """Update an existing camera in the override config.
 
         Raises:
             ValueError: If camera doesn't exist
-            ConfigVersionConflict: If config_version is stale
         """
         ...
 
     async def remove_camera(
         self,
         camera_name: str,
-        config_version: int,
     ) -> ConfigUpdateResult:
         """Remove a camera from the override config.
 
         Raises:
             ValueError: If camera doesn't exist
-            ConfigVersionConflict: If config_version is stale
         """
         ...
-
-class ConfigVersionConflict(Exception):
-    """Raised when config_version doesn't match current version."""
-    pass
 ```
 
 **ConfigLoader** (`loader.py`)
@@ -164,8 +148,6 @@ def load_configs(paths: list[Path]) -> Config:
     - Files loaded left to right, rightmost wins
     - Dicts: deep merge (recursive)
     - Lists: merge (union, preserving order, no duplicates)
-
-    The override file may contain a top-level `config_version` key.
     """
     ...
 
@@ -182,7 +164,6 @@ def deep_merge(base: dict, override: dict) -> dict:
 ### Constraints
 
 - Override file written atomically (write temp, fsync, rename)
-- `config_version` stored in override file, incremented on each write
 - All file I/O via `asyncio.to_thread`
 - Base config is read-only; all mutations go to override file
 - Override file is machine-owned (no comment preservation needed)
@@ -318,12 +299,10 @@ class CameraCreate(BaseModel):
     enabled: bool = True
     source_backend: str  # rtsp, ftp, local_folder
     source_config: dict
-    config_version: int
 
 class CameraUpdate(BaseModel):
     enabled: bool | None = None
     source_config: dict | None = None
-    config_version: int
 
 class CameraResponse(BaseModel):
     name: str
@@ -335,15 +314,13 @@ class CameraResponse(BaseModel):
 
 class ConfigChangeResponse(BaseModel):
     restart_required: bool = True
-    config_version: int
     camera: CameraResponse | None = None
 ```
 
 ### Constraints
 
 - All config-mutating endpoints return `restart_required: True`
-- All config-mutating endpoints require `config_version` for optimistic concurrency
-- Return 409 Conflict when `config_version` is stale
+- Last-write-wins semantics (no optimistic concurrency in v1)
 - Return 503 Service Unavailable when Postgres is down
 - Pagination: `page` (1-indexed), `page_size` (default 50, max 100)
 
@@ -436,12 +413,7 @@ class FastAPIServerConfig(BaseModel):
 **Camera CRUD**
 - Given no cameras, when POST /cameras with valid data, then 201 and camera created
 - Given camera "front", when GET /cameras/front, then returns camera data
-- Given camera "front", when DELETE /cameras/front with correct version, then 200
-- Given camera "front", when DELETE /cameras/front with stale version, then 409 Conflict
-
-**Config Version**
-- Given config_version=5, when update with version=4, then 409 Conflict
-- Given config_version=5, when update with version=5, then 200 and new version=6
+- Given camera "front", when DELETE /cameras/front, then 200 and camera removed
 
 **Health**
 - Given Postgres is up, when GET /health, then status="healthy"
@@ -485,7 +457,6 @@ open http://localhost:8080/docs
 - [ ] All CRUD operations for cameras work
 - [ ] Config changes are validated and persisted to override file
 - [ ] Config changes return `restart_required: true`
-- [ ] Stale `config_version` returns 409 Conflict
 - [ ] `/api/v1/system/restart` triggers graceful shutdown
 - [ ] Clip listing with pagination and filtering works
 - [ ] Event history API works

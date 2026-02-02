@@ -17,7 +17,7 @@ This document provides an overview of the Home Assistant integration for HomeSec
 - **P0 priority**: Recording + uploading must keep working even if Postgres is down
 - **Real-time events**: Use HA Events API (not MQTT). Add-on gets `SUPERVISOR_TOKEN` automatically
 - **No MQTT required**: Integration uses HA Events API directly. Existing MQTT notifier remains for Node-RED/other systems
-- **409 Conflict UX**: Show error to user when config version is stale
+- **Last write wins**: No optimistic concurrency in v1 (single HA instance assumption)
 - **API during Postgres outage**: Return 503 Service Unavailable
 - **Restart acceptable**: API writes validated config to disk and returns `restart_required`; HA can trigger restart
 
@@ -91,7 +91,6 @@ These interfaces are defined across phases. See individual phase docs for detail
 - `update_camera(...) -> ConfigUpdateResult`
 - `add_camera(...) -> ConfigUpdateResult`
 - `remove_camera(...) -> ConfigUpdateResult`
-- `config_version: int` (optimistic concurrency)
 
 ### ClipRepository Extensions (Phase 1)
 - `get_clip(clip_id) -> Clip | None`

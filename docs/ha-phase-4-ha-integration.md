@@ -181,11 +181,6 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def base_url(self) -> str: ...
 
-    @property
-    def config_version(self) -> int:
-        """Current config version for optimistic concurrency."""
-        ...
-
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from HomeSec API.
 
@@ -193,7 +188,6 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {
                 "health": {...},
                 "cameras": [...],
-                "config_version": int,
                 "stats": {...},
                 "connected": bool,
                 "motion_active": {camera: bool},      # Event-driven
@@ -216,17 +210,12 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Unsubscribe from HomeSec events."""
         ...
 
-    # API Methods (use config_version for optimistic concurrency)
+    # API Methods
     async def async_add_camera(self, name, source_backend, source_config) -> dict: ...
     async def async_update_camera(self, camera_name, source_config=None) -> dict: ...
     async def async_delete_camera(self, camera_name) -> None: ...
     async def async_set_camera_enabled(self, camera_name, enabled: bool) -> dict: ...
     async def async_test_camera(self, camera_name) -> dict: ...
-
-
-class ConfigVersionConflict(Exception):
-    """Raised when config_version is stale (409 Conflict)."""
-    pass
 ```
 
 ### Motion Timer Logic
@@ -242,7 +231,6 @@ When `homesec_alert` event received:
 - Preserve `motion_active`, `latest_alerts`, `recent_alerts` across polling updates
 - Store last 20 alerts in `recent_alerts` (newest first)
 - Handle 503 gracefully (Postgres unavailable)
-- Handle 409 by raising `ConfigVersionConflict`
 
 ---
 
@@ -508,7 +496,6 @@ cp -r homeassistant/integration/custom_components/homesec ~/.homeassistant/custo
 - [ ] HA Events subscription triggers refresh on alerts
 - [ ] Motion sensor auto-resets after configurable timeout
 - [ ] Camera switch enables/disables via API
-- [ ] Config version tracking prevents conflicts (409 handling)
 - [ ] Services work (add_camera, remove_camera)
 - [ ] Options flow allows reconfiguration
 - [ ] All strings translatable

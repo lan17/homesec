@@ -27,7 +27,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 - P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
 - **Real-time events**: Use HA Events API (not MQTT). Add-on gets `SUPERVISOR_TOKEN` automatically; standalone users provide HA URL + token.
 - **No MQTT broker required**: Primary path uses HA Events API. Existing MQTT notifier remains available for Node-RED and other MQTT consumers.
-- **409 Conflict UX**: Show error to user when config version is stale.
+- **Last write wins**: No optimistic concurrency in v1 (single HA instance assumption).
 - **API during Postgres outage**: Return 503 Service Unavailable.
 
 ## Constraints and Non-Goals
@@ -425,7 +425,7 @@ Config model for Option B:
 - Dicts deep-merge; lists merge (union).
 - Override file default: `config/ha-overrides.yaml` (configurable via CLI).
 - CLI accepts multiple `--config` flags; order matters.
-- All config writes require `config_version` for optimistic concurrency.
+- Config writes use last-write-wins semantics (no optimistic concurrency in v1).
 
 ```yaml
 # New endpoints
