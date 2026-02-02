@@ -161,6 +161,10 @@ class ConfigManager:
 ```
 
 **ConfigLoader** (`loader.py`)
+
+> **Note**: This extends the existing `loader.py`. The current `load_config(path)` function
+> remains unchanged. We add `load_configs()`, `deep_merge()`, and `merge_named_lists()` alongside it.
+
 ```python
 def load_configs(paths: list[Path]) -> Config:
     """Load and merge multiple YAML config files.
