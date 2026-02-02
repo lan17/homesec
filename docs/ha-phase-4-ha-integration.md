@@ -206,7 +206,9 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_subscribe_events(self) -> None:
         """Subscribe to HomeSec events fired via HA Events API.
 
-        Events: homesec_alert, homesec_camera_health, homesec_clip_recorded
+        Events: homesec_alert, homesec_clip_recorded
+
+        Note: Camera health is polled via REST API, not event-driven.
         """
         ...
 

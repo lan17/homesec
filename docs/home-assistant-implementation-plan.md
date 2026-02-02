@@ -101,11 +101,8 @@ These interfaces are defined across phases. See individual phase docs for detail
 - `count_clips_since(since: datetime) -> int`
 - `count_alerts_since(since: datetime) -> int`
 
-### Notifier Extensions (Phase 0)
-- `publish_camera_health(camera_name: str, healthy: bool) -> None`
-
-### ClipSource Extensions (Phase 0)
-- `enabled: bool` property (respects CameraConfig.enabled)
+### CameraConfig Extensions (Phase 0)
+- `enabled: bool = True` field (allows disabling cameras via API)
 
 ---
 

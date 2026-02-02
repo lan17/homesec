@@ -1,6 +1,6 @@
 # Phase 2: Home Assistant Notifier Plugin
 
-**Goal**: Enable real-time event push from HomeSec to Home Assistant without requiring MQTT.
+**Goal**: Enable real-time alert and clip event push from HomeSec to Home Assistant without requiring MQTT.
 
 **Estimated Effort**: 2-3 days
 
@@ -11,6 +11,8 @@
 ## Overview
 
 This phase adds a new notifier plugin that pushes events directly to Home Assistant via the HA Events API. When running as an add-on, it uses `SUPERVISOR_TOKEN` for zero-config authentication.
+
+**Note**: Camera health is **not** pushed via events. Health uses a pull-based architecture where the HA Integration (Phase 4) polls the REST API (Phase 1). This keeps the core simple.
 
 ---
 
@@ -33,7 +35,7 @@ class HomeAssistantNotifierConfig(BaseModel):
     token_env: str | None = None    # e.g., "HA_TOKEN" -> long-lived access token
 
     # Event configuration
-    event_prefix: str = "homesec"   # Events: homesec_alert, homesec_camera_health, etc.
+    event_prefix: str = "homesec"   # Events: homesec_alert, homesec_clip_recorded
 ```
 
 ### Constraints
@@ -90,14 +92,6 @@ class HomeAssistantNotifier(Notifier):
         """
         ...
 
-    async def publish_camera_health(self, camera_name: str, healthy: bool) -> None:
-        """Send camera health event to Home Assistant.
-
-        Event: homesec_camera_health
-        Data: {camera: str, healthy: bool, status: "healthy"|"unhealthy"}
-        """
-        ...
-
     async def publish_clip_recorded(self, clip_id: str, camera_name: str) -> None:
         """Send clip recorded event to Home Assistant.
 
@@ -130,7 +124,7 @@ def _get_url_and_headers(self, event_type: str) -> tuple[str, dict[str, str]]:
 - Use aiohttp for HTTP requests
 - Events API endpoint: `POST /api/events/{event_type}`
 - Supervisor URL: `http://supervisor/core/api/events/...`
-- Event names: `{event_prefix}_alert`, `{event_prefix}_camera_health`, `{event_prefix}_clip_recorded`
+- Event names: `{event_prefix}_alert`, `{event_prefix}_clip_recorded`
 
 ---
 
@@ -151,18 +145,6 @@ Fired when an alert is generated after VLM analysis.
   "storage_uri": "dropbox:///clips/abc123.mp4",
   "timestamp": "2026-02-01T10:30:00Z",
   "detected_objects": ["person"]
-}
-```
-
-### homesec_camera_health
-
-Fired when camera health status changes.
-
-```json
-{
-  "camera": "front_door",
-  "healthy": false,
-  "status": "unhealthy"
 }
 ```
 
@@ -229,9 +211,6 @@ notifiers:
 - Given HA returns 401, when notify() called, then error logged but no exception raised
 - Given HA unreachable, when notify() called, then error logged but no exception raised
 
-**Camera Health**
-- Given notifier started, when publish_camera_health("front", False), then POST homesec_camera_health event with healthy=false
-
 ---
 
 ## Verification
@@ -256,7 +235,7 @@ pytest tests/unit/plugins/notifiers/test_home_assistant.py -v
 - [ ] Notifier auto-detects supervisor mode via `SUPERVISOR_TOKEN`
 - [ ] Zero-config works when running as HA add-on
 - [ ] Standalone mode requires `url_env` and `token_env`
-- [ ] Events fired: `homesec_alert`, `homesec_camera_health`, `homesec_clip_recorded`
+- [ ] Events fired: `homesec_alert`, `homesec_clip_recorded`
 - [ ] Notification failures don't crash the pipeline (best-effort)
 - [ ] Events contain all required metadata
 - [ ] Config example added

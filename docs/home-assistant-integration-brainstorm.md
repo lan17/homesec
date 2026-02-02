@@ -113,8 +113,9 @@ homesec/
 | Event | Trigger | Data |
 |-------|---------|------|
 | `homesec_alert` | Detection alert | camera, clip_id, activity_type, risk_level, summary, view_url |
-| `homesec_camera_health` | Camera status change | camera, healthy, status |
 | `homesec_clip_recorded` | New clip recorded | clip_id, camera |
+
+**Note**: Camera health is **not** pushed via events. The HA Integration polls the REST API (`GET /api/v1/cameras/{name}/status`) every 30-60s to get health status. This keeps the HomeSec core simple and stateless.
 
 ### Future Features (v2+)
 
@@ -709,10 +710,11 @@ class HomeAssistantNotifier(Notifier):
 
 **Event types fired:**
 - `homesec_alert` - Detection alert with full metadata
-- `homesec_camera_health` - Camera health status changes
 - `homesec_clip_recorded` - New clip recorded
 
 The HA integration subscribes to these events and updates entities in real-time.
+
+**Note**: Camera health is polled via REST API, not pushed via events.
 
 ---
 
