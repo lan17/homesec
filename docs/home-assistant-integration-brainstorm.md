@@ -523,35 +523,35 @@ homeassistant/integration/
 
 **Entity Platforms:**
 
-| Platform | Entities | Description |
-|----------|----------|-------------|
-| `image` | Per-camera | Last snapshot (optional) |
-| `binary_sensor` | `motion`, `person_detected` | Detection states |
-| `sensor` | `last_activity`, `risk_level`, `clip_count` | Detection metadata |
-| `switch` | `camera_enabled`, `alerts_enabled` | Per-camera toggles |
-| `select` | `alert_sensitivity` | LOW/MEDIUM/HIGH |
-| `device_tracker` | `camera_online` | Connectivity status (optional) |
+| Platform | Entities | Description | v1 Scope |
+|----------|----------|-------------|----------|
+| `binary_sensor` | `motion` | Motion detected (30s auto-reset) | ✓ |
+| `sensor` | `last_activity`, `risk_level`, `health` | Detection metadata | ✓ |
+| `switch` | `camera_enabled` | Enable/disable camera | ✓ |
+| `image` | Per-camera | Last snapshot | v2 |
+| `select` | `alert_sensitivity` | LOW/MEDIUM/HIGH | v2 |
 
-**Services:**
+**Services (v1):**
 
 ```yaml
 homesec.add_camera:
   description: Add a new camera
   fields:
     name: Camera identifier
-    rtsp_url: RTSP stream URL
+    source_backend: rtsp, ftp, or local_folder
+    rtsp_url: RTSP stream URL (for rtsp backend)
 
-homesec.set_alert_policy:
-  description: Configure alert policy for camera
-  fields:
-    camera: Camera name
-    min_risk_level: Minimum risk level to alert
-    activity_types: List of activity types to alert on
+homesec.remove_camera:
+  description: Remove a camera
+  target:
+    device: Camera device
+```
 
-homesec.process_clip:
-  description: Manually process a video clip
-  fields:
-    file_path: Path to video file
+**Services (v2 - Future):**
+
+```yaml
+# homesec.set_alert_policy - requires new API endpoint
+# homesec.test_camera - requires new API endpoint
 ```
 
 **Config Flow:**

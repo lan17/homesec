@@ -24,6 +24,24 @@ This document provides a comprehensive, step-by-step implementation plan for int
 - **Camera ping**: RTSP ping implementation should include TODO for real connectivity test (not part of this integration work).
 - **Delete clip**: Deletes from both local storage and cloud storage (existing pattern in cleanup_clips.py).
 
+## Prerequisites (Changes to Core HomeSec)
+
+Before implementing the HA integration, these changes are needed in the core HomeSec codebase:
+
+1. **Add `enabled` field to CameraConfig** (`src/homesec/models/config.py`):
+   ```python
+   class CameraConfig(BaseModel):
+       name: str
+       enabled: bool = True  # NEW: Allow disabling camera via API
+       source: CameraSourceConfig
+   ```
+
+2. **Add camera health monitoring**: The Application needs to periodically check camera health and call `notifier.publish_camera_health()` when status changes.
+
+3. **Add stats methods to ClipRepository**:
+   - `count_clips_since(since: datetime) -> int`
+   - `count_alerts_since(since: datetime) -> int`
+
 ## Execution Order (Option A)
 
 1. Phase 2: REST API for Configuration (control plane)
@@ -151,13 +169,15 @@ homesec/
 
 ---
 
-## Phase 1: MQTT Discovery Enhancement (Optional)
+## Phase 1: MQTT Discovery Enhancement (Optional - Future)
 
-**Goal:** Auto-create Home Assistant entities from HomeSec without requiring the native integration. This is an optional feature for users who prefer MQTT over the primary HA Events API approach.
+> **⚠️ OUT OF SCOPE FOR V1**: This phase is optional and should be implemented only after the core integration (Phases 2-4) is complete and stable. The primary integration path uses the HA Events API which requires no MQTT broker.
+
+**Goal:** Auto-create Home Assistant entities from HomeSec without requiring the native integration. This is for users who prefer MQTT over the primary HA Events API approach.
 
 **Estimated Effort:** 2-3 days
 
-**Note:** This phase is optional. The primary integration path uses the HA Events API (Phase 2.5) which requires no MQTT broker.
+**Warning:** If both MQTT Discovery AND the native integration are enabled, you will have duplicate entities. Users should choose one approach, not both.
 
 ### 1.1 Configuration Model Updates
 
@@ -2046,12 +2066,10 @@ ADDON_HOSTNAME: Final = "localhost"  # Add-on runs on same host as HA
 # Motion sensor
 DEFAULT_MOTION_RESET_SECONDS: Final = 30
 
-# Platforms
+# Platforms (v1 - core functionality only)
+# TODO v2: Add "camera", "image", "select" platforms
 PLATFORMS: Final = [
     "binary_sensor",
-    "camera",
-    "image",
-    "select",
     "sensor",
     "switch",
 ]
@@ -2997,18 +3015,26 @@ class HomesecCameraBinarySensor(HomesecEntity, BinarySensorEntity):
 **File:** `homeassistant/integration/custom_components/homesec/switch.py`
 
 ```python
-"""Switch platform for HomeSec integration."""
+"""Switch platform for HomeSec integration.
+
+Prerequisite: Add `enabled: bool = True` field to CameraConfig in
+src/homesec/models/config.py. The switch toggles this field via the API.
+"""
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 from .coordinator import HomesecCoordinator
 from .entity import HomesecEntity
 
@@ -3065,20 +3091,28 @@ class HomesecCameraSwitch(HomesecEntity, SwitchEntity):
         key = self.entity_description.key
 
         if key == "enabled":
-            # Camera is enabled if it's in the config and not explicitly disabled
-            return camera.get("config", {}).get("enabled", True)
+            # NOTE: Requires `enabled: bool` field on CameraConfig (see prerequisite below)
+            return camera.get("enabled", True)
 
         return None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on (enable camera, starts RTSP connection)."""
-        await self.coordinator.async_set_camera_enabled(self._camera_name, True)
-        await self.coordinator.async_request_refresh()
+        try:
+            await self.coordinator.async_set_camera_enabled(self._camera_name, True)
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to enable camera %s: %s", self._camera_name, err)
+            raise HomeAssistantError(f"Failed to enable camera: {err}") from err
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off (disable camera, stops RTSP connection)."""
-        await self.coordinator.async_set_camera_enabled(self._camera_name, False)
-        await self.coordinator.async_request_refresh()
+        try:
+            await self.coordinator.async_set_camera_enabled(self._camera_name, False)
+            await self.coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.error("Failed to disable camera %s: %s", self._camera_name, err)
+            raise HomeAssistantError(f"Failed to disable camera: {err}") from err
 ```
 
 ### 4.9 Services
@@ -3122,42 +3156,16 @@ remove_camera:
     device:
       integration: homesec
 
-set_alert_policy:
-  name: Set Alert Policy
-  description: Configure alert policy override for a camera (stored in alert_policy.config.overrides)
-  target:
-    device:
-      integration: homesec
-  fields:
-    min_risk_level:
-      name: Minimum Risk Level
-      description: Minimum risk level to trigger alerts
-      required: true
-      selector:
-        select:
-          options:
-            - "low"
-            - "medium"
-            - "high"
-            - "critical"
-    notify_on_activity_types:
-      name: Activity Types
-      description: Activity types that trigger alerts
-      selector:
-        select:
-          multiple: true
-          options:
-            - "person_at_door"
-            - "delivery"
-            - "suspicious"
-            - "animal"
-
-test_camera:
-  name: Test Camera
-  description: Test camera connection
-  target:
-    device:
-      integration: homesec
+# TODO v2: Add these services (require additional API endpoints)
+# set_alert_policy:
+#   name: Set Alert Policy
+#   description: Configure alert policy override for a camera
+#   (requires PUT /api/v1/config/alert_policy endpoint)
+#
+# test_camera:
+#   name: Test Camera
+#   description: Test camera connection
+#   (requires POST /api/v1/cameras/{name}/test endpoint)
 ```
 
 ### 4.10 Translations
@@ -3241,14 +3249,6 @@ test_camera:
     "remove_camera": {
       "name": "Remove Camera",
       "description": "Remove a camera from HomeSec"
-    },
-    "set_alert_policy": {
-      "name": "Set Alert Policy",
-      "description": "Configure alert policy for a camera"
-    },
-    "test_camera": {
-      "name": "Test Camera",
-      "description": "Test camera connection"
     }
   }
 }
@@ -3262,13 +3262,14 @@ test_camera:
 - [ ] DataUpdateCoordinator fetches data at correct intervals
 - [ ] HA Events subscription triggers refresh on alerts (homesec_alert, homesec_camera_health)
 - [ ] Motion sensor auto-resets after configurable timeout (default 30s)
-- [ ] Camera switch enables/disables RTSP connection
+- [ ] Camera switch enables/disables camera (requires `enabled` field prerequisite)
 - [ ] Config version tracking prevents conflicts (409 on stale version)
-- [ ] Services work correctly (add/remove camera, set policy, test)
+- [ ] Services work correctly (add_camera, remove_camera)
 - [ ] Options flow allows reconfiguration
 - [ ] Diagnostics provide useful debug information
 - [ ] All strings are translatable
 - [ ] HACS installation works
+- [ ] Error handling shows user-friendly messages on API failures
 
 ---
 
