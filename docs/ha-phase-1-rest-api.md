@@ -395,9 +395,7 @@ class ComponentStatus(BaseModel):
 class CameraStatus(BaseModel):
     healthy: bool
     enabled: bool
-    last_heartbeat: float | None
-    frames_processed: int
-    errors_recent: int             # Errors in last hour
+    last_heartbeat: float | None   # Monotonic timestamp from ClipSource
 
 class DiagnosticsResponse(BaseModel):
     status: str                    # "healthy", "degraded", "unhealthy"
@@ -412,7 +410,7 @@ class DiagnosticsResponse(BaseModel):
 class ClipResponse(BaseModel):
     id: str
     camera: str
-    status: str                    # "recording", "uploading", "complete", "failed", "deleted"
+    status: str                    # ClipStatus enum: "queued_local", "uploaded", "analyzed", "done", "error", "deleted"
     created_at: datetime
     activity_type: str | None = None
     risk_level: str | None = None
