@@ -77,6 +77,7 @@ typecheck:
 lint:
 	uv run ruff check src tests
 	uv run ruff format --check src tests
+	make -C homeassistant shellcheck
 
 lint-fix:
 	uv run ruff check --fix src tests

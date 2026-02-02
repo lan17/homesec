@@ -1,0 +1,2 @@
+#!/command/with-contenv bashio
+exec su postgres -s /bin/sh -c "postgres -D /data/postgres/data -c listen_addresses='127.0.0.1'"

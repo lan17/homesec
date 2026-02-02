@@ -46,6 +46,12 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
 
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck add-on scripts
+        run: make -C homeassistant shellcheck
+
       # Lint and typecheck run while Postgres boots
       - name: Lint
         run: make lint

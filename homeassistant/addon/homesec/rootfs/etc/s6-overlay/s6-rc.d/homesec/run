@@ -1,0 +1,130 @@
+#!/command/with-contenv bashio
+set -euo pipefail
+
+CONFIG_PATH="$(bashio::config 'config_path')"
+LOG_LEVEL="$(bashio::config 'log_level')"
+STORAGE_TYPE="$(bashio::config 'storage_type')"
+STORAGE_PATH="$(bashio::config 'storage_path')"
+VLM_ENABLED="$(bashio::config 'vlm_enabled')"
+OPENAI_MODEL="$(bashio::config 'openai_model')"
+
+DB_USER="homesec"
+DB_NAME="homesec"
+PASS_FILE="/data/postgres/db_password"
+
+if bashio::config.has_value 'database_url'; then
+    DATABASE_URL_OPTION="$(bashio::config 'database_url')"
+    export DATABASE_URL="${DATABASE_URL_OPTION}"
+    USING_EXTERNAL_DB=true
+else
+    if [ -s "${PASS_FILE}" ]; then
+        DB_PASS="$(cat "${PASS_FILE}")"
+    elif bashio::config.has_value 'db_password'; then
+        DB_PASS="$(bashio::config 'db_password')"
+        if [ -s "/data/postgres/data/PG_VERSION" ]; then
+            bashio::log.warning "PostgreSQL already initialized; assuming db_password matches."
+        fi
+        if [ -n "${DB_PASS}" ]; then
+            umask 077
+            printf '%s' "${DB_PASS}" > "${PASS_FILE}"
+        fi
+    else
+        bashio::log.error "Database password missing for bundled Postgres."
+        bashio::log.error "Set db_password option or delete /data/postgres to re-init."
+        exit 1
+    fi
+
+    export DATABASE_URL="postgresql+asyncpg://${DB_USER}:${DB_PASS}@127.0.0.1:5432/${DB_NAME}"
+    USING_EXTERNAL_DB=false
+fi
+
+if bashio::config.has_value 'dropbox_token'; then
+    DROPBOX_TOKEN="$(bashio::config 'dropbox_token')"
+    export DROPBOX_TOKEN
+fi
+
+if bashio::config.has_value 'openai_api_key'; then
+    OPENAI_API_KEY="$(bashio::config 'openai_api_key')"
+    export OPENAI_API_KEY
+else
+    export OPENAI_API_KEY="disabled"
+fi
+
+if [ "${USING_EXTERNAL_DB}" = "false" ]; then
+    bashio::log.info "Waiting for PostgreSQL..."
+    until pg_isready -h 127.0.0.1 -p 5432 -U "${DB_USER}" >/dev/null 2>&1; do
+        sleep 2
+    done
+fi
+
+mkdir -p "$(dirname "${CONFIG_PATH}")"
+
+if [ ! -s "${CONFIG_PATH}" ]; then
+    bashio::log.info "Generating default HomeSec config at ${CONFIG_PATH}"
+
+    if [ "${VLM_ENABLED}" = "true" ]; then
+        VLM_RUN_MODE="trigger_only"
+    else
+        VLM_RUN_MODE="never"
+    fi
+
+    if [ "${STORAGE_TYPE}" = "dropbox" ]; then
+        STORAGE_BLOCK=$(cat <<EOF_STORAGE
+  backend: dropbox
+  config:
+    root: /homecam
+    token_env: DROPBOX_TOKEN
+EOF_STORAGE
+)
+    else
+        STORAGE_BLOCK=$(cat <<EOF_STORAGE
+  backend: local
+  config:
+    root: ${STORAGE_PATH}
+EOF_STORAGE
+)
+    fi
+
+    cat <<EOF_CONFIG > "${CONFIG_PATH}"
+version: 1
+
+cameras: []
+
+storage:
+${STORAGE_BLOCK}
+
+state_store:
+  dsn_env: DATABASE_URL
+
+notifiers:
+  - backend: home_assistant
+    config: {}
+
+filter:
+  backend: yolo
+  config:
+    classes:
+      - person
+
+vlm:
+  backend: openai
+  trigger_classes: ["person"]
+  run_mode: ${VLM_RUN_MODE}
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: "${OPENAI_MODEL}"
+
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: medium
+
+server:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+EOF_CONFIG
+fi
+
+exec python3 -m homesec.cli run --config "${CONFIG_PATH}" --log_level "${LOG_LEVEL^^}"

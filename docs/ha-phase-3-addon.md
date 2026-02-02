@@ -91,6 +91,7 @@ schema:
   config_path: str?
   log_level: list(debug|info|warning|error)?
   database_url: str?           # External DB (optional)
+  db_password: password?       # Bundled DB password (optional)
   storage_type: list(local|dropbox)?
   storage_path: str?
   dropbox_token: password?     # Mapped to DROPBOX_TOKEN env var
@@ -102,6 +103,7 @@ options:
   config_path: /config/homesec/config.yaml
   log_level: info
   database_url: ""
+  db_password: ""
   storage_type: local
   storage_path: /media/homesec/clips
   vlm_enabled: false
@@ -131,6 +133,8 @@ watchdog: http://[HOST]:[PORT:8080]/api/v1/health
 - `homeassistant_api: true` injects SUPERVISOR_TOKEN
 - Ingress provides secure access without port exposure
 - Watchdog ensures auto-restart on failure
+- Bundled Postgres password is optional; if omitted, it is auto-generated and
+  stored at `/data/postgres/db_password`
 
 ---
 
@@ -267,7 +271,7 @@ cameras: []
 storage:
   backend: local  # or dropbox based on options
   config:
-    path: /media/homesec/clips
+    root: /media/homesec/clips
 
 state_store:
   dsn_env: DATABASE_URL
@@ -275,6 +279,26 @@ state_store:
 notifiers:
   - backend: home_assistant
     config: {}  # Uses SUPERVISOR_TOKEN automatically
+
+filter:
+  backend: yolo
+  config:
+    classes:
+      - person
+
+vlm:
+  backend: openai
+  trigger_classes: ["person"]
+  run_mode: never  # trigger_only when VLM enabled
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: "gpt-4o"
+
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: medium
 
 server:
   enabled: true
