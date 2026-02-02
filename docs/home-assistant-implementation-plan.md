@@ -8,8 +8,7 @@ This document provides an overview of the Home Assistant integration for HomeSec
 
 - **Approach**: Add-on + native integration with HomeSec as the runtime
 - **API stack**: FastAPI, async endpoints only, async SQLAlchemy only
-- **Config storage**: Override YAML file is source of truth for dynamic config. Base YAML is bootstrap-only.
-- **Config merge**: Multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge (recursive), lists with `name` field merge by key.
+- **Config storage**: Single YAML file for all config. API mutations overwrite the file (backup created first).
 - **Single instance**: HA integration assumes one HomeSec instance (`single_config_entry`)
 - **Secrets**: Never stored in HomeSec config; only env var names are persisted
 - **Repository pattern**: API reads/writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access)
@@ -112,9 +111,8 @@ These interfaces are defined across phases. See individual phase docs for detail
 1. Export current `config.yaml`
 2. Install HomeSec add-on
 3. Copy config to `/config/homesec/config.yaml`
-4. Create `/data/overrides.yaml` for HA-managed config
-5. Update database URL if using external Postgres
-6. Start add-on
+4. Update database URL if using external Postgres
+5. Start add-on
 
 ### From MQTT Notifier to Native Integration
 

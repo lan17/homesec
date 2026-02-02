@@ -102,7 +102,6 @@ class CameraConfig(BaseModel):
 ### Files
 
 - `src/homesec/config/manager.py`
-- `src/homesec/config/loader.py`
 
 ### Interfaces
 
@@ -113,12 +112,15 @@ class ConfigUpdateResult(BaseModel):
     restart_required: bool = True
 
 class ConfigManager:
-    """Manages configuration persistence (last-write-wins semantics)."""
+    """Manages configuration persistence (single file, last-write-wins).
 
-    def __init__(self, base_paths: list[Path], override_path: Path): ...
+    On mutations, backs up current config to {path}.bak before overwriting.
+    """
+
+    def __init__(self, config_path: Path): ...
 
     def get_config(self) -> Config:
-        """Get the current merged configuration."""
+        """Get the current configuration."""
         ...
 
     async def add_camera(
@@ -128,7 +130,7 @@ class ConfigManager:
         source_backend: str,
         source_config: dict,
     ) -> ConfigUpdateResult:
-        """Add a new camera to the override config.
+        """Add a new camera to the config.
 
         Raises:
             ValueError: If camera name already exists
@@ -141,7 +143,7 @@ class ConfigManager:
         enabled: bool | None,
         source_config: dict | None,
     ) -> ConfigUpdateResult:
-        """Update an existing camera in the override config.
+        """Update an existing camera in the config.
 
         Raises:
             ValueError: If camera doesn't exist
@@ -152,64 +154,31 @@ class ConfigManager:
         self,
         camera_name: str,
     ) -> ConfigUpdateResult:
-        """Remove a camera from the override config.
+        """Remove a camera from the config.
 
         Raises:
             ValueError: If camera doesn't exist
         """
         ...
+
+    async def _save_config(self, config: Config) -> None:
+        """Save config to disk with backup.
+
+        1. Copy current config to {path}.bak
+        2. Write new config atomically (temp file, fsync, rename)
+        """
+        ...
 ```
 
-**ConfigLoader** (`loader.py`)
-
-> **Note**: This extends the existing `loader.py`. The current `load_config(path)` function
-> remains unchanged. We add `load_configs()`, `deep_merge()`, and `merge_named_lists()` alongside it.
-
-```python
-def load_configs(paths: list[Path]) -> Config:
-    """Load and merge multiple YAML config files.
-
-    Merge semantics:
-    - Files loaded left to right, rightmost wins
-    - Dicts: deep merge (recursive)
-    - Lists of objects with `name` field: key-based merge by `name`
-      - Items with same `name` are merged (override fields win)
-      - Items only in base are preserved
-      - Items only in override are added
-    - Other lists: override replaces base entirely
-    """
-    ...
-
-def deep_merge(base: dict, override: dict) -> dict:
-    """Deep merge two dicts.
-
-    - Nested dicts are merged recursively
-    - Lists of dicts with 'name' key: merge by name (see merge_named_lists)
-    - Other lists: override replaces base
-    - Scalars: override wins
-    """
-    ...
-
-def merge_named_lists(base: list[dict], override: list[dict]) -> list[dict]:
-    """Merge two lists of dicts by 'name' key.
-
-    Example:
-        base:     [{name: "a", x: 1}, {name: "b", x: 2}]
-        override: [{name: "b", x: 99}, {name: "c", x: 3}]
-        result:   [{name: "a", x: 1}, {name: "b", x: 99}, {name: "c", x: 3}]
-
-    - Preserves order: base items first (in order), then new override items
-    - Override items with matching name replace/merge with base items
-    """
-    ...
-```
+> **Note**: No merge logic needed. The existing `load_config(path)` in `loader.py` is used as-is.
+> ConfigManager owns a single config file and overwrites it entirely on mutations.
 
 ### Constraints
 
-- Override file written atomically (write temp, fsync, rename)
+- Single config file (no base/override split)
+- Backup created before each mutation (`config.yaml` → `config.yaml.bak`)
+- Config file written atomically (write temp, fsync, rename)
 - All file I/O via `asyncio.to_thread`
-- Base config is read-only; all mutations go to override file
-- Override file is machine-owned (no comment preservation needed)
 
 ---
 
@@ -256,11 +225,14 @@ class ClipRepository:
         """
         ...
 
-    async def delete_clip(self, clip_id: str) -> None:
-        """Mark clip as deleted and delete from storage.
+    async def delete_clip(self, clip_id: str) -> ClipStateData:
+        """Mark clip as deleted in database.
 
-        Uses existing record_clip_deleted() internally.
-        Also deletes from storage backend.
+        Returns the clip data (including storage_uri) so caller can
+        coordinate storage deletion separately.
+
+        Note: Storage deletion is handled by the API route, not the repository.
+        This keeps the repository focused on database operations only.
         """
         ...
 
@@ -286,7 +258,7 @@ class ClipRepository:
 - Counts should be efficient (use SQL COUNT, not fetch all)
 - `count_alerts_since` counts events where `event_type='notification_sent'`
 - `list_clips` returns tuple of (items, total_count) for pagination
-- `delete_clip` should delete from both local and cloud storage
+- `delete_clip` only marks deleted in DB; API route coordinates storage deletion
 
 ---
 
@@ -347,11 +319,24 @@ class ConfigChangeResponse(BaseModel):
     camera: CameraResponse | None = None
 ```
 
+**Health Response Model**
+```python
+class HealthResponse(BaseModel):
+    status: str           # "healthy", "degraded", or "unhealthy"
+    pipeline: str         # "running" or "stopped"
+    postgres: str         # "connected" or "unavailable"
+    cameras_online: int   # Count of healthy cameras
+```
+
+> **Note**: `/health` returns 200 if pipeline is running, even if Postgres is unavailable (degraded state).
+> This allows the add-on watchdog to avoid restart loops when only the DB is down.
+> Use `/diagnostics` for detailed component status.
+
 ### Constraints
 
 - All config-mutating endpoints return `restart_required: True`
 - Last-write-wins semantics (no optimistic concurrency in v1)
-- Return 503 Service Unavailable when Postgres is down
+- `/health` returns 200 if pipeline running (status may be "degraded" if DB down)
 - Pagination: `page` (1-indexed), `page_size` (default 50, max 100)
 
 ---
@@ -387,26 +372,7 @@ class FastAPIServerConfig(BaseModel):
 
 **File**: `src/homesec/cli.py`
 
-### Interface
-
-```python
-# Support multiple --config flags
-# Example: homesec run --config base.yaml --config overrides.yaml
-
-@click.option(
-    "--config",
-    "config_paths",
-    multiple=True,
-    type=click.Path(exists=True),
-    help="Config file(s). Can be specified multiple times. Later files override earlier.",
-)
-```
-
-### Constraints
-
-- Order matters: files loaded left to right
-- Default override path: `config/ha-overrides.yaml` (if exists)
-- Override path can be explicitly passed as last `--config`
+No CLI changes needed. The existing `--config` flag already accepts a single config file path.
 
 ---
 
@@ -418,11 +384,9 @@ class FastAPIServerConfig(BaseModel):
 | `src/homesec/api/server.py` | FastAPI app factory and server |
 | `src/homesec/api/dependencies.py` | Request dependencies |
 | `src/homesec/api/routes/*.py` | All route modules |
-| `src/homesec/config/manager.py` | Config persistence |
-| `src/homesec/config/loader.py` | Multi-file config loading |
+| `src/homesec/config/manager.py` | Config persistence (single file with backup) |
 | `src/homesec/models/config.py` | Add `FastAPIServerConfig` |
 | `src/homesec/repository/clip_repository.py` | Add read/list/count methods |
-| `src/homesec/cli.py` | Support multiple `--config` flags |
 | `src/homesec/app.py` | Integrate API server |
 | `pyproject.toml` | Add fastapi, uvicorn dependencies |
 
@@ -446,8 +410,9 @@ class FastAPIServerConfig(BaseModel):
 - Given camera "front", when DELETE /cameras/front, then 200 and camera removed
 
 **Health**
-- Given Postgres is up, when GET /health, then status="healthy"
-- Given Postgres is down, when GET /health, then 503 and status="unhealthy"
+- Given Postgres is up and pipeline running, when GET /health, then 200 and status="healthy"
+- Given Postgres is down but pipeline running, when GET /health, then 200 and status="degraded", postgres="unavailable"
+- Given pipeline stopped, when GET /health, then 503 and status="unhealthy"
 
 **Clips**
 - Given 100 clips, when GET /clips?page=2&page_size=10, then returns clips 11-20
@@ -458,7 +423,7 @@ class FastAPIServerConfig(BaseModel):
 - Given clips with mixed cameras, when `list_clips(camera="front")`, then returns only "front" clips
 - Given 10 clips (5 alerted, 5 not), when `list_clips(alerted=True)`, then returns only 5 alerted clips
 - Given clips with mixed risk levels, when `list_clips(risk_level="high")`, then returns only high-risk clips
-- Given clip exists, when `delete_clip(clip_id)`, then clip marked deleted and storage files removed
+- Given clip exists, when `delete_clip(clip_id)`, then clip marked deleted and returns clip data
 - Given StateStore is up, when `ping()`, then returns True
 
 ---
@@ -487,7 +452,7 @@ open http://localhost:8080/docs
 
 - [ ] FastAPI server starts and serves requests
 - [ ] All CRUD operations for cameras work
-- [ ] Config changes are validated and persisted to override file
+- [ ] Config changes are validated and persisted (with backup)
 - [ ] Config changes return `restart_required: true`
 - [ ] `/api/v1/system/restart` triggers graceful shutdown
 - [ ] Clip listing with pagination and filtering works
@@ -495,6 +460,5 @@ open http://localhost:8080/docs
 - [ ] OpenAPI documentation is accurate at `/docs`
 - [ ] CORS works for configured origins
 - [ ] API authentication (when enabled) works
-- [ ] Returns 503 when Postgres is unavailable
-- [ ] Multiple `--config` flags work in CLI
+- [ ] `/health` returns 200 if pipeline running (even if DB degraded)
 - [ ] All tests pass

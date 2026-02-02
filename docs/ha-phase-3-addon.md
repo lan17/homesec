@@ -89,24 +89,27 @@ map:
 
 schema:
   config_path: str?
-  override_path: str?
   log_level: list(debug|info|warning|error)?
   database_url: str?           # External DB (optional)
   storage_type: list(local|dropbox)?
   storage_path: str?
-  dropbox_token: password?
+  dropbox_token: password?     # Mapped to DROPBOX_TOKEN env var
   vlm_enabled: bool?
-  openai_api_key: password?
+  openai_api_key: password?    # Mapped to OPENAI_API_KEY env var
   openai_model: str?
 
 options:
   config_path: /config/homesec/config.yaml
-  override_path: /data/overrides.yaml
   log_level: info
   database_url: ""
   storage_type: local
   storage_path: /media/homesec/clips
   vlm_enabled: false
+
+# Secret handling: Add-on options with `password` type are mapped to
+# environment variables by the run script. Config YAML stores env var
+# names (e.g., `token_env: DROPBOX_TOKEN`), not actual secret values.
+# This follows HomeSec's existing pattern for credential management.
 
 startup: services
 stage: stable
@@ -114,7 +117,7 @@ advanced: true
 privileged: []
 apparmor: true
 
-# Watchdog for auto-restart
+# Watchdog for auto-restart (returns 200 if pipeline running, even if DB degraded)
 watchdog: http://[HOST]:[PORT:8080]/api/v1/health
 ```
 
@@ -209,9 +212,10 @@ exec su postgres -c "postgres -D /data/postgres/data"
 
 Waits for PostgreSQL, generates config if missing, runs HomeSec:
 - Reads options from `/data/options.json` via Bashio
+- Maps secret options (dropbox_token, openai_api_key) to environment variables
 - Waits for `pg_isready`
 - Generates initial config if not exists
-- Runs `python3 -m homesec.cli run --config ... --config ...`
+- Runs `python3 -m homesec.cli run --config /config/homesec/config.yaml`
 
 ### Constraints
 

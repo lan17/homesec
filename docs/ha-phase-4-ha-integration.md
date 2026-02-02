@@ -303,9 +303,13 @@ HomeSec Hub (identifiers: homesec_hub)
 ### Binary Sensors (binary_sensor.py)
 
 **Camera Binary Sensors** (HomesecCameraEntity):
-- `motion` - Motion detected (auto-resets after timeout)
+- `motion` - Alert-based motion (triggered by `homesec_alert`, auto-resets after timeout)
 - `person` - Person detected (based on latest alert activity_type)
 - `online` - Camera connectivity
+
+> **Note**: `motion` and `person` sensors are driven by `homesec_alert` events, not raw clip recording.
+> If the alert policy suppresses an alert (e.g., low-risk activity), these sensors won't trigger.
+> This is intentional - they represent "alertable activity" rather than all motion.
 
 ### Switches (switch.py)
 

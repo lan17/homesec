@@ -18,8 +18,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 - Required: runtime add/remove cameras and other config changes from HA.
 - API stack: FastAPI, async endpoints only, async SQLAlchemy only.
 - Restart is acceptable: API writes validated config to disk and returns `restart_required`; HA may trigger restart.
-- Config storage: **Override YAML file** is source of truth for dynamic config. Base YAML is bootstrap-only.
-- Config merge: multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge, lists with `name` field merge by key.
+- Config storage: **Single YAML file** for all config. API mutations overwrite the file (backup created first).
 - Single instance: HA integration assumes one HomeSec instance (`single_config_entry`).
 - Secrets: never stored in HomeSec; config stores env var names; HA/add-on passes env vars at boot.
 - Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
@@ -312,9 +311,9 @@ The HomeSec add-on is a Docker container managed by HA Supervisor. It bundles Po
 | Path | Contents | Persistence |
 |------|----------|-------------|
 | `/data/postgres/` | PostgreSQL database files | Add-on private, persistent |
-| `/data/overrides.yaml` | HA-managed config overrides | Add-on private, persistent |
 | `/media/homesec/clips/` | Video clips (LocalStorage) | Shared with HA, persistent |
-| `/config/homesec/` | Base config file | Shared with HA, persistent |
+| `/config/homesec/config.yaml` | HomeSec config file | Shared with HA, persistent |
+| `/config/homesec/config.yaml.bak` | Config backup (created on each mutation) | Shared with HA, persistent |
 
 ---
 
@@ -415,14 +414,10 @@ Execution order for Option A:
 
 Add a new REST API to HomeSec for remote configuration. All endpoints are `async def` and use async SQLAlchemy only.
 
-Config model for Option B:
+Config model:
 
-- Base YAML is bootstrap-only (DB DSN, server config, storage root, MQTT broker, etc.).
-- API writes a machine-owned **override YAML** file for all dynamic config.
-- HomeSec loads multiple YAML files left → right; rightmost wins.
-- Dicts deep-merge; lists with `name` field merge by key.
-- Override file default: `config/ha-overrides.yaml` (configurable via CLI).
-- CLI accepts multiple `--config` flags; order matters.
+- Single YAML config file for all settings.
+- API mutations overwrite the config file entirely (backup created first as `config.yaml.bak`).
 - Config writes use last-write-wins semantics (no optimistic concurrency in v1).
 
 ```yaml
@@ -438,7 +433,7 @@ GET  /api/v1/clips/{id}                # Get clip details
 POST /api/v1/system/restart            # Request graceful restart
 ```
 
-Config updates are validated with Pydantic, written to the override YAML, and return `restart_required: true`. HA can then call a restart endpoint or restart the add-on.
+Config updates are validated with Pydantic, written to the config file (with backup), and return `restart_required: true`. HA can then call a restart endpoint or restart the add-on.
 Real-time updates use HA Events API (no WebSocket or MQTT required in v1).
 
 ### Phase 3: Home Assistant Add-on
@@ -613,10 +608,8 @@ async def async_get_config_entry_diagnostics(hass, entry):
 
 ### Adopted Strategy (Override YAML)
 
-- **Base YAML**: bootstrap-only (DB DSN, server config, storage root, MQTT broker, etc.).
-- **Override YAML**: machine-owned, fully managed by HA via API.
-- **Load order**: multiple YAML files loaded left → right; rightmost wins.
-- **Merge semantics**: dicts deep-merge; lists with `name` field merge by key (e.g., cameras merge by camera name).
+- **Single config file**: all settings in one YAML file, fully managed by HA via API.
+- **Backup on mutation**: `config.yaml.bak` created before each overwrite.
 - **Restart**: required for all config changes.
 
 ---
