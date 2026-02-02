@@ -8,7 +8,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 2. **Configure** cameras, alerts, and AI settings through the HA UI
 3. **Monitor** camera health, detection stats, and pipeline status as HA entities
 4. **Automate** based on detection events with rich metadata
-5. **View** clips and live streams directly in HA dashboards
+5. **View** clips directly in HA dashboards (RTSP handled by HA)
 
 ---
 
@@ -18,6 +18,10 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 - Required: runtime add/remove cameras and other config changes from HA.
 - API stack: FastAPI, async endpoints only, async SQLAlchemy only.
 - Restart is acceptable: API writes validated config to disk and returns `restart_required`; HA may trigger restart.
+- Config storage: **Override YAML file** is source of truth for dynamic config. Base YAML is bootstrap-only.
+- Config merge: multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge, lists replace.
+- Single instance: HA integration assumes one HomeSec instance (`single_config_entry`).
+- Secrets: never stored in HomeSec; config stores env var names; HA/add-on passes env vars at boot.
 - Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
 - Tests: Given/When/Then comments required for all new tests.
 - P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
@@ -27,6 +31,8 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 - No blocking work in API endpoints; file I/O and long operations must use `asyncio.to_thread`.
 - Avoid in-process hot-reload of pipeline components in v1; prefer restart after config changes.
 - Do not move heavy inference into Home Assistant (keep compute inside HomeSec runtime).
+- Prefer behavioral tests that assert outcomes, not internal state.
+- Prefer behavioral tests; avoid internal state assertions.
 
 ---
 
@@ -45,7 +51,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 │  │  - Pipeline service │    │  - Config flow UI           │ │
 │  │  - RTSP sources     │    │  - Entity platforms         │ │
 │  │  - YOLO/VLM         │    │  - Services                 │ │
-│  │  - Storage backends │    │  - Event subscriptions      │ │
+│  │  - Storage backends │    │  - MQTT subscriptions       │ │
 │  └─────────────────────┘    └─────────────────────────────┘ │
 │           │                            │                     │
 │           └────────┬───────────────────┘                     │
@@ -53,8 +59,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │              Communication Layer                         │ │
 │  │  - REST API (new) for config/control                    │ │
-│  │  - WebSocket (new) for real-time events                 │ │
-│  │  - MQTT for alerts (existing)                           │ │
+│  │  - MQTT for events + state topics                       │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -139,7 +144,17 @@ Enhance the existing MQTT notifier to publish discovery configs:
 
 ### Phase 2: REST API for Configuration
 
-Add a new REST API to homesec for remote configuration. All endpoints are `async def` and use async SQLAlchemy only.
+Add a new REST API to HomeSec for remote configuration. All endpoints are `async def` and use async SQLAlchemy only.
+
+Config model for Option B:
+
+- Base YAML is bootstrap-only (DB DSN, server config, storage root, MQTT broker, etc.).
+- API writes a machine-owned **override YAML** file for all dynamic config.
+- HomeSec loads multiple YAML files left → right; rightmost wins.
+- Dicts deep-merge; lists replace (override lists fully replace base lists).
+- Override file default: `config/ha-overrides.yaml` (configurable via CLI).
+- CLI accepts multiple `--config` flags; order matters.
+- All config writes require `config_version` for optimistic concurrency.
 
 ```yaml
 # New endpoints
@@ -154,10 +169,11 @@ POST /api/v1/cameras/{name}/test       # Test camera connection
 GET  /api/v1/clips                     # List recent clips
 GET  /api/v1/clips/{id}                # Get clip details
 GET  /api/v1/events                    # Event history
-WS   /api/v1/ws                        # Real-time events
+POST /api/v1/system/restart            # Request graceful restart
 ```
 
-Config updates are validated with Pydantic, written to disk, and return `restart_required: true`. HA can then call a restart endpoint or restart the add-on.
+Config updates are validated with Pydantic, written to the override YAML, and return `restart_required: true`. HA can then call a restart endpoint or restart the add-on.
+Real-time updates use MQTT topics (no WebSocket in v1).
 
 ### Phase 3: Home Assistant Add-on
 
@@ -172,14 +188,14 @@ slug: homesec
 arch: [amd64, aarch64]
 ports:
   8080/tcp: 8080   # API/Health
-  8554/tcp: 8554   # RTSP proxy (optional)
 map:
-  - config:rw       # Store config
-  - media:rw        # Store clips
+  - addon_config:rw  # Store HomeSec config/overrides
+  - media:rw         # Store clips
 services:
   - mqtt:need       # Requires MQTT broker
 options:
   config_file: /config/homesec/config.yaml
+  override_file: /data/overrides.yaml
 ```
 
 **Add-on features:**
@@ -199,7 +215,6 @@ custom_components/homesec/
 ├── config_flow.py        # UI-based configuration
 ├── const.py              # Constants
 ├── coordinator.py        # DataUpdateCoordinator
-├── camera.py             # Camera entity platform
 ├── sensor.py             # Sensor entities
 ├── binary_sensor.py      # Motion sensors
 ├── switch.py             # Enable/disable cameras
@@ -213,12 +228,12 @@ custom_components/homesec/
 
 | Platform | Entities | Description |
 |----------|----------|-------------|
-| `camera` | Per-camera | Live RTSP stream proxy |
+| `image` | Per-camera | Last snapshot (optional) |
 | `binary_sensor` | `motion`, `person_detected` | Detection states |
 | `sensor` | `last_activity`, `risk_level`, `clip_count` | Detection metadata |
 | `switch` | `camera_enabled`, `alerts_enabled` | Per-camera toggles |
 | `select` | `alert_sensitivity` | LOW/MEDIUM/HIGH |
-| `image` | `last_snapshot` | Most recent detection frame |
+| `device_tracker` | `camera_online` | Connectivity status (optional) |
 
 **Services:**
 
@@ -268,18 +283,8 @@ Step 3: Notifications
 
 ### 1. Camera Streams in HA
 
-Proxy RTSP streams through homesec with authentication:
-
-```python
-class HomesecCamera(Camera):
-    """Representation of a HomeSec camera."""
-
-    _attr_supported_features = CameraEntityFeature.STREAM
-
-    async def stream_source(self) -> str:
-        """Return the stream source URL."""
-        return f"rtsp://{self._host}:8554/{self._camera_name}"
-```
+HomeSec will not proxy RTSP streams. HA should use its own camera integration for RTSP
+while HomeSec ingests the same stream for analysis.
 
 ### 2. Rich Event Data for Automations
 
@@ -355,30 +360,13 @@ async def async_get_config_entry_diagnostics(hass, entry):
 
 ## Configuration Sync Strategy
 
-### Option A: HA as Source of Truth
+### Adopted Strategy (Override YAML)
 
-HA integration manages config, pushes to homesec:
-
-```
-User edits in HA UI → Integration → REST API → HomeSec
-                                              ↓
-                                         Restarts with new config
-```
-
-### Option B: HomeSec as Source of Truth
-
-HomeSec config is canonical, HA reads it:
-
-```
-User edits YAML → HomeSec → MQTT Discovery → HA entities created
-                         → REST API → Integration reads state
-```
-
-### Option C: Hybrid (Recommended)
-
-- **Core config** (storage, database, VLM provider): HomeSec YAML
-- **Camera config**: Editable from HA via API, persisted to YAML; restart required
-- **Alert policies**: Editable from HA, stored in homesec; restart required
+- **Base YAML**: bootstrap-only (DB DSN, server config, storage root, MQTT broker, etc.).
+- **Override YAML**: machine-owned, fully managed by HA via API.
+- **Load order**: multiple YAML files loaded left → right; rightmost wins.
+- **Merge semantics**: dicts deep-merge; lists replace (override lists fully replace base lists).
+- **Restart**: required for all config changes.
 
 ---
 
@@ -391,7 +379,7 @@ For custom integration distribution:
 {
   "name": "HomeSec",
   "render_readme": true,
-  "domains": ["camera", "sensor", "binary_sensor", "switch"],
+  "domains": ["sensor", "binary_sensor", "switch", "select", "image", "device_tracker"],
   "iot_class": "local_push"
 }
 ```
@@ -405,6 +393,7 @@ For custom integration distribution:
   "documentation": "https://github.com/lan17/homesec",
   "dependencies": ["mqtt"],
   "codeowners": ["@lan17"],
+  "single_config_entry": true,
   "iot_class": "local_push",
   "integration_type": "hub"
 }

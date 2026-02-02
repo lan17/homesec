@@ -10,6 +10,10 @@ This document provides a comprehensive, step-by-step implementation plan for int
 - Required: runtime add/remove cameras and other config changes from HA.
 - API stack: FastAPI, async endpoints only, async SQLAlchemy only.
 - Restart is acceptable: API writes validated config to disk and returns `restart_required`; HA can trigger restart.
+- Config storage: **Override YAML file** is source of truth for dynamic config. Base YAML is bootstrap-only.
+- Config merge: multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge, lists replace.
+- Single instance: HA integration assumes one HomeSec instance (`single_config_entry`).
+- Secrets: never stored in HomeSec; config stores env var names; HA/add-on passes env vars at boot.
 - Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
 - Tests: Given/When/Then comments required for all new tests.
 - P0 priority: recording + uploading must keep working even if Postgres is down (API and HA features are best-effort).
@@ -454,8 +458,12 @@ class TestMQTTDiscoveryBuilder:
 - Use async SQLAlchemy only for DB access (no sync engines or blocking DB calls).
 - No blocking operations inside endpoints; use `asyncio.to_thread` for file I/O and restarts.
 - API must not write directly to `StateStore`/`EventStore`. Add read methods on `ClipRepository`.
-- Config updates are validated with Pydantic, persisted to disk, and return `restart_required: true`.
+- Config is loaded from **multiple YAML files** (left → right). Rightmost wins.
+- Merge semantics: dicts deep-merge; lists replace.
+- Config updates are validated with Pydantic, **written to the override YAML only**, and return `restart_required: true`.
 - API provides a restart endpoint to request a graceful shutdown.
+- Server config: introduce `FastAPIServerConfig` (host/port, enabled, api_key_env, CORS, health path) to replace `HealthConfig`.
+- Secrets are never stored in config; only env var names are persisted.
 
 ### 2.1 API Framework Setup
 
@@ -483,7 +491,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import cameras, clips, config, events, health, websocket
+from .routes import cameras, clips, config, events, health
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -522,7 +530,7 @@ def create_app(app_instance: Application) -> FastAPI:
     app.include_router(cameras.router, prefix="/api/v1", tags=["cameras"])
     app.include_router(clips.router, prefix="/api/v1", tags=["clips"])
     app.include_router(events.router, prefix="/api/v1", tags=["events"])
-    app.include_router(websocket.router, prefix="/api/v1", tags=["websocket"])
+    # MQTT is used for event push (no WebSocket in v1)
 
     return app
 
@@ -555,10 +563,9 @@ class APIServer:
             self._server.should_exit = True
 ```
 
-**Port coordination:** The current `HealthServer` defaults to port 8080. Either:
-
-- Move health to a new default (e.g., 8081) when API is enabled, or
-- Replace the aiohttp health server with a FastAPI `/api/v1/health` endpoint.
+**Port coordination:** Replace the aiohttp `HealthServer` with FastAPI and make
+the port configurable via `FastAPIServerConfig` (default 8080). Provide both
+`/health` and `/api/v1/health` for compatibility.
 
 ### 2.2 Config Persistence + Restart
 
@@ -566,8 +573,11 @@ class APIServer:
 
 Responsibilities:
 
-- Load and validate config via existing `load_config()` and Pydantic models.
-- Persist updated config atomically (write temp file, fsync, rename).
+- Load and validate config from **multiple YAML files** (left → right). Rightmost wins.
+- Base YAML is bootstrap-only; **override YAML** contains all HA-managed config.
+- Merge semantics: dicts deep-merge; lists replace.
+- Persist updated override YAML atomically (write temp file, fsync, rename).
+- Store `config_version` in the override file and enforce optimistic concurrency.
 - Return `restart_required: true` for any config-changing endpoints.
 - Expose methods:
   - `get_config() -> Config`
@@ -575,6 +585,16 @@ Responsibilities:
   - `update_camera(...) -> ConfigUpdateResult`
   - `remove_camera(...) -> ConfigUpdateResult`
 - Use `asyncio.to_thread` for file I/O to keep endpoints non-blocking.
+- Provide `dump_override(path: Path)` to export backup YAML.
+  - `ConfigUpdateResult` should include the new `config_version`.
+- Application should expose `config_store` and `config_version` for API routes.
+- Override file is machine-owned; comment preservation is not required.
+- Application should load configs via ConfigManager with multiple `--config` paths.
+
+CLI requirements:
+
+- Support multiple `--config` flags (order matters).
+- Default override path: `config/ha-overrides.yaml` (override can be passed as the last `--config`).
 
 **Repository extensions:**
 
@@ -610,6 +630,7 @@ router = APIRouter(prefix="/cameras")
 
 # Note: All config-mutating endpoints return restart_required=True and do not
 # attempt hot-reload. HA may call /api/v1/system/restart or restart the add-on.
+# All config-mutating endpoints require config_version for optimistic concurrency.
 
 
 class CameraCreate(BaseModel):
@@ -617,12 +638,14 @@ class CameraCreate(BaseModel):
     name: str
     type: str  # rtsp, ftp, local_folder
     config: dict  # Type-specific configuration
+    config_version: int
 
 
 class CameraUpdate(BaseModel):
     """Request model for updating a camera."""
     config: dict | None = None
     alert_policy: dict | None = None
+    config_version: int
 
 
 class CameraResponse(BaseModel):
@@ -644,6 +667,7 @@ class CameraListResponse(BaseModel):
 class ConfigChangeResponse(BaseModel):
     """Response model for config changes."""
     restart_required: bool = True
+    config_version: int
     camera: CameraResponse | None = None
 
 
@@ -651,14 +675,16 @@ class ConfigChangeResponse(BaseModel):
 async def list_cameras(app=Depends(get_homesec_app)):
     """List all configured cameras."""
     cameras = []
-    for source in app.sources:
+    config = app.config_store.get_config()
+    for camera in config.cameras:
+        source = app.get_source(camera.name)
         cameras.append(CameraResponse(
-            name=source.camera_name,
-            type=source.source_type,
-            healthy=source.is_healthy(),
-            last_heartbeat=source.last_heartbeat(),
-            config=source.get_config(),
-            alert_policy=app.get_camera_alert_policy(source.camera_name),
+            name=camera.name,
+            type=camera.source.type,
+            healthy=source.is_healthy() if source else False,
+            last_heartbeat=source.last_heartbeat() if source else None,
+            config=camera.source.config if isinstance(camera.source.config, dict) else camera.source.config.model_dump(),
+            alert_policy=app.get_camera_alert_policy(camera.name),
         ))
     return CameraListResponse(cameras=cameras, total=len(cameras))
 
@@ -666,18 +692,20 @@ async def list_cameras(app=Depends(get_homesec_app)):
 @router.get("/{camera_name}", response_model=CameraResponse)
 async def get_camera(camera_name: str, app=Depends(get_homesec_app)):
     """Get a specific camera's configuration."""
-    source = app.get_source(camera_name)
-    if not source:
+    config = app.config_store.get_config()
+    camera = next((c for c in config.cameras if c.name == camera_name), None)
+    if not camera:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Camera '{camera_name}' not found",
         )
+    source = app.get_source(camera_name)
     return CameraResponse(
-        name=source.camera_name,
-        type=source.source_type,
-        healthy=source.is_healthy(),
-        last_heartbeat=source.last_heartbeat(),
-        config=source.get_config(),
+        name=camera.name,
+        type=camera.source.type,
+        healthy=source.is_healthy() if source else False,
+        last_heartbeat=source.last_heartbeat() if source else None,
+        config=camera.source.config if isinstance(camera.source.config, dict) else camera.source.config.model_dump(),
         alert_policy=app.get_camera_alert_policy(camera_name),
     )
 
@@ -692,19 +720,21 @@ async def create_camera(camera: CameraCreate, app=Depends(get_homesec_app)):
         )
 
     try:
-        source = await app.add_camera(
+        result = await app.config_store.add_camera(
             name=camera.name,
             source_type=camera.type,
             config=camera.config,
+            config_version=camera.config_version,
         )
         return ConfigChangeResponse(
             restart_required=True,
+            config_version=result.config_version,
             camera=CameraResponse(
-                name=source.camera_name,
-                type=source.source_type,
-                healthy=source.is_healthy(),
-                last_heartbeat=source.last_heartbeat(),
-                config=source.get_config(),
+                name=camera.name,
+                type=camera.type,
+                healthy=False,
+                last_heartbeat=None,
+                config=camera.config,
                 alert_policy=None,
             ),
         )
@@ -729,28 +759,26 @@ async def update_camera(
             detail=f"Camera '{camera_name}' not found",
         )
 
-    if update.config:
-        await app.update_camera_config(camera_name, update.config)
+    result = await app.config_store.update_camera(
+        camera_name=camera_name,
+        config=update.config,
+        alert_policy=update.alert_policy,
+        config_version=update.config_version,
+    )
 
-    if update.alert_policy:
-        await app.update_camera_alert_policy(camera_name, update.alert_policy)
-
-    source = app.get_source(camera_name)
     return ConfigChangeResponse(
         restart_required=True,
-        camera=CameraResponse(
-            name=source.camera_name,
-            type=source.source_type,
-            healthy=source.is_healthy(),
-            last_heartbeat=source.last_heartbeat(),
-            config=source.get_config(),
-            alert_policy=app.get_camera_alert_policy(camera_name),
-        ),
+        config_version=result.config_version,
+        camera=result.camera,
     )
 
 
 @router.delete("/{camera_name}", response_model=ConfigChangeResponse)
-async def delete_camera(camera_name: str, app=Depends(get_homesec_app)):
+async def delete_camera(
+    camera_name: str,
+    config_version: int,
+    app=Depends(get_homesec_app),
+):
     """Remove a camera."""
     source = app.get_source(camera_name)
     if not source:
@@ -759,8 +787,15 @@ async def delete_camera(camera_name: str, app=Depends(get_homesec_app)):
             detail=f"Camera '{camera_name}' not found",
         )
 
-    await app.remove_camera(camera_name)
-    return ConfigChangeResponse(restart_required=True, camera=None)
+    result = await app.config_store.remove_camera(
+        camera_name=camera_name,
+        config_version=config_version,
+    )
+    return ConfigChangeResponse(
+        restart_required=True,
+        config_version=result.config_version,
+        camera=None,
+    )
 
 
 @router.get("/{camera_name}/status")
@@ -962,109 +997,15 @@ async def list_events(
     )
 ```
 
-**New File:** `src/homesec/api/routes/websocket.py`
-
-```python
-"""WebSocket routes for real-time updates."""
-
-from __future__ import annotations
-
-import asyncio
-import json
-import logging
-from typing import TYPE_CHECKING
-
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
-if TYPE_CHECKING:
-    from homesec.app import Application
-
-logger = logging.getLogger(__name__)
-
-router = APIRouter()
-
-
-class ConnectionManager:
-    """Manages WebSocket connections."""
-
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-    async def broadcast(self, message: dict):
-        """Broadcast message to all connected clients."""
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                pass  # Connection might be closed
-
-
-manager = ConnectionManager()
-
-
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time events."""
-    await manager.connect(websocket)
-
-    app: Application = websocket.app.state.homesec
-
-    # Subscribe to app events
-    event_queue = asyncio.Queue()
-
-    async def event_handler(event_type: str, data: dict):
-        await event_queue.put({"type": event_type, "data": data})
-
-    app.subscribe_events(event_handler)
-
-    try:
-        while True:
-            # Wait for either client message or app event
-            done, pending = await asyncio.wait(
-                [
-                    asyncio.create_task(websocket.receive_text()),
-                    asyncio.create_task(event_queue.get()),
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            for task in done:
-                result = task.result()
-
-                if isinstance(result, str):
-                    # Message from client
-                    try:
-                        msg = json.loads(result)
-                        if msg.get("type") == "ping":
-                            await websocket.send_json({"type": "pong"})
-                    except json.JSONDecodeError:
-                        pass
-                else:
-                    # Event from app
-                    await websocket.send_json(result)
-
-            for task in pending:
-                task.cancel()
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        app.unsubscribe_events(event_handler)
-```
+Real-time updates use MQTT topics; no WebSocket endpoint in v1.
 
 ### 2.4 API Configuration
 
 **File:** `src/homesec/models/config.py` (add)
 
 ```python
-class APIConfig(BaseModel):
-    """Configuration for the REST API."""
+class FastAPIServerConfig(BaseModel):
+    """Configuration for the FastAPI server."""
 
     enabled: bool = True
     host: str = "0.0.0.0"
@@ -1073,10 +1014,12 @@ class APIConfig(BaseModel):
     # Authentication (optional)
     auth_enabled: bool = False
     api_key_env: str | None = None
-    # Rate limiting
-    rate_limit_enabled: bool = True
-    rate_limit_requests: int = 100
-    rate_limit_window_seconds: int = 60
+    # Health endpoints
+    health_path: str = "/health"
+    api_health_path: str = "/api/v1/health"
+
+# In Config:
+# - Replace `health: HealthConfig` with `server: FastAPIServerConfig`
 ```
 
 ### 2.5 OpenAPI Documentation
@@ -1087,10 +1030,11 @@ The FastAPI app automatically generates OpenAPI docs at `/api/v1/docs` (Swagger 
 
 - [ ] All CRUD operations for cameras work
 - [ ] Config changes are validated, persisted, and return `restart_required: true`
+- [ ] Stale `config_version` updates return 409 Conflict
 - [ ] Restart endpoint triggers graceful shutdown
 - [ ] Clip listing with filtering works
 - [ ] Event history API works
-- [ ] WebSocket broadcasts real-time events
+- [ ] MQTT event topics trigger HA refresh
 - [ ] OpenAPI documentation is accurate
 - [ ] CORS works for Home Assistant frontend
 - [ ] API authentication (optional) works
@@ -1156,11 +1100,10 @@ panel_title: HomeSec
 # Port mappings
 ports:
   8080/tcp: null    # API (exposed via ingress)
-  8554/tcp: 8554    # RTSP proxy (if implemented)
 
 # Volume mappings
 map:
-  - config:rw        # /config - HA config directory
+  - addon_config:rw  # /config - HomeSec managed config
   - media:rw         # /media - Media storage
   - share:rw         # /share - Shared data
 
@@ -1171,6 +1114,7 @@ services:
 # Options schema
 schema:
   config_path: str?
+  override_path: str?
   log_level: list(debug|info|warning|error)?
   # Database
   database_url: str?
@@ -1188,6 +1132,7 @@ schema:
 # Default options
 options:
   config_path: /config/homesec/config.yaml
+  override_path: /data/overrides.yaml
   log_level: info
   database_url: ""
   storage_type: local
@@ -1261,6 +1206,7 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
 
 # Read options
 CONFIG_PATH=$(bashio::config 'config_path')
+OVERRIDE_PATH=$(bashio::config 'override_path')
 LOG_LEVEL=$(bashio::config 'log_level')
 DATABASE_URL=$(bashio::config 'database_url')
 STORAGE_TYPE=$(bashio::config 'storage_type')
@@ -1281,6 +1227,7 @@ fi
 
 # Create config directory if needed
 mkdir -p "$(dirname "${CONFIG_PATH}")"
+mkdir -p "$(dirname "${OVERRIDE_PATH}")"
 
 # Generate config if it doesn't exist
 if [[ ! -f "${CONFIG_PATH}" ]]; then
@@ -1307,13 +1254,19 @@ notifiers:
     discovery:
       enabled: ${MQTT_DISCOVERY}
 
-health:
+server:
   enabled: true
+  host: 0.0.0.0
   port: 8080
+EOF
+fi
 
-api:
-  enabled: true
-  port: 8080
+# Create override file if missing
+if [[ ! -f "${OVERRIDE_PATH}" ]]; then
+    bashio::log.info "Creating override file at ${OVERRIDE_PATH}"
+    cat > "${OVERRIDE_PATH}" << EOF
+version: 1
+config_version: 1
 EOF
 fi
 
@@ -1340,6 +1293,7 @@ bashio::log.info "Starting HomeSec..."
 # Run HomeSec
 exec python3 -m homesec.cli run \
     --config "${CONFIG_PATH}" \
+    --config "${OVERRIDE_PATH}" \
     --log-level "${LOG_LEVEL}"
 ```
 
@@ -1356,10 +1310,6 @@ location / {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-
-    # WebSocket support
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
 
     # Timeouts for long-running connections
     proxy_connect_timeout 60s;
@@ -1398,7 +1348,6 @@ custom_components/homesec/
 ├── config_flow.py        # UI configuration flow
 ├── coordinator.py        # Data update coordinator
 ├── entity.py             # Base entity class
-├── camera.py             # Camera platform
 ├── sensor.py             # Sensor platform
 ├── binary_sensor.py      # Binary sensor platform
 ├── switch.py             # Switch platform
@@ -1422,6 +1371,7 @@ custom_components/homesec/
   "codeowners": ["@lan17"],
   "config_flow": true,
   "dependencies": ["mqtt"],
+  "single_config_entry": true,
   "documentation": "https://github.com/lan17/homesec",
   "integration_type": "hub",
   "iot_class": "local_push",
@@ -1467,7 +1417,6 @@ DIAGNOSTIC_SENSORS: Final = ["health", "last_heartbeat"]
 
 # Update intervals
 SCAN_INTERVAL_SECONDS: Final = 30
-WEBSOCKET_RECONNECT_DELAY: Final = 5
 
 # Attributes
 ATTR_CLIP_ID: Final = "clip_id"
@@ -1727,7 +1676,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, SCAN_INTERVAL_SECONDS, WEBSOCKET_RECONNECT_DELAY
+from .const import DOMAIN, SCAN_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1755,8 +1704,7 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api_key = api_key
         self.verify_ssl = verify_ssl
         self._session = async_get_clientsession(hass, verify_ssl=verify_ssl)
-        self._ws_task: asyncio.Task | None = None
-        self._event_callbacks: list[callable] = []
+        self._mqtt_unsub: callable | None = None
 
     @property
     def base_url(self) -> str:
@@ -1802,78 +1750,35 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"Error communicating with HomeSec: {err}") from err
 
-    async def async_start_websocket(self) -> None:
-        """Start WebSocket connection for real-time updates."""
-        if self._ws_task is not None:
+    async def async_start_mqtt(self) -> None:
+        """Subscribe to HomeSec MQTT topics for push updates."""
+        if self._mqtt_unsub is not None:
             return
-        self._ws_task = asyncio.create_task(self._websocket_loop())
 
-    async def async_stop_websocket(self) -> None:
-        """Stop WebSocket connection."""
-        if self._ws_task is not None:
-            self._ws_task.cancel()
-            try:
-                await self._ws_task
-            except asyncio.CancelledError:
-                pass
-            self._ws_task = None
+        from homeassistant.components import mqtt
 
-    async def _websocket_loop(self) -> None:
-        """Maintain WebSocket connection and handle events."""
-        ws_url = f"ws://{self.host}:{self.port}/api/v1/ws"
+        async def _on_message(msg: mqtt.ReceiveMessage) -> None:
+            await self._handle_mqtt_event(msg.topic, msg.payload)
 
-        while True:
-            try:
-                async with self._session.ws_connect(ws_url) as ws:
-                    _LOGGER.info("Connected to HomeSec WebSocket")
+        self._mqtt_unsub = await mqtt.async_subscribe(
+            self.hass,
+            "homesec/+/alert",
+            _on_message,
+        )
 
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            data = msg.json()
-                            await self._handle_ws_event(data)
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            _LOGGER.error("WebSocket error: %s", ws.exception())
-                            break
+    async def async_stop_mqtt(self) -> None:
+        """Stop MQTT subscription."""
+        if self._mqtt_unsub is not None:
+            self._mqtt_unsub()
+            self._mqtt_unsub = None
 
-            except aiohttp.ClientError as err:
-                _LOGGER.error("WebSocket connection error: %s", err)
+    async def _handle_mqtt_event(self, topic: str, payload: bytes) -> None:
+        """Handle incoming MQTT event."""
+        _ = topic
+        _ = payload
 
-            except asyncio.CancelledError:
-                _LOGGER.info("WebSocket task cancelled")
-                return
-
-            _LOGGER.info(
-                "WebSocket disconnected, reconnecting in %s seconds",
-                WEBSOCKET_RECONNECT_DELAY,
-            )
-            await asyncio.sleep(WEBSOCKET_RECONNECT_DELAY)
-
-    async def _handle_ws_event(self, data: dict[str, Any]) -> None:
-        """Handle incoming WebSocket event."""
-        event_type = data.get("type")
-        event_data = data.get("data", {})
-
-        _LOGGER.debug("Received WebSocket event: %s", event_type)
-
-        # Trigger immediate data refresh for certain events
-        if event_type in ["alert", "clip_recorded", "camera_status_changed"]:
-            await self.async_request_refresh()
-
-        # Notify registered callbacks
-        for callback in self._event_callbacks:
-            try:
-                await callback(event_type, event_data)
-            except Exception:
-                _LOGGER.exception("Error in event callback")
-
-    def register_event_callback(self, callback: callable) -> callable:
-        """Register a callback for WebSocket events."""
-        self._event_callbacks.append(callback)
-
-        def remove():
-            self._event_callbacks.remove(callback)
-
-        return remove
+        # Trigger immediate data refresh on alerts
+        await self.async_request_refresh()
 
     # API Methods
 
@@ -1939,6 +1844,18 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ) as response:
             response.raise_for_status()
             return await response.json()
+```
+
+In `async_setup_entry`, start MQTT subscription:
+
+```python
+await coordinator.async_start_mqtt()
+```
+
+In `async_unload_entry`, call:
+
+```python
+await coordinator.async_stop_mqtt()
 ```
 
 ### 4.6 Entity Platforms
@@ -2339,7 +2256,7 @@ test_camera:
 - [ ] Config flow connects to HomeSec and discovers cameras
 - [ ] All entity platforms create entities correctly
 - [ ] DataUpdateCoordinator fetches data at correct intervals
-- [ ] WebSocket connection provides real-time updates
+- [ ] MQTT subscription triggers refresh on alerts
 - [ ] Services work correctly (add/remove camera, set policy, test)
 - [ ] Options flow allows reconfiguration
 - [ ] Diagnostics provide useful debug information
@@ -2354,96 +2271,7 @@ test_camera:
 
 **Estimated Effort:** 5-7 days
 
-### 5.1 Camera Entity with Live Stream
-
-**File:** `custom_components/homesec/camera.py`
-
-```python
-"""Camera platform for HomeSec integration."""
-
-from __future__ import annotations
-
-from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
-from .const import DOMAIN
-from .coordinator import HomesecCoordinator
-from .entity import HomesecEntity
-
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up HomeSec cameras."""
-    coordinator: HomesecCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    entities = [
-        HomesecCameraEntity(coordinator, camera["name"])
-        for camera in coordinator.data.get("cameras", [])
-    ]
-
-    async_add_entities(entities)
-
-
-class HomesecCameraEntity(HomesecEntity, Camera):
-    """Representation of a HomeSec camera."""
-
-    _attr_supported_features = CameraEntityFeature.STREAM
-
-    def __init__(
-        self,
-        coordinator: HomesecCoordinator,
-        camera_name: str,
-    ) -> None:
-        """Initialize the camera."""
-        HomesecEntity.__init__(self, coordinator, camera_name)
-        Camera.__init__(self)
-        self._attr_unique_id = f"{camera_name}_camera"
-        self._attr_name = None  # Use device name
-
-    async def stream_source(self) -> str | None:
-        """Return the source of the stream."""
-        camera = self._get_camera_data()
-        if not camera:
-            return None
-
-        # Get RTSP URL from camera config
-        config = camera.get("config", {})
-        rtsp_url = config.get("rtsp_url")
-
-        if rtsp_url:
-            return rtsp_url
-
-        # Fallback to HomeSec RTSP proxy if available
-        return f"rtsp://{self.coordinator.host}:8554/{self._camera_name}"
-
-    async def async_camera_image(
-        self, width: int | None = None, height: int | None = None
-    ) -> bytes | None:
-        """Return a still image from the camera."""
-        camera = self._get_camera_data()
-        if not camera:
-            return None
-
-        # Request snapshot from HomeSec API
-        try:
-            async with self.coordinator._session.get(
-                f"{self.coordinator.base_url}/cameras/{self._camera_name}/snapshot",
-                headers=self.coordinator._headers,
-            ) as response:
-                if response.status == 200:
-                    return await response.read()
-        except Exception:
-            pass
-
-        return None
-```
-
-### 5.2 Custom Lovelace Card (Optional)
+### 5.1 Custom Lovelace Card (Optional)
 
 **File:** `custom_components/homesec/www/homesec-camera-card.js`
 
@@ -2532,13 +2360,12 @@ class HomesecCameraCard extends HTMLElement {
 customElements.define("homesec-camera-card", HomesecCameraCard);
 ```
 
-### 5.3 Event Timeline Panel (Optional)
+### 5.2 Event Timeline Panel (Optional)
 
 Create a custom panel for viewing event history with timeline visualization.
 
-### 5.4 Acceptance Criteria
+### 5.3 Acceptance Criteria
 
-- [ ] Camera entities show live streams
 - [ ] Snapshot images work
 - [ ] Custom Lovelace card displays detection overlays
 - [ ] Event timeline shows historical data
@@ -2547,7 +2374,8 @@ Create a custom panel for viewing event history with timeline visualization.
 
 ## Testing Strategy
 
-All new tests must include Given/When/Then comments (per `TESTING.md`).
+All new tests must include Given/When/Then comments (per `TESTING.md`). Prefer behavioral
+style tests that assert observable outcomes, not internal state.
 
 ### Unit Tests
 
@@ -2580,8 +2408,9 @@ tests/
 
 2. **API Tests:**
    - Full CRUD cycle for cameras
-   - WebSocket event delivery
+   - MQTT event topic delivery triggers HA refresh
    - Authentication flows
+   - MQTT broker unreachable does not stall clip processing
 
 3. **Add-on Tests:**
    - Installation on HA OS
@@ -2595,7 +2424,7 @@ tests/
 - [ ] Add/remove cameras
 - [ ] Verify entities update on alerts
 - [ ] Test automations with HomeSec triggers
-- [ ] Verify camera streams in dashboard
+- [ ] Verify snapshots and links (if enabled) in dashboard
 
 ---
 
@@ -2606,8 +2435,9 @@ tests/
 1. Export current `config.yaml`
 2. Install HomeSec add-on
 3. Copy config to `/config/homesec/config.yaml`
-4. Update database URL if using external Postgres
-5. Start add-on
+4. Create `/data/overrides.yaml` for HA-managed config
+5. Update database URL if using external Postgres
+6. Start add-on
 
 ### From MQTT-only to Full Integration
 
@@ -2632,7 +2462,9 @@ tests/
 ### Phase 2: REST API
 - `src/homesec/api/` - New package (server.py, routes/*, dependencies.py)
 - `src/homesec/config/manager.py` - Config persistence + restart signaling
-- `src/homesec/models/config.py` - Add APIConfig
+- `src/homesec/models/config.py` - Add FastAPIServerConfig
+- `src/homesec/config/loader.py` - Support multiple YAML files + merge semantics
+- `src/homesec/cli.py` - Accept repeated `--config` flags (order matters)
 - `src/homesec/app.py` - Integrate API server
 - `pyproject.toml` - Add fastapi, uvicorn dependencies
 
@@ -2647,7 +2479,6 @@ tests/
 - HACS repository configuration
 
 ### Phase 5: Advanced
-- `custom_components/homesec/camera.py` - Camera platform
 - `custom_components/homesec/www/` - Lovelace cards
 
 ---
