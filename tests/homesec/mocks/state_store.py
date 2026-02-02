@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime
 
 from homesec.models.clip import ClipStateData
+from homesec.models.enums import ClipStatus
 
 
 class MockStateStore:
@@ -55,6 +56,72 @@ class MockStateStore:
             raise RuntimeError("Simulated state store get failure")
 
         return self.states.get(clip_id)
+
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        """Retrieve clip state by ID (mock implementation)."""
+        return await self.get(clip_id)
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]:
+        items = list(self.states.values())
+
+        if camera is not None:
+            items = [item for item in items if item.camera_name == camera]
+        if status is not None:
+            items = [item for item in items if str(item.status) == status.value]
+        if alerted is True:
+            items = [item for item in items if item.alert_decision and item.alert_decision.notify]
+        elif alerted is False:
+            items = [
+                item for item in items if not (item.alert_decision and item.alert_decision.notify)
+            ]
+        if risk_level is not None:
+            items = [
+                item
+                for item in items
+                if item.analysis_result and str(item.analysis_result.risk_level) == risk_level
+            ]
+        if activity_type is not None:
+            items = [
+                item
+                for item in items
+                if item.analysis_result and item.analysis_result.activity_type == activity_type
+            ]
+        if since is not None:
+            items = [item for item in items if item.created_at and item.created_at >= since]
+        if until is not None:
+            items = [item for item in items if item.created_at and item.created_at <= until]
+
+        total = len(items)
+        sliced = items[int(offset) : int(offset) + int(limit)]
+        return (sliced, total)
+
+    async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
+        state = self.states.get(clip_id)
+        if state is None:
+            raise ValueError(f"Clip not found: {clip_id}")
+        state.status = ClipStatus.DELETED
+        self.states[clip_id] = state
+        return state
+
+    async def count_clips_since(self, since: datetime) -> int:
+        _ = since
+        return len(self.states)
+
+    async def count_alerts_since(self, since: datetime) -> int:
+        _ = since
+        return 0
 
     async def list_candidate_clips_for_cleanup(
         self,

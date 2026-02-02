@@ -19,6 +19,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -28,7 +29,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from homesec.interfaces import EventStore, StateStore
 from homesec.models.clip import ClipStateData
-from homesec.models.enums import EventType
+from homesec.models.enums import ClipStatus, EventType
 from homesec.models.events import (
     AlertDecisionMadeEvent,
     ClipDeletedEvent,
@@ -212,6 +213,10 @@ class PostgresStateStore(StateStore):
 
         Graceful degradation: returns None if DB unavailable or error occurs.
         """
+        return await self.get_clip(clip_id)
+
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        """Get clip state by ID."""
         if self._engine is None:
             logger.warning("StateStore not initialized, returning None for %s", clip_id)
             return None
@@ -219,14 +224,17 @@ class PostgresStateStore(StateStore):
         try:
             async with self._engine.connect() as conn:
                 result = await conn.execute(
-                    select(ClipState.data).where(ClipState.clip_id == clip_id)
+                    select(ClipState.data, ClipState.created_at).where(ClipState.clip_id == clip_id)
                 )
-                raw = result.scalar_one_or_none()
-            if raw is None:
+                row = result.one_or_none()
+
+            if row is None:
                 return None
 
-            # Parse JSON and validate with Pydantic
+            raw, created_at = row
             data_dict = self._parse_state_data(raw)
+            data_dict["clip_id"] = clip_id
+            data_dict["created_at"] = created_at
             return ClipStateData.model_validate(data_dict)
         except Exception as e:
             logger.error(
@@ -236,6 +244,144 @@ class PostgresStateStore(StateStore):
                 exc_info=True,
             )
             return None
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]:
+        """List clips with filtering and pagination."""
+        if self._engine is None:
+            logger.warning("StateStore not initialized, returning empty clip list")
+            return ([], 0)
+
+        status_expr = func.jsonb_extract_path_text(ClipState.data, "status")
+        camera_expr = func.jsonb_extract_path_text(ClipState.data, "camera_name")
+        alerted_expr = func.jsonb_extract_path_text(ClipState.data, "alert_decision", "notify")
+        risk_expr = func.jsonb_extract_path_text(ClipState.data, "analysis_result", "risk_level")
+        activity_expr = func.jsonb_extract_path_text(
+            ClipState.data, "analysis_result", "activity_type"
+        )
+
+        conditions = []
+        if camera is not None:
+            conditions.append(camera_expr == camera)
+        if status is not None:
+            conditions.append(status_expr == status.value)
+        if alerted is True:
+            conditions.append(alerted_expr == "true")
+        elif alerted is False:
+            conditions.append(or_(alerted_expr == "false", alerted_expr.is_(None)))
+        if risk_level is not None:
+            conditions.append(risk_expr == risk_level.lower())
+        if activity_type is not None:
+            conditions.append(activity_expr == activity_type)
+        if since is not None:
+            conditions.append(ClipState.created_at >= since)
+        if until is not None:
+            conditions.append(ClipState.created_at <= until)
+
+        where_clause = and_(*conditions) if conditions else None
+
+        query = select(ClipState.clip_id, ClipState.data, ClipState.created_at)
+        if where_clause is not None:
+            query = query.where(where_clause)
+        query = query.order_by(ClipState.created_at.desc(), ClipState.clip_id.desc())
+        query = query.offset(int(offset)).limit(int(limit))
+
+        count_query = select(func.count()).select_from(ClipState)
+        if where_clause is not None:
+            count_query = count_query.where(where_clause)
+
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(query)
+                rows = result.all()
+                count_result = await conn.execute(count_query)
+                total = int(count_result.scalar() or 0)
+        except Exception as e:
+            logger.error("Failed to list clips: %s", e, exc_info=True)
+            return ([], 0)
+
+        items: list[ClipStateData] = []
+        for clip_id, raw, created_at in rows:
+            try:
+                data_dict = self._parse_state_data(raw)
+                data_dict["clip_id"] = clip_id
+                data_dict["created_at"] = created_at
+                items.append(ClipStateData.model_validate(data_dict))
+            except Exception as exc:
+                logger.warning("Failed parsing clip state %s: %s", clip_id, exc, exc_info=True)
+
+        return (items, total)
+
+    async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
+        """Mark a clip as deleted."""
+        state = await self.get_clip(clip_id)
+        if state is None:
+            raise ValueError(f"Clip not found: {clip_id}")
+
+        state.status = ClipStatus.DELETED
+        state.clip_id = clip_id
+
+        if self._engine is None:
+            raise RuntimeError("StateStore not initialized")
+
+        payload = state.model_dump(mode="json")
+        stmt = (
+            update(ClipState)
+            .where(ClipState.clip_id == clip_id)
+            .values(data=payload, updated_at=func.now())
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
+
+        return state
+
+    async def count_clips_since(self, since: datetime) -> int:
+        """Count clips created since the given timestamp."""
+        if self._engine is None:
+            return 0
+
+        query = select(func.count()).select_from(ClipState).where(ClipState.created_at >= since)
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(query)
+                return int(result.scalar() or 0)
+        except Exception as e:
+            logger.warning("Failed to count clips: %s", e, exc_info=True)
+            return 0
+
+    async def count_alerts_since(self, since: datetime) -> int:
+        """Count alert events (notification_sent) since the given timestamp."""
+        if self._engine is None:
+            return 0
+
+        query = (
+            select(func.count())
+            .select_from(ClipEvent)
+            .where(
+                and_(
+                    ClipEvent.event_type == EventType.NOTIFICATION_SENT,
+                    ClipEvent.timestamp >= since,
+                )
+            )
+        )
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(query)
+                return int(result.scalar() or 0)
+        except Exception as e:
+            logger.warning("Failed to count alerts: %s", e, exc_info=True)
+            return 0
 
     async def list_candidate_clips_for_cleanup(
         self,
@@ -299,6 +445,8 @@ class PostgresStateStore(StateStore):
         for clip_id, raw, created_at in rows:
             try:
                 data_dict = self._parse_state_data(raw)
+                data_dict["clip_id"] = clip_id
+                data_dict["created_at"] = created_at
                 state = ClipStateData.model_validate(data_dict)
             except Exception as exc:
                 logger.warning(
@@ -503,6 +651,44 @@ class NoopStateStore(StateStore):
 
     async def get(self, clip_id: str) -> ClipStateData | None:
         return None
+
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        return None
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]:
+        _ = camera
+        _ = status
+        _ = alerted
+        _ = risk_level
+        _ = activity_type
+        _ = since
+        _ = until
+        _ = offset
+        _ = limit
+        return ([], 0)
+
+    async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
+        raise ValueError(f"Clip not found: {clip_id}")
+
+    async def count_clips_since(self, since: datetime) -> int:
+        _ = since
+        return 0
+
+    async def count_alerts_since(self, since: datetime) -> int:
+        _ = since
+        return 0
 
     async def list_candidate_clips_for_cleanup(
         self,
