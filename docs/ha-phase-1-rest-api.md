@@ -305,17 +305,16 @@ class ClipRepository:
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/config` | Config summary |
 | GET | `/api/v1/cameras` | List cameras |
-| GET | `/api/v1/cameras/{name}` | Get camera |
+| GET | `/api/v1/cameras/{name}` | Get camera (config + runtime status) |
 | POST | `/api/v1/cameras` | Create camera |
 | PUT | `/api/v1/cameras/{name}` | Update camera |
 | DELETE | `/api/v1/cameras/{name}` | Delete camera |
-| GET | `/api/v1/cameras/{name}/status` | Camera status (includes health) |
 | GET | `/api/v1/clips` | List clips (filterable: camera, status, alerted, risk_level, activity_type) |
 | GET | `/api/v1/clips/{id}` | Get clip |
 | DELETE | `/api/v1/clips/{id}` | Delete clip |
 | GET | `/api/v1/stats` | System statistics |
 | POST | `/api/v1/system/restart` | Request graceful restart |
-| GET | `/api/v1/system/health/detailed` | Detailed health with error codes |
+| GET | `/api/v1/diagnostics` | Detailed health with error codes |
 
 ### Request/Response Models
 

@@ -113,7 +113,7 @@ homesec/
 | Event | Trigger | Data |
 |-------|---------|------|
 | `homesec_alert` | Detection alert | camera, clip_id, activity_type, risk_level, summary, view_url |
-**Note**: Camera health is **not** pushed via events. The HA Integration polls the REST API (`GET /api/v1/cameras/{name}/status`) every 30-60s to get health status. This keeps the HomeSec core simple and stateless.
+**Note**: Camera health is **not** pushed via events. The HA Integration polls the REST API (`GET /api/v1/cameras/{name}`) every 30-60s to get health status. This keeps the HomeSec core simple and stateless.
 
 ### Future Features (v2+)
 
@@ -433,7 +433,6 @@ GET  /api/v1/cameras                   # List cameras
 POST /api/v1/cameras                   # Add camera
 PUT  /api/v1/cameras/{name}            # Update camera
 DELETE /api/v1/cameras/{name}          # Remove camera
-GET  /api/v1/cameras/{name}/status     # Camera status
 GET  /api/v1/clips                     # List recent clips
 GET  /api/v1/clips/{id}                # Get clip details
 POST /api/v1/system/restart            # Request graceful restart
