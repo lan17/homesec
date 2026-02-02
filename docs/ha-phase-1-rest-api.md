@@ -332,6 +332,67 @@ class HealthResponse(BaseModel):
 > This allows the add-on watchdog to avoid restart loops when only the DB is down.
 > Use `/diagnostics` for detailed component status.
 
+**Stats Response Model**
+```python
+class StatsResponse(BaseModel):
+    clips_today: int
+    alerts_today: int
+    cameras_total: int
+    cameras_online: int
+    uptime_seconds: float  # Time since Application started
+```
+
+**Config Response Model**
+```python
+class ConfigResponse(BaseModel):
+    """Returns the full config (secrets shown as env var names, not values)."""
+    config: dict  # The full Config model as dict
+```
+
+**Diagnostics Response Model**
+```python
+class ComponentStatus(BaseModel):
+    status: str                    # "ok", "error"
+    error: str | None = None       # Error message if failed
+    latency_ms: float | None = None
+
+class CameraStatus(BaseModel):
+    healthy: bool
+    enabled: bool
+    last_heartbeat: float | None
+    frames_processed: int
+    errors_recent: int             # Errors in last hour
+
+class DiagnosticsResponse(BaseModel):
+    status: str                    # "healthy", "degraded", "unhealthy"
+    uptime_seconds: float
+    postgres: ComponentStatus
+    storage: ComponentStatus
+    cameras: dict[str, CameraStatus]
+```
+
+**Clip Response Models**
+```python
+class ClipResponse(BaseModel):
+    id: str
+    camera: str
+    status: str                    # "recording", "uploading", "complete", "failed", "deleted"
+    created_at: datetime
+    activity_type: str | None = None
+    risk_level: str | None = None
+    summary: str | None = None
+    detected_objects: list[str] = []
+    storage_uri: str | None = None
+    view_url: str | None = None
+    alerted: bool = False
+
+class ClipListResponse(BaseModel):
+    clips: list[ClipResponse]
+    total: int                     # Total matching (for pagination)
+    page: int
+    page_size: int
+```
+
 ### Constraints
 
 - All config-mutating endpoints return `restart_required: True`
@@ -376,6 +437,62 @@ No CLI changes needed. The existing `--config` flag already accepts a single con
 
 ---
 
+## 1.6 Implementation Notes
+
+### Camera Health Source
+
+Camera health (`CameraResponse.healthy`, `last_heartbeat`) comes from existing infrastructure:
+- `ClipSource.is_healthy()` and `ClipSource.last_heartbeat()` already exist
+- `Application` holds references to sources
+- API routes access sources via `Application` to build responses
+
+### Replacing HealthServer
+
+The existing aiohttp-based `HealthServer` (`src/homesec/health/server.py`) is replaced by FastAPI.
+Remove `HealthServer` and its config; FastAPI's `/health` endpoint provides the same functionality.
+
+### Restart Mechanism
+
+`POST /api/v1/system/restart` sends SIGTERM to self:
+
+```python
+import os, signal
+
+@router.post("/api/v1/system/restart")
+async def restart():
+    os.kill(os.getpid(), signal.SIGTERM)
+    return {"message": "Shutdown initiated"}
+```
+
+Existing signal handler in `app.py` handles graceful shutdown. Supervisor/add-on handles restart.
+
+### API Server Lifecycle
+
+In `Application.run()`:
+
+```python
+async def run(self):
+    # ... initialize components ...
+
+    # Start API server (replaces old HealthServer)
+    if self.config.server.enabled:
+        self._api_server = APIServer(create_app(self), self.config.server.host, self.config.server.port)
+        await self._api_server.start()
+
+    # Track start time for uptime
+    self._start_time = time.time()
+
+    # Wait for shutdown signal
+    await self._shutdown_event.wait()
+
+    # Shutdown (stop API first, then sources)
+    if self._api_server:
+        await self._api_server.stop()
+    # ... stop other components ...
+```
+
+---
+
 ## File Changes Summary
 
 | File | Change |
@@ -385,10 +502,11 @@ No CLI changes needed. The existing `--config` flag already accepts a single con
 | `src/homesec/api/dependencies.py` | Request dependencies |
 | `src/homesec/api/routes/*.py` | All route modules |
 | `src/homesec/config/manager.py` | Config persistence (single file with backup) |
-| `src/homesec/models/config.py` | Add `FastAPIServerConfig` |
+| `src/homesec/models/config.py` | Add `FastAPIServerConfig`, remove `HealthConfig` |
 | `src/homesec/repository/clip_repository.py` | Add read/list/count methods |
-| `src/homesec/app.py` | Integrate API server |
-| `pyproject.toml` | Add fastapi, uvicorn dependencies |
+| `src/homesec/app.py` | Integrate API server, remove HealthServer usage |
+| `src/homesec/health/` | Remove (replaced by FastAPI) |
+| `pyproject.toml` | Add fastapi, uvicorn; remove aiohttp if unused elsewhere |
 
 ---
 
