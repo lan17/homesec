@@ -466,22 +466,23 @@ for entry in self._notifier_entries:
 
 ```yaml
 notifiers:
-  - type: mqtt
-    host: localhost
-    port: 1883
-    auth:
-      username_env: MQTT_USERNAME
-      password_env: MQTT_PASSWORD
-    topic_template: "homecam/alerts/{camera_name}"
-    qos: 1
-    retain: false
-    discovery:
-      enabled: true
-      prefix: homeassistant
-      node_id: homesec
-      device_name: HomeSec
-      subscribe_to_birth: true
-      birth_topic: homeassistant/status
+  - backend: mqtt
+    config:
+      host: localhost
+      port: 1883
+      auth:
+        username_env: MQTT_USERNAME
+        password_env: MQTT_PASSWORD
+      topic_template: "homecam/alerts/{camera_name}"
+      qos: 1
+      retain: false
+      discovery:
+        enabled: true
+        prefix: homeassistant
+        node_id: homesec
+        device_name: HomeSec
+        subscribe_to_birth: true
+        birth_topic: homeassistant/status
 ```
 
 ### 1.6 Testing
@@ -747,26 +748,24 @@ router = APIRouter(prefix="/cameras")
 class CameraCreate(BaseModel):
     """Request model for creating a camera."""
     name: str
-    type: str  # rtsp, ftp, local_folder
-    config: dict  # Type-specific configuration
+    source_backend: str  # rtsp, ftp, local_folder
+    source_config: dict  # Backend-specific configuration
     config_version: int
 
 
 class CameraUpdate(BaseModel):
     """Request model for updating a camera."""
-    config: dict | None = None
-    alert_policy: dict | None = None
+    source_config: dict | None = None
     config_version: int
 
 
 class CameraResponse(BaseModel):
     """Response model for camera."""
     name: str
-    type: str
+    source_backend: str
     healthy: bool
     last_heartbeat: float | None
-    config: dict
-    alert_policy: dict | None
+    source_config: dict
 
 
 class CameraListResponse(BaseModel):
@@ -791,11 +790,10 @@ async def list_cameras(app=Depends(get_homesec_app)):
         source = app.get_source(camera.name)
         cameras.append(CameraResponse(
             name=camera.name,
-            type=camera.source.type,
+            source_backend=camera.source.backend,
             healthy=source.is_healthy() if source else False,
             last_heartbeat=source.last_heartbeat() if source else None,
-            config=camera.source.config if isinstance(camera.source.config, dict) else camera.source.config.model_dump(),
-            alert_policy=app.get_camera_alert_policy(camera.name),
+            source_config=camera.source.config if isinstance(camera.source.config, dict) else camera.source.config.model_dump(),
         ))
     return CameraListResponse(cameras=cameras, total=len(cameras))
 
@@ -813,11 +811,10 @@ async def get_camera(camera_name: str, app=Depends(get_homesec_app)):
     source = app.get_source(camera_name)
     return CameraResponse(
         name=camera.name,
-        type=camera.source.type,
+        source_backend=camera.source.backend,
         healthy=source.is_healthy() if source else False,
         last_heartbeat=source.last_heartbeat() if source else None,
-        config=camera.source.config if isinstance(camera.source.config, dict) else camera.source.config.model_dump(),
-        alert_policy=app.get_camera_alert_policy(camera_name),
+        source_config=camera.source.config if isinstance(camera.source.config, dict) else camera.source.config.model_dump(),
     )
 
 
@@ -833,8 +830,8 @@ async def create_camera(camera: CameraCreate, app=Depends(get_homesec_app)):
     try:
         result = await app.config_store.add_camera(
             name=camera.name,
-            source_type=camera.type,
-            config=camera.config,
+            source_backend=camera.source_backend,
+            source_config=camera.source_config,
             config_version=camera.config_version,
         )
         return ConfigChangeResponse(
@@ -842,11 +839,10 @@ async def create_camera(camera: CameraCreate, app=Depends(get_homesec_app)):
             config_version=result.config_version,
             camera=CameraResponse(
                 name=camera.name,
-                type=camera.type,
+                source_backend=camera.source_backend,
                 healthy=False,
                 last_heartbeat=None,
-                config=camera.config,
-                alert_policy=None,
+                source_config=camera.source_config,
             ),
         )
     except ValueError as e:
@@ -862,7 +858,7 @@ async def update_camera(
     update: CameraUpdate,
     app=Depends(get_homesec_app),
 ):
-    """Update a camera's configuration."""
+    """Update a camera's source configuration."""
     source = app.get_source(camera_name)
     if not source:
         raise HTTPException(
@@ -872,8 +868,7 @@ async def update_camera(
 
     result = await app.config_store.update_camera(
         camera_name=camera_name,
-        config=update.config,
-        alert_policy=update.alert_policy,
+        source_config=update.source_config,
         config_version=update.config_version,
     )
 
@@ -1487,11 +1482,12 @@ class HomeAssistantNotifier(Notifier):
 ```yaml
 notifiers:
   # Home Assistant notifier (recommended for HA users)
-  - type: home_assistant
-    # When running as HA add-on, no configuration needed (uses SUPERVISOR_TOKEN)
-    # For standalone mode, provide HA URL and token:
-    # url_env: HA_URL           # http://homeassistant.local:8123
-    # token_env: HA_TOKEN       # Long-lived access token from HA
+  - backend: home_assistant
+    config:
+      # When running as HA add-on, no configuration needed (uses SUPERVISOR_TOKEN)
+      # For standalone mode, provide HA URL and token:
+      # url_env: HA_URL           # http://homeassistant.local:8123
+      # token_env: HA_TOKEN       # Long-lived access token from HA
 ```
 
 ### 2.5.4 Testing
@@ -1883,16 +1879,17 @@ version: 1
 cameras: []
 
 storage:
-  type: ${STORAGE_TYPE}
-  path: ${STORAGE_PATH}
+  backend: ${STORAGE_TYPE}
+  config:
+    path: ${STORAGE_PATH}
 
 state_store:
-  type: postgres
   dsn_env: DATABASE_URL
 
 notifiers:
   # Primary: Push events to HA via Events API (uses SUPERVISOR_TOKEN automatically)
-  - type: home_assistant
+  - backend: home_assistant
+    config: {}
 
 server:
   enabled: true
@@ -1906,14 +1903,15 @@ EOF
         cat >> "${CONFIG_PATH}" << EOF
 
   # Optional: MQTT Discovery for users who prefer MQTT entities
-  - type: mqtt
-    host_env: MQTT_HOST
-    port_env: MQTT_PORT
-    auth:
-      username_env: MQTT_USER
-      password_env: MQTT_PASS
-    discovery:
-      enabled: true
+  - backend: mqtt
+    config:
+      host_env: MQTT_HOST
+      port_env: MQTT_PORT
+      auth:
+        username_env: MQTT_USER
+        password_env: MQTT_PASS
+      discovery:
+        enabled: true
 EOF
     fi
 fi
@@ -2553,14 +2551,14 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_add_camera(
         self,
         name: str,
-        camera_type: str,
-        config: dict,
+        source_backend: str,
+        source_config: dict,
     ) -> dict:
         """Add a new camera. Uses optimistic concurrency with config_version."""
         payload = {
             "name": name,
-            "type": camera_type,
-            "config": config,
+            "source_backend": source_backend,
+            "source_config": source_config,
             "config_version": self._config_version,
         }
         async with self._session.post(
@@ -2578,15 +2576,12 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_update_camera(
         self,
         camera_name: str,
-        config: dict | None = None,
-        alert_policy: dict | None = None,
+        source_config: dict | None = None,
     ) -> dict:
-        """Update camera configuration. Uses optimistic concurrency."""
+        """Update camera source configuration. Uses optimistic concurrency."""
         payload = {"config_version": self._config_version}
-        if config is not None:
-            payload["config"] = config
-        if alert_policy is not None:
-            payload["alert_policy"] = alert_policy
+        if source_config is not None:
+            payload["source_config"] = source_config
 
         async with self._session.put(
             f"{self.base_url}/cameras/{camera_name}",
@@ -2617,7 +2612,7 @@ class HomesecCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Enable or disable a camera (stops RTSP connection when disabled)."""
         return await self.async_update_camera(
             camera_name,
-            config={"enabled": enabled},
+            source_config={"enabled": enabled},
         )
 
 
@@ -3102,9 +3097,9 @@ add_camera:
       example: "front_door"
       selector:
         text:
-    type:
-      name: Type
-      description: Camera source type
+    source_backend:
+      name: Source Backend
+      description: Camera source backend type
       required: true
       example: "rtsp"
       selector:
@@ -3115,7 +3110,7 @@ add_camera:
             - "local_folder"
     rtsp_url:
       name: RTSP URL
-      description: RTSP stream URL (for RTSP type)
+      description: RTSP stream URL (for rtsp backend)
       example: "rtsp://192.168.1.100:554/stream"
       selector:
         text:
@@ -3129,7 +3124,7 @@ remove_camera:
 
 set_alert_policy:
   name: Set Alert Policy
-  description: Configure alert policy for a camera
+  description: Configure alert policy override for a camera (stored in alert_policy.config.overrides)
   target:
     device:
       integration: homesec
@@ -3141,22 +3136,21 @@ set_alert_policy:
       selector:
         select:
           options:
-            - "LOW"
-            - "MEDIUM"
-            - "HIGH"
-            - "CRITICAL"
-    activity_types:
+            - "low"
+            - "medium"
+            - "high"
+            - "critical"
+    notify_on_activity_types:
       name: Activity Types
       description: Activity types that trigger alerts
       selector:
         select:
           multiple: true
           options:
-            - "person"
-            - "vehicle"
-            - "animal"
-            - "package"
+            - "person_at_door"
+            - "delivery"
             - "suspicious"
+            - "animal"
 
 test_camera:
   name: Test Camera

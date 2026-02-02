@@ -220,9 +220,10 @@ For users running HomeSec outside HA (separate server, NAS, etc.).
 │ User adds to config.yaml:                                   │
 │                                                              │
 │   notifiers:                                                │
-│     - type: home_assistant                                  │
-│       url_env: HA_URL      # http://homeassistant:8123     │
-│       token_env: HA_TOKEN  # the long-lived token          │
+│     - backend: home_assistant                               │
+│       config:                                               │
+│         url_env: HA_URL    # http://homeassistant:8123     │
+│         token_env: HA_TOKEN # the long-lived token         │
 │                                                              │
 │ Sets environment variables and restarts HomeSec             │
 └─────────────────────────────────────────────────────────────┘
