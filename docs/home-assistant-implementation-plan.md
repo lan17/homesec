@@ -41,6 +41,7 @@ All code lives in the main `homesec` monorepo:
 
 ```
 homesec/
+├── repository.json                     # HA Add-on repo manifest (must be at root)
 ├── src/homesec/                        # Main Python package (PyPI)
 │   ├── api/                            # NEW: REST API
 │   │   ├── __init__.py
@@ -88,7 +89,6 @@ homesec/
 │   │               └── en.json
 │   │
 │   └── addon/                          # Add-on (HA Supervisor)
-│       ├── repository.json
 │       ├── README.md
 │       └── homesec/
 │           ├── config.yaml
@@ -132,7 +132,7 @@ homesec/
 **Distribution:**
 - **PyPI**: `src/homesec/` published as `homesec` package
 - **HACS**: Users point to `homeassistant/integration/`
-- **Add-on Store**: Users add repo URL `https://github.com/lan17/homesec/homeassistant/addon`
+- **Add-on Store**: Users add repo URL `https://github.com/lan17/homesec` (repository.json at repo root points to `homeassistant/addon/homesec/`)
 
 ---
 
@@ -1584,21 +1584,27 @@ class TestHomeAssistantNotifier:
 
 ### 3.1 Add-on Repository Structure
 
-**New Repository:** `homesec-ha-addons`
+**Location:** `homeassistant/addon/` in the main homesec monorepo.
+
+Users add the add-on via: `https://github.com/lan17/homesec`
+
+Note: `repository.json` must be at the repo root (not in `homeassistant/addon/`) for Home Assistant to discover it. The file points to `homeassistant/addon/homesec/` as the add-on location.
 
 ```
-homesec-ha-addons/
+homeassistant/addon/
 ├── README.md
-├── repository.json
 └── homesec/
     ├── config.yaml           # Add-on manifest
     ├── Dockerfile            # Container build
     ├── build.yaml            # Build configuration
-    ├── run.sh                # Startup script
     ├── DOCS.md               # Documentation
     ├── CHANGELOG.md          # Version history
     ├── icon.png              # Add-on icon (512x512)
     ├── logo.png              # Add-on logo (256x256)
+    ├── rootfs/               # s6-overlay services
+    │   └── etc/
+    │       ├── s6-overlay/
+    │       └── nginx/
     └── translations/
         └── en.yaml           # UI strings
 ```
@@ -1660,10 +1666,9 @@ schema:
   # VLM
   vlm_enabled: bool?
   openai_api_key: password?
-  # MQTT Discovery (optional - primary path uses HA Events API)
-  mqtt_discovery: bool?
+  # VLM model
   openai_model: str?
-  # MQTT Discovery
+  # MQTT Discovery (optional - primary path uses HA Events API)
   mqtt_discovery: bool?
 
 # Default options
@@ -1954,13 +1959,16 @@ location / {
 
 ### 3.9 Acceptance Criteria
 
-- [ ] Add-on installs successfully from repository
-- [ ] Auto-configures MQTT from Home Assistant
+- [ ] Add-on installs successfully from monorepo URL
+- [ ] Bundled PostgreSQL starts and initializes correctly
+- [ ] HomeSec waits for PostgreSQL before starting
+- [ ] SUPERVISOR_TOKEN enables zero-config HA Events API
 - [ ] Ingress provides access to API/UI
 - [ ] Configuration options work correctly
 - [ ] Watchdog restarts on failure
 - [ ] Logs are accessible in HA
 - [ ] Works on both amd64 and aarch64
+- [ ] Optional: MQTT Discovery works if user enables it
 
 ---
 
@@ -1972,10 +1980,10 @@ location / {
 
 ### 4.1 Integration Structure
 
-**Directory:** `custom_components/homesec/`
+**Directory:** `homeassistant/integration/custom_components/homesec/`
 
 ```
-custom_components/homesec/
+homeassistant/integration/custom_components/homesec/
 ├── __init__.py           # Setup and entry points
 ├── manifest.json         # Integration metadata
 ├── const.py              # Constants
@@ -2361,10 +2369,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import (
@@ -3253,10 +3262,14 @@ test_camera:
 
 ### 4.11 Acceptance Criteria
 
-- [ ] Config flow connects to HomeSec and discovers cameras
+- [ ] Config flow auto-detects add-on and connects to HomeSec
+- [ ] Config flow falls back to manual setup for standalone users
 - [ ] All entity platforms create entities correctly
 - [ ] DataUpdateCoordinator fetches data at correct intervals
-- [ ] MQTT subscription triggers refresh on alerts
+- [ ] HA Events subscription triggers refresh on alerts (homesec_alert, homesec_camera_health)
+- [ ] Motion sensor auto-resets after configurable timeout (default 30s)
+- [ ] Camera switch enables/disables RTSP connection
+- [ ] Config version tracking prevents conflicts (409 on stale version)
 - [ ] Services work correctly (add/remove camera, set policy, test)
 - [ ] Options flow allows reconfiguration
 - [ ] Diagnostics provide useful debug information
@@ -3491,7 +3504,7 @@ If user enables MQTT Discovery:
 - `homeassistant/integration/custom_components/homesec/translations/en.json` - Strings
 
 ### Phase 3: Add-on (in `homeassistant/addon/`)
-- `homeassistant/addon/repository.json` - Add-on repository manifest
+- `repository.json` - Add-on repository manifest (at repo root, points to `homeassistant/addon/homesec/`)
 - `homeassistant/addon/homesec/config.yaml` - Add-on manifest (homeassistant_api: true)
 - `homeassistant/addon/homesec/Dockerfile` - Container build with PostgreSQL 16
 - `homeassistant/addon/homesec/rootfs/` - s6-overlay services (postgres-init, postgres, homesec)

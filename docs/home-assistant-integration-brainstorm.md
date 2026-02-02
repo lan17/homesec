@@ -45,6 +45,7 @@ All Home Assistant code lives in the main `homesec` monorepo under `homeassistan
 
 ```
 homesec/
+├── repository.json                 # HA Add-on repo manifest (must be at root)
 ├── src/homesec/                    # Main Python package (PyPI)
 │   ├── api/                        # REST API for HA integration
 │   ├── config/                     # Config management
@@ -57,7 +58,6 @@ homesec/
 │   │   └── custom_components/homesec/
 │   │
 │   └── addon/                      # Add-on (HA Supervisor)
-│       ├── repository.json
 │       └── homesec/
 │           ├── config.yaml
 │           ├── Dockerfile
@@ -70,7 +70,7 @@ homesec/
 **Distribution:**
 - **PyPI**: `src/homesec/` published as `homesec` package
 - **HACS**: Users point to `homeassistant/integration/`
-- **Add-on Store**: Users add `https://github.com/lan17/homesec/homeassistant/addon`
+- **Add-on Store**: Users add `https://github.com/lan17/homesec` (repository.json at root points to `homeassistant/addon/homesec/`)
 
 ---
 
@@ -467,7 +467,6 @@ Create a Home Assistant add-on in the monorepo:
 
 ```
 homeassistant/addon/
-├── repository.json
 ├── README.md
 └── homesec/
     ├── config.yaml           # Add-on manifest
@@ -485,6 +484,8 @@ homeassistant/addon/
         └── en.yaml
 ```
 
+Note: `repository.json` lives at the repo root (not in `homeassistant/addon/`) for HA to discover it.
+
 **Add-on features:**
 - Zero-config HA integration via `SUPERVISOR_TOKEN` (automatic)
 - Real-time event push to HA without MQTT
@@ -493,7 +494,7 @@ homeassistant/addon/
 - Watchdog for auto-restart
 - Optional MQTT Discovery for users who prefer it
 
-Users add the add-on repo via: `https://github.com/lan17/homesec/homeassistant/addon`
+Users add the add-on repo via: `https://github.com/lan17/homesec`
 
 ### Phase 4: Native Home Assistant Integration
 
