@@ -6,15 +6,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
+from homesec.models.alert import AlertDecision
 from homesec.models.clip import Clip
-from homesec.models.enums import RiskLevel
+from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.events import ClipRecheckedEvent
 from homesec.models.filter import FilterResult
-from homesec.models.vlm import (
-    AnalysisResult,
-    SequenceAnalysis,
-)
+from homesec.models.vlm import AnalysisResult, SequenceAnalysis
 from homesec.repository import ClipRepository
 from homesec.state.postgres import PostgresEventStore, PostgresStateStore
 
@@ -52,6 +51,216 @@ async def test_initialize_clip(postgres_dsn: str, tmp_path: Path, clean_test_db:
     assert events[0].event_type == "clip_recorded"
 
     # Cleanup
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_count_clips_since(postgres_dsn: str, tmp_path: Path, clean_test_db: None) -> None:
+    """count_clips_since should include clips created after the cutoff."""
+    # Given: A repository with two clips created around a cutoff
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    event_store = state_store.create_event_store()
+    repository = ClipRepository(state_store, event_store)
+
+    clip_old = Clip(
+        clip_id="test-clip-old",
+        camera_name="front_door",
+        local_path=tmp_path / "old.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now(),
+        duration_s=1.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip_old)
+    clip_new = Clip(
+        clip_id="test-clip-new",
+        camera_name="front_door",
+        local_path=tmp_path / "new.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now(),
+        duration_s=1.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip_new)
+
+    # Given: Normalize timestamps using database time to avoid clock skew
+    assert state_store._engine is not None
+    async with state_store._engine.begin() as conn:
+        result = await conn.execute(text("SELECT now()"))
+        db_now = result.scalar_one()
+        await conn.execute(
+            text("UPDATE clip_states SET created_at = :created_at WHERE clip_id = :clip_id"),
+            {"created_at": db_now - timedelta(hours=2), "clip_id": clip_old.clip_id},
+        )
+
+    cutoff = db_now - timedelta(hours=1)
+
+    # When: Counting clips since the cutoff
+    count = await repository.count_clips_since(cutoff)
+
+    # Then: Only the newer clip is counted
+    assert count == 1
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_count_alerts_since(postgres_dsn: str, tmp_path: Path, clean_test_db: None) -> None:
+    """count_alerts_since should count notification_sent events."""
+    # Given: A repository with one notification_sent event
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    event_store = state_store.create_event_store()
+    repository = ClipRepository(state_store, event_store)
+
+    clip = Clip(
+        clip_id="test-clip-alert",
+        camera_name="front_door",
+        local_path=tmp_path / "alert.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now(),
+        duration_s=1.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip)
+    await repository.record_notification_sent(
+        clip_id=clip.clip_id,
+        notifier_name="test",
+        dedupe_key=clip.clip_id,
+    )
+
+    # When: Counting alerts since a recent timestamp
+    since = datetime.now() - timedelta(minutes=1)
+    count = await repository.count_alerts_since(since)
+
+    # Then: The alert is counted
+    assert count == 1
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_list_clips_filters(postgres_dsn: str, tmp_path: Path, clean_test_db: None) -> None:
+    """list_clips should apply filters correctly."""
+    # Given: Two clips with different cameras and risk levels
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    event_store = state_store.create_event_store()
+    repository = ClipRepository(state_store, event_store)
+
+    clip_front = Clip(
+        clip_id="test-clip-front",
+        camera_name="front_door",
+        local_path=tmp_path / "front.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now(),
+        duration_s=1.0,
+        source_backend="test",
+    )
+    clip_back = Clip(
+        clip_id="test-clip-back",
+        camera_name="back_door",
+        local_path=tmp_path / "back.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now(),
+        duration_s=1.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip_front)
+    await repository.initialize_clip(clip_back)
+
+    await repository.record_vlm_completed(
+        clip_id=clip_front.clip_id,
+        result=AnalysisResult(
+            risk_level="high",
+            activity_type="suspicious_behavior",
+            summary="Suspicious",
+            analysis=None,
+        ),
+        prompt_tokens=None,
+        completion_tokens=None,
+        duration_ms=10,
+    )
+    await repository.record_vlm_completed(
+        clip_id=clip_back.clip_id,
+        result=AnalysisResult(
+            risk_level="low",
+            activity_type="passerby",
+            summary="Normal",
+            analysis=None,
+        ),
+        prompt_tokens=None,
+        completion_tokens=None,
+        duration_ms=10,
+    )
+
+    await repository.record_alert_decision(
+        clip_id=clip_front.clip_id,
+        decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        detected_classes=["person"],
+        vlm_risk="high",
+    )
+    await repository.record_alert_decision(
+        clip_id=clip_back.clip_id,
+        decision=AlertDecision(notify=False, notify_reason="low risk"),
+        detected_classes=["person"],
+        vlm_risk="low",
+    )
+
+    # When: Listing clips by camera, alert status, and risk level
+    clips_by_camera, total_by_camera = await repository.list_clips(camera="front_door")
+    clips_alerted, total_alerted = await repository.list_clips(alerted=True)
+    clips_high, total_high = await repository.list_clips(risk_level="high")
+
+    # Then: Each filter returns the expected clip
+    assert total_by_camera == 1
+    assert clips_by_camera[0].camera_name == "front_door"
+
+    assert total_alerted == 1
+    assert clips_alerted[0].clip_id == clip_front.clip_id
+
+    assert total_high == 1
+    assert clips_high[0].clip_id == clip_front.clip_id
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_delete_clip_marks_deleted(
+    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+) -> None:
+    """delete_clip should mark clip as deleted."""
+    # Given: A clip with uploaded storage
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    event_store = state_store.create_event_store()
+    repository = ClipRepository(state_store, event_store)
+
+    clip = Clip(
+        clip_id="test-clip-delete",
+        camera_name="front_door",
+        local_path=tmp_path / "delete.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now(),
+        duration_s=1.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip)
+    await repository.record_upload_completed(
+        clip_id=clip.clip_id,
+        storage_uri="dropbox://delete.mp4",
+        view_url=None,
+        duration_ms=10,
+    )
+
+    # When: Deleting the clip
+    state = await repository.delete_clip(clip.clip_id)
+
+    # Then: State is marked deleted
+    assert state.status == ClipStatus.DELETED
+    assert state.storage_uri == "dropbox://delete.mp4"
+
     await state_store.shutdown()
 
 
