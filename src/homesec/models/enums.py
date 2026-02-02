@@ -66,6 +66,14 @@ class ClipStatus(StrEnum):
     DELETED = "deleted"
 
 
+class VLMRunMode(StrEnum):
+    """Policy for when to run VLM analysis."""
+
+    TRIGGER_ONLY = "trigger_only"
+    ALWAYS = "always"
+    NEVER = "never"
+
+
 class RiskLevel(IntEnum):
     """VLM risk assessment levels.
 

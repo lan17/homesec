@@ -18,7 +18,7 @@ cameras:
   # RTSP camera (IP cameras, NVRs)
   - name: front_door
     source:
-      type: rtsp
+      backend: rtsp
       config:
         # RTSP URL from environment variable (set in .env)
         rtsp_url_env: FRONT_DOOR_RTSP_URL
@@ -52,7 +52,7 @@ cameras:
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera
     source:
-      type: ftp
+      backend: ftp
       config:
         host: "0.0.0.0"
         port: 2121
@@ -66,7 +66,7 @@ cameras:
   # Local folder (watch for new files)
   - name: local_camera
     source:
-      type: local_folder
+      backend: local_folder
       config:
         watch_dir: "./recordings"
         poll_interval: 1.0           # Seconds between folder scans
@@ -78,8 +78,8 @@ cameras:
 storage:
   backend: dropbox  # Options: dropbox, local
 
-  # Dropbox storage
-  dropbox:
+  # Backend-specific config
+  config:
     root: "/homecam"
     # Simple token auth (get from Dropbox App Console)
     token_env: DROPBOX_TOKEN
@@ -88,10 +88,6 @@ storage:
     # app_secret_env: DROPBOX_APP_SECRET
     # refresh_token_env: DROPBOX_REFRESH_TOKEN
     web_url_prefix: "https://www.dropbox.com/home"
-
-  # Local storage (alternative to Dropbox)
-  # local:
-  #   root: "./storage"
 
 # =============================================================================
 # State Store - PostgreSQL for clip state tracking
@@ -127,11 +123,11 @@ notifiers:
 # Filter - Object detection to filter clips
 # =============================================================================
 filter:
-  plugin: yolo
-  max_workers: 4  # Parallel detection workers
+  backend: yolo
   config:
     # Model downloads automatically to ./yolo_cache
     # model_path: "yolo11n.pt"  # Default model
+    max_workers: 4  # Parallel detection workers (plugin-specific)
     classes:
       - person
       - car
@@ -150,8 +146,8 @@ filter:
 vlm:
   backend: openai
   trigger_classes: ["person"]  # Only run VLM if these detected
-  max_workers: 2
-  llm:
+  run_mode: trigger_only  # trigger_only | always | never
+  config:
     api_key_env: OPENAI_API_KEY
     model: "gpt-4o"
     # For local/alternative providers:
@@ -175,16 +171,14 @@ alert_policy:
       - delivery
       - suspicious
     notify_on_motion: false   # Alert on any motion (no VLM required)
-
-# Per-camera overrides
-per_camera_alert:
-  front_door:
-    min_risk_level: "low"
-    notify_on_activity_types:
-      - person_at_door
-      - delivery
-      - suspicious
-      - animal
+    overrides:
+      front_door:
+        min_risk_level: "low"
+        notify_on_activity_types:
+          - person_at_door
+          - delivery
+          - suspicious
+          - animal
 
 # =============================================================================
 # Advanced Settings (optional)

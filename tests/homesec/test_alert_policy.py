@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from homesec.models.config import DefaultAlertPolicySettings
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
-from homesec.plugins.alert_policies.default import DefaultAlertPolicy
+from homesec.plugins.alert_policies.default import DefaultAlertPolicy, DefaultAlertPolicySettings
 
 
 def _make_policy(
@@ -19,7 +18,7 @@ def _make_policy(
     )
     # Inject runtime fields
     settings.overrides = {}
-    settings.trigger_classes = {"person"}
+    settings.trigger_classes = ["person"]
     return DefaultAlertPolicy(settings)
 
 

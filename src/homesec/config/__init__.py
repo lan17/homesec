@@ -6,7 +6,12 @@ from homesec.config.loader import (
     load_config_from_dict,
     resolve_env_var,
 )
-from homesec.config.validation import validate_camera_references, validate_plugin_names
+from homesec.config.validation import (
+    validate_camera_references,
+    validate_config,
+    validate_plugin_configs,
+    validate_plugin_names,
+)
 
 __all__ = [
     "ConfigError",
@@ -14,5 +19,7 @@ __all__ = [
     "load_config_from_dict",
     "resolve_env_var",
     "validate_camera_references",
+    "validate_config",
+    "validate_plugin_configs",
     "validate_plugin_names",
 ]

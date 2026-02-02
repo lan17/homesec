@@ -13,8 +13,8 @@ load_dotenv()
 import fire  # type: ignore[import-untyped]
 
 from homesec.app import Application
-from homesec.config import ConfigError, load_config
-from homesec.config.validation import validate_camera_references, validate_plugin_names
+from homesec.config import ConfigError, load_config, validate_config
+from homesec.config.validation import validate_plugin_names
 from homesec.logging_setup import configure_logging
 from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
 from homesec.plugins.registry import PluginType, get_plugin_names
@@ -66,7 +66,6 @@ class HomeSec:
             discover_all_plugins()
 
             # Additional validation checks
-            validate_camera_references(cfg)
             validate_plugin_names(
                 cfg,
                 sorted(get_plugin_names(PluginType.FILTER)),
@@ -74,7 +73,9 @@ class HomeSec:
                 valid_storage=sorted(get_plugin_names(PluginType.STORAGE)),
                 valid_notifiers=sorted(get_plugin_names(PluginType.NOTIFIER)),
                 valid_alert_policies=sorted(get_plugin_names(PluginType.ALERT_POLICY)),
+                valid_sources=sorted(get_plugin_names(PluginType.SOURCE)),
             )
+            validate_config(cfg)
 
             print(f"✓ Config valid: {config_path}")
             camera_names = [camera.name for camera in cfg.cameras]
@@ -84,7 +85,7 @@ class HomeSec:
             ]
             print(f"  Storage backend: {cfg.storage.backend}")
             print(f"  Notifiers: {notifier_backends}")
-            print(f"  Filter plugin: {cfg.filter.plugin}")
+            print(f"  Filter backend: {cfg.filter.backend}")
             print(f"  VLM backend: {cfg.vlm.backend}")
             print(f"  VLM trigger classes: {cfg.vlm.trigger_classes}")
             print(f"  Alert policy backend: {cfg.alert_policy.backend}")

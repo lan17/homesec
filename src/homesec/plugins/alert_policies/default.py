@@ -2,13 +2,32 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel, Field
+
 from homesec.interfaces import AlertPolicy
 from homesec.models.alert import AlertDecision
-from homesec.models.config import DefaultAlertPolicySettings
-from homesec.models.enums import RiskLevel
+from homesec.models.enums import RiskLevel, RiskLevelField
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.plugins.registry import PluginType, plugin
+
+
+class AlertPolicyOverrides(BaseModel):
+    """Per-camera alert policy overrides (only non-None fields override base)."""
+
+    min_risk_level: RiskLevelField | None = None
+    notify_on_activity_types: list[str] | None = None
+    notify_on_motion: bool | None = None
+
+
+class DefaultAlertPolicySettings(BaseModel):
+    """Default alert policy settings."""
+
+    min_risk_level: RiskLevelField = RiskLevel.MEDIUM
+    notify_on_activity_types: list[str] = Field(default_factory=list)
+    notify_on_motion: bool = False
+    overrides: dict[str, AlertPolicyOverrides] = Field(default_factory=dict)
+    trigger_classes: list[str] = Field(default_factory=list)
 
 
 @plugin(plugin_type=PluginType.ALERT_POLICY, name="default")

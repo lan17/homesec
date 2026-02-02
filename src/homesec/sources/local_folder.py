@@ -12,12 +12,37 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from anyio import Path as AsyncPath
+from pydantic import BaseModel, Field
 
 from homesec.models.clip import Clip
-from homesec.models.source.local_folder import LocalFolderSourceConfig
 from homesec.sources.base import AsyncClipSource
 
 logger = logging.getLogger(__name__)
+
+
+class LocalFolderSourceConfig(BaseModel):
+    """Local folder source configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    camera_name: str | None = Field(
+        default=None,
+        description="Optional human-friendly camera name.",
+    )
+    watch_dir: str = Field(
+        default="recordings",
+        description="Directory to watch for new clips.",
+    )
+    poll_interval: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Polling interval in seconds.",
+    )
+    stability_threshold_s: float = Field(
+        default=3.0,
+        ge=0.0,
+        description="Seconds to wait for file size to stabilize before accepting a clip.",
+    )
 
 
 class LocalFolderSource(AsyncClipSource):
@@ -215,5 +240,5 @@ class LocalFolderSource(AsyncClipSource):
             start_ts=mtime_dt - timedelta(seconds=duration_s),
             end_ts=mtime_dt,
             duration_s=duration_s,
-            source_type="local_folder",
+            source_backend="local_folder",
         )

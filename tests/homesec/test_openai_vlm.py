@@ -17,8 +17,8 @@ from PIL import Image
 
 from homesec.models.enums import RiskLevel
 from homesec.models.filter import FilterResult
-from homesec.models.vlm import OpenAILLMConfig, VLMConfig, VLMPreprocessConfig
-from homesec.plugins.analyzers.openai import OpenAIVLM
+from homesec.models.vlm import VLMConfig, VLMPreprocessConfig
+from homesec.plugins.analyzers.openai import OpenAIConfig, OpenAIVLM
 
 
 def _make_config(**overrides: Any) -> VLMConfig:
@@ -26,7 +26,7 @@ def _make_config(**overrides: Any) -> VLMConfig:
     defaults: dict[str, Any] = {
         "backend": "openai",
         "trigger_classes": ["person"],
-        "llm": OpenAILLMConfig(
+        "config": OpenAIConfig(
             api_key_env="OPENAI_API_KEY",
             model="gpt-4o",
             request_timeout=30.0,
@@ -40,13 +40,9 @@ def _make_vlm(config: VLMConfig | None = None) -> OpenAIVLM:
     """Create an OpenAIVLM."""
     if config is None:
         config = _make_config()
-    llm_config = config.llm
-    if not isinstance(llm_config, OpenAILLMConfig):
-        raise TypeError("Expected OpenAILLMConfig")
-
-    # Inject context into config as if it was loaded by plugin registry
-    llm_config.trigger_classes = list(config.trigger_classes)
-    llm_config.max_workers = config.max_workers
+    llm_config = config.config
+    if not isinstance(llm_config, OpenAIConfig):
+        raise TypeError("Expected OpenAIConfig")
 
     return OpenAIVLM(llm_config)
 

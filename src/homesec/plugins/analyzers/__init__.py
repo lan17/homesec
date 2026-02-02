@@ -30,9 +30,7 @@ def load_analyzer(config: VLMConfig) -> VLMAnalyzer:
         load_plugin(
             PluginType.ANALYZER,
             config.backend,
-            config.llm,
-            trigger_classes=config.trigger_classes,
-            max_workers=config.max_workers,
+            config.config,
         ),
     )
 

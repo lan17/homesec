@@ -41,7 +41,7 @@ async def test_append_and_get_events(postgres_dsn: str, clean_test_db: None) -> 
             timestamp=datetime.now(),
             camera_name="front_door",
             duration_s=10.0,
-            source_type="test",
+            source_backend="test",
         ),
         UploadCompletedEvent(
             clip_id=clip_id,
@@ -152,7 +152,7 @@ async def test_get_events_after_id(postgres_dsn: str, clean_test_db: None) -> No
             timestamp=datetime.now(),
             camera_name="front_door",
             duration_s=10.0,
-            source_type="test",
+            source_backend="test",
         ),
         UploadCompletedEvent(
             clip_id=clip_id,

@@ -62,7 +62,7 @@ def sample_clip() -> Clip:
         start_ts=now,
         end_ts=now,
         duration_s=10.0,
-        source_type="rtsp",
+        source_backend="rtsp",
     )
 
 

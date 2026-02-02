@@ -17,12 +17,32 @@ except Exception:
 else:
     mqtt = _mqtt
 
+from pydantic import BaseModel
+
 from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
-from homesec.models.config import MQTTConfig
 from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
+
+
+class MQTTAuthConfig(BaseModel):
+    """MQTT auth configuration using env var names."""
+
+    username_env: str | None = None
+    password_env: str | None = None
+
+
+class MQTTConfig(BaseModel):
+    """MQTT notifier configuration."""
+
+    host: str
+    port: int = 1883
+    auth: MQTTAuthConfig | None = None
+    topic_template: str = "homecam/alerts/{camera_name}"
+    qos: int = 1
+    retain: bool = False
+    connection_timeout: float = 10.0
 
 
 @plugin(plugin_type=PluginType.NOTIFIER, name="mqtt")

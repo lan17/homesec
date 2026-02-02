@@ -13,18 +13,19 @@ from homesec.models.config import (
     CameraConfig,
     CameraSourceConfig,
     Config,
-    DefaultAlertPolicySettings,
-    DropboxStorageConfig,
     NotifierConfig,
     RetryConfig,
     StateStoreConfig,
     StorageConfig,
 )
-from homesec.models.filter import FilterConfig, FilterResult, YoloFilterSettings
-from homesec.models.vlm import AnalysisResult, OpenAILLMConfig, VLMConfig
+from homesec.models.filter import FilterConfig, FilterResult
+from homesec.models.vlm import AnalysisResult, VLMConfig
+from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
-from homesec.plugins.alert_policies.default import DefaultAlertPolicy
-from homesec.plugins.notifiers.multiplex import NotifierEntry
+from homesec.plugins.alert_policies.default import DefaultAlertPolicy, DefaultAlertPolicySettings
+from homesec.plugins.analyzers.openai import OpenAIConfig
+from homesec.plugins.filters.yolo import YoloFilterConfig
+from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.repository import ClipRepository
 from homesec.state.postgres import PostgresEventStore, PostgresStateStore
 from tests.homesec.mocks import MockFilter, MockNotifier, MockStorage, MockVLM
@@ -36,7 +37,7 @@ def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> 
         CameraConfig(
             name="front_door",
             source=CameraSourceConfig(
-                type="local_folder",
+                backend="local_folder",
                 config={"watch_dir": "recordings", "poll_interval": 1.0},
             ),
         )
@@ -45,7 +46,7 @@ def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> 
         cameras=cameras,
         storage=StorageConfig(
             backend="dropbox",
-            dropbox=DropboxStorageConfig(root="/homecam"),
+            config=DropboxStorageConfig(root="/homecam"),
         ),
         state_store=StateStoreConfig(dsn="postgresql://user:pass@localhost/db"),
         notifiers=[
@@ -56,13 +57,13 @@ def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> 
             for _ in range(notifier_count)
         ],
         filter=FilterConfig(
-            plugin="yolo",
-            config=YoloFilterSettings(model_path="yolov8n.pt"),
+            backend="yolo",
+            config=YoloFilterConfig(model_path="yolov8n.pt"),
         ),
         vlm=VLMConfig(
             backend="openai",
             trigger_classes=["person", "car"],
-            llm=OpenAILLMConfig(api_key_env="OPENAI_API_KEY", model="gpt-4o"),
+            config=OpenAIConfig(api_key_env="OPENAI_API_KEY", model="gpt-4o"),
         ),
         alert_policy=AlertPolicyConfig(
             backend="default",
@@ -77,9 +78,7 @@ def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> 
 
 def make_alert_policy(config: Config) -> DefaultAlertPolicy:
     settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
-    settings = DefaultAlertPolicySettings.model_validate(config.alert_policy.config)
-    settings.overrides = config.per_camera_alert
-    settings.trigger_classes = set(config.vlm.trigger_classes)
+    settings.trigger_classes = list(config.vlm.trigger_classes)
     return DefaultAlertPolicy(settings)
 
 
@@ -95,7 +94,7 @@ def make_clip(tmp_path: Path, clip_id: str) -> Clip:
         start_ts=start_ts,
         end_ts=start_ts + timedelta(seconds=10),
         duration_s=10.0,
-        source_type="mock",
+        source_backend="mock",
     )
 
 

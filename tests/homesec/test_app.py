@@ -10,16 +10,18 @@ from homesec.models.config import (
     CameraConfig,
     CameraSourceConfig,
     Config,
-    DropboxStorageConfig,
     NotifierConfig,
     StateStoreConfig,
     StorageConfig,
 )
-from homesec.models.filter import FilterConfig, YoloFilterSettings
-from homesec.models.source.local_folder import LocalFolderSourceConfig
+from homesec.models.filter import FilterConfig
 from homesec.models.storage import StorageUploadResult
-from homesec.models.vlm import OpenAILLMConfig, VLMConfig
-from homesec.plugins.notifiers import MultiplexNotifier
+from homesec.models.vlm import VLMConfig
+from homesec.notifiers.multiplex import MultiplexNotifier
+from homesec.plugins.analyzers.openai import OpenAIConfig
+from homesec.plugins.filters.yolo import YoloFilterConfig
+from homesec.plugins.storage.dropbox import DropboxStorageConfig
+from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
 class _StubStorage:
@@ -120,7 +122,7 @@ def _make_config(notifiers: list[object]) -> Config:
             CameraConfig(
                 name="front_door",
                 source=CameraSourceConfig(
-                    type="local_folder",
+                    backend="local_folder",
                     config=LocalFolderSourceConfig(
                         watch_dir="recordings",
                         poll_interval=1.0,
@@ -130,17 +132,17 @@ def _make_config(notifiers: list[object]) -> Config:
         ],
         storage=StorageConfig(
             backend="dropbox",
-            dropbox=DropboxStorageConfig(root="/homecam"),
+            config=DropboxStorageConfig(root="/homecam"),
         ),
         state_store=StateStoreConfig(dsn="postgresql://user:pass@localhost/db"),
         notifiers=notifiers,  # type: ignore[arg-type]
         filter=FilterConfig(
-            plugin="yolo",
-            config=YoloFilterSettings(model_path="yolov8n.pt"),
+            backend="yolo",
+            config=YoloFilterConfig(model_path="yolov8n.pt"),
         ),
         vlm=VLMConfig(
             backend="openai",
-            llm=OpenAILLMConfig(api_key_env="OPENAI_API_KEY", model="gpt-4o"),
+            config=OpenAIConfig(api_key_env="OPENAI_API_KEY", model="gpt-4o"),
             trigger_classes=["person"],
         ),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
@@ -158,7 +160,7 @@ def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("homesec.app.load_filter", lambda _: _StubFilter())
     monkeypatch.setattr("homesec.app.load_analyzer", lambda _: _StubVLM())
     monkeypatch.setattr(
-        "homesec.app.load_source_plugin", lambda source_type, config, camera_name: _StubSource()
+        "homesec.app.load_source_plugin", lambda source_backend, config, camera_name: _StubSource()
     )
 
     # Mock registry validation
@@ -166,6 +168,7 @@ def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
         pass
 
     monkeypatch.setattr("homesec.app.validate_plugin_names", _mock_validate)
+    monkeypatch.setattr("homesec.app.validate_config", _mock_validate)
 
     # Mock notifier loading loop in app.py manually if needed,
     # but app.py uses load_notifier_plugin.

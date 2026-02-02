@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 aiohttp: Any
 cv2: Any
@@ -31,13 +31,7 @@ from pydantic import BaseModel
 
 from homesec.interfaces import VLMAnalyzer
 from homesec.models.filter import FilterResult
-from homesec.models.vlm import (
-    AnalysisResult,
-    OpenAILLMConfig,
-    SequenceAnalysis,
-    VLMConfig,
-    VLMPreprocessConfig,
-)
+from homesec.models.vlm import AnalysisResult, SequenceAnalysis, VLMConfig, VLMPreprocessConfig
 from homesec.plugins.registry import PluginType, plugin
 
 logger = logging.getLogger(__name__)
@@ -59,6 +53,20 @@ Focus on KEY EVENTS ONLY:
 - Vehicles stopping, driving past, or unusual patterns
 
 Keep observations list concise (short bullet points of security-relevant actions)."""
+
+
+class OpenAIConfig(BaseModel):
+    """OpenAI-compatible LLM configuration."""
+
+    model_config = {"extra": "forbid"}
+    api_key_env: str
+    model: str
+    base_url: str = "https://api.openai.com/v1"
+    token_param: Literal["max_tokens", "max_completion_tokens"] = "max_completion_tokens"
+    max_completion_tokens: int = 10_000
+    max_tokens: int | None = None
+    temperature: float | None = 0.0
+    request_timeout: float = 60.0
 
 
 def _ensure_openai_dependencies() -> None:
@@ -92,18 +100,17 @@ class OpenAIVLM(VLMAnalyzer):
     Supports structured output with Pydantic schemas.
     """
 
-    config_cls = OpenAILLMConfig
+    config_cls = OpenAIConfig
 
     @classmethod
-    def create(cls, config: OpenAILLMConfig) -> VLMAnalyzer:
+    def create(cls, config: OpenAIConfig) -> VLMAnalyzer:
         return cls(config)
 
-    def __init__(self, llm_config: OpenAILLMConfig) -> None:
+    def __init__(self, llm_config: OpenAIConfig) -> None:
         """Initialize OpenAI VLM with validated LLM config.
 
         Args:
             llm_config: OpenAI-specific configuration (API key, model, etc.)
-                        Also assumes injected runtime fields (trigger_classes, max_workers)
         """
         _ensure_openai_dependencies()
         self._config = llm_config
@@ -335,7 +342,7 @@ class OpenAIVLM(VLMAnalyzer):
                 f"VLM response does not match SequenceAnalysis schema: {e}. Raw response: {content}"
             ) from e
 
-    def _resolve_token_limit(self, llm: OpenAILLMConfig) -> int:
+    def _resolve_token_limit(self, llm: OpenAIConfig) -> int:
         if self.token_param == "max_completion_tokens":
             value = llm.max_completion_tokens or llm.max_tokens or 1000
         else:

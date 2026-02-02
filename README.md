@@ -157,7 +157,7 @@ Best for real-world setups with flaky cameras.
 cameras:
   - name: driveway
     source:
-      type: rtsp
+      backend: rtsp
       config:
         rtsp_url_env: DRIVEWAY_RTSP_URL
         output_dir: "./recordings"
@@ -168,7 +168,7 @@ cameras:
           backoff_s: 5
 
 filter:
-  plugin: yolo
+  backend: yolo
   config:
     classes: ["person", "car"]
     min_confidence: 0.6
@@ -185,7 +185,7 @@ Uploads to Cloud but keeps analysis local.
 ```yaml
 storage:
   backend: dropbox
-  dropbox:
+  config:
     token_env: DROPBOX_TOKEN
     root: "/SecurityCam"
 

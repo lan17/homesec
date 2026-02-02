@@ -24,20 +24,12 @@ def load_storage_plugin(config: StorageConfig) -> StorageBackend:
     Raises:
         ValueError: If backend is unknown or backend-specific config is missing
     """
-    # Extract backend-specific config using attribute access
-    specific_config = getattr(config, config.backend.lower(), None)
-    if specific_config is None:
-        raise ValueError(
-            f"Missing '{config.backend.lower()}' config in storage section. "
-            f"Add 'storage.{config.backend.lower()}' to your config."
-        )
-
     return cast(
         StorageBackend,
         load_plugin(
             PluginType.STORAGE,
             config.backend,
-            specific_config,
+            config.config,
         ),
     )
 

@@ -30,8 +30,9 @@ HomeSec uses a unified **Class-Based Plugin Architecture**. All plugins follow a
 
 ### Key Principles
 
--   **Context-Free Creation**: The `create` method receives *only* a fully resolved configuration object. Runtime dependencies (like `camera_name` or `trigger_classes`) are injected into the config model before validation.
+-   **Context-Free Creation**: The `create` method receives *only* a fully resolved configuration object. Runtime dependencies (like `camera_name` for sources or default alert-policy `trigger_classes`) are injected into the config model before validation when needed.
 -   **Strict Typing**: All configs are Pydantic models.
+-   **Backend/Config Boundary**: Core config uses `backend` + opaque `config` payloads; plugin-specific fields live in the plugin’s `config_cls`.
 -   **Async Interface**: All I/O operations must be async.
 -   **Lifecycle Management**: Implement `shutdown()` and `ping()` (where applicable).
 
@@ -69,7 +70,9 @@ class MyPlugin(ObjectFilter):
 Every plugin must define a Pydantic model for its configuration. This model serves as the contract for the plugin.
 
 - **Strict Validation**: Utilize Pydantic's validation features (types, `Field` constraints) to ensure invalid configs are caught early.
-- **Injected Fields**: If your plugin needs runtime context (like `camera_name`), declare these fields in your config model. The registry will inject them automatically.
+- **Injected Fields**: If your plugin type needs runtime context (sources, alert policy), declare those fields in your config model. The registry will inject them automatically.
+
+Tip: Define the plugin-specific config model in the same module as the plugin implementation (no re-exports).
 
 ```python
 class MyConfig(BaseModel):
@@ -153,7 +156,7 @@ class CustomFilter(ObjectFilter):
 
 ```yaml
 filter:
-  plugin: custom
+  backend: custom
   config:
     model_path: /path/to/model.pt
     confidence: 0.6
@@ -176,9 +179,8 @@ from pydantic import BaseModel
 
 class CustomVLMSettings(BaseModel):
     model_name: str
-    # Injected fields (must be present if used)
-    trigger_classes: list[str] = []
-    max_workers: int = 1
+    api_key_env: str | None = None
+    base_url: str | None = None
 
 @plugin(type=PluginType.ANALYZER, name="custom")
 class CustomVLM(VLMAnalyzer):
@@ -200,6 +202,8 @@ class CustomVLM(VLMAnalyzer):
         # ... logic ...
         pass
 ```
+
+Note: `vlm.trigger_classes` and `vlm.run_mode` live in the core VLM config, not the analyzer plugin config. Keep analyzer configs backend-specific only.
 
 ---
 
@@ -304,5 +308,5 @@ def test_my_plugin():
 
 ---
 
-*Document version: 1.1*
-*Last updated: 2026-01-18*
+*Document version: 1.2*
+*Last updated: 2026-02-01*
