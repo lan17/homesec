@@ -9,7 +9,7 @@ This document provides an overview of the Home Assistant integration for HomeSec
 - **Approach**: Add-on + native integration with HomeSec as the runtime
 - **API stack**: FastAPI, async endpoints only, async SQLAlchemy only
 - **Config storage**: Override YAML file is source of truth for dynamic config. Base YAML is bootstrap-only.
-- **Config merge**: Multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge (recursive), lists merge (union).
+- **Config merge**: Multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge (recursive), lists with `name` field merge by key.
 - **Single instance**: HA integration assumes one HomeSec instance (`single_config_entry`)
 - **Secrets**: Never stored in HomeSec config; only env var names are persisted
 - **Repository pattern**: API reads/writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access)

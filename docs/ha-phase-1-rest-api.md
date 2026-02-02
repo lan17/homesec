@@ -168,7 +168,11 @@ def load_configs(paths: list[Path]) -> Config:
     Merge semantics:
     - Files loaded left to right, rightmost wins
     - Dicts: deep merge (recursive)
-    - Lists: merge (union, preserving order, no duplicates)
+    - Lists of objects with `name` field: key-based merge by `name`
+      - Items with same `name` are merged (override fields win)
+      - Items only in base are preserved
+      - Items only in override are added
+    - Other lists: override replaces base entirely
     """
     ...
 
@@ -176,8 +180,22 @@ def deep_merge(base: dict, override: dict) -> dict:
     """Deep merge two dicts.
 
     - Nested dicts are merged recursively
-    - Lists are merged (union)
+    - Lists of dicts with 'name' key: merge by name (see merge_named_lists)
+    - Other lists: override replaces base
     - Scalars: override wins
+    """
+    ...
+
+def merge_named_lists(base: list[dict], override: list[dict]) -> list[dict]:
+    """Merge two lists of dicts by 'name' key.
+
+    Example:
+        base:     [{name: "a", x: 1}, {name: "b", x: 2}]
+        override: [{name: "b", x: 99}, {name: "c", x: 3}]
+        result:   [{name: "a", x: 1}, {name: "b", x: 99}, {name: "c", x: 3}]
+
+    - Preserves order: base items first (in order), then new override items
+    - Override items with matching name replace/merge with base items
     """
     ...
 ```

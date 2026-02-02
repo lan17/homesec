@@ -19,7 +19,7 @@ HomeSec is already well-architected for Home Assistant integration with its plug
 - API stack: FastAPI, async endpoints only, async SQLAlchemy only.
 - Restart is acceptable: API writes validated config to disk and returns `restart_required`; HA may trigger restart.
 - Config storage: **Override YAML file** is source of truth for dynamic config. Base YAML is bootstrap-only.
-- Config merge: multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge, lists merge (union).
+- Config merge: multiple YAML files loaded left → right; rightmost wins. Dicts deep-merge, lists with `name` field merge by key.
 - Single instance: HA integration assumes one HomeSec instance (`single_config_entry`).
 - Secrets: never stored in HomeSec; config stores env var names; HA/add-on passes env vars at boot.
 - Repository pattern: API reads and writes go through `ClipRepository` (no direct `StateStore`/`EventStore` access).
@@ -94,7 +94,7 @@ homesec/
 | Entity | Type | Description |
 |--------|------|-------------|
 | `binary_sensor.homesec_{camera}_motion` | Binary Sensor | Motion detected (on for 30s after alert) |
-| `binary_sensor.homesec_{camera}_person` | Binary Sensor | Person detected |
+| `binary_sensor.homesec_{camera}_online` | Binary Sensor | Camera connectivity |
 | `sensor.homesec_{camera}_last_activity` | Sensor | Last activity type (person, vehicle, package, etc.) |
 | `sensor.homesec_{camera}_risk_level` | Sensor | Risk level (LOW/MEDIUM/HIGH/CRITICAL) |
 | `sensor.homesec_{camera}_health` | Sensor | healthy/unhealthy |
@@ -420,7 +420,7 @@ Config model for Option B:
 - Base YAML is bootstrap-only (DB DSN, server config, storage root, MQTT broker, etc.).
 - API writes a machine-owned **override YAML** file for all dynamic config.
 - HomeSec loads multiple YAML files left → right; rightmost wins.
-- Dicts deep-merge; lists merge (union).
+- Dicts deep-merge; lists with `name` field merge by key.
 - Override file default: `config/ha-overrides.yaml` (configurable via CLI).
 - CLI accepts multiple `--config` flags; order matters.
 - Config writes use last-write-wins semantics (no optimistic concurrency in v1).
@@ -617,7 +617,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
 - **Base YAML**: bootstrap-only (DB DSN, server config, storage root, MQTT broker, etc.).
 - **Override YAML**: machine-owned, fully managed by HA via API.
 - **Load order**: multiple YAML files loaded left → right; rightmost wins.
-- **Merge semantics**: dicts deep-merge; lists merge (union).
+- **Merge semantics**: dicts deep-merge; lists with `name` field merge by key (e.g., cameras merge by camera name).
 - **Restart**: required for all config changes.
 
 ---
