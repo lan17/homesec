@@ -83,15 +83,10 @@ graph TD
 
 ## Quickstart
 
-### 30-Second Start (Docker)
-The fastest way to see it in action. Includes a pre-configured Postgres and a dummy local source.
+### Docker
+Use the included [docker-compose.yml](docker-compose.yml) (HomeSec + Postgres, pulls `leva/homesec:latest`).
 
-```bash
-git clone https://github.com/lan17/homesec.git
-cd homesec
-make up
-```
-*Modify `config/config.yaml` to add your real cameras, then restart.*
+Configure your own config.yaml and .env files as described in Manual Setup.
 
 ### Manual Setup
 For standard production usage without Docker Compose:
