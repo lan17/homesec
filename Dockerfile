@@ -41,8 +41,8 @@ COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
-# Install the project
-RUN uv sync --frozen --no-dev
+# Install the project (ensure homesec is in site-packages)
+RUN uv pip install --no-deps .
 
 # =============================================================================
 # Stage 2: Runtime

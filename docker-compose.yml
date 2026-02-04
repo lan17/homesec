@@ -1,7 +1,8 @@
 services:
   homesec:
     build: .
-    image: homesec:latest
+    image: leva/homesec:latest
+    pull_policy: always
     container_name: homesec
     restart: unless-stopped
     depends_on:

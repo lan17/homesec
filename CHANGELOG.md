@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.2.3 (2026-02-04)
+
+### Bug Fixes
+
+- Fix dockerfile ([#21](https://github.com/lan17/homesec/pull/21),
+  [`29e8ce4`](https://github.com/lan17/homesec/commit/29e8ce43a667d288b668417b7735c0c51620fca1))
+
+### Continuous Integration
+
+- Add docker publish workflow ([#20](https://github.com/lan17/homesec/pull/20),
+  [`0ec59a0`](https://github.com/lan17/homesec/commit/0ec59a0509cf7a7a98900963d3d265bfdd2cb65c))
+
+### Refactoring
+
+- Plugin config boundary cleanup ([#18](https://github.com/lan17/homesec/pull/18),
+  [`6746fa2`](https://github.com/lan17/homesec/commit/6746fa2f4285657df01d0dc1d25c7a1d1580407b))
+
+
 ## v1.2.2 (2026-01-27)
 
 ### Bug Fixes
