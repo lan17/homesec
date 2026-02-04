@@ -21,6 +21,24 @@ from tests.homesec.mocks import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_socket(socket_enabled) -> None:
+    """Allow socket usage for tests that hit local Postgres."""
+    _ = socket_enabled
+
+
+@pytest.fixture
+def enable_event_loop_debug() -> None:
+    """Override HA plugin fixture to avoid HA event loop policy in core tests."""
+    return None
+
+
+@pytest.fixture
+def verify_cleanup() -> None:
+    """Override HA plugin cleanup verification for core tests."""
+    return None
+
+
 @pytest.fixture
 def mock_filter() -> MockFilter:
     """Return a MockFilter with default config."""
@@ -71,7 +89,7 @@ def postgres_dsn() -> str:
     """Return test Postgres DSN (requires local DB running)."""
     import os
 
-    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
+    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@127.0.0.1:5432/homesec")
 
 
 @pytest.fixture

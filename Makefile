@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish ha-lint ha-test
 
 help:
 	@echo "Targets:"
@@ -20,6 +20,8 @@ help:
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
 	@echo "    make check         Run lint + typecheck + test"
+	@echo "    make ha-lint       Run ruff on HA integration code"
+	@echo "    make ha-test       Run HA integration tests"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make db-migrate    Run migrations"
@@ -34,6 +36,9 @@ HOMESEC_LOG_LEVEL ?= INFO
 DOCKER_IMAGE ?= homesec
 DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
+HA_INTEGRATION_DIR := homeassistant/integration
+HA_INTEGRATION_SRC := $(HA_INTEGRATION_DIR)/custom_components
+HA_INTEGRATION_TESTS := $(HA_INTEGRATION_DIR)/tests
 
 # Docker
 up:
@@ -78,12 +83,20 @@ lint:
 	uv run ruff check src tests
 	uv run ruff format --check src tests
 	make -C homeassistant shellcheck
+	make ha-lint
+
+ha-lint:
+	uv run ruff check $(HA_INTEGRATION_SRC) $(HA_INTEGRATION_TESTS)
+	uv run ruff format --check $(HA_INTEGRATION_SRC) $(HA_INTEGRATION_TESTS)
+
+ha-test:
+	uv run pytest $(HA_INTEGRATION_TESTS) -q
 
 lint-fix:
 	uv run ruff check --fix src tests
 	uv run ruff format src tests
 
-check: lint typecheck test
+check: lint typecheck test ha-lint ha-test
 
 # Database
 db-migrate:
