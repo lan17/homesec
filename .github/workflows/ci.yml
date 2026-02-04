@@ -30,6 +30,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
       - name: Setup uv and Python
         uses: astral-sh/setup-uv@v3
         with:
@@ -46,12 +51,24 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
 
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck add-on scripts
+        run: make -C homeassistant shellcheck
+
       # Lint and typecheck run while Postgres boots
       - name: Lint
         run: make lint
 
+      - name: HA integration lint
+        run: make ha-lint
+
       - name: Type check
         run: make typecheck
+
+      - name: HA integration tests
+        run: make ha-test
 
       # Wait for Postgres before migrations
       - name: Wait for Postgres

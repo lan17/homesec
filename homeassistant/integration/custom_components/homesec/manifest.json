@@ -1,0 +1,14 @@
+{
+  "domain": "homesec",
+  "name": "HomeSec",
+  "codeowners": ["@lan17"],
+  "config_flow": true,
+  "dependencies": [],
+  "single_config_entry": true,
+  "documentation": "https://github.com/lan17/homesec",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/lan17/homesec/issues",
+  "requirements": ["aiohttp>=3.8.0"],
+  "version": "1.0.0"
+}

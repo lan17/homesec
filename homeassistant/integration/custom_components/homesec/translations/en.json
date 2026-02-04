@@ -1,0 +1,39 @@
+{
+  "title": "HomeSec",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to HomeSec",
+        "description": "Set up HomeSec for this Home Assistant instance."
+      },
+      "addon": {
+        "title": "Use HomeSec add-on",
+        "description": "HomeSec add-on detected. Confirm to connect."
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "Enter connection details for a HomeSec server."
+      },
+      "cameras": {
+        "title": "Select cameras",
+        "description": "Choose which cameras to add to Home Assistant."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to HomeSec.",
+      "invalid_auth": "Invalid authentication.",
+      "single_instance_allowed": "Only one HomeSec instance is allowed."
+    },
+    "abort": {
+      "single_instance_allowed": "Only one HomeSec instance is allowed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HomeSec options",
+        "description": "Adjust polling and motion reset timing."
+      }
+    }
+  }
+}

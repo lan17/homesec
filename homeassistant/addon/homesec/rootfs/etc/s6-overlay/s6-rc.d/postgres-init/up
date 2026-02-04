@@ -1,0 +1,48 @@
+#!/command/with-contenv bashio
+set -euo pipefail
+
+PGDATA="/data/postgres/data"
+DB_USER="homesec"
+DB_NAME="homesec"
+PASS_FILE="/data/postgres/db_password"
+
+if [ -s "${PASS_FILE}" ]; then
+    DB_PASS="$(cat "${PASS_FILE}")"
+elif bashio::config.has_value 'db_password'; then
+    DB_PASS="$(bashio::config 'db_password')"
+    if [ -s "${PGDATA}/PG_VERSION" ]; then
+        bashio::log.warning "PostgreSQL already initialized; assuming db_password matches."
+    fi
+    if [ -n "${DB_PASS}" ]; then
+        umask 077
+        printf '%s' "${DB_PASS}" > "${PASS_FILE}"
+    fi
+else
+    if [ -s "${PGDATA}/PG_VERSION" ]; then
+        bashio::log.error "PostgreSQL already initialized but db_password is missing."
+        bashio::log.error "Set db_password option or remove /data/postgres to re-init."
+        exit 1
+    fi
+    umask 077
+    DB_PASS="$(head -c 32 /dev/urandom | sha256sum | awk '{print $1}')"
+    printf '%s' "${DB_PASS}" > "${PASS_FILE}"
+fi
+
+if [ ! -s "${PGDATA}/PG_VERSION" ]; then
+    bashio::log.info "Initializing PostgreSQL data directory..."
+    mkdir -p /data/postgres
+    chown -R postgres:postgres /data/postgres
+
+    su postgres -s /bin/sh -c "initdb -D '${PGDATA}' --encoding=UTF8 --locale=C"
+    su postgres -s /bin/sh -c "pg_ctl -D '${PGDATA}' -o \"-c listen_addresses='127.0.0.1'\" -w start"
+    su postgres -s /bin/sh -c "psql -v ON_ERROR_STOP=1 --username postgres <<EOSQL
+CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';
+CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};
+GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
+EOSQL"
+    su postgres -s /bin/sh -c "pg_ctl -D '${PGDATA}' -m fast -w stop"
+
+    bashio::log.info "PostgreSQL initialized"
+else
+    bashio::log.info "PostgreSQL already initialized; skipping"
+fi

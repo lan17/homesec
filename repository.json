@@ -1,0 +1,14 @@
+{
+  "name": "HomeSec",
+  "url": "https://github.com/lan17/homesec",
+  "maintainer": "lan17",
+  "addons": [
+    {
+      "name": "HomeSec",
+      "slug": "homesec",
+      "description": "Self-hosted AI video security pipeline",
+      "url": "https://github.com/lan17/homesec",
+      "path": "homeassistant/addon/homesec"
+    }
+  ]
+}

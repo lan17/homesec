@@ -11,7 +11,7 @@ from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
 # Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://homesec:homesec@localhost:5432/homesec"
+DEFAULT_DSN = "postgresql://homesec:homesec@127.0.0.1:5432/homesec"
 
 
 def get_test_dsn() -> str:

@@ -1,0 +1,642 @@
+# Phase 1: REST API for Configuration
+
+**Goal**: Enable remote configuration and monitoring of HomeSec via HTTP API.
+
+**Estimated Effort**: 5-7 days
+
+**Dependencies**: None
+
+---
+
+## Overview
+
+This phase adds a FastAPI-based REST API to HomeSec for:
+- Camera CRUD operations (including `enabled` field for toggling cameras)
+- Clip listing with filters (camera, status, alerted, risk_level, activity_type)
+- System stats and health
+- Configuration management (last-write-wins)
+
+---
+
+## 1.1 API Framework Setup
+
+### Files
+
+- `src/homesec/api/__init__.py`
+- `src/homesec/api/server.py`
+- `src/homesec/api/dependencies.py`
+
+### Interfaces
+
+**APIServer** (`server.py`)
+```python
+def create_app(app_instance: Application) -> FastAPI:
+    """Create the FastAPI application.
+
+    - Stores Application reference in app.state.homesec
+    - Configures CORS from server_config.cors_origins
+    - Registers all route modules
+    """
+    ...
+
+class APIServer:
+    """Manages the API server lifecycle."""
+
+    def __init__(self, app: FastAPI, host: str, port: int): ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+```
+
+**Dependencies** (`dependencies.py`)
+```python
+async def get_homesec_app(request: Request) -> Application:
+    """Get the HomeSec Application instance from request state.
+
+    Raises HTTPException 503 if not initialized.
+    """
+    ...
+
+async def verify_api_key(request: Request, app=Depends(get_homesec_app)) -> None:
+    """Verify API key if authentication is enabled.
+
+    - Skips auth for public paths: /api/v1/health, /api/v1/diagnostics
+    - Checks app.config.server.auth_enabled
+    - Expects Authorization: Bearer <token>
+    - Raises HTTPException 401 on failure
+    """
+    ...
+```
+
+### Constraints
+
+- All endpoints must be `async def`
+- No blocking operations (use `asyncio.to_thread` for file I/O)
+- CORS origins configurable via `FastAPIServerConfig.cors_origins`
+- Port configurable, replaces old `HealthConfig`
+
+---
+
+## 1.1.1 CameraConfig.enabled Field
+
+**File**: `src/homesec/models/config.py`
+
+Add `enabled` field to allow toggling cameras via API:
+
+```python
+class CameraConfig(BaseModel):
+    """Camera configuration and clip source selection."""
+
+    name: str
+    enabled: bool = True  # Allow disabling camera via API
+    source: CameraSourceConfig
+```
+
+**Constraints:**
+- Default is `True` (backwards compatible)
+- When `enabled=False`, Application skips starting the source
+- API can toggle this field; requires restart to take effect
+
+---
+
+## 1.2 Config Management
+
+### Files
+
+- `src/homesec/config/manager.py`
+
+### Interfaces
+
+**ConfigManager** (`manager.py`)
+```python
+class ConfigUpdateResult(BaseModel):
+    """Result of a config update operation."""
+    restart_required: bool = True
+
+class ConfigManager:
+    """Manages configuration persistence (single file, last-write-wins).
+
+    On mutations, backs up current config to {path}.bak before overwriting.
+    """
+
+    def __init__(self, config_path: Path): ...
+
+    def get_config(self) -> Config:
+        """Get the current configuration."""
+        ...
+
+    async def add_camera(
+        self,
+        name: str,
+        enabled: bool,
+        source_backend: str,
+        source_config: dict,
+    ) -> ConfigUpdateResult:
+        """Add a new camera to the config.
+
+        Raises:
+            ValueError: If camera name already exists
+        """
+        ...
+
+    async def update_camera(
+        self,
+        camera_name: str,
+        enabled: bool | None,
+        source_config: dict | None,
+    ) -> ConfigUpdateResult:
+        """Update an existing camera in the config.
+
+        Raises:
+            ValueError: If camera doesn't exist
+        """
+        ...
+
+    async def remove_camera(
+        self,
+        camera_name: str,
+    ) -> ConfigUpdateResult:
+        """Remove a camera from the config.
+
+        Raises:
+            ValueError: If camera doesn't exist
+        """
+        ...
+
+    async def _save_config(self, config: Config) -> None:
+        """Save config to disk with backup.
+
+        1. Copy current config to {path}.bak
+        2. Write new config atomically (temp file, fsync, rename)
+        """
+        ...
+```
+
+> **Note**: No merge logic needed. The existing `load_config(path)` in `loader.py` is used as-is.
+> ConfigManager owns a single config file and overwrites it entirely on mutations.
+
+### Constraints
+
+- Single config file (no base/override split)
+- Backup created before each mutation (`config.yaml` → `config.yaml.bak`)
+- Config file written atomically (write temp, fsync, rename)
+- All file I/O via `asyncio.to_thread`
+
+---
+
+## 1.2.1 ClipRepository Extensions
+
+**File**: `src/homesec/repository/clip_repository.py`
+
+The existing `ClipRepository` needs these additional methods for the API:
+
+### Interface
+
+```python
+class ClipRepository:
+    """Coordinates state + event writes with best-effort retries."""
+
+    # ... existing methods ...
+
+    # NEW: Read methods for API
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        """Get clip state by ID."""
+        ...
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]:
+        """List clips with filtering and pagination.
+
+        Filters:
+        - alerted: If True, only clips that triggered notifications
+        - risk_level: Filter by analysis risk level (low/medium/high/critical)
+        - activity_type: Filter by detected activity type
+
+        Returns (clips, total_count).
+        """
+        ...
+
+    async def delete_clip(self, clip_id: str) -> ClipStateData:
+        """Mark clip as deleted in database.
+
+        Returns the clip data (including storage_uri) so caller can
+        coordinate storage deletion separately.
+
+        Note: Storage deletion is handled by the API route, not the repository.
+        This keeps the repository focused on database operations only.
+        """
+        ...
+
+    async def count_clips_since(self, since: datetime) -> int:
+        """Count clips created since the given timestamp."""
+        ...
+
+    async def count_alerts_since(self, since: datetime) -> int:
+        """Count alert events (notification_sent) since the given timestamp."""
+        ...
+
+    async def ping(self) -> bool:
+        """Health check - verify database is reachable.
+
+        Delegates to StateStore.ping().
+        """
+        return await self._state.ping()
+```
+
+### StateStore Extensions
+
+**File**: `src/homesec/state/postgres.py`
+
+`ClipRepository` delegates to new `StateStore` methods (all DB access through StateStore for consistency):
+
+```python
+class StateStore(Protocol):
+    # ... existing methods ...
+
+    # NEW: Read methods for API
+    async def get_clip(self, clip_id: str) -> ClipStateData | None: ...
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]: ...
+
+    async def mark_clip_deleted(self, clip_id: str) -> ClipStateData: ...
+
+    async def count_clips_since(self, since: datetime) -> int: ...
+
+    async def count_alerts_since(self, since: datetime) -> int: ...
+```
+
+### Constraints
+
+- Must use async SQLAlchemy
+- Counts should be efficient (use SQL COUNT, not fetch all)
+- `count_alerts_since` counts events where `event_type='notification_sent'`
+- `list_clips` returns tuple of (items, total_count) for pagination
+- `mark_clip_deleted` only marks deleted in DB; API route coordinates storage deletion
+- All new methods added to `StateStore` interface and `PostgresStateStore` implementation
+
+---
+
+## 1.3 API Routes
+
+### Files
+
+- `src/homesec/api/routes/__init__.py`
+- `src/homesec/api/routes/cameras.py`
+- `src/homesec/api/routes/clips.py`
+- `src/homesec/api/routes/stats.py`
+- `src/homesec/api/routes/health.py`
+- `src/homesec/api/routes/config.py`
+- `src/homesec/api/routes/system.py`
+
+### Route Summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/config` | Config summary |
+| GET | `/api/v1/cameras` | List cameras |
+| GET | `/api/v1/cameras/{name}` | Get camera (config + runtime status) |
+| POST | `/api/v1/cameras` | Create camera |
+| PUT | `/api/v1/cameras/{name}` | Update camera |
+| DELETE | `/api/v1/cameras/{name}` | Delete camera |
+| GET | `/api/v1/clips` | List clips (filterable: camera, status, alerted, risk_level, activity_type) |
+| GET | `/api/v1/clips/{id}` | Get clip |
+| DELETE | `/api/v1/clips/{id}` | Delete clip |
+| GET | `/api/v1/stats` | System statistics |
+| POST | `/api/v1/system/restart` | Request graceful restart |
+| GET | `/api/v1/diagnostics` | Detailed health with error codes |
+
+### Request/Response Models
+
+**Camera Models**
+```python
+class CameraCreate(BaseModel):
+    name: str
+    enabled: bool = True
+    source_backend: str  # rtsp, ftp, local_folder
+    source_config: dict
+
+class CameraUpdate(BaseModel):
+    enabled: bool | None = None
+    source_config: dict | None = None
+
+class CameraResponse(BaseModel):
+    name: str
+    enabled: bool
+    source_backend: str
+    healthy: bool
+    last_heartbeat: float | None
+    source_config: dict  # Secrets are env var names, not values
+
+class ConfigChangeResponse(BaseModel):
+    restart_required: bool = True
+    camera: CameraResponse | None = None
+```
+
+**Health Response Model**
+```python
+class HealthResponse(BaseModel):
+    status: str           # "healthy", "degraded", or "unhealthy"
+    pipeline: str         # "running" or "stopped"
+    postgres: str         # "connected" or "unavailable"
+    cameras_online: int   # Count of healthy cameras
+```
+
+> **Note**: `/health` returns 200 if pipeline is running, even if Postgres is unavailable (degraded state).
+> This allows the add-on watchdog to avoid restart loops when only the DB is down.
+> Use `/diagnostics` for detailed component status.
+
+**Stats Response Model**
+```python
+class StatsResponse(BaseModel):
+    clips_today: int
+    alerts_today: int
+    cameras_total: int
+    cameras_online: int
+    uptime_seconds: float  # Time since Application started
+```
+
+**Config Response Model**
+```python
+class ConfigResponse(BaseModel):
+    """Returns the full config (secrets shown as env var names, not values)."""
+    config: dict  # The full Config model as dict
+```
+
+**Diagnostics Response Model**
+```python
+class ComponentStatus(BaseModel):
+    status: str                    # "ok", "error"
+    error: str | None = None       # Error message if failed
+    latency_ms: float | None = None
+
+class CameraStatus(BaseModel):
+    healthy: bool
+    enabled: bool
+    last_heartbeat: float | None   # Monotonic timestamp from ClipSource
+
+class DiagnosticsResponse(BaseModel):
+    status: str                    # "healthy", "degraded", "unhealthy"
+    uptime_seconds: float
+    postgres: ComponentStatus
+    storage: ComponentStatus
+    cameras: dict[str, CameraStatus]
+```
+
+**Clip Response Models**
+```python
+class ClipResponse(BaseModel):
+    id: str
+    camera: str
+    status: str                    # ClipStatus enum: "queued_local", "uploaded", "analyzed", "done", "error", "deleted"
+    created_at: datetime
+    activity_type: str | None = None
+    risk_level: str | None = None
+    summary: str | None = None
+    detected_objects: list[str] = []
+    storage_uri: str | None = None
+    view_url: str | None = None
+    alerted: bool = False
+
+class ClipListResponse(BaseModel):
+    clips: list[ClipResponse]
+    total: int                     # Total matching (for pagination)
+    page: int
+    page_size: int
+```
+
+### Auth Bypass
+
+`/health` and `/diagnostics` are public (no auth required). This allows:
+- Add-on watchdog to check health without token
+- External monitoring tools to probe health
+
+All other endpoints require auth when `auth_enabled: true`.
+
+### DB-Down Behavior
+
+| Endpoint | DB Down Response |
+|----------|------------------|
+| `/health` | 200, `status: "degraded"`, `postgres: "unavailable"` |
+| `/diagnostics` | 200, shows component error details |
+| All other endpoints | 503 Service Unavailable |
+
+Non-health endpoints return 503 with:
+```json
+{
+  "detail": "Database unavailable",
+  "error_code": "DB_UNAVAILABLE"
+}
+```
+
+### Constraints
+
+- All config-mutating endpoints return `restart_required: True`
+- Last-write-wins semantics (no optimistic concurrency in v1)
+- `/health` returns 200 if pipeline running (status may be "degraded" if DB down)
+- Pagination: `page` (1-indexed), `page_size` (default 50, max 100)
+
+---
+
+## 1.4 Server Configuration
+
+**File**: `src/homesec/models/config.py`
+
+### Interface
+
+```python
+class FastAPIServerConfig(BaseModel):
+    """Configuration for the FastAPI server (replaces HealthConfig)."""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8080
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    auth_enabled: bool = False
+    api_key_env: str | None = None  # Env var name, not the key itself
+
+    def get_api_key(self) -> str | None:
+        """Resolve API key from environment variable."""
+        ...
+
+# Update Config class:
+# - Replace `health: HealthConfig` with `server: FastAPIServerConfig`
+```
+
+---
+
+## 1.5 CLI Updates
+
+**File**: `src/homesec/cli.py`
+
+No CLI changes needed. The existing `--config` flag already accepts a single config file path.
+
+---
+
+## 1.6 Implementation Notes
+
+### Camera Health Source
+
+Camera health (`CameraResponse.healthy`, `last_heartbeat`) comes from existing infrastructure:
+- `ClipSource.is_healthy()` and `ClipSource.last_heartbeat()` already exist
+- `Application` holds references to sources
+- API routes access sources via `Application` to build responses
+
+### Replacing HealthServer
+
+The existing aiohttp-based `HealthServer` (`src/homesec/health/server.py`) is replaced by FastAPI.
+Remove `HealthServer` and its config; FastAPI's `/health` endpoint provides the same functionality.
+
+### Restart Mechanism
+
+`POST /api/v1/system/restart` sends SIGTERM to self:
+
+```python
+import os, signal
+
+@router.post("/api/v1/system/restart")
+async def restart():
+    os.kill(os.getpid(), signal.SIGTERM)
+    return {"message": "Shutdown initiated"}
+```
+
+Existing signal handler in `app.py` handles graceful shutdown. Supervisor/add-on handles restart.
+
+### API Server Lifecycle
+
+In `Application.run()`:
+
+```python
+async def run(self):
+    # ... initialize components ...
+
+    # Start API server (replaces old HealthServer)
+    if self.config.server.enabled:
+        self._api_server = APIServer(create_app(self), self.config.server.host, self.config.server.port)
+        await self._api_server.start()
+
+    # Track start time for uptime
+    self._start_time = time.time()
+
+    # Wait for shutdown signal
+    await self._shutdown_event.wait()
+
+    # Shutdown (stop API first, then sources)
+    if self._api_server:
+        await self._api_server.stop()
+    # ... stop other components ...
+```
+
+---
+
+## File Changes Summary
+
+| File | Change |
+|------|--------|
+| `src/homesec/api/__init__.py` | New package |
+| `src/homesec/api/server.py` | FastAPI app factory and server |
+| `src/homesec/api/dependencies.py` | Request dependencies |
+| `src/homesec/api/routes/*.py` | All route modules |
+| `src/homesec/config/manager.py` | Config persistence (single file with backup) |
+| `src/homesec/models/config.py` | Add `FastAPIServerConfig`, remove `HealthConfig` |
+| `src/homesec/interfaces.py` | Add new StateStore methods to protocol |
+| `src/homesec/state/postgres.py` | Implement new StateStore methods |
+| `src/homesec/repository/clip_repository.py` | Add read/list/count methods (delegate to StateStore) |
+| `src/homesec/app.py` | Integrate API server, remove HealthServer usage |
+| `src/homesec/health/` | Remove (replaced by FastAPI) |
+| `pyproject.toml` | Add fastapi, uvicorn; remove aiohttp if unused elsewhere |
+
+---
+
+## Test Expectations
+
+### Fixtures Needed
+
+- `test_client` - FastAPI TestClient with mocked Application
+- `mock_config_store` - ConfigManager that operates in-memory
+- `mock_repository` - ClipRepository with canned data
+- `sample_camera_config` - Valid CameraConfig for RTSP
+- `sample_clip` - Clip with all fields populated
+
+### Test Cases
+
+**Camera CRUD**
+- Given no cameras, when POST /cameras with valid data, then 201 and camera created
+- Given camera "front", when GET /cameras/front, then returns camera data
+- Given camera "front", when DELETE /cameras/front, then 200 and camera removed
+
+**Health**
+- Given Postgres is up and pipeline running, when GET /health, then 200 and status="healthy"
+- Given Postgres is down but pipeline running, when GET /health, then 200 and status="degraded", postgres="unavailable"
+- Given pipeline stopped, when GET /health, then 503 and status="unhealthy"
+
+**Clips**
+- Given 100 clips, when GET /clips?page=2&page_size=10, then returns clips 11-20
+
+**ClipRepository**
+- Given 5 clips created today and 10 yesterday, when `count_clips_since(today_start)`, then returns 5
+- Given 0 alerts, when `count_alerts_since(any_date)`, then returns 0
+- Given clips with mixed cameras, when `list_clips(camera="front")`, then returns only "front" clips
+- Given 10 clips (5 alerted, 5 not), when `list_clips(alerted=True)`, then returns only 5 alerted clips
+- Given clips with mixed risk levels, when `list_clips(risk_level="high")`, then returns only high-risk clips
+- Given clip exists, when `delete_clip(clip_id)`, then clip marked deleted and returns clip data
+- Given StateStore is up, when `ping()`, then returns True
+
+---
+
+## Verification
+
+```bash
+# Run API tests
+pytest tests/unit/api/ -v
+
+# Start server manually
+homesec run --config config/example.yaml
+
+# Test endpoints
+curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/cameras
+curl http://localhost:8080/api/v1/config
+
+# Check OpenAPI docs
+open http://localhost:8080/docs
+```
+
+---
+
+## Definition of Done
+
+- [ ] FastAPI server starts and serves requests
+- [ ] All CRUD operations for cameras work
+- [ ] Config changes are validated and persisted (with backup)
+- [ ] Config changes return `restart_required: true`
+- [ ] `/api/v1/system/restart` triggers graceful shutdown
+- [ ] Clip listing with pagination and filtering works
+- [ ] Stats endpoint returns correct counts
+- [ ] OpenAPI documentation is accurate at `/docs`
+- [ ] CORS works for configured origins
+- [ ] API authentication (when enabled) works
+- [ ] `/health` returns 200 if pipeline running (even if DB degraded)
+- [ ] All tests pass

@@ -1,0 +1,31 @@
+configuration:
+  config_path:
+    name: Config path
+    description: Path to HomeSec config file inside Home Assistant.
+  log_level:
+    name: Log level
+    description: Logging verbosity for HomeSec.
+  database_url:
+    name: Database URL
+    description: Optional external Postgres DSN. Leave empty to use bundled Postgres.
+  db_password:
+    name: Database password
+    description: Password for bundled Postgres (leave blank to auto-generate).
+  storage_type:
+    name: Storage type
+    description: Storage backend for clips (local or dropbox).
+  storage_path:
+    name: Storage path
+    description: Local storage root path (used for local storage).
+  dropbox_token:
+    name: Dropbox token
+    description: Dropbox API token (used for dropbox storage).
+  vlm_enabled:
+    name: Enable VLM
+    description: Enable OpenAI VLM analysis.
+  openai_api_key:
+    name: OpenAI API key
+    description: OpenAI API key (required when VLM is enabled).
+  openai_model:
+    name: OpenAI model
+    description: OpenAI model name (e.g., gpt-4o).

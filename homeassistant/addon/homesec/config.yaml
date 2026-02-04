@@ -1,0 +1,55 @@
+name: HomeSec
+version: "1.2.2"
+slug: homesec
+description: Self-hosted AI video security pipeline
+url: https://github.com/lan17/homesec
+arch:
+  - amd64
+  - aarch64
+init: false
+homeassistant_api: true
+hassio_api: true
+host_network: false
+ingress: true
+ingress_port: 8080
+ingress_stream: true
+panel_icon: mdi:cctv
+panel_title: HomeSec
+
+ports:
+  8080/tcp: null
+
+map:
+  - addon_config:rw
+  - media:rw
+  - share:rw
+
+schema:
+  config_path: str?
+  log_level: list(debug|info|warning|error)?
+  database_url: str?
+  db_password: password?
+  storage_type: list(local|dropbox)?
+  storage_path: str?
+  dropbox_token: password?
+  vlm_enabled: bool?
+  openai_api_key: password?
+  openai_model: str?
+
+options:
+  config_path: /config/homesec/config.yaml
+  log_level: info
+  database_url: ""
+  db_password: ""
+  storage_type: local
+  storage_path: /media/homesec/clips
+  vlm_enabled: false
+  openai_model: gpt-4o
+
+startup: services
+stage: stable
+advanced: true
+privileged: []
+apparmor: true
+
+watchdog: http://[HOST]:[PORT:8080]/api/v1/health
