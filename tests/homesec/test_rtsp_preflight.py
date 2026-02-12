@@ -311,6 +311,71 @@ def test_preflight_enables_wallclock_timestamps_when_baseline_is_unstable(
     assert "mp4:v=copy:a=copy:ts=wallclock" in outcome.diagnostics.negotiation_attempts
 
 
+def test_validate_recording_profile_collects_stability_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recording validation should capture timestamp instability warning signals."""
+
+    class _FakeResult:
+        def __init__(self, returncode: int, stderr: str) -> None:
+            self.returncode = returncode
+            self.stderr = stderr
+            self.stdout = ""
+
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery([]),
+    )
+    profile = RecordingProfile(
+        input_url="rtsp://cam/high",
+        audio_mode="aac",
+        ffmpeg_output_args=["-c:v", "copy", "-c:a", "aac", "-f", "mp4"],
+    )
+
+    def _fake_run(
+        cmd: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> _FakeResult:
+        # Given: a validation ffmpeg command that logs warnings and succeeds
+        _ = capture_output
+        _ = text
+        _ = timeout
+        _ = check
+        idx = cmd.index("-loglevel")
+        assert cmd[idx + 1] == "warning"
+        output_path = Path(cmd[-1])
+        output_path.write_bytes(b"ok")
+        return _FakeResult(
+            returncode=0,
+            stderr=(
+                "Non-monotonic DTS\\n"
+                "Non-monotonic DTS\\n"
+                "Queue input is backward in time\\n"
+                "DTS discontinuity\\n"
+                "SEI type 764 size\\n"
+            ),
+        )
+
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.run", _fake_run)
+
+    # When: validating a recording profile
+    result = preflight._validate_recording_profile(profile)
+
+    # Then: warning counts are captured and returned with a successful validation
+    assert result.ok
+    assert result.signals.non_monotonic_dts == 2
+    assert result.signals.queue_input_backward == 1
+    assert result.signals.dts_discontinuity == 1
+    assert result.signals.sei_truncated == 1
+
+
 def test_session_limit_validation_retries_without_timeout_flags(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -531,7 +531,7 @@ class RTSPStartupPreflight:
             "-hide_banner",
             "-nostdin",
             "-loglevel",
-            "error",
+            "warning",
             "-rtsp_transport",
             "tcp",
         ]
