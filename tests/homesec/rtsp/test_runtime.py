@@ -15,6 +15,7 @@ from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recorder import FfmpegRecorder
+from homesec.sources.rtsp.recording_profile import MotionProfile
 
 
 class FakeClock:
@@ -267,6 +268,20 @@ def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
     assert source._detect_stream_available
 
 
+def test_detect_stream_derived_from_stream1(tmp_path: Path) -> None:
+    """Trailing /stream1 URLs should derive /stream2 detect streams."""
+    # Given: a /stream1 main stream with no explicit detect stream
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/camera/stream1")
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: detect stream is derived from stream sibling
+    assert source.detect_rtsp_url == "rtsp://host/camera/stream2"
+    assert source._detect_rtsp_url_source == "derived_stream2"
+    assert source._detect_stream_available
+
+
 def test_detect_stream_defaults_to_main(tmp_path: Path) -> None:
     """Detect stream should default to main stream when no subtype is available."""
     # Given: a main stream without subtype and no detect stream
@@ -411,6 +426,46 @@ def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     assert source._detect_fallback_active
 
 
+def test_reconnect_retries_detect_stream_when_fallback_fails(tmp_path: Path) -> None:
+    """Reconnect should probe the detect stream again when fallback cannot recover."""
+    # Given: detect stream fails twice, fallback stream fails, then detect recovers
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        reconnect={"detect_fallback_attempts": 2, "max_attempts": 6},
+    )
+    initial_source = RTSPSource(config, camera_name="cam")
+    detect_url = initial_source.detect_rtsp_url
+    pipeline = FakeFramePipeline(
+        frames=[b"0000"],
+        fail_start_times=2,
+        fail_urls={initial_source.rtsp_url},
+    )
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+
+    # When: reconnecting after fallback activation with a failing fallback stream
+    ok = source._reconnect_frame_pipeline(aggressive=True)
+
+    # Then: reconnect alternates back to detect stream and succeeds
+    assert ok
+    assert pipeline.start_calls[:4] == [
+        detect_url,
+        detect_url,
+        source.rtsp_url,
+        detect_url,
+    ]
+    assert not source._detect_fallback_active
+    assert source._motion_rtsp_url == detect_url
+
+
 def test_reconnect_defers_detect_fallback_while_recording(tmp_path: Path) -> None:
     """Reconnect should defer detect fallback when recording is active."""
     # Given: detect stream always fails while recording is active
@@ -494,6 +549,7 @@ def test_frame_pipeline_retries_without_timeouts_when_unsupported(tmp_path: Path
         rtsp_connect_timeout_s=2.0,
         rtsp_io_timeout_s=2.0,
         ffmpeg_flags=[],
+        motion_profile=MotionProfile(input_url="rtsp://host/stream"),
         hwaccel_config=HardwareAccelConfig(hwaccel=None),
         hwaccel_failed=True,
         on_frame=lambda: None,
@@ -748,6 +804,54 @@ def test_recording_retries_without_timeouts_when_unsupported(tmp_path: Path) -> 
     assert len(calls) == 2
     assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
     assert "-rw_timeout" not in calls[1]
+
+
+def test_recording_disables_timeout_flags_after_first_unsupported(tmp_path: Path) -> None:
+    """Recording should stop trying timeout flags after unsupported detection."""
+    # Given: a recorder whose ffmpeg rejects timeout flags
+    clock = FakeClock()
+    recorder = FfmpegRecorder(
+        rtsp_url="rtsp://host/stream",
+        ffmpeg_flags=[],
+        rtsp_connect_timeout_s=1.0,
+        rtsp_io_timeout_s=1.0,
+        clock=clock,
+    )
+    output_file = tmp_path / "clip.mp4"
+    stderr_log = tmp_path / "clip.log"
+    calls: list[list[str]] = []
+
+    class DummyPopen:
+        def __init__(self, returncode: int | None) -> None:
+            self._returncode = returncode
+            self.returncode = returncode
+            self.pid = 1234
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> DummyPopen:
+        calls.append(list(cmd))
+        stderr = kwargs.get("stderr")
+        if "-rw_timeout" in cmd or "-stimeout" in cmd:
+            if hasattr(stderr, "write"):
+                stderr.write("Unrecognized option 'stimeout'.\n")
+                stderr.flush()
+            return DummyPopen(returncode=1)
+        return DummyPopen(returncode=None)
+
+    # When: starting recordings twice
+    with patch("homesec.sources.rtsp.recorder.subprocess.Popen", side_effect=fake_popen):
+        _ = recorder.start(output_file, stderr_log)
+        _ = recorder.start(output_file, stderr_log)
+
+    # Then: second start skips timeout-option attempt
+    assert len(calls) == 3
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+    assert "-rw_timeout" not in calls[1]
+    assert "-stimeout" not in calls[1]
+    assert "-rw_timeout" not in calls[2]
+    assert "-stimeout" not in calls[2]
 
 
 def test_probe_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None:

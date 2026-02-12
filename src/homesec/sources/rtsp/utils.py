@@ -31,5 +31,14 @@ def _is_timeout_option_error(stderr_text: str) -> bool:
     )
 
 
+def _build_timeout_attempts(timeout_args: list[str]) -> list[tuple[str, list[str]]]:
+    if timeout_args:
+        return [
+            ("timeouts", list(timeout_args)),
+            ("no_timeouts", []),
+        ]
+    return [("default", [])]
+
+
 def _next_backoff(backoff_s: float, cap_s: float, *, factor: float = 1.6) -> float:
     return min(backoff_s * factor, cap_s)

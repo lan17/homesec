@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from homesec.sources.rtsp.core import RTSPSource, RTSPSourceConfig
+from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 
 
 def _make_source(tmp_path: Path) -> RTSPSource:
@@ -28,28 +29,39 @@ def test_sanitize_camera_name(tmp_path: Path) -> None:
     assert cleaned == "Front_Door_1"
 
 
-def test_derive_detect_rtsp_url(tmp_path: Path) -> None:
+def test_derive_detect_rtsp_url() -> None:
     """Derive a detect stream URL from subtype=0 URLs."""
-    # Given an RTSPSource instance
-    source = _make_source(tmp_path)
+    # Given: a subtype=0 RTSP URL
 
     # When deriving a detect URL from subtype=0
-    derived = source._derive_detect_rtsp_url("rtsp://host/stream?subtype=0")
+    result = derive_detect_rtsp_url("rtsp://host/stream?subtype=0")
 
     # Then subtype=1 is returned
-    assert derived == "rtsp://host/stream?subtype=1"
+    assert result is not None
+    assert result.url == "rtsp://host/stream?subtype=1"
 
 
-def test_derive_detect_rtsp_url_no_change(tmp_path: Path) -> None:
+def test_derive_detect_rtsp_url_no_change() -> None:
     """Return None when subtype=0 is not present."""
-    # Given an RTSPSource instance
-    source = _make_source(tmp_path)
+    # Given: a URL without subtype=0
 
     # When deriving from a URL without subtype=0
-    derived = source._derive_detect_rtsp_url("rtsp://host/stream")
+    result = derive_detect_rtsp_url("rtsp://host/stream")
 
     # Then no derived URL is produced
-    assert derived is None
+    assert result is None
+
+
+def test_derive_detect_rtsp_url_from_stream1() -> None:
+    """Derive detect stream from trailing /stream1 paths."""
+    # Given: a stream1 URL
+
+    # When deriving a detect URL from /stream1
+    result = derive_detect_rtsp_url("rtsp://host/cam/stream1")
+
+    # Then stream2 is returned
+    assert result is not None
+    assert result.url == "rtsp://host/cam/stream2"
 
 
 def test_normalize_blur_kernel(tmp_path: Path) -> None:

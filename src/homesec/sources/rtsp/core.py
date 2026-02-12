@@ -21,13 +21,24 @@ from pydantic import BaseModel, Field, model_validator
 
 from homesec.models.clip import Clip
 from homesec.sources.base import ThreadedClipSource
+from homesec.sources.rtsp.capabilities import (
+    RTSPTimeoutCapabilities,
+    get_global_rtsp_timeout_capabilities,
+)
 from homesec.sources.rtsp.clock import Clock, SystemClock
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
 from homesec.sources.rtsp.motion import MotionDetector
+from homesec.sources.rtsp.preflight import (
+    CameraPreflightOutcome,
+    PreflightError,
+    RTSPStartupPreflight,
+)
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
+from homesec.sources.rtsp.recording_profile import MotionProfile
+from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
-    _format_cmd,
+    _build_timeout_attempts,
     _is_timeout_option_error,
     _next_backoff,
     _redact_rtsp_url,
@@ -218,6 +229,7 @@ class RTSPSource(ThreadedClipSource):
         frame_pipeline: FramePipeline | None = None,
         recorder: Recorder | None = None,
         clock: Clock | None = None,
+        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
         """Initialize RTSP source."""
         super().__init__()
@@ -238,13 +250,13 @@ class RTSPSource(ThreadedClipSource):
             if env_value:
                 detect_rtsp_url = env_value
 
-        derived_detect = self._derive_detect_rtsp_url(self.rtsp_url)
+        derived_detect = derive_detect_rtsp_url(self.rtsp_url)
         if detect_rtsp_url:
             self.detect_rtsp_url = detect_rtsp_url
             self._detect_rtsp_url_source = "explicit"
         elif derived_detect:
-            self.detect_rtsp_url = derived_detect
-            self._detect_rtsp_url_source = "derived_subtype=1"
+            self.detect_rtsp_url = derived_detect.url
+            self._detect_rtsp_url_source = derived_detect.source
         else:
             self.detect_rtsp_url = self.rtsp_url
             self._detect_rtsp_url_source = "same_as_rtsp_url"
@@ -268,7 +280,15 @@ class RTSPSource(ThreadedClipSource):
         self.reconnect_backoff_s = float(config.reconnect.backoff_s)
         self.rtsp_connect_timeout_s = float(config.stream.connect_timeout_s)
         self.rtsp_io_timeout_s = float(config.stream.io_timeout_s)
-        self.ffmpeg_flags = list(config.stream.ffmpeg_flags)
+        self._legacy_ffmpeg_flags = list(config.stream.ffmpeg_flags)
+        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
+        self._preflight = RTSPStartupPreflight(
+            output_dir=Path(config.output_dir),
+            rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+            rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+            timeout_capabilities=self._timeout_capabilities,
+        )
+        self._preflight_outcome: CameraPreflightOutcome | None = None
 
         if config.stream.disable_hwaccel:
             logger.info("Hardware acceleration manually disabled")
@@ -299,24 +319,30 @@ class RTSPSource(ThreadedClipSource):
             blur_kernel=self.blur_kernel,
             debug=self.debug_motion,
         )
+        self._owns_frame_pipeline = frame_pipeline is None
+        self._owns_recorder = recorder is None
 
         self._frame_pipeline: FramePipeline = frame_pipeline or FfmpegFramePipeline(
             output_dir=self.output_dir,
             frame_queue_size=self.frame_queue_size,
             rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self.rtsp_io_timeout_s,
-            ffmpeg_flags=self.ffmpeg_flags,
+            ffmpeg_flags=[],
+            motion_profile=MotionProfile(input_url=self.detect_rtsp_url),
             hwaccel_config=self.hwaccel_config,
             hwaccel_failed=self._hwaccel_failed,
             on_frame=self._touch_heartbeat,
             clock=self._clock,
+            timeout_capabilities=self._timeout_capabilities,
         )
         self._recorder: Recorder = recorder or FfmpegRecorder(
             rtsp_url=self.rtsp_url,
-            ffmpeg_flags=self.ffmpeg_flags,
+            ffmpeg_flags=[],
+            recording_profile=None,
             rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self.rtsp_io_timeout_s,
             clock=self._clock,
+            timeout_capabilities=self._timeout_capabilities,
         )
         self._run_state = RTSPRunState.IDLE
         self._motion_rtsp_url = self.detect_rtsp_url
@@ -354,6 +380,7 @@ class RTSPSource(ThreadedClipSource):
 
     def _on_start(self) -> None:
         logger.info("Starting RTSPSource: %s", self.camera_name)
+        self._run_startup_preflight()
 
     def _on_stop(self) -> None:
         logger.info("Stopping RTSPSource...")
@@ -361,10 +388,65 @@ class RTSPSource(ThreadedClipSource):
     def _on_stopped(self) -> None:
         logger.info("RTSPSource stopped")
 
-    def _derive_detect_rtsp_url(self, rtsp_url: str) -> str | None:
-        if "subtype=0" in rtsp_url:
-            return rtsp_url.replace("subtype=0", "subtype=1")
-        return None
+    def _run_startup_preflight(self) -> None:
+        if self._preflight_outcome is not None:
+            return
+
+        if self._legacy_ffmpeg_flags:
+            logger.warning(
+                "Ignoring deprecated stream.ffmpeg_flags for RTSP source %s; startup preflight auto-negotiation is enabled",
+                self.camera_name,
+            )
+
+        result = self._preflight.run(
+            camera_name=self.camera_name,
+            primary_rtsp_url=self.rtsp_url,
+            detect_rtsp_url=self.detect_rtsp_url,
+        )
+        match result:
+            case CameraPreflightOutcome() as outcome:
+                self._apply_preflight_outcome(outcome)
+            case PreflightError() as err:
+                logger.error(
+                    "RTSP startup preflight failed: camera=%s key=%s stage=%s reason=%s",
+                    self.camera_name,
+                    err.camera_key,
+                    err.stage,
+                    err.message,
+                )
+                raise RuntimeError(
+                    f"RTSP preflight failed for {self.camera_name} at {err.stage}: {err.message}"
+                ) from err
+            case _:
+                raise RuntimeError(
+                    "RTSP startup preflight returned unexpected result type: "
+                    f"{type(result).__name__}"
+                )
+
+    def _apply_preflight_outcome(self, outcome: CameraPreflightOutcome) -> None:
+        self._preflight_outcome = outcome
+        self._motion_rtsp_url = outcome.motion_profile.input_url
+
+        if self._owns_frame_pipeline and isinstance(self._frame_pipeline, FfmpegFramePipeline):
+            self._frame_pipeline.set_motion_profile(outcome.motion_profile)
+        if self._owns_recorder and isinstance(self._recorder, FfmpegRecorder):
+            self._recorder.configure_profile(outcome.recording_profile)
+
+        if self._motion_rtsp_url != self.detect_rtsp_url:
+            # Motion stream is pinned away from detect stream, so runtime fallback probing
+            # would only introduce nondeterministic behavior.
+            self._detect_stream_available = False
+            self._detect_fallback_active = False
+            self._detect_next_probe_at = None
+
+        logger.info(
+            "RTSP preflight complete: camera=%s motion_url=%s recording_url=%s profile=%s session_mode=%s",
+            self.camera_name,
+            self._redact_rtsp_url(outcome.motion_profile.input_url),
+            self._redact_rtsp_url(outcome.recording_profile.input_url),
+            outcome.recording_profile.profile_id(),
+            outcome.diagnostics.session_mode,
+        )
 
     def _sanitize_camera_name(self, name: str | None) -> str | None:
         if not name:
@@ -392,7 +474,10 @@ class RTSPSource(ThreadedClipSource):
 
     def _make_recording_paths(self, timestamp: str) -> tuple[Path, Path]:
         prefix = self._recording_prefix()
-        output_file = self.output_dir / f"{prefix}motion_{timestamp}.mp4"
+        extension = "mp4"
+        if self._preflight_outcome is not None:
+            extension = self._preflight_outcome.recording_profile.output_extension
+        output_file = self.output_dir / f"{prefix}motion_{timestamp}.{extension}"
         stderr_log = self.output_dir / f"{prefix}recording_{timestamp}.log"
         return output_file, stderr_log
 
@@ -475,18 +560,18 @@ class RTSPSource(ThreadedClipSource):
             "-rtsp_transport",
             "tcp",
         ]
-        timeout_args: list[str] = []
-        if self.rtsp_connect_timeout_s > 0:
-            timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-            timeout_args.extend(["-stimeout", timeout_us_connect])
-        if self.rtsp_io_timeout_s > 0:
-            timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
-            timeout_args.extend(["-rw_timeout", timeout_us_io])
+        timeout_args = self._timeout_capabilities.build_ffprobe_timeout_args(
+            connect_timeout_s=self.rtsp_connect_timeout_s,
+            io_timeout_s=self.rtsp_io_timeout_s,
+        )
 
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", base_cmd + timeout_args + [rtsp_url]))
-        attempts.append(("no_timeouts" if timeout_args else "default", base_cmd + [rtsp_url]))
+        attempts = [
+            (
+                label,
+                base_cmd + timeout_attempt_args + [rtsp_url],
+            )
+            for label, timeout_attempt_args in _build_timeout_attempts(timeout_args)
+        ]
 
         for label, cmd in attempts:
             try:
@@ -499,10 +584,22 @@ class RTSPSource(ThreadedClipSource):
                 )
                 if result.returncode != 0:
                     if _is_timeout_option_error(result.stderr):
-                        logger.debug("ffprobe missing timeout options (%s), retrying", label)
+                        changed = self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
+                        if changed:
+                            logger.warning(
+                                "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
+                            )
+                        else:
+                            logger.debug(
+                                "ffprobe missing timeout options (%s), retrying",
+                                label,
+                            )
                         continue
                     logger.debug("ffprobe failed (%s) with exit code %s", label, result.returncode)
                     break
+
+                if label == "timeouts":
+                    self._timeout_capabilities.note_ffprobe_timeout_success()
 
                 data = json.loads(result.stdout)
                 if not data.get("streams"):
@@ -522,9 +619,6 @@ class RTSPSource(ThreadedClipSource):
 
     def _redact_rtsp_url(self, url: str) -> str:
         return _redact_rtsp_url(url)
-
-    def _format_cmd(self, cmd: list[str]) -> str:
-        return _format_cmd(cmd)
 
     def detect_motion(
         self, frame: npt.NDArray[np.uint8], *, threshold: float | None = None
@@ -737,6 +831,45 @@ class RTSPSource(ThreadedClipSource):
     def _wait_for_first_frame(self, timeout_s: float) -> bool:
         return self._frame_pipeline.read_frame(timeout_s) is not None
 
+    def _on_reconnect_attempt_failed(self, attempted_url: str) -> None:
+        if not self._detect_fallback_active:
+            return
+        if not self._detect_stream_available:
+            return
+
+        if attempted_url == self.rtsp_url:
+            self._motion_rtsp_url = self.detect_rtsp_url
+            logger.info(
+                "Reconnect fallback: retrying detect stream",
+                extra=self._event_extra(
+                    "detect_fallback_reconnect_probe",
+                    detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                    detect_stream_is_same=False,
+                ),
+            )
+            return
+
+        if attempted_url == self.detect_rtsp_url:
+            self._motion_rtsp_url = self.rtsp_url
+
+    def _on_reconnect_attempt_succeeded(self, attempted_url: str) -> None:
+        if not self._detect_fallback_active:
+            return
+        if attempted_url != self.detect_rtsp_url:
+            return
+
+        self._detect_fallback_active = False
+        self._detect_next_probe_at = None
+        self._detect_probe_backoff_s = self._detect_probe_interval_s
+        logger.info(
+            "Detect stream restored during reconnect; using detect stream again",
+            extra=self._event_extra(
+                "detect_fallback_recovered",
+                detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                detect_stream_is_same=False,
+            ),
+        )
+
     def _reconnect_frame_pipeline(self, *, aggressive: bool) -> bool:
         initial_backoff_s = 0.2 if aggressive else float(self.reconnect_backoff_s)
         backoff_s = initial_backoff_s
@@ -787,6 +920,7 @@ class RTSPSource(ThreadedClipSource):
                 logger.debug("Waiting %.2fs before reconnect...", sleep_s)
                 self._clock.sleep(sleep_s)
 
+            attempted_url = self._motion_rtsp_url
             try:
                 self._start_frame_pipeline()
             except Exception as exc:
@@ -798,6 +932,7 @@ class RTSPSource(ThreadedClipSource):
                     backoff_s = initial_backoff_s
                     first_attempt = True
                     continue
+                self._on_reconnect_attempt_failed(attempted_url)
                 backoff_s = self._bump_reconnect_backoff(
                     backoff_s,
                     backoff_cap_s,
@@ -817,13 +952,14 @@ class RTSPSource(ThreadedClipSource):
                         motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
                     ),
                 )
+                self._on_reconnect_attempt_succeeded(attempted_url)
                 self.reconnect_count = 0
                 self._detect_failure_count = 0
                 self._detect_fallback_deferred = False
                 return True
 
             logger.warning("Frame pipeline restarted but still no frames; retrying...")
-            self._note_detect_failure(self._clock.now())
+            triggered_fallback = self._note_detect_failure(self._clock.now())
             try:
                 self._stop_frame_pipeline()
             except Exception as exc:
@@ -834,6 +970,8 @@ class RTSPSource(ThreadedClipSource):
                 )
             if self._reconnect_exhausted(aggressive=aggressive):
                 return False
+            if not triggered_fallback:
+                self._on_reconnect_attempt_failed(attempted_url)
             backoff_s = self._bump_reconnect_backoff(
                 backoff_s,
                 backoff_cap_s,
@@ -1176,43 +1314,22 @@ class RTSPSource(ThreadedClipSource):
         else:
             logger.info("Hardware acceleration: disabled (using software decoding)")
 
-        logger.info("Detecting camera resolution...")
-        info = self._probe_stream_info(self.rtsp_url)
-        width = info.get("width") if info else None
-        height = info.get("height") if info else None
-        if isinstance(width, (int, str)) and isinstance(height, (int, str)):
-            native_width = int(width)
-            native_height = int(height)
-        else:
-            logger.warning("Failed to probe stream, using default 1920x1080")
-            native_width, native_height = 1920, 1080
-        logger.info("Camera resolution: %sx%s", native_width, native_height)
+        if self._preflight_outcome is not None:
+            selected = self._preflight_outcome
+            logger.info(
+                "Preflight-selected motion stream: %s",
+                self._redact_rtsp_url(selected.motion_profile.input_url),
+            )
+            logger.info(
+                "Preflight-selected recording stream: %s (profile=%s session_mode=%s)",
+                self._redact_rtsp_url(selected.recording_profile.input_url),
+                selected.recording_profile.profile_id(),
+                selected.diagnostics.session_mode,
+            )
+            logger.info("Motion detection: 320x240@10fps (downscaled for efficiency)")
+            return
 
-        if self.detect_rtsp_url != self.rtsp_url:
-            info = self._probe_stream_info(self.detect_rtsp_url)
-            if info and info.get("width") and info.get("height"):
-                logger.info(
-                    "Motion RTSP stream (%s) available: %s (%sx%s @ %s)",
-                    self._detect_rtsp_url_source,
-                    self._redact_rtsp_url(self.detect_rtsp_url),
-                    info.get("width"),
-                    info.get("height"),
-                    info.get("avg_frame_rate"),
-                )
-            else:
-                if self.detect_fallback_attempts > 0:
-                    logger.warning(
-                        "Motion RTSP stream (%s) did not probe cleanly; falling back to main RTSP stream",
-                        self._detect_rtsp_url_source,
-                    )
-                    self._activate_detect_fallback(self._clock.now())
-                else:
-                    logger.warning(
-                        "Motion RTSP stream (%s) did not probe cleanly; fallback disabled",
-                        self._detect_rtsp_url_source,
-                    )
-
-        logger.info("Motion detection: 320x240@10fps (downscaled for efficiency)")
+        logger.warning("Preflight outcome missing at startup; using runtime defaults")
 
     def _handle_frame_timeout(self) -> bool:
         pipe_status = self._frame_pipeline.exit_code()
