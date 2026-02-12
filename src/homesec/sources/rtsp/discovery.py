@@ -13,7 +13,12 @@ from homesec.sources.rtsp.capabilities import (
     RTSPTimeoutCapabilities,
     get_global_rtsp_timeout_capabilities,
 )
-from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
+from homesec.sources.rtsp.utils import (
+    _build_timeout_attempts,
+    _format_cmd,
+    _is_timeout_option_error,
+    _redact_rtsp_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +117,13 @@ class FfprobeStreamDiscovery:
             io_timeout_s=self._rtsp_io_timeout_s,
         )
 
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", base_cmd + timeout_args + [rtsp_url]))
-        attempts.append(("no_timeouts" if timeout_args else "default", base_cmd + [rtsp_url]))
+        attempts = [
+            (
+                label,
+                base_cmd + timeout_attempt_args + [rtsp_url],
+            )
+            for label, timeout_attempt_args in _build_timeout_attempts(timeout_args)
+        ]
 
         for label, cmd in attempts:
             redacted_cmd = _format_probe_cmd(cmd)

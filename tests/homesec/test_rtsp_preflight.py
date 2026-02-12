@@ -376,6 +376,55 @@ def test_validate_recording_profile_collects_stability_warnings(
     assert result.signals.sei_truncated == 1
 
 
+def test_validate_recording_profile_requires_output_clip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation should fail if ffmpeg reports success but no output clip exists."""
+
+    class _FakeResult:
+        def __init__(self, returncode: int, stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stderr = stderr
+            self.stdout = ""
+
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery([]),
+    )
+    profile = RecordingProfile(
+        input_url="rtsp://cam/high",
+        audio_mode="aac",
+        ffmpeg_output_args=["-c:v", "copy", "-c:a", "aac", "-f", "mp4"],
+    )
+
+    def _fake_run(
+        _cmd: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> _FakeResult:
+        _ = capture_output
+        _ = text
+        _ = timeout
+        _ = check
+        return _FakeResult(returncode=0)
+
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.run", _fake_run)
+
+    # When: validating a profile with no output produced
+    result = preflight._validate_recording_profile(profile)
+
+    # Then: validation fails closed
+    assert not result.ok
+    assert result.error is not None
+    assert "empty" in result.error
+
+
 def test_session_limit_validation_retries_without_timeout_flags(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

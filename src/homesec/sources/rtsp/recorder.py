@@ -11,7 +11,12 @@ from homesec.sources.rtsp.capabilities import (
 )
 from homesec.sources.rtsp.clock import Clock
 from homesec.sources.rtsp.recording_profile import RecordingProfile, build_default_recording_profile
-from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
+from homesec.sources.rtsp.utils import (
+    _build_timeout_attempts,
+    _format_cmd,
+    _is_timeout_option_error,
+    _redact_rtsp_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +114,7 @@ class FfmpegRecorder:
         cmd_tail.extend(user_flags)
         cmd_tail.extend(["-y", str(output_file)])
 
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", timeout_args))
-        attempts.append(("no_timeouts" if timeout_args else "default", []))
+        attempts = _build_timeout_attempts(timeout_args)
 
         for label, extra_args in attempts:
             cmd = list(cmd_base) + list(extra_args) + cmd_tail

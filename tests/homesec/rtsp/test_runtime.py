@@ -15,6 +15,7 @@ from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recorder import FfmpegRecorder
+from homesec.sources.rtsp.recording_profile import MotionProfile
 
 
 class FakeClock:
@@ -508,7 +509,7 @@ def test_frame_pipeline_retries_without_timeouts_when_unsupported(tmp_path: Path
         rtsp_connect_timeout_s=2.0,
         rtsp_io_timeout_s=2.0,
         ffmpeg_flags=[],
-        motion_profile=None,
+        motion_profile=MotionProfile(input_url="rtsp://host/stream"),
         hwaccel_config=HardwareAccelConfig(hwaccel=None),
         hwaccel_failed=True,
         on_frame=lambda: None,

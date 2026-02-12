@@ -38,6 +38,7 @@ from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
 from homesec.sources.rtsp.recording_profile import MotionProfile
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
+    _build_timeout_attempts,
     _format_cmd,
     _is_timeout_option_error,
     _next_backoff,
@@ -388,12 +389,6 @@ class RTSPSource(ThreadedClipSource):
     def _on_stopped(self) -> None:
         logger.info("RTSPSource stopped")
 
-    def _derive_detect_rtsp_url(self, rtsp_url: str) -> str | None:
-        derived = derive_detect_rtsp_url(rtsp_url)
-        if derived is None:
-            return None
-        return derived.url
-
     def _run_startup_preflight(self) -> None:
         if self._preflight_outcome is not None:
             return
@@ -571,10 +566,13 @@ class RTSPSource(ThreadedClipSource):
             io_timeout_s=self.rtsp_io_timeout_s,
         )
 
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", base_cmd + timeout_args + [rtsp_url]))
-        attempts.append(("no_timeouts" if timeout_args else "default", base_cmd + [rtsp_url]))
+        attempts = [
+            (
+                label,
+                base_cmd + timeout_attempt_args + [rtsp_url],
+            )
+            for label, timeout_attempt_args in _build_timeout_attempts(timeout_args)
+        ]
 
         for label, cmd in attempts:
             try:

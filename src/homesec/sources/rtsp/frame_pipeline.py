@@ -15,7 +15,12 @@ from homesec.sources.rtsp.capabilities import (
 from homesec.sources.rtsp.clock import Clock
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recording_profile import MotionProfile
-from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
+from homesec.sources.rtsp.utils import (
+    _build_timeout_attempts,
+    _format_cmd,
+    _is_timeout_option_error,
+    _redact_rtsp_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +55,7 @@ class FfmpegFramePipeline:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         ffmpeg_flags: list[str],
-        motion_profile: MotionProfile | None,
+        motion_profile: MotionProfile,
         hwaccel_config: HardwareAccelConfig,
         hwaccel_failed: bool,
         on_frame: Callable[[], None],
@@ -62,7 +67,7 @@ class FfmpegFramePipeline:
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._ffmpeg_flags = ffmpeg_flags
-        self._motion_profile = motion_profile or MotionProfile(input_url="", ffmpeg_input_args=[])
+        self._motion_profile = motion_profile
         self._hwaccel_config = hwaccel_config
         self._hwaccel_failed = hwaccel_failed
         self._on_frame = on_frame
@@ -252,10 +257,13 @@ class FfmpegFramePipeline:
         if not has_rw_timeout and "-rw_timeout" in timeout_values:
             timeout_args.extend(["-rw_timeout", timeout_values["-rw_timeout"]])
 
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", base_input_prefix + timeout_args + base_input_args))
-        attempts.append(("no_timeouts", base_input_prefix + base_input_args))
+        attempts = [
+            (
+                label,
+                base_input_prefix + timeout_attempt_args + base_input_args,
+            )
+            for label, timeout_attempt_args in _build_timeout_attempts(timeout_args)
+        ]
 
         process: subprocess.Popen[bytes] | None = None
         stderr_file: Any | None = None

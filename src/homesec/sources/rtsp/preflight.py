@@ -27,7 +27,12 @@ from homesec.sources.rtsp.recording_profile import (
     build_recording_profile_candidates,
 )
 from homesec.sources.rtsp.url_derivation import derive_probe_candidate_urls
-from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
+from homesec.sources.rtsp.utils import (
+    _build_timeout_attempts,
+    _format_cmd,
+    _is_timeout_option_error,
+    _redact_rtsp_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -382,10 +387,7 @@ class RTSPStartupPreflight:
 
         timeout_args = self._timeout_args()
 
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", timeout_args))
-        attempts.append(("no_timeouts" if timeout_args else "default", []))
+        attempts = _build_timeout_attempts(timeout_args)
 
         try:
             for label, extra_timeout_args in attempts:
@@ -419,12 +421,43 @@ class RTSPStartupPreflight:
                     if label == "timeouts":
                         self._timeout_capabilities.note_ffmpeg_timeout_success()
                     try:
-                        if temp_path.exists() and temp_path.stat().st_size > 0:
-                            return RecordingValidationResult(ok=True, signals=signals)
-                    except Exception:
+                        exists = temp_path.exists()
+                    except Exception as exc:
+                        logger.warning(
+                            "Recording preflight failed to verify output existence: %s",
+                            exc,
+                            exc_info=True,
+                        )
+                        return RecordingValidationResult(
+                            ok=False,
+                            error=f"failed to verify output file existence: {type(exc).__name__}",
+                            signals=signals,
+                        )
+                    if not exists:
+                        return RecordingValidationResult(
+                            ok=False,
+                            error="ffmpeg returned success but output clip was not created",
+                            signals=signals,
+                        )
+                    try:
+                        size = temp_path.stat().st_size
+                    except Exception as exc:
+                        logger.warning(
+                            "Recording preflight failed to stat output clip: %s",
+                            exc,
+                            exc_info=True,
+                        )
+                        return RecordingValidationResult(
+                            ok=False,
+                            error=f"failed to stat output clip: {type(exc).__name__}",
+                            signals=signals,
+                        )
+                    if size > 0:
                         return RecordingValidationResult(ok=True, signals=signals)
                     return RecordingValidationResult(
-                        ok=False, error="ffmpeg returned success but output clip is empty"
+                        ok=False,
+                        error="ffmpeg returned success but output clip is empty",
+                        signals=signals,
                     )
 
                 if label == "timeouts" and _is_timeout_option_error(stderr_text):
@@ -456,10 +489,7 @@ class RTSPStartupPreflight:
     def _validate_session_limits(self, motion_url: str, recording_url: str) -> bool:
         """Validate that motion and recording pipelines can open concurrently."""
         timeout_args = self._timeout_args()
-        attempts: list[tuple[str, list[str]]] = []
-        if timeout_args:
-            attempts.append(("timeouts", timeout_args))
-        attempts.append(("no_timeouts" if timeout_args else "default", []))
+        attempts = _build_timeout_attempts(timeout_args)
 
         for label, current_timeout_args in attempts:
             motion_cmd = self._build_stream_open_cmd(

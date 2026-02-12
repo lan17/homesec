@@ -15,6 +15,8 @@ MP4_COPY_AUDIO_CODECS: frozenset[str] = frozenset(
     }
 )
 
+MP4_PASSTHROUGH_TIMING_ARGS: list[str] = ["-vsync", "0"]
+
 
 class MotionProfile(BaseModel):
     """Locked ffmpeg input profile for motion detection stream."""
@@ -75,7 +77,15 @@ def build_recording_profile_candidates(
             RecordingProfile(
                 input_url=input_url,
                 audio_mode="copy",
-                ffmpeg_output_args=["-c:v", "copy", "-c:a", "copy", "-f", "mp4"],
+                ffmpeg_output_args=[
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "copy",
+                    *MP4_PASSTHROUGH_TIMING_ARGS,
+                    "-f",
+                    "mp4",
+                ],
             )
         )
 
@@ -91,6 +101,7 @@ def build_recording_profile_candidates(
                     "aac",
                     "-b:a",
                     "128k",
+                    *MP4_PASSTHROUGH_TIMING_ARGS,
                     "-f",
                     "mp4",
                 ],
@@ -101,7 +112,14 @@ def build_recording_profile_candidates(
         RecordingProfile(
             input_url=input_url,
             audio_mode="none",
-            ffmpeg_output_args=["-c:v", "copy", "-an", "-f", "mp4"],
+            ffmpeg_output_args=[
+                "-c:v",
+                "copy",
+                "-an",
+                *MP4_PASSTHROUGH_TIMING_ARGS,
+                "-f",
+                "mp4",
+            ],
         )
     )
 
@@ -114,5 +132,13 @@ def build_default_recording_profile(input_url: str) -> RecordingProfile:
     return RecordingProfile(
         input_url=input_url,
         audio_mode="copy",
-        ffmpeg_output_args=["-c:v", "copy", "-c:a", "copy", "-f", "mp4"],
+        ffmpeg_output_args=[
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            *MP4_PASSTHROUGH_TIMING_ARGS,
+            "-f",
+            "mp4",
+        ],
     )
