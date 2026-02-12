@@ -225,9 +225,6 @@ class FfmpegFramePipeline:
         # Add all user flags to global scope.
         cmd.extend(user_flags)
 
-        has_stimeout = any(x == "-stimeout" for x in user_flags)
-        has_rw_timeout = any(x == "-rw_timeout" for x in user_flags)
-
         base_input_prefix = ["-rtsp_transport", "tcp"]
         base_input_args = [
             "-i",
@@ -242,20 +239,11 @@ class FfmpegFramePipeline:
             "-",
         ]
 
-        timeout_args: list[str] = []
-        candidate_timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args(
+        timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args_for_user_flags(
             connect_timeout_s=self._rtsp_connect_timeout_s,
             io_timeout_s=self._rtsp_io_timeout_s,
+            user_flags=user_flags,
         )
-        timeout_values: dict[str, str] = {}
-        for idx in range(0, len(candidate_timeout_args), 2):
-            if idx + 1 >= len(candidate_timeout_args):
-                continue
-            timeout_values[candidate_timeout_args[idx]] = candidate_timeout_args[idx + 1]
-        if not has_stimeout and "-stimeout" in timeout_values:
-            timeout_args.extend(["-stimeout", timeout_values["-stimeout"]])
-        if not has_rw_timeout and "-rw_timeout" in timeout_values:
-            timeout_args.extend(["-rw_timeout", timeout_values["-rw_timeout"]])
 
         attempts = [
             (

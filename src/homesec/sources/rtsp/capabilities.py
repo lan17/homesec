@@ -51,6 +51,35 @@ class RTSPTimeoutCapabilities:
             connect_timeout_s=connect_timeout_s, io_timeout_s=io_timeout_s
         )
 
+    def build_ffmpeg_timeout_args_for_user_flags(
+        self,
+        *,
+        connect_timeout_s: float,
+        io_timeout_s: float,
+        user_flags: list[str],
+    ) -> list[str]:
+        """Build timeout args while respecting explicit user timeout options."""
+        timeout_args = self.build_ffmpeg_timeout_args(
+            connect_timeout_s=connect_timeout_s,
+            io_timeout_s=io_timeout_s,
+        )
+        if not timeout_args:
+            return []
+
+        skip_options = {flag for flag in user_flags if flag in {"-stimeout", "-rw_timeout"}}
+        if not skip_options:
+            return timeout_args
+
+        filtered: list[str] = []
+        for idx in range(0, len(timeout_args), 2):
+            if idx + 1 >= len(timeout_args):
+                continue
+            option = timeout_args[idx]
+            if option in skip_options:
+                continue
+            filtered.extend([option, timeout_args[idx + 1]])
+        return filtered
+
     def note_ffmpeg_timeout_success(self) -> None:
         with self._lock:
             if self._ffmpeg == TimeoutOptionSupport.UNKNOWN:
