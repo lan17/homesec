@@ -21,6 +21,7 @@ from homesec.sources.rtsp.recording_profile import (
     RecordingProfile,
     build_recording_profile_candidates,
 )
+from homesec.sources.rtsp.url_derivation import derive_probe_candidate_urls
 from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
 
 logger = logging.getLogger(__name__)
@@ -536,9 +537,17 @@ def select_recording_stream(*, camera_key: str, streams: list[ProbeStreamInfo]) 
 
 
 def _candidate_urls(primary_rtsp_url: str, detect_rtsp_url: str) -> list[str]:
-    if detect_rtsp_url == primary_rtsp_url:
-        return [primary_rtsp_url]
-    return [primary_rtsp_url, detect_rtsp_url]
+    candidates: list[str] = [primary_rtsp_url]
+    if detect_rtsp_url != primary_rtsp_url:
+        candidates.append(detect_rtsp_url)
+
+    for base_url in (primary_rtsp_url, detect_rtsp_url):
+        for derived_url in derive_probe_candidate_urls(base_url):
+            if derived_url in candidates:
+                continue
+            candidates.append(derived_url)
+
+    return candidates
 
 
 def _format_recording_cmd(cmd: list[str]) -> str:

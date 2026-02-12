@@ -52,6 +52,18 @@ def test_derive_detect_rtsp_url_no_change(tmp_path: Path) -> None:
     assert derived is None
 
 
+def test_derive_detect_rtsp_url_from_stream1(tmp_path: Path) -> None:
+    """Derive detect stream from trailing /stream1 paths."""
+    # Given an RTSPSource instance
+    source = _make_source(tmp_path)
+
+    # When deriving a detect URL from /stream1
+    derived = source._derive_detect_rtsp_url("rtsp://host/cam/stream1")
+
+    # Then stream2 is returned
+    assert derived == "rtsp://host/cam/stream2"
+
+
 def test_normalize_blur_kernel(tmp_path: Path) -> None:
     """Normalize blur kernel to odd or zero values."""
     # Given an RTSPSource instance

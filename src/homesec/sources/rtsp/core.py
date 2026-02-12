@@ -32,6 +32,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
 from homesec.sources.rtsp.recording_profile import MotionProfile
+from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
     _format_cmd,
     _is_timeout_option_error,
@@ -244,13 +245,13 @@ class RTSPSource(ThreadedClipSource):
             if env_value:
                 detect_rtsp_url = env_value
 
-        derived_detect = self._derive_detect_rtsp_url(self.rtsp_url)
+        derived_detect = derive_detect_rtsp_url(self.rtsp_url)
         if detect_rtsp_url:
             self.detect_rtsp_url = detect_rtsp_url
             self._detect_rtsp_url_source = "explicit"
         elif derived_detect:
-            self.detect_rtsp_url = derived_detect
-            self._detect_rtsp_url_source = "derived_subtype=1"
+            self.detect_rtsp_url = derived_detect.url
+            self._detect_rtsp_url_source = derived_detect.source
         else:
             self.detect_rtsp_url = self.rtsp_url
             self._detect_rtsp_url_source = "same_as_rtsp_url"
@@ -379,9 +380,10 @@ class RTSPSource(ThreadedClipSource):
         logger.info("RTSPSource stopped")
 
     def _derive_detect_rtsp_url(self, rtsp_url: str) -> str | None:
-        if "subtype=0" in rtsp_url:
-            return rtsp_url.replace("subtype=0", "subtype=1")
-        return None
+        derived = derive_detect_rtsp_url(rtsp_url)
+        if derived is None:
+            return None
+        return derived.url
 
     def _run_startup_preflight(self) -> None:
         if self._preflight_outcome is not None:

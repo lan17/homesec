@@ -267,6 +267,20 @@ def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
     assert source._detect_stream_available
 
 
+def test_detect_stream_derived_from_stream1(tmp_path: Path) -> None:
+    """Trailing /stream1 URLs should derive /stream2 detect streams."""
+    # Given: a /stream1 main stream with no explicit detect stream
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/camera/stream1")
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: detect stream is derived from stream sibling
+    assert source.detect_rtsp_url == "rtsp://host/camera/stream2"
+    assert source._detect_rtsp_url_source == "derived_stream2"
+    assert source._detect_stream_available
+
+
 def test_detect_stream_defaults_to_main(tmp_path: Path) -> None:
     """Detect stream should default to main stream when no subtype is available."""
     # Given: a main stream without subtype and no detect stream

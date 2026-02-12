@@ -14,11 +14,14 @@ from homesec.sources.rtsp.recording_profile import RecordingProfile
 class _FakeDiscovery:
     def __init__(self, streams: list[ProbeStreamInfo]) -> None:
         self._streams = streams
+        self.last_candidate_urls: list[str] = []
 
     def probe(self, *, camera_key: str, candidate_urls: list[str]) -> CameraProbeResult:
+        self.last_candidate_urls = list(candidate_urls)
+        streams = [stream for stream in self._streams if stream.url in candidate_urls]
         return CameraProbeResult(
             camera_key=camera_key,
-            streams=list(self._streams),
+            streams=streams,
             attempted_urls=candidate_urls,
             duration_ms=12,
         )
@@ -184,6 +187,62 @@ def test_preflight_returns_negotiation_error_for_unusable_audio(
     assert outcome.stage == "negotiation"
     assert outcome.diagnostics is not None
     assert outcome.diagnostics.negotiation_attempts == ["mp4:v=copy:a=aac", "mp4:v=copy:a=none"]
+
+
+def test_preflight_discovers_stream2_candidate_from_stream1_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should probe /stream2 when configured with only /stream1."""
+    # Given: discovery metadata for stream1 (high) and stream2 (low)
+    streams = [
+        ProbeStreamInfo(
+            url="rtsp://cam/stream1",
+            video_codec="h264",
+            audio_codec="aac",
+            width=1920,
+            height=1080,
+            fps=20.0,
+            fps_raw="20/1",
+            probe_ok=True,
+        ),
+        ProbeStreamInfo(
+            url="rtsp://cam/stream2",
+            video_codec="h264",
+            audio_codec="aac",
+            width=640,
+            height=360,
+            fps=10.0,
+            fps_raw="10/1",
+            probe_ok=True,
+        ),
+    ]
+    fake_discovery = _FakeDiscovery(streams)
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=fake_discovery,
+    )
+
+    def _validate_profile(_profile: RecordingProfile) -> tuple[bool, str | None]:
+        return True, None
+
+    monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
+    monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
+
+    # When: running startup preflight with only stream1 configured
+    outcome = preflight.run(
+        camera_name="garage",
+        primary_rtsp_url="rtsp://cam/stream1",
+        detect_rtsp_url="rtsp://cam/stream1",
+    )
+
+    # Then: stream2 is probed and selected for motion while stream1 stays for recording
+    assert not isinstance(outcome, PreflightError)
+    assert "rtsp://cam/stream2" in fake_discovery.last_candidate_urls
+    assert outcome.motion_profile.input_url == "rtsp://cam/stream2"
+    assert outcome.recording_profile.input_url == "rtsp://cam/stream1"
 
 
 def test_session_limit_validation_retries_without_timeout_flags(
