@@ -75,7 +75,8 @@ class FfmpegRecorder:
             timeout_args.extend(["-rw_timeout", timeout_us_io])
 
         input_url = self._recording_profile.input_url
-        cmd_tail = ["-i", input_url]
+        cmd_tail = list(self._recording_profile.ffmpeg_input_args)
+        cmd_tail.extend(["-i", input_url])
 
         # Naive check to see if user overrode defaults
         # If user supplies ANY -loglevel, we don't add ours.

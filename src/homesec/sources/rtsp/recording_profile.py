@@ -31,6 +31,7 @@ class RecordingProfile(BaseModel):
     model_config = {"extra": "forbid"}
 
     input_url: str
+    ffmpeg_input_args: list[str] = Field(default_factory=list)
     container: Literal["mp4"] = "mp4"
     video_mode: Literal["copy"] = "copy"
     audio_mode: Literal["copy", "aac", "none"]
@@ -38,7 +39,20 @@ class RecordingProfile(BaseModel):
     output_extension: Literal["mp4"] = "mp4"
 
     def profile_id(self) -> str:
-        return f"{self.container}:v={self.video_mode}:a={self.audio_mode}"
+        base = f"{self.container}:v={self.video_mode}:a={self.audio_mode}"
+        if self.uses_wallclock_timestamps():
+            return f"{base}:ts=wallclock"
+        return base
+
+    def uses_wallclock_timestamps(self) -> bool:
+        args = self.ffmpeg_input_args
+        for idx, arg in enumerate(args):
+            if arg != "-use_wallclock_as_timestamps":
+                continue
+            if idx + 1 < len(args):
+                return args[idx + 1] == "1"
+            return True
+        return False
 
 
 def is_mp4_audio_copy_compatible(audio_codec: str | None) -> bool:

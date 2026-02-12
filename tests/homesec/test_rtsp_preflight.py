@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from homesec.sources.rtsp.discovery import CameraProbeResult, ProbeStreamInfo
-from homesec.sources.rtsp.preflight import PreflightError, RTSPStartupPreflight
+from homesec.sources.rtsp.preflight import (
+    PreflightError,
+    RecordingValidationResult,
+    RecordingValidationSignals,
+    RTSPStartupPreflight,
+)
 from homesec.sources.rtsp.recording_profile import RecordingProfile
 
 
@@ -62,8 +67,8 @@ def test_preflight_selects_low_motion_and_high_recording_streams(
         discovery=_FakeDiscovery(streams),
     )
 
-    def _validate_profile(_profile: RecordingProfile) -> tuple[bool, str | None]:
-        return True, None
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
 
     monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
     monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
@@ -117,8 +122,8 @@ def test_preflight_falls_back_to_single_stream_when_dual_fails(
         discovery=_FakeDiscovery(streams),
     )
 
-    def _validate_profile(_profile: RecordingProfile) -> tuple[bool, str | None]:
-        return True, None
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
 
     call_count = 0
 
@@ -170,8 +175,8 @@ def test_preflight_returns_negotiation_error_for_unusable_audio(
         discovery=_FakeDiscovery(streams),
     )
 
-    def _validate_profile(_profile: RecordingProfile) -> tuple[bool, str | None]:
-        return False, "simulated ffmpeg failure"
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=False, error="simulated ffmpeg failure")
 
     monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
 
@@ -225,8 +230,8 @@ def test_preflight_discovers_stream2_candidate_from_stream1_url(
         discovery=fake_discovery,
     )
 
-    def _validate_profile(_profile: RecordingProfile) -> tuple[bool, str | None]:
-        return True, None
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
 
     monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
     monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
@@ -243,6 +248,67 @@ def test_preflight_discovers_stream2_candidate_from_stream1_url(
     assert "rtsp://cam/stream2" in fake_discovery.last_candidate_urls
     assert outcome.motion_profile.input_url == "rtsp://cam/stream2"
     assert outcome.recording_profile.input_url == "rtsp://cam/stream1"
+
+
+def test_preflight_enables_wallclock_timestamps_when_baseline_is_unstable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should lock wallclock timestamps when validation shows DTS instability."""
+    # Given: one viable stream with baseline timing instability warnings
+    streams = [
+        ProbeStreamInfo(
+            url="rtsp://cam/high",
+            video_codec="h264",
+            audio_codec="aac",
+            width=1920,
+            height=1080,
+            fps=20.0,
+            fps_raw="20/1",
+            probe_ok=True,
+        ),
+    ]
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery(streams),
+    )
+
+    def _validate_profile(profile: RecordingProfile) -> RecordingValidationResult:
+        if profile.uses_wallclock_timestamps():
+            return RecordingValidationResult(
+                ok=True,
+                signals=RecordingValidationSignals(
+                    non_monotonic_dts=1,
+                    queue_input_backward=0,
+                    dts_discontinuity=0,
+                ),
+            )
+        return RecordingValidationResult(
+            ok=True,
+            signals=RecordingValidationSignals(
+                non_monotonic_dts=20,
+                queue_input_backward=2,
+                dts_discontinuity=0,
+            ),
+        )
+
+    monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
+    monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
+
+    # When: running startup preflight
+    outcome = preflight.run(
+        camera_name="garage",
+        primary_rtsp_url="rtsp://cam/high",
+        detect_rtsp_url="rtsp://cam/high",
+    )
+
+    # Then: wallclock timestamps are enabled for recording
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.recording_profile.uses_wallclock_timestamps()
+    assert outcome.diagnostics.selected_recording_profile == "mp4:v=copy:a=copy:ts=wallclock"
+    assert "mp4:v=copy:a=copy:ts=wallclock" in outcome.diagnostics.negotiation_attempts
 
 
 def test_session_limit_validation_retries_without_timeout_flags(

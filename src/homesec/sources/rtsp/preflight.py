@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -25,6 +26,10 @@ from homesec.sources.rtsp.url_derivation import derive_probe_candidate_urls
 from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
 
 logger = logging.getLogger(__name__)
+
+_NON_MONOTONIC_DTS_RETRY_THRESHOLD = 5
+_QUEUE_BACKWARD_RETRY_THRESHOLD = 1
+_DTS_DISCONTINUITY_RETRY_THRESHOLD = 1
 
 
 class StreamDiscovery(Protocol):
@@ -97,6 +102,42 @@ class CameraPreflightOutcome(BaseModel):
     motion_profile: MotionProfile
     recording_profile: RecordingProfile
     diagnostics: CameraPreflightDiagnostics
+
+
+class RecordingValidationSignals(BaseModel):
+    """Stability signals extracted from ffmpeg/ffprobe stderr text."""
+
+    model_config = {"extra": "forbid"}
+
+    non_monotonic_dts: int = 0
+    queue_input_backward: int = 0
+    dts_discontinuity: int = 0
+    sei_truncated: int = 0
+
+    def instability_score(self) -> int:
+        # Penalize explicit backward-queue and discontinuity warnings first.
+        return (
+            (self.queue_input_backward * 1_000)
+            + (self.dts_discontinuity * 100)
+            + self.non_monotonic_dts
+        )
+
+    def needs_wallclock_retry(self) -> bool:
+        return (
+            self.queue_input_backward >= _QUEUE_BACKWARD_RETRY_THRESHOLD
+            or self.non_monotonic_dts >= _NON_MONOTONIC_DTS_RETRY_THRESHOLD
+            or self.dts_discontinuity >= _DTS_DISCONTINUITY_RETRY_THRESHOLD
+        )
+
+
+class RecordingValidationResult(BaseModel):
+    """Result for one recording-profile validation attempt."""
+
+    model_config = {"extra": "forbid"}
+
+    ok: bool
+    error: str | None = None
+    signals: RecordingValidationSignals = Field(default_factory=RecordingValidationSignals)
 
 
 class RTSPStartupPreflight:
@@ -260,18 +301,23 @@ class RTSPStartupPreflight:
         last_error: str | None = None
         for candidate in candidates:
             diagnostics.negotiation_attempts.append(candidate.profile_id())
-            ok, error = self._validate_recording_profile(candidate)
-            if ok:
-                diagnostics.selected_recording_profile = candidate.profile_id()
+            validation = self._validate_recording_profile(candidate)
+            if validation.ok:
+                selected_profile = self._maybe_enable_wallclock_timestamps(
+                    candidate=candidate,
+                    validation=validation,
+                    diagnostics=diagnostics,
+                )
+                diagnostics.selected_recording_profile = selected_profile.profile_id()
                 logger.info(
                     "Recording profile selected: camera=%s profile=%s",
                     camera_key,
-                    candidate.profile_id(),
+                    selected_profile.profile_id(),
                 )
-                return candidate
+                return selected_profile
 
-            if error:
-                last_error = error
+            if validation.error:
+                last_error = validation.error
 
         error_text = last_error or "No candidate profile succeeded"
         return NegotiationError(
@@ -279,7 +325,41 @@ class RTSPStartupPreflight:
             f"Recording profile negotiation failed: {error_text}",
         )
 
-    def _validate_recording_profile(self, profile: RecordingProfile) -> tuple[bool, str | None]:
+    def _maybe_enable_wallclock_timestamps(
+        self,
+        *,
+        candidate: RecordingProfile,
+        validation: RecordingValidationResult,
+        diagnostics: CameraPreflightDiagnostics,
+    ) -> RecordingProfile:
+        if candidate.uses_wallclock_timestamps():
+            return candidate
+        if not validation.signals.needs_wallclock_retry():
+            return candidate
+
+        wallclock_candidate = candidate.model_copy(
+            update={"ffmpeg_input_args": ["-use_wallclock_as_timestamps", "1"]}
+        )
+        diagnostics.negotiation_attempts.append(wallclock_candidate.profile_id())
+        wallclock_validation = self._validate_recording_profile(wallclock_candidate)
+
+        if not wallclock_validation.ok:
+            diagnostics.notes.append(
+                "Wallclock retry failed; keeping baseline recording timestamp mode"
+            )
+            return candidate
+
+        baseline_score = validation.signals.instability_score()
+        wallclock_score = wallclock_validation.signals.instability_score()
+        if wallclock_score < baseline_score:
+            diagnostics.notes.append(
+                "Wallclock timestamps enabled after startup validation reduced DTS instability"
+            )
+            return wallclock_candidate
+
+        return candidate
+
+    def _validate_recording_profile(self, profile: RecordingProfile) -> RecordingValidationResult:
         """Run short ffmpeg check to validate locked recording profile."""
 
         self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +384,7 @@ class RTSPStartupPreflight:
             for label, extra_timeout_args in attempts:
                 cmd = self._build_recording_check_cmd(
                     input_url=profile.input_url,
+                    input_args=profile.ffmpeg_input_args,
                     output_path=temp_path,
                     output_args=profile.ffmpeg_output_args,
                     timeout_args=extra_timeout_args,
@@ -321,24 +402,36 @@ class RTSPStartupPreflight:
                         check=False,
                     )
                 except Exception as exc:
-                    return False, f"ffmpeg execution failed: {type(exc).__name__}"
+                    return RecordingValidationResult(
+                        ok=False, error=f"ffmpeg execution failed: {type(exc).__name__}"
+                    )
 
                 stderr_text = _sanitize_stderr(result.stderr, profile.input_url)
+                signals = _collect_recording_stability_signals(stderr_text)
                 if result.returncode == 0:
                     try:
                         if temp_path.exists() and temp_path.stat().st_size > 0:
-                            return True, None
+                            return RecordingValidationResult(ok=True, signals=signals)
                     except Exception:
-                        return True, None
-                    return False, "ffmpeg returned success but output clip is empty"
+                        return RecordingValidationResult(ok=True, signals=signals)
+                    return RecordingValidationResult(
+                        ok=False, error="ffmpeg returned success but output clip is empty"
+                    )
 
                 if label == "timeouts" and _is_timeout_option_error(stderr_text):
                     logger.debug("Recording preflight retrying without timeout options")
                     continue
 
-                return False, stderr_text[:280] or f"ffmpeg failed ({result.returncode})"
+                return RecordingValidationResult(
+                    ok=False,
+                    error=stderr_text[:280] or f"ffmpeg failed ({result.returncode})",
+                    signals=signals,
+                )
 
-            return False, "ffmpeg failed after timeout-option fallback"
+            return RecordingValidationResult(
+                ok=False,
+                error="ffmpeg failed after timeout-option fallback",
+            )
         finally:
             try:
                 if temp_path.exists():
@@ -428,6 +521,7 @@ class RTSPStartupPreflight:
         self,
         *,
         input_url: str,
+        input_args: list[str],
         output_path: Path,
         output_args: list[str],
         timeout_args: list[str],
@@ -442,6 +536,7 @@ class RTSPStartupPreflight:
             "tcp",
         ]
         cmd.extend(timeout_args)
+        cmd.extend(input_args)
         cmd.extend(
             [
                 "-i",
@@ -564,3 +659,18 @@ def _sanitize_stderr(stderr_text: str, input_url: str) -> str:
     if not stderr_text:
         return ""
     return stderr_text.replace(input_url, _redact_rtsp_url(input_url)).strip()
+
+
+def _collect_recording_stability_signals(stderr_text: str) -> RecordingValidationSignals:
+    if not stderr_text:
+        return RecordingValidationSignals()
+
+    def _count(pattern: str) -> int:
+        return len(re.findall(pattern, stderr_text, flags=re.IGNORECASE))
+
+    return RecordingValidationSignals(
+        non_monotonic_dts=_count(r"Non-monotonic DTS"),
+        queue_input_backward=_count(r"Queue input is backward in time"),
+        dts_discontinuity=_count(r"DTS discontinuity"),
+        sei_truncated=_count(r"SEI type 764 size"),
+    )
