@@ -440,10 +440,13 @@ def test_session_limit_validation_retries_without_timeout_flags(
             return self._returncode
 
         def terminate(self) -> None:
-            self._returncode = 0
+            if self._returncode is None:
+                self._returncode = 0
 
         def communicate(self, timeout: float) -> tuple[str, str]:
             _ = timeout
+            if self._returncode is None:
+                self._returncode = 0
             return ("", self._stderr_text)
 
         def kill(self) -> None:
@@ -479,3 +482,113 @@ def test_session_limit_validation_retries_without_timeout_flags(
     assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
     assert "-rw_timeout" not in calls[-1]
     assert "-stimeout" not in calls[-1]
+
+
+def test_session_limit_validation_non_timeout_failure_does_not_retry_without_timeouts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session-limit validation should fail fast on non-timeout launch failures."""
+
+    class _FakeProc:
+        def __init__(self, *, returncode: int | None, stderr_text: str) -> None:
+            self._returncode = returncode
+            self._stderr_text = stderr_text
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+        def terminate(self) -> None:
+            if self._returncode is None:
+                self._returncode = 0
+
+        def communicate(self, timeout: float) -> tuple[str, str]:
+            _ = timeout
+            if self._returncode is None:
+                self._returncode = 0
+            return ("", self._stderr_text)
+
+        def kill(self) -> None:
+            self._returncode = -9
+
+    calls: list[list[str]] = []
+
+    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        calls.append(list(cmd))
+        return _FakeProc(returncode=1, stderr_text="Connection refused")
+
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery([]),
+    )
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
+
+    # Given: concurrent stream opens fail for non-timeout reasons
+    motion_url = "rtsp://cam/motion"
+    recording_url = "rtsp://cam/recording"
+
+    # When: validating concurrent session limits
+    ok = preflight._validate_session_limits(motion_url, recording_url)
+
+    # Then: validation fails without a no-timeouts retry
+    assert not ok
+    assert len(calls) == 2
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+
+
+def test_session_limit_validation_requires_clean_exit_after_overlap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session-limit validation should fail when opens die after overlap window."""
+
+    class _FakeProc:
+        def __init__(self, *, final_exit: int, stderr_text: str) -> None:
+            self._returncode: int | None = None
+            self._final_exit = final_exit
+            self._stderr_text = stderr_text
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+        def terminate(self) -> None:
+            if self._returncode is None:
+                self._returncode = 0
+
+        def communicate(self, timeout: float) -> tuple[str, str]:
+            _ = timeout
+            if self._returncode is None:
+                self._returncode = self._final_exit
+            return ("", self._stderr_text)
+
+        def kill(self) -> None:
+            self._returncode = -9
+
+    calls: list[list[str]] = []
+
+    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        calls.append(list(cmd))
+        return _FakeProc(final_exit=1, stderr_text="Session ended")
+
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery([]),
+    )
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
+
+    # Given: both ffmpeg session checks appear alive during overlap but exit non-zero
+    motion_url = "rtsp://cam/motion"
+    recording_url = "rtsp://cam/recording"
+
+    # When: validating concurrent session limits
+    ok = preflight._validate_session_limits(motion_url, recording_url)
+
+    # Then: validation fails closed instead of treating overlap-only liveness as success
+    assert not ok
+    assert len(calls) == 2

@@ -41,7 +41,6 @@ class FfmpegRecorder:
         recording_profile: RecordingProfile | None = None,
         timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
-        self._rtsp_url = rtsp_url
         self._ffmpeg_flags = ffmpeg_flags
         self._recording_profile = recording_profile or build_default_recording_profile(rtsp_url)
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s

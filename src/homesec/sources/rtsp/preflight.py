@@ -490,15 +490,19 @@ class RTSPStartupPreflight:
         """Validate that motion and recording pipelines can open concurrently."""
         timeout_args = self._timeout_args()
         attempts = _build_timeout_attempts(timeout_args)
+        session_check_duration_s = max(2.0, self._session_overlap_s + 0.5)
+        completion_timeout_s = session_check_duration_s + 1.5
 
         for label, current_timeout_args in attempts:
             motion_cmd = self._build_stream_open_cmd(
                 input_url=motion_url,
                 timeout_args=current_timeout_args,
+                duration_s=session_check_duration_s,
             )
             recording_cmd = self._build_stream_open_cmd(
                 input_url=recording_url,
                 timeout_args=current_timeout_args,
+                duration_s=session_check_duration_s,
             )
 
             motion_proc: subprocess.Popen[str] | None = None
@@ -533,14 +537,23 @@ class RTSPStartupPreflight:
             motion_exit = motion_proc.poll()
             recording_exit = recording_proc.poll()
             if motion_exit is None and recording_exit is None:
+                motion_exit, motion_err = self._wait_for_process_exit(
+                    motion_proc,
+                    timeout_s=completion_timeout_s,
+                )
+                recording_exit, recording_err = self._wait_for_process_exit(
+                    recording_proc,
+                    timeout_s=completion_timeout_s,
+                )
+            else:
+                motion_exit, motion_err = self._terminate_process(motion_proc)
+                recording_exit, recording_err = self._terminate_process(recording_proc)
+
+            if motion_exit == 0 and recording_exit == 0:
                 if label == "timeouts":
                     self._timeout_capabilities.note_ffmpeg_timeout_success()
-                self._terminate_process(motion_proc)
-                self._terminate_process(recording_proc)
                 return True
 
-            motion_err = self._terminate_process(motion_proc)
-            recording_err = self._terminate_process(recording_proc)
             timeout_option_error = label == "timeouts" and (
                 _is_timeout_option_error(motion_err) or _is_timeout_option_error(recording_err)
             )
@@ -565,6 +578,8 @@ class RTSPStartupPreflight:
                 motion_err,
                 recording_err,
             )
+            if label == "timeouts":
+                return False
 
         return False
 
@@ -600,7 +615,13 @@ class RTSPStartupPreflight:
         cmd.extend(["-y", str(output_path)])
         return cmd
 
-    def _build_stream_open_cmd(self, *, input_url: str, timeout_args: list[str]) -> list[str]:
+    def _build_stream_open_cmd(
+        self,
+        *,
+        input_url: str,
+        timeout_args: list[str],
+        duration_s: float,
+    ) -> list[str]:
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -616,7 +637,7 @@ class RTSPStartupPreflight:
                 "-i",
                 input_url,
                 "-t",
-                "2",
+                f"{max(0.5, duration_s):.1f}",
                 "-an",
                 "-f",
                 "null",
@@ -631,9 +652,25 @@ class RTSPStartupPreflight:
             io_timeout_s=self._rtsp_io_timeout_s,
         )
 
-    def _terminate_process(self, proc: subprocess.Popen[str] | None) -> str:
+    def _wait_for_process_exit(
+        self,
+        proc: subprocess.Popen[str] | None,
+        *,
+        timeout_s: float,
+    ) -> tuple[int | None, str]:
         if proc is None:
-            return ""
+            return None, ""
+
+        try:
+            _, stderr_text = proc.communicate(timeout=max(0.1, timeout_s))
+            stderr_tail = stderr_text[-240:] if stderr_text else ""
+            return proc.poll(), stderr_tail.strip()
+        except Exception:
+            return self._terminate_process(proc)
+
+    def _terminate_process(self, proc: subprocess.Popen[str] | None) -> tuple[int | None, str]:
+        if proc is None:
+            return None, ""
 
         stderr_tail = ""
         try:
@@ -647,9 +684,9 @@ class RTSPStartupPreflight:
                 _, stderr_text = proc.communicate(timeout=2)
                 stderr_tail = stderr_text[-240:] if stderr_text else ""
             except Exception:
-                return ""
+                return proc.poll(), ""
 
-        return stderr_tail.strip()
+        return proc.poll(), stderr_tail.strip()
 
 
 def select_motion_stream(*, camera_key: str, streams: list[ProbeStreamInfo]) -> ProbeStreamInfo:

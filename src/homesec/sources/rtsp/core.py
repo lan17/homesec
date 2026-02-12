@@ -39,7 +39,6 @@ from homesec.sources.rtsp.recording_profile import MotionProfile
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
-    _format_cmd,
     _is_timeout_option_error,
     _next_backoff,
     _redact_rtsp_url,
@@ -620,9 +619,6 @@ class RTSPSource(ThreadedClipSource):
 
     def _redact_rtsp_url(self, url: str) -> str:
         return _redact_rtsp_url(url)
-
-    def _format_cmd(self, cmd: list[str]) -> str:
-        return _format_cmd(cmd)
 
     def detect_motion(
         self, frame: npt.NDArray[np.uint8], *, threshold: float | None = None
