@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 from homesec.sources.rtsp.clock import Clock
+from homesec.sources.rtsp.recording_profile import RecordingProfile, build_default_recording_profile
 from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
 
 logger = logging.getLogger(__name__)
@@ -28,12 +29,17 @@ class FfmpegRecorder:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         clock: Clock,
+        recording_profile: RecordingProfile | None = None,
     ) -> None:
         self._rtsp_url = rtsp_url
         self._ffmpeg_flags = ffmpeg_flags
+        self._recording_profile = recording_profile or build_default_recording_profile(rtsp_url)
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._clock = clock
+
+    def configure_profile(self, profile: RecordingProfile) -> None:
+        self._recording_profile = profile
 
     def start(self, output_file: Path, stderr_log: Path) -> subprocess.Popen[bytes] | None:
         def _read_tail(path: Path, max_bytes: int = 4000) -> str:
@@ -68,7 +74,8 @@ class FfmpegRecorder:
         if not has_rw_timeout and self._rtsp_io_timeout_s > 0:
             timeout_args.extend(["-rw_timeout", timeout_us_io])
 
-        cmd_tail = ["-i", self._rtsp_url, "-c", "copy", "-f", "mp4", "-y"]
+        input_url = self._recording_profile.input_url
+        cmd_tail = ["-i", input_url]
 
         # Naive check to see if user overrode defaults
         # If user supplies ANY -loglevel, we don't add ours.
@@ -82,13 +89,11 @@ class FfmpegRecorder:
         if not has_fflags:
             cmd_tail.extend(["-fflags", "+genpts+igndts"])
 
-        has_fps_mode = any(x == "-fps_mode" or x == "-vsync" for x in user_flags)
-        if not has_fps_mode:
-            cmd_tail.extend(["-vsync", "0"])
+        cmd_tail.extend(self._recording_profile.ffmpeg_output_args)
 
         # Add user flags last so they can potentially override or add to the above
         cmd_tail.extend(user_flags)
-        cmd_tail.extend([str(output_file)])
+        cmd_tail.extend(["-y", str(output_file)])
 
         attempts: list[tuple[str, list[str]]] = []
         if timeout_args:
@@ -137,9 +142,7 @@ class FfmpegRecorder:
                     logger.error("Check logs at: %s", stderr_log)
 
                 if stderr_tail:
-                    redacted_tail = stderr_tail.replace(
-                        self._rtsp_url, _redact_rtsp_url(self._rtsp_url)
-                    )
+                    redacted_tail = stderr_tail.replace(input_url, _redact_rtsp_url(input_url))
                     if timeout_option_error:
                         logger.warning("Recording stderr tail (%s):\n%s", label, redacted_tail)
                         logger.warning(

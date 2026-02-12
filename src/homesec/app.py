@@ -92,8 +92,32 @@ class Application:
             await self._health_server.start()
 
         # Start sources
+        started_sources: list[ClipSource] = []
+        startup_errors: list[tuple[str, Exception]] = []
         for source in self._sources:
-            await source.start()
+            camera_name = getattr(source, "camera_name", source.__class__.__name__)
+            try:
+                await source.start()
+            except Exception as exc:
+                startup_errors.append((str(camera_name), exc))
+            else:
+                started_sources.append(source)
+
+        if startup_errors:
+            if started_sources:
+                await asyncio.gather(
+                    *(source.shutdown() for source in started_sources),
+                    return_exceptions=True,
+                )
+            for camera_name, error in startup_errors:
+                logger.error(
+                    "Source startup failed: camera=%s error=%s",
+                    camera_name,
+                    error,
+                    exc_info=error,
+                )
+            summary = "; ".join(f"{camera_name}: {error}" for camera_name, error in startup_errors)
+            raise RuntimeError(f"Source startup preflight failed: {summary}")
 
         logger.info("Application started. Waiting for clips...")
 

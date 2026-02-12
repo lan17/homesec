@@ -494,6 +494,7 @@ def test_frame_pipeline_retries_without_timeouts_when_unsupported(tmp_path: Path
         rtsp_connect_timeout_s=2.0,
         rtsp_io_timeout_s=2.0,
         ffmpeg_flags=[],
+        motion_profile=None,
         hwaccel_config=HardwareAccelConfig(hwaccel=None),
         hwaccel_failed=True,
         on_frame=lambda: None,

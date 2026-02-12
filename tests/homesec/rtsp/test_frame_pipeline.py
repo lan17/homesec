@@ -64,6 +64,7 @@ def _make_pipeline(tmp_path: Path, *, frame_queue_size: int) -> FfmpegFramePipel
         rtsp_connect_timeout_s=1.0,
         rtsp_io_timeout_s=1.0,
         ffmpeg_flags=[],
+        motion_profile=None,
         hwaccel_config=HardwareAccelConfig(hwaccel=None),
         hwaccel_failed=True,
         on_frame=lambda: None,

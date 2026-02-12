@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from homesec.sources.rtsp.clock import Clock
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
+from homesec.sources.rtsp.recording_profile import MotionProfile
 from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class FfmpegFramePipeline:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         ffmpeg_flags: list[str],
+        motion_profile: MotionProfile | None,
         hwaccel_config: HardwareAccelConfig,
         hwaccel_failed: bool,
         on_frame: Callable[[], None],
@@ -55,6 +57,7 @@ class FfmpegFramePipeline:
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._ffmpeg_flags = ffmpeg_flags
+        self._motion_profile = motion_profile or MotionProfile(input_url="", ffmpeg_input_args=[])
         self._hwaccel_config = hwaccel_config
         self._hwaccel_failed = hwaccel_failed
         self._on_frame = on_frame
@@ -68,6 +71,9 @@ class FfmpegFramePipeline:
         self.frame_width: int | None = None
         self.frame_height: int | None = None
         self._frame_size: int | None = None
+
+    def set_motion_profile(self, profile: MotionProfile) -> None:
+        self._motion_profile = profile
 
     def start(self, rtsp_url: str) -> None:
         (
@@ -195,7 +201,7 @@ class FfmpegFramePipeline:
             logger.info("Hardware acceleration disabled due to previous failures")
 
         # 2. Global Flags (Robustness & Logging)
-        user_flags = self._ffmpeg_flags
+        user_flags = list(self._motion_profile.ffmpeg_input_args) + list(self._ffmpeg_flags)
 
         has_loglevel = any(x == "-loglevel" for x in user_flags)
         if not has_loglevel:

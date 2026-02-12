@@ -96,6 +96,19 @@ class _StubVLM:
         return None
 
 
+class _StubAlertPolicy:
+    def should_notify(
+        self,
+        camera_name: str,
+        filter_result: object,
+        analysis: object,
+    ) -> tuple[bool, str]:
+        _ = camera_name
+        _ = filter_result
+        _ = analysis
+        return False, "stub"
+
+
 class _StubSource:
     """Stub source for testing."""
 
@@ -159,6 +172,7 @@ def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
     # Mock specific loads used in app.py
     monkeypatch.setattr("homesec.app.load_filter", lambda _: _StubFilter())
     monkeypatch.setattr("homesec.app.load_analyzer", lambda _: _StubVLM())
+    monkeypatch.setattr("homesec.app.load_alert_policy", lambda *args, **kwargs: _StubAlertPolicy())
     monkeypatch.setattr(
         "homesec.app.load_source_plugin", lambda source_backend, config, camera_name: _StubSource()
     )
