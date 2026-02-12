@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-02-12)
+
+### Continuous Integration
+
+- Allow manual docker publish ([#22](https://github.com/lan17/homesec/pull/22),
+  [`d6a31fe`](https://github.com/lan17/homesec/commit/d6a31fe8ed2c4f3fce56eed473b57953a43af742))
+
+### Features
+
+- **rtsp**: Startup preflight, profile locking, and reconnect hardening
+  ([#23](https://github.com/lan17/homesec/pull/23),
+  [`e2f094e`](https://github.com/lan17/homesec/commit/e2f094e9efc2a534a5d1ee55368cb7e4d545f1b2))
+
+
 ## v1.2.3 (2026-02-04)
 
 ### Bug Fixes
