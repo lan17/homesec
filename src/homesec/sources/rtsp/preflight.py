@@ -347,52 +347,80 @@ class RTSPStartupPreflight:
 
     def _validate_session_limits(self, motion_url: str, recording_url: str) -> bool:
         """Validate that motion and recording pipelines can open concurrently."""
+        timeout_args = self._timeout_args()
+        attempts: list[tuple[str, list[str]]] = []
+        if timeout_args:
+            attempts.append(("timeouts", timeout_args))
+        attempts.append(("no_timeouts" if timeout_args else "default", []))
 
-        motion_cmd = self._build_stream_open_cmd(motion_url)
-        recording_cmd = self._build_stream_open_cmd(recording_url)
-
-        motion_proc: subprocess.Popen[str] | None = None
-        recording_proc: subprocess.Popen[str] | None = None
-
-        try:
-            motion_proc = subprocess.Popen(
-                motion_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+        for label, current_timeout_args in attempts:
+            motion_cmd = self._build_stream_open_cmd(
+                input_url=motion_url,
+                timeout_args=current_timeout_args,
             )
-            recording_proc = subprocess.Popen(
-                recording_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+            recording_cmd = self._build_stream_open_cmd(
+                input_url=recording_url,
+                timeout_args=current_timeout_args,
             )
-        except Exception as exc:
+
+            motion_proc: subprocess.Popen[str] | None = None
+            recording_proc: subprocess.Popen[str] | None = None
+
+            try:
+                motion_proc = subprocess.Popen(
+                    motion_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                recording_proc = subprocess.Popen(
+                    recording_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Session-limit validation failed to launch ffmpeg (%s): %s",
+                    label,
+                    exc,
+                    exc_info=True,
+                )
+                self._terminate_process(motion_proc)
+                self._terminate_process(recording_proc)
+                continue
+
+            time.sleep(self._session_overlap_s)
+
+            motion_exit = motion_proc.poll()
+            recording_exit = recording_proc.poll()
+            if motion_exit is None and recording_exit is None:
+                self._terminate_process(motion_proc)
+                self._terminate_process(recording_proc)
+                return True
+
+            motion_err = self._terminate_process(motion_proc)
+            recording_err = self._terminate_process(recording_proc)
+            timeout_option_error = label == "timeouts" and (
+                _is_timeout_option_error(motion_err) or _is_timeout_option_error(recording_err)
+            )
+            if timeout_option_error:
+                logger.debug(
+                    "Session-limit validation retrying without timeout options; motion_err=%s recording_err=%s",
+                    motion_err,
+                    recording_err,
+                )
+                continue
+
             logger.warning(
-                "Session-limit validation failed to launch ffmpeg: %s", exc, exc_info=True
+                "Session-limit validation failed (%s): motion_exit=%s recording_exit=%s motion_err=%s recording_err=%s",
+                label,
+                motion_exit,
+                recording_exit,
+                motion_err,
+                recording_err,
             )
-            self._terminate_process(motion_proc)
-            self._terminate_process(recording_proc)
-            return False
 
-        time.sleep(self._session_overlap_s)
-
-        motion_exit = motion_proc.poll()
-        recording_exit = recording_proc.poll()
-        if motion_exit is None and recording_exit is None:
-            self._terminate_process(motion_proc)
-            self._terminate_process(recording_proc)
-            return True
-
-        motion_err = self._terminate_process(motion_proc)
-        recording_err = self._terminate_process(recording_proc)
-        logger.warning(
-            "Session-limit validation failed: motion_exit=%s recording_exit=%s motion_err=%s recording_err=%s",
-            motion_exit,
-            recording_exit,
-            motion_err,
-            recording_err,
-        )
         return False
 
     def _build_recording_check_cmd(
@@ -425,7 +453,7 @@ class RTSPStartupPreflight:
         cmd.extend(["-y", str(output_path)])
         return cmd
 
-    def _build_stream_open_cmd(self, input_url: str) -> list[str]:
+    def _build_stream_open_cmd(self, *, input_url: str, timeout_args: list[str]) -> list[str]:
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -435,7 +463,7 @@ class RTSPStartupPreflight:
             "-rtsp_transport",
             "tcp",
         ]
-        cmd.extend(self._timeout_args())
+        cmd.extend(timeout_args)
         cmd.extend(
             [
                 "-i",

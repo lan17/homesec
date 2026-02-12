@@ -184,3 +184,59 @@ def test_preflight_returns_negotiation_error_for_unusable_audio(
     assert outcome.stage == "negotiation"
     assert outcome.diagnostics is not None
     assert outcome.diagnostics.negotiation_attempts == ["mp4:v=copy:a=aac", "mp4:v=copy:a=none"]
+
+
+def test_session_limit_validation_retries_without_timeout_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session-limit validation should retry when ffmpeg rejects timeout options."""
+
+    class _FakeProc:
+        def __init__(self, *, returncode: int | None, stderr_text: str) -> None:
+            self._returncode = returncode
+            self._stderr_text = stderr_text
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+        def terminate(self) -> None:
+            self._returncode = 0
+
+        def communicate(self, timeout: float) -> tuple[str, str]:
+            _ = timeout
+            return ("", self._stderr_text)
+
+        def kill(self) -> None:
+            self._returncode = -9
+
+    calls: list[list[str]] = []
+
+    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        calls.append(list(cmd))
+        if "-rw_timeout" in cmd or "-stimeout" in cmd:
+            return _FakeProc(returncode=1, stderr_text="Option rw_timeout not found")
+        return _FakeProc(returncode=None, stderr_text="")
+
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery([]),
+    )
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
+
+    # Given: ffmpeg fails with timeout-option errors and then succeeds without them
+    motion_url = "rtsp://cam/motion"
+    recording_url = "rtsp://cam/recording"
+
+    # When: validating concurrent session limits
+    ok = preflight._validate_session_limits(motion_url, recording_url)
+
+    # Then: validation succeeds after retry without timeout options
+    assert ok
+    assert len(calls) == 4
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+    assert "-rw_timeout" not in calls[-1]
+    assert "-stimeout" not in calls[-1]
