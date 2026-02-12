@@ -835,6 +835,45 @@ class RTSPSource(ThreadedClipSource):
     def _wait_for_first_frame(self, timeout_s: float) -> bool:
         return self._frame_pipeline.read_frame(timeout_s) is not None
 
+    def _on_reconnect_attempt_failed(self, attempted_url: str) -> None:
+        if not self._detect_fallback_active:
+            return
+        if not self._detect_stream_available:
+            return
+
+        if attempted_url == self.rtsp_url:
+            self._motion_rtsp_url = self.detect_rtsp_url
+            logger.info(
+                "Reconnect fallback: retrying detect stream",
+                extra=self._event_extra(
+                    "detect_fallback_reconnect_probe",
+                    detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                    detect_stream_is_same=False,
+                ),
+            )
+            return
+
+        if attempted_url == self.detect_rtsp_url:
+            self._motion_rtsp_url = self.rtsp_url
+
+    def _on_reconnect_attempt_succeeded(self, attempted_url: str) -> None:
+        if not self._detect_fallback_active:
+            return
+        if attempted_url != self.detect_rtsp_url:
+            return
+
+        self._detect_fallback_active = False
+        self._detect_next_probe_at = None
+        self._detect_probe_backoff_s = self._detect_probe_interval_s
+        logger.info(
+            "Detect stream restored during reconnect; using detect stream again",
+            extra=self._event_extra(
+                "detect_fallback_recovered",
+                detect_stream_source=getattr(self, "_detect_rtsp_url_source", None),
+                detect_stream_is_same=False,
+            ),
+        )
+
     def _reconnect_frame_pipeline(self, *, aggressive: bool) -> bool:
         initial_backoff_s = 0.2 if aggressive else float(self.reconnect_backoff_s)
         backoff_s = initial_backoff_s
@@ -885,6 +924,7 @@ class RTSPSource(ThreadedClipSource):
                 logger.debug("Waiting %.2fs before reconnect...", sleep_s)
                 self._clock.sleep(sleep_s)
 
+            attempted_url = self._motion_rtsp_url
             try:
                 self._start_frame_pipeline()
             except Exception as exc:
@@ -896,6 +936,7 @@ class RTSPSource(ThreadedClipSource):
                     backoff_s = initial_backoff_s
                     first_attempt = True
                     continue
+                self._on_reconnect_attempt_failed(attempted_url)
                 backoff_s = self._bump_reconnect_backoff(
                     backoff_s,
                     backoff_cap_s,
@@ -915,13 +956,14 @@ class RTSPSource(ThreadedClipSource):
                         motion_rtsp_url=self._redact_rtsp_url(self._motion_rtsp_url),
                     ),
                 )
+                self._on_reconnect_attempt_succeeded(attempted_url)
                 self.reconnect_count = 0
                 self._detect_failure_count = 0
                 self._detect_fallback_deferred = False
                 return True
 
             logger.warning("Frame pipeline restarted but still no frames; retrying...")
-            self._note_detect_failure(self._clock.now())
+            triggered_fallback = self._note_detect_failure(self._clock.now())
             try:
                 self._stop_frame_pipeline()
             except Exception as exc:
@@ -932,6 +974,8 @@ class RTSPSource(ThreadedClipSource):
                 )
             if self._reconnect_exhausted(aggressive=aggressive):
                 return False
+            if not triggered_fallback:
+                self._on_reconnect_attempt_failed(attempted_url)
             backoff_s = self._bump_reconnect_backoff(
                 backoff_s,
                 backoff_cap_s,

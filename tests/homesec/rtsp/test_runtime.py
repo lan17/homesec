@@ -426,6 +426,46 @@ def test_detect_fallback_after_attempts(tmp_path: Path) -> None:
     assert source._detect_fallback_active
 
 
+def test_reconnect_retries_detect_stream_when_fallback_fails(tmp_path: Path) -> None:
+    """Reconnect should probe the detect stream again when fallback cannot recover."""
+    # Given: detect stream fails twice, fallback stream fails, then detect recovers
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream?subtype=0",
+        reconnect={"detect_fallback_attempts": 2, "max_attempts": 6},
+    )
+    initial_source = RTSPSource(config, camera_name="cam")
+    detect_url = initial_source.detect_rtsp_url
+    pipeline = FakeFramePipeline(
+        frames=[b"0000"],
+        fail_start_times=2,
+        fail_urls={initial_source.rtsp_url},
+    )
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+        clock=clock,
+    )
+
+    # When: reconnecting after fallback activation with a failing fallback stream
+    ok = source._reconnect_frame_pipeline(aggressive=True)
+
+    # Then: reconnect alternates back to detect stream and succeeds
+    assert ok
+    assert pipeline.start_calls[:4] == [
+        detect_url,
+        detect_url,
+        source.rtsp_url,
+        detect_url,
+    ]
+    assert not source._detect_fallback_active
+    assert source._motion_rtsp_url == detect_url
+
+
 def test_reconnect_defers_detect_fallback_while_recording(tmp_path: Path) -> None:
     """Reconnect should defer detect fallback when recording is active."""
     # Given: detect stream always fails while recording is active
