@@ -765,6 +765,54 @@ def test_recording_retries_without_timeouts_when_unsupported(tmp_path: Path) -> 
     assert "-rw_timeout" not in calls[1]
 
 
+def test_recording_disables_timeout_flags_after_first_unsupported(tmp_path: Path) -> None:
+    """Recording should stop trying timeout flags after unsupported detection."""
+    # Given: a recorder whose ffmpeg rejects timeout flags
+    clock = FakeClock()
+    recorder = FfmpegRecorder(
+        rtsp_url="rtsp://host/stream",
+        ffmpeg_flags=[],
+        rtsp_connect_timeout_s=1.0,
+        rtsp_io_timeout_s=1.0,
+        clock=clock,
+    )
+    output_file = tmp_path / "clip.mp4"
+    stderr_log = tmp_path / "clip.log"
+    calls: list[list[str]] = []
+
+    class DummyPopen:
+        def __init__(self, returncode: int | None) -> None:
+            self._returncode = returncode
+            self.returncode = returncode
+            self.pid = 1234
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> DummyPopen:
+        calls.append(list(cmd))
+        stderr = kwargs.get("stderr")
+        if "-rw_timeout" in cmd or "-stimeout" in cmd:
+            if hasattr(stderr, "write"):
+                stderr.write("Unrecognized option 'stimeout'.\n")
+                stderr.flush()
+            return DummyPopen(returncode=1)
+        return DummyPopen(returncode=None)
+
+    # When: starting recordings twice
+    with patch("homesec.sources.rtsp.recorder.subprocess.Popen", side_effect=fake_popen):
+        _ = recorder.start(output_file, stderr_log)
+        _ = recorder.start(output_file, stderr_log)
+
+    # Then: second start skips timeout-option attempt
+    assert len(calls) == 3
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+    assert "-rw_timeout" not in calls[1]
+    assert "-stimeout" not in calls[1]
+    assert "-rw_timeout" not in calls[2]
+    assert "-stimeout" not in calls[2]
+
+
 def test_probe_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None:
     """Stream probe should retry without timeouts when ffprobe rejects them."""
     # Given: an RTSP source and a fake ffprobe error on timeout options

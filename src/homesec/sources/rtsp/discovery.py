@@ -9,6 +9,10 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
+from homesec.sources.rtsp.capabilities import (
+    RTSPTimeoutCapabilities,
+    get_global_rtsp_timeout_capabilities,
+)
 from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
 
 logger = logging.getLogger(__name__)
@@ -61,10 +65,12 @@ class FfprobeStreamDiscovery:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         command_timeout_s: float = 10.0,
+        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._command_timeout_s = command_timeout_s
+        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
 
     def probe(
         self,
@@ -101,13 +107,10 @@ class FfprobeStreamDiscovery:
             "tcp",
         ]
 
-        timeout_args: list[str] = []
-        if self._rtsp_connect_timeout_s > 0:
-            timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
-            timeout_args.extend(["-stimeout", timeout_us_connect])
-        if self._rtsp_io_timeout_s > 0:
-            timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
-            timeout_args.extend(["-rw_timeout", timeout_us_io])
+        timeout_args = self._timeout_capabilities.build_ffprobe_timeout_args(
+            connect_timeout_s=self._rtsp_connect_timeout_s,
+            io_timeout_s=self._rtsp_io_timeout_s,
+        )
 
         attempts: list[tuple[str, list[str]]] = []
         if timeout_args:
@@ -135,16 +138,26 @@ class FfprobeStreamDiscovery:
 
             if result.returncode != 0:
                 stderr_text = _redact_stderr(result.stderr, rtsp_url)
-                if _is_timeout_option_error(stderr_text):
-                    logger.debug(
-                        "ffprobe timeout options unsupported for %s", _redact_rtsp_url(rtsp_url)
-                    )
+                if label == "timeouts" and _is_timeout_option_error(stderr_text):
+                    changed = self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
+                    if changed:
+                        logger.warning(
+                            "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
+                        )
+                    else:
+                        logger.debug(
+                            "ffprobe timeout options still unsupported for %s",
+                            _redact_rtsp_url(rtsp_url),
+                        )
                     continue
                 return ProbeStreamInfo(
                     url=rtsp_url,
                     probe_ok=False,
                     error=f"ffprobe failed ({result.returncode}): {stderr_text[:240]}",
                 )
+
+            if label == "timeouts":
+                self._timeout_capabilities.note_ffprobe_timeout_success()
 
             parsed = _parse_ffprobe_payload(result.stdout, rtsp_url)
             if parsed.probe_ok:

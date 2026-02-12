@@ -12,6 +12,7 @@ if str(src_path.resolve()) not in sys.path:
 import pytest
 
 from homesec.models.clip import Clip
+from homesec.sources.rtsp.capabilities import get_global_rtsp_timeout_capabilities
 from tests.homesec.mocks import (
     MockFilter,
     MockNotifier,
@@ -19,6 +20,15 @@ from tests.homesec.mocks import (
     MockStorage,
     MockVLM,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_rtsp_timeout_capabilities() -> None:
+    """Reset process-wide RTSP timeout capability cache between tests."""
+    capabilities = get_global_rtsp_timeout_capabilities()
+    capabilities.reset()
+    yield
+    capabilities.reset()
 
 
 @pytest.fixture

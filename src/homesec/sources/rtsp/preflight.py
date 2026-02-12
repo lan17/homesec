@@ -10,6 +10,10 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
+from homesec.sources.rtsp.capabilities import (
+    RTSPTimeoutCapabilities,
+    get_global_rtsp_timeout_capabilities,
+)
 from homesec.sources.rtsp.discovery import (
     CameraProbeResult,
     FfprobeStreamDiscovery,
@@ -152,16 +156,19 @@ class RTSPStartupPreflight:
         discovery: StreamDiscovery | None = None,
         session_overlap_s: float = 1.0,
         command_timeout_s: float = 8.0,
+        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
         self._output_dir = output_dir
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._session_overlap_s = max(0.1, session_overlap_s)
         self._command_timeout_s = max(1.0, command_timeout_s)
+        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
         self._discovery = discovery or FfprobeStreamDiscovery(
             rtsp_connect_timeout_s=rtsp_connect_timeout_s,
             rtsp_io_timeout_s=rtsp_io_timeout_s,
             command_timeout_s=command_timeout_s,
+            timeout_capabilities=self._timeout_capabilities,
         )
 
     def run(
@@ -409,6 +416,8 @@ class RTSPStartupPreflight:
                 stderr_text = _sanitize_stderr(result.stderr, profile.input_url)
                 signals = _collect_recording_stability_signals(stderr_text)
                 if result.returncode == 0:
+                    if label == "timeouts":
+                        self._timeout_capabilities.note_ffmpeg_timeout_success()
                     try:
                         if temp_path.exists() and temp_path.stat().st_size > 0:
                             return RecordingValidationResult(ok=True, signals=signals)
@@ -419,6 +428,11 @@ class RTSPStartupPreflight:
                     )
 
                 if label == "timeouts" and _is_timeout_option_error(stderr_text):
+                    changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
+                    if changed:
+                        logger.warning(
+                            "ffmpeg timeout options unsupported; disabling RTSP timeout options for this process"
+                        )
                     logger.debug("Recording preflight retrying without timeout options")
                     continue
 
@@ -489,6 +503,8 @@ class RTSPStartupPreflight:
             motion_exit = motion_proc.poll()
             recording_exit = recording_proc.poll()
             if motion_exit is None and recording_exit is None:
+                if label == "timeouts":
+                    self._timeout_capabilities.note_ffmpeg_timeout_success()
                 self._terminate_process(motion_proc)
                 self._terminate_process(recording_proc)
                 return True
@@ -499,6 +515,11 @@ class RTSPStartupPreflight:
                 _is_timeout_option_error(motion_err) or _is_timeout_option_error(recording_err)
             )
             if timeout_option_error:
+                changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
+                if changed:
+                    logger.warning(
+                        "ffmpeg timeout options unsupported; disabling RTSP timeout options for this process"
+                    )
                 logger.debug(
                     "Session-limit validation retrying without timeout options; motion_err=%s recording_err=%s",
                     motion_err,
@@ -575,14 +596,10 @@ class RTSPStartupPreflight:
         return cmd
 
     def _timeout_args(self) -> list[str]:
-        timeout_args: list[str] = []
-        if self._rtsp_connect_timeout_s > 0:
-            timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
-            timeout_args.extend(["-stimeout", timeout_us_connect])
-        if self._rtsp_io_timeout_s > 0:
-            timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
-            timeout_args.extend(["-rw_timeout", timeout_us_io])
-        return timeout_args
+        return self._timeout_capabilities.build_ffmpeg_timeout_args(
+            connect_timeout_s=self._rtsp_connect_timeout_s,
+            io_timeout_s=self._rtsp_io_timeout_s,
+        )
 
     def _terminate_process(self, proc: subprocess.Popen[str] | None) -> str:
         if proc is None:

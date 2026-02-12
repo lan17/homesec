@@ -21,6 +21,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from homesec.models.clip import Clip
 from homesec.sources.base import ThreadedClipSource
+from homesec.sources.rtsp.capabilities import (
+    RTSPTimeoutCapabilities,
+    get_global_rtsp_timeout_capabilities,
+)
 from homesec.sources.rtsp.clock import Clock, SystemClock
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
@@ -225,6 +229,7 @@ class RTSPSource(ThreadedClipSource):
         frame_pipeline: FramePipeline | None = None,
         recorder: Recorder | None = None,
         clock: Clock | None = None,
+        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
         """Initialize RTSP source."""
         super().__init__()
@@ -276,10 +281,12 @@ class RTSPSource(ThreadedClipSource):
         self.rtsp_connect_timeout_s = float(config.stream.connect_timeout_s)
         self.rtsp_io_timeout_s = float(config.stream.io_timeout_s)
         self._legacy_ffmpeg_flags = list(config.stream.ffmpeg_flags)
+        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
         self._preflight = RTSPStartupPreflight(
             output_dir=Path(config.output_dir),
             rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+            timeout_capabilities=self._timeout_capabilities,
         )
         self._preflight_outcome: CameraPreflightOutcome | None = None
 
@@ -326,6 +333,7 @@ class RTSPSource(ThreadedClipSource):
             hwaccel_failed=self._hwaccel_failed,
             on_frame=self._touch_heartbeat,
             clock=self._clock,
+            timeout_capabilities=self._timeout_capabilities,
         )
         self._recorder: Recorder = recorder or FfmpegRecorder(
             rtsp_url=self.rtsp_url,
@@ -334,6 +342,7 @@ class RTSPSource(ThreadedClipSource):
             rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self.rtsp_io_timeout_s,
             clock=self._clock,
+            timeout_capabilities=self._timeout_capabilities,
         )
         self._run_state = RTSPRunState.IDLE
         self._motion_rtsp_url = self.detect_rtsp_url
@@ -557,13 +566,10 @@ class RTSPSource(ThreadedClipSource):
             "-rtsp_transport",
             "tcp",
         ]
-        timeout_args: list[str] = []
-        if self.rtsp_connect_timeout_s > 0:
-            timeout_us_connect = str(int(max(0.1, self.rtsp_connect_timeout_s) * 1_000_000))
-            timeout_args.extend(["-stimeout", timeout_us_connect])
-        if self.rtsp_io_timeout_s > 0:
-            timeout_us_io = str(int(max(0.1, self.rtsp_io_timeout_s) * 1_000_000))
-            timeout_args.extend(["-rw_timeout", timeout_us_io])
+        timeout_args = self._timeout_capabilities.build_ffprobe_timeout_args(
+            connect_timeout_s=self.rtsp_connect_timeout_s,
+            io_timeout_s=self.rtsp_io_timeout_s,
+        )
 
         attempts: list[tuple[str, list[str]]] = []
         if timeout_args:
@@ -581,10 +587,22 @@ class RTSPSource(ThreadedClipSource):
                 )
                 if result.returncode != 0:
                     if _is_timeout_option_error(result.stderr):
-                        logger.debug("ffprobe missing timeout options (%s), retrying", label)
+                        changed = self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
+                        if changed:
+                            logger.warning(
+                                "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
+                            )
+                        else:
+                            logger.debug(
+                                "ffprobe missing timeout options (%s), retrying",
+                                label,
+                            )
                         continue
                     logger.debug("ffprobe failed (%s) with exit code %s", label, result.returncode)
                     break
+
+                if label == "timeouts":
+                    self._timeout_capabilities.note_ffprobe_timeout_success()
 
                 data = json.loads(result.stdout)
                 if not data.get("streams"):

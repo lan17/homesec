@@ -5,6 +5,10 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
+from homesec.sources.rtsp.capabilities import (
+    RTSPTimeoutCapabilities,
+    get_global_rtsp_timeout_capabilities,
+)
 from homesec.sources.rtsp.clock import Clock
 from homesec.sources.rtsp.recording_profile import RecordingProfile, build_default_recording_profile
 from homesec.sources.rtsp.utils import _format_cmd, _is_timeout_option_error, _redact_rtsp_url
@@ -30,6 +34,7 @@ class FfmpegRecorder:
         rtsp_io_timeout_s: float,
         clock: Clock,
         recording_profile: RecordingProfile | None = None,
+        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
         self._rtsp_url = rtsp_url
         self._ffmpeg_flags = ffmpeg_flags
@@ -37,6 +42,7 @@ class FfmpegRecorder:
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._clock = clock
+        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
 
     def configure_profile(self, profile: RecordingProfile) -> None:
         self._recording_profile = profile
@@ -65,14 +71,21 @@ class FfmpegRecorder:
         user_flags = self._ffmpeg_flags
         has_stimeout = any(x == "-stimeout" for x in user_flags)
         has_rw_timeout = any(x == "-rw_timeout" for x in user_flags)
-        timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
-        timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
 
         timeout_args: list[str] = []
-        if not has_stimeout and self._rtsp_connect_timeout_s > 0:
-            timeout_args.extend(["-stimeout", timeout_us_connect])
-        if not has_rw_timeout and self._rtsp_io_timeout_s > 0:
-            timeout_args.extend(["-rw_timeout", timeout_us_io])
+        candidate_timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args(
+            connect_timeout_s=self._rtsp_connect_timeout_s,
+            io_timeout_s=self._rtsp_io_timeout_s,
+        )
+        timeout_values: dict[str, str] = {}
+        for idx in range(0, len(candidate_timeout_args), 2):
+            if idx + 1 >= len(candidate_timeout_args):
+                continue
+            timeout_values[candidate_timeout_args[idx]] = candidate_timeout_args[idx + 1]
+        if not has_stimeout and "-stimeout" in timeout_values:
+            timeout_args.extend(["-stimeout", timeout_values["-stimeout"]])
+        if not has_rw_timeout and "-rw_timeout" in timeout_values:
+            timeout_args.extend(["-rw_timeout", timeout_values["-rw_timeout"]])
 
         input_url = self._recording_profile.input_url
         cmd_tail = list(self._recording_profile.ffmpeg_input_args)
@@ -118,6 +131,8 @@ class FfmpegRecorder:
 
                 self._clock.sleep(0.5)
                 if proc.poll() is None:
+                    if label == "timeouts":
+                        self._timeout_capabilities.note_ffmpeg_timeout_success()
                     return proc
 
                 stderr_tail = _read_tail(stderr_log)
@@ -128,11 +143,19 @@ class FfmpegRecorder:
                 )
 
                 if timeout_option_error:
-                    logger.warning(
-                        "Recording process died immediately (%s, exit code: %s); timeout options unsupported",
-                        label,
-                        proc.returncode,
-                    )
+                    changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
+                    if changed:
+                        logger.warning(
+                            "Recording process died immediately (%s, exit code: %s); timeout options unsupported. Disabling RTSP timeout options for this process",
+                            label,
+                            proc.returncode,
+                        )
+                    else:
+                        logger.debug(
+                            "Recording timeout options already disabled after repeated failure (%s, exit code: %s)",
+                            label,
+                            proc.returncode,
+                        )
                     logger.warning("Check logs at: %s", stderr_log)
                 else:
                     logger.error(
@@ -145,7 +168,8 @@ class FfmpegRecorder:
                 if stderr_tail:
                     redacted_tail = stderr_tail.replace(input_url, _redact_rtsp_url(input_url))
                     if timeout_option_error:
-                        logger.warning("Recording stderr tail (%s):\n%s", label, redacted_tail)
+                        log_fn = logger.warning if changed else logger.debug
+                        log_fn("Recording stderr tail (%s):\n%s", label, redacted_tail)
                         logger.warning(
                             "Recording ffmpeg missing timeout options; retrying without timeouts"
                         )

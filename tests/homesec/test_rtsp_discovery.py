@@ -89,3 +89,42 @@ def test_probe_retries_without_timeout_flags(monkeypatch: pytest.MonkeyPatch) ->
     assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
     assert "-rw_timeout" not in calls[1]
     assert "-stimeout" not in calls[1]
+
+
+def test_probe_disables_timeout_flags_after_first_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery should stop retrying timeout flags once unsupported is detected."""
+    # Given: ffprobe rejects timeout flags on first probe call
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd: Sequence[str], **_kwargs: object) -> _FakeResult:
+        calls.append(list(cmd))
+        if "-rw_timeout" in cmd or "-stimeout" in cmd:
+            return _FakeResult(returncode=1, stderr="Unrecognized option 'stimeout'")
+        return _FakeResult(
+            returncode=0,
+            stdout=(
+                '{"streams":['
+                '{"codec_type":"video","codec_name":"h264","width":640,'
+                '"height":360,"avg_frame_rate":"10/1"}'
+                "]}"
+            ),
+        )
+
+    monkeypatch.setattr("homesec.sources.rtsp.discovery.subprocess.run", _fake_run)
+    discovery = FfprobeStreamDiscovery(rtsp_connect_timeout_s=2.0, rtsp_io_timeout_s=2.0)
+
+    # When: probing the same camera twice
+    first = discovery.probe(camera_key="garage:lenovo:stream", candidate_urls=["rtsp://x"])
+    second = discovery.probe(camera_key="garage:lenovo:stream", candidate_urls=["rtsp://x"])
+
+    # Then: second probe skips timeout-option attempt entirely
+    assert first.streams[0].probe_ok
+    assert second.streams[0].probe_ok
+    assert len(calls) == 3
+    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
+    assert "-rw_timeout" not in calls[1]
+    assert "-stimeout" not in calls[1]
+    assert "-rw_timeout" not in calls[2]
+    assert "-stimeout" not in calls[2]

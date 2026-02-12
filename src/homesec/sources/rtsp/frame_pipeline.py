@@ -8,6 +8,10 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from typing import Any, Protocol
 
+from homesec.sources.rtsp.capabilities import (
+    RTSPTimeoutCapabilities,
+    get_global_rtsp_timeout_capabilities,
+)
 from homesec.sources.rtsp.clock import Clock
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recording_profile import MotionProfile
@@ -51,6 +55,7 @@ class FfmpegFramePipeline:
         hwaccel_failed: bool,
         on_frame: Callable[[], None],
         clock: Clock,
+        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
     ) -> None:
         self._output_dir = output_dir
         self._frame_queue_size = frame_queue_size
@@ -62,6 +67,7 @@ class FfmpegFramePipeline:
         self._hwaccel_failed = hwaccel_failed
         self._on_frame = on_frame
         self._clock = clock
+        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
 
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr: Any | None = None
@@ -217,9 +223,6 @@ class FfmpegFramePipeline:
         has_stimeout = any(x == "-stimeout" for x in user_flags)
         has_rw_timeout = any(x == "-rw_timeout" for x in user_flags)
 
-        timeout_us_connect = str(int(max(0.1, self._rtsp_connect_timeout_s) * 1_000_000))
-        timeout_us_io = str(int(max(0.1, self._rtsp_io_timeout_s) * 1_000_000))
-
         base_input_prefix = ["-rtsp_transport", "tcp"]
         base_input_args = [
             "-i",
@@ -235,10 +238,19 @@ class FfmpegFramePipeline:
         ]
 
         timeout_args: list[str] = []
-        if not has_stimeout and self._rtsp_connect_timeout_s > 0:
-            timeout_args.extend(["-stimeout", timeout_us_connect])
-        if not has_rw_timeout and self._rtsp_io_timeout_s > 0:
-            timeout_args.extend(["-rw_timeout", timeout_us_io])
+        candidate_timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args(
+            connect_timeout_s=self._rtsp_connect_timeout_s,
+            io_timeout_s=self._rtsp_io_timeout_s,
+        )
+        timeout_values: dict[str, str] = {}
+        for idx in range(0, len(candidate_timeout_args), 2):
+            if idx + 1 >= len(candidate_timeout_args):
+                continue
+            timeout_values[candidate_timeout_args[idx]] = candidate_timeout_args[idx + 1]
+        if not has_stimeout and "-stimeout" in timeout_values:
+            timeout_args.extend(["-stimeout", timeout_values["-stimeout"]])
+        if not has_rw_timeout and "-rw_timeout" in timeout_values:
+            timeout_args.extend(["-rw_timeout", timeout_values["-rw_timeout"]])
 
         attempts: list[tuple[str, list[str]]] = []
         if timeout_args:
@@ -282,6 +294,8 @@ class FfmpegFramePipeline:
 
             self._clock.sleep(1)
             if process.poll() is None:
+                if label == "timeouts":
+                    self._timeout_capabilities.note_ffmpeg_timeout_success()
                 return process, stderr_file, detect_width, detect_height
 
             try:
@@ -293,13 +307,22 @@ class FfmpegFramePipeline:
                 label == "timeouts" and bool(stderr_tail) and _is_timeout_option_error(stderr_tail)
             )
             if timeout_option_error:
-                logger.warning(
-                    "Frame pipeline died immediately (%s, exit code: %s); timeout options unsupported",
-                    label,
-                    process.returncode,
-                )
+                changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
+                if changed:
+                    logger.warning(
+                        "Frame pipeline died immediately (%s, exit code: %s); timeout options unsupported. Disabling RTSP timeout options for this process",
+                        label,
+                        process.returncode,
+                    )
+                else:
+                    logger.debug(
+                        "Frame pipeline timeout options already disabled after repeated failure (%s, exit code: %s)",
+                        label,
+                        process.returncode,
+                    )
                 if stderr_tail:
-                    logger.warning("Frame pipeline stderr tail (%s):\n%s", label, stderr_tail)
+                    log_fn = logger.warning if changed else logger.debug
+                    log_fn("Frame pipeline stderr tail (%s):\n%s", label, stderr_tail)
             else:
                 logger.error(
                     "Frame pipeline died immediately (%s, exit code: %s)",
