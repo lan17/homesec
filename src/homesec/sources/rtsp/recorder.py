@@ -146,7 +146,8 @@ class FfmpegRecorder:
                             label,
                             proc.returncode,
                         )
-                    logger.warning("Check logs at: %s", stderr_log)
+                    check_logs_fn = logger.warning if changed else logger.debug
+                    check_logs_fn("Check logs at: %s", stderr_log)
                 else:
                     logger.error(
                         "Recording process died immediately (%s, exit code: %s)",
