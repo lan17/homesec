@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -34,8 +35,11 @@ class _StubRepository:
         self._ok = ok
         self._clips_count = clips_count
         self._alerts_count = alerts_count
+        self.deleted_clip_ids: list[str] = []
+        self.ping_calls = 0
 
     async def ping(self) -> bool:
+        self.ping_calls += 1
         return self._ok
 
     async def list_clips(
@@ -68,6 +72,7 @@ class _StubRepository:
         return None
 
     async def delete_clip(self, clip_id: str) -> ClipStateData:
+        self.deleted_clip_ids.append(clip_id)
         clip = await self.get_clip(clip_id)
         if clip is None:
             raise ValueError(f"Clip not found: {clip_id}")
@@ -489,6 +494,99 @@ def test_get_config_returns_full_config(tmp_path) -> None:
     assert payload["config"]["server"]["enabled"] is True
 
 
+def test_get_config_redacts_sensitive_fields(tmp_path) -> None:
+    """GET /config should redact direct secret values while preserving *_env references."""
+    # Given a config containing direct secrets and env var references
+    payload = {
+        "version": 1,
+        "cameras": [
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "rtsp",
+                    "config": {
+                        "rtsp_url": "rtsp://user:pass@10.0.0.5:554/stream",
+                        "rtsp_url_env": "FRONT_RTSP_URL",
+                    },
+                },
+            }
+        ],
+        "storage": {"backend": "dropbox", "config": {"root": "/homecam"}},
+        "state_store": {"dsn": "postgresql://user:password@localhost/homesec"},
+        "notifiers": [
+            {
+                "backend": "mqtt",
+                "config": {
+                    "host": "localhost",
+                    "auth": {
+                        "password_env": "MQTT_PASSWORD",
+                    },
+                },
+            }
+        ],
+        "filter": {"backend": "yolo", "config": {}},
+        "vlm": {
+            "backend": "openai",
+            "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+        },
+        "alert_policy": {"backend": "default", "config": {}},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    manager = ConfigManager(path)
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When requesting config
+    response = client.get("/api/v1/config")
+
+    # Then direct secrets are redacted and *_env values are preserved
+    assert response.status_code == 200
+    config = response.json()["config"]
+    assert config["state_store"]["dsn"] == "***redacted***"
+    assert (
+        config["cameras"][0]["source"]["config"]["rtsp_url"]
+        == "rtsp://***redacted***@10.0.0.5:554/stream"
+    )
+    assert config["cameras"][0]["source"]["config"]["rtsp_url_env"] == "FRONT_RTSP_URL"
+    assert config["vlm"]["config"]["api_key_env"] == "OPENAI_API_KEY"
+
+
+def test_cors_disables_credentials_for_wildcard_origins(tmp_path) -> None:
+    """CORS should disable credentials when wildcard origins are configured."""
+    # Given a server config with wildcard origin
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+
+    # When creating FastAPI app
+    fastapi_app = create_app(app)
+
+    # Then CORS credentials are disabled to satisfy browser CORS rules
+    cors = next(m for m in fastapi_app.user_middleware if m.cls is CORSMiddleware)
+    assert cors.kwargs["allow_credentials"] is False
+
+
+def test_cors_allows_credentials_for_explicit_origins(tmp_path) -> None:
+    """CORS should allow credentials when origins are explicit."""
+    # Given a server config with explicit origins
+    server_config = FastAPIServerConfig(cors_origins=["https://example.com"])
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        server_config=server_config,
+    )
+
+    # When creating FastAPI app
+    fastapi_app = create_app(app)
+
+    # Then CORS credentials are enabled
+    cors = next(m for m in fastapi_app.user_middleware if m.cls is CORSMiddleware)
+    assert cors.kwargs["allow_credentials"] is True
+
+
 def test_list_clips_pagination(tmp_path) -> None:
     """GET /clips should paginate results."""
     # Given 100 clips in the repository
@@ -608,6 +706,7 @@ def test_delete_clip_storage_failure_returns_500(tmp_path) -> None:
 
     # Then it returns 500
     assert response.status_code == 500
+    assert repository.deleted_clip_ids == []
 
 
 def test_delete_clip_missing_returns_404(tmp_path) -> None:
@@ -659,6 +758,7 @@ def test_delete_clip_success_removes_storage(tmp_path) -> None:
     assert payload["id"] == "clip-2"
     assert payload["storage_uri"] == "dropbox://clip-2.mp4"
     assert storage.deleted == ["dropbox://clip-2.mp4"]
+    assert repository.deleted_clip_ids == ["clip-2"]
 
 
 def test_stats_endpoint_returns_counts(tmp_path) -> None:
@@ -746,7 +846,7 @@ def test_system_restart_calls_sigterm(tmp_path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_db_unavailable_returns_503(tmp_path) -> None:
-    """Non-health endpoints should return 503 when DB is down."""
+    """DB-backed endpoints should return 503 when DB is down."""
     # Given a repository that is unavailable
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
@@ -756,13 +856,53 @@ def test_db_unavailable_returns_503(tmp_path) -> None:
     )
     client = _client(app)
 
-    # When requesting a data endpoint
-    response = client.get("/api/v1/cameras")
+    # When requesting a DB-backed endpoint
+    response = client.get("/api/v1/clips")
 
     # Then it returns 503 with error code
     assert response.status_code == 503
     payload = response.json()
     assert payload["error_code"] == "DB_UNAVAILABLE"
+
+
+def test_cameras_available_when_db_unavailable(tmp_path) -> None:
+    """Camera config endpoint should remain available when DB is down."""
+    # Given a repository that is unavailable
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=False),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting camera config endpoint
+    response = client.get("/api/v1/cameras")
+
+    # Then it still returns successfully
+    assert response.status_code == 200
+
+
+def test_db_health_probe_is_cached_for_burst_requests(tmp_path) -> None:
+    """DB-backed endpoints should reuse a recent health probe result."""
+    # Given a healthy repository and DB-backed endpoint client
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository(ok=True)
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When issuing two immediate requests to a DB-backed endpoint
+    first = client.get("/api/v1/clips")
+    second = client.get("/api/v1/clips")
+
+    # Then both requests succeed and the ping probe is reused
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert repository.ping_calls == 1
 
 
 def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

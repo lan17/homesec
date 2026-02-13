@@ -28,6 +28,12 @@ class ConfigManager:
 
     def __init__(self, config_path: Path) -> None:
         self._config_path = config_path
+        self._lock: asyncio.Lock | None = None
+
+    def _mutation_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def get_config(self) -> Config:
         """Get the current configuration."""
@@ -41,22 +47,23 @@ class ConfigManager:
         source_config: dict[str, object],
     ) -> ConfigUpdateResult:
         """Add a new camera to the config."""
-        config = await asyncio.to_thread(self.get_config)
+        async with self._mutation_lock():
+            config = await asyncio.to_thread(self.get_config)
 
-        if any(camera.name == name for camera in config.cameras):
-            raise ValueError(f"Camera already exists: {name}")
+            if any(camera.name == name for camera in config.cameras):
+                raise ValueError(f"Camera already exists: {name}")
 
-        config.cameras.append(
-            CameraConfig(
-                name=name,
-                enabled=enabled,
-                source=CameraSourceConfig(backend=source_backend, config=source_config),
+            config.cameras.append(
+                CameraConfig(
+                    name=name,
+                    enabled=enabled,
+                    source=CameraSourceConfig(backend=source_backend, config=source_config),
+                )
             )
-        )
 
-        validated = await self._validate_config(config)
-        await self._save_config(validated)
-        return ConfigUpdateResult()
+            validated = await self._validate_config(config)
+            await self._save_config(validated)
+            return ConfigUpdateResult()
 
     async def update_camera(
         self,
@@ -65,40 +72,42 @@ class ConfigManager:
         source_config: dict[str, object] | None,
     ) -> ConfigUpdateResult:
         """Update an existing camera in the config."""
-        config = await asyncio.to_thread(self.get_config)
+        async with self._mutation_lock():
+            config = await asyncio.to_thread(self.get_config)
 
-        camera = next((cam for cam in config.cameras if cam.name == camera_name), None)
-        if camera is None:
-            raise ValueError(f"Camera not found: {camera_name}")
+            camera = next((cam for cam in config.cameras if cam.name == camera_name), None)
+            if camera is None:
+                raise ValueError(f"Camera not found: {camera_name}")
 
-        if enabled is not None:
-            camera.enabled = enabled
-        if source_config is not None:
-            camera.source = CameraSourceConfig(
-                backend=camera.source.backend,
-                config=source_config,
-            )
+            if enabled is not None:
+                camera.enabled = enabled
+            if source_config is not None:
+                camera.source = CameraSourceConfig(
+                    backend=camera.source.backend,
+                    config=source_config,
+                )
 
-        validated = await self._validate_config(config)
-        await self._save_config(validated)
-        return ConfigUpdateResult()
+            validated = await self._validate_config(config)
+            await self._save_config(validated)
+            return ConfigUpdateResult()
 
     async def remove_camera(
         self,
         camera_name: str,
     ) -> ConfigUpdateResult:
         """Remove a camera from the config."""
-        config = await asyncio.to_thread(self.get_config)
+        async with self._mutation_lock():
+            config = await asyncio.to_thread(self.get_config)
 
-        updated = [camera for camera in config.cameras if camera.name != camera_name]
-        if len(updated) == len(config.cameras):
-            raise ValueError(f"Camera not found: {camera_name}")
+            updated = [camera for camera in config.cameras if camera.name != camera_name]
+            if len(updated) == len(config.cameras):
+                raise ValueError(f"Camera not found: {camera_name}")
 
-        config.cameras = updated
+            config.cameras = updated
 
-        validated = await self._validate_config(config)
-        await self._save_config(validated)
-        return ConfigUpdateResult()
+            validated = await self._validate_config(config)
+            await self._save_config(validated)
+            return ConfigUpdateResult()
 
     async def _validate_config(self, config: Config) -> Config:
         """Validate configuration via the standard loader path."""

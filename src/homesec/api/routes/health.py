@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -87,8 +88,10 @@ async def get_diagnostics(app: Application = Depends(get_homesec_app)) -> Diagno
             return ComponentStatus(status="ok", latency_ms=latency_ms)
         return ComponentStatus(status="error", error="unavailable", latency_ms=latency_ms)
 
-    postgres_status = await _check(app.repository.ping)
-    storage_status = await _check(app.storage.ping)
+    postgres_status, storage_status = await asyncio.gather(
+        _check(app.repository.ping),
+        _check(app.storage.ping),
+    )
 
     cameras: dict[str, CameraStatus] = {}
     for camera in app.config.cameras:

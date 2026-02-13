@@ -11,14 +11,8 @@ from homesec.api.routes import cameras, clips, config, health, stats, system
 def register_routes(app: FastAPI) -> None:
     """Register all API routers."""
     app.include_router(health.router, dependencies=[Depends(verify_api_key)])
-    app.include_router(
-        config.router,
-        dependencies=[Depends(verify_api_key), Depends(require_database)],
-    )
-    app.include_router(
-        cameras.router,
-        dependencies=[Depends(verify_api_key), Depends(require_database)],
-    )
+    app.include_router(config.router, dependencies=[Depends(verify_api_key)])
+    app.include_router(cameras.router, dependencies=[Depends(verify_api_key)])
     app.include_router(
         clips.router,
         dependencies=[Depends(verify_api_key), Depends(require_database)],
@@ -27,7 +21,4 @@ def register_routes(app: FastAPI) -> None:
         stats.router,
         dependencies=[Depends(verify_api_key), Depends(require_database)],
     )
-    app.include_router(
-        system.router,
-        dependencies=[Depends(verify_api_key), Depends(require_database)],
-    )
+    app.include_router(system.router, dependencies=[Depends(verify_api_key)])

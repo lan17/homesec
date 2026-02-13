@@ -10,6 +10,7 @@ from homesec.models.config import (
     CameraConfig,
     CameraSourceConfig,
     Config,
+    FastAPIServerConfig,
     NotifierConfig,
     StateStoreConfig,
     StorageConfig,
@@ -212,6 +213,7 @@ async def test_application_wires_pipeline_and_health(_mock_plugins: None) -> Non
     # Then pipeline, sources, and health server are wired
     assert app._pipeline is not None
     assert app._health_server is not None
+    assert app._api_server is not None
     assert app._sources
     for source in app._sources:
         callback = source._callback
@@ -252,3 +254,26 @@ async def test_application_uses_multiplex_for_multiple_notifiers(
 
     # Then a MultiplexNotifier is used
     assert isinstance(app._notifier, MultiplexNotifier)
+
+
+@pytest.mark.asyncio
+async def test_application_does_not_create_api_server_when_disabled(_mock_plugins: None) -> None:
+    """API server should not be created when disabled in config."""
+    # Given a config with API server disabled
+    config = _make_config(
+        [
+            NotifierConfig(
+                backend="mqtt",
+                config={"host": "localhost"},
+            )
+        ]
+    )
+    config.server = FastAPIServerConfig(enabled=False)
+    app = Application(config_path=__file__)
+    app._config = config
+
+    # When creating components
+    await app._create_components()
+
+    # Then API server is not created
+    assert app._api_server is None

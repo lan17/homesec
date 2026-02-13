@@ -2,17 +2,37 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
-from typing import TYPE_CHECKING, cast
+import time
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
     from homesec.app import Application
 
+DB_PING_CACHE_TTL_S = 0.5
+
 
 class DatabaseUnavailableError(RuntimeError):
     """Raised when database is unavailable for API requests."""
+
+
+@dataclass
+class _DatabaseProbeCache:
+    last_check_monotonic: float = 0.0
+    last_ok: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _get_database_probe_cache(app: Application) -> _DatabaseProbeCache:
+    cache = cast(_DatabaseProbeCache | None, getattr(app, "_db_probe_cache", None))
+    if cache is None:
+        cache = _DatabaseProbeCache()
+        cast(Any, app)._db_probe_cache = cache
+    return cache
 
 
 async def get_homesec_app(request: Request) -> Application:
@@ -48,7 +68,15 @@ async def verify_api_key(request: Request, app: Application = Depends(get_homese
 
 async def require_database(app: Application = Depends(get_homesec_app)) -> None:
     """Ensure the database is reachable for data endpoints."""
-    repository = app.repository
-    ok = await repository.ping()
-    if not ok:
+    cache = _get_database_probe_cache(app)
+    now = time.monotonic()
+
+    if now - cache.last_check_monotonic > DB_PING_CACHE_TTL_S:
+        async with cache.lock:
+            now = time.monotonic()
+            if now - cache.last_check_monotonic > DB_PING_CACHE_TTL_S:
+                cache.last_ok = await app.repository.ping()
+                cache.last_check_monotonic = now
+
+    if not cache.last_ok:
         raise DatabaseUnavailableError("Database unavailable")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -150,3 +151,34 @@ async def test_config_manager_invalid_update_raises(tmp_path: Path) -> None:
         )
 
     # Then it raises a validation error
+
+
+@pytest.mark.asyncio
+async def test_config_manager_add_camera_concurrent_updates_preserve_all_changes(
+    tmp_path: Path,
+) -> None:
+    """ConfigManager should serialize concurrent camera adds to avoid lost updates."""
+    # Given a config with no cameras
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(config_path, cameras=[])
+
+    # When adding different cameras concurrently
+    await asyncio.gather(
+        manager.add_camera(
+            name="front",
+            enabled=True,
+            source_backend="local_folder",
+            source_config={"watch_dir": "/tmp/front"},
+        ),
+        manager.add_camera(
+            name="back",
+            enabled=True,
+            source_backend="local_folder",
+            source_config={"watch_dir": "/tmp/back"},
+        ),
+    )
+
+    # Then both camera additions are preserved
+    config = manager.get_config()
+    names = {camera.name for camera in config.cameras}
+    assert names == {"front", "back"}

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
 from homesec.config.manager import ConfigManager
 from homesec.health import HealthServer
@@ -68,6 +69,7 @@ class Application:
         self._sources_by_camera: dict[str, ClipSource] = {}
         self._pipeline: ClipPipeline | None = None
         self._health_server: HealthServer | None = None
+        self._api_server: APIServer | None = None
         self._config_manager = ConfigManager(config_path)
         self._start_time: float | None = None
 
@@ -123,6 +125,9 @@ class Application:
                 )
             summary = "; ".join(f"{camera_name}: {error}" for camera_name, error in startup_errors)
             raise RuntimeError(f"Source startup preflight failed: {summary}")
+
+        if self._api_server:
+            await self._api_server.start()
 
         self._start_time = time.time()
         logger.info("Application started. Waiting for clips...")
@@ -203,6 +208,17 @@ class Application:
             sources=self._sources,
             mqtt_is_critical=health_cfg.mqtt_is_critical,
         )
+
+        server_cfg = config.server
+        if server_cfg.enabled:
+            api_app = create_app(self)
+            self._api_server = APIServer(
+                app=api_app,
+                host=server_cfg.host,
+                port=server_cfg.port,
+            )
+        else:
+            self._api_server = None
 
         logger.info("All components created")
 
@@ -333,6 +349,10 @@ class Application:
     async def shutdown(self) -> None:
         """Graceful shutdown of all components."""
         logger.info("Shutting down application...")
+
+        # Stop API server first to prevent new requests during shutdown.
+        if self._api_server:
+            await self._api_server.stop()
 
         # Stop sources first
         if self._sources:

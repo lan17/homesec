@@ -106,7 +106,7 @@ class FastAPIServerConfig(BaseModel):
 
     enabled: bool = True
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 8081
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     auth_enabled: bool = False
     api_key_env: str | None = None

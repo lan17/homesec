@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homesec.api.dependencies import get_homesec_app
 
@@ -28,7 +28,7 @@ class ClipResponse(BaseModel):
     activity_type: str | None = None
     risk_level: str | None = None
     summary: str | None = None
-    detected_objects: list[str] = []
+    detected_objects: list[str] = Field(default_factory=list)
     storage_uri: str | None = None
     view_url: str | None = None
     alerted: bool = False
@@ -51,7 +51,7 @@ def _clip_response(state: ClipStateData) -> ClipResponse:
     analysis = state.analysis_result
     detected = state.filter_result.detected_classes if state.filter_result else []
     alerted = state.alert_decision.notify if state.alert_decision else False
-    created_at = state.created_at or datetime.now()
+    created_at = state.created_at or datetime.now(timezone.utc)
     clip_id = state.clip_id or ""
 
     return ClipResponse(
@@ -116,21 +116,28 @@ async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) ->
 @router.delete("/api/v1/clips/{clip_id}", response_model=ClipResponse)
 async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app)) -> ClipResponse:
     """Delete a clip and its storage object."""
+    state = await app.repository.get_clip(clip_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Clip not found: {clip_id}")
+
     try:
-        state = await app.repository.delete_clip(clip_id)
+        if state.storage_uri:
+            await app.storage.delete(state.storage_uri)
+    except Exception as exc:
+        logger.error(
+            "Storage delete failed for clip %s: %s",
+            clip_id,
+            exc,
+            exc_info=exc,
+        )
+        raise HTTPException(status_code=500, detail="Storage deletion failed") from exc
+
+    try:
+        deleted = await app.repository.delete_clip(clip_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if state.storage_uri:
-        try:
-            await app.storage.delete(state.storage_uri)
-        except Exception as exc:
-            logger.error(
-                "Storage delete failed for clip %s: %s",
-                clip_id,
-                exc,
-                exc_info=exc,
-            )
-            raise HTTPException(status_code=500, detail="Storage deletion failed") from exc
+    if deleted.storage_uri is None:
+        deleted.storage_uri = state.storage_uri
 
-    return _clip_response(state)
+    return _clip_response(deleted)

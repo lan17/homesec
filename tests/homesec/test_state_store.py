@@ -1,11 +1,15 @@
 """Tests for PostgresStateStore."""
 
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete
 
+from homesec.models.alert import AlertDecision
 from homesec.models.clip import ClipStateData
+from homesec.models.enums import ClipStatus
+from homesec.models.events import NotificationSentEvent
 from homesec.models.filter import FilterResult
 from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
@@ -257,3 +261,134 @@ async def test_list_candidate_clips_for_cleanup_skips_deleted_and_filters_camera
 
     # Then: Only that camera's non-deleted rows are returned
     assert ids_front == {"test-cleanup-a"}
+
+
+@pytest.mark.asyncio
+async def test_get_clip_returns_clip_id_and_created_at(state_store: PostgresStateStore) -> None:
+    """get_clip should hydrate clip_id and created_at metadata."""
+    # Given: A persisted clip state
+    clip_id = "test-get-clip-meta-001"
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status="queued_local",
+            local_path="/tmp/meta.mp4",
+        ),
+    )
+
+    # When: Fetching it by clip id
+    clip = await state_store.get_clip(clip_id)
+
+    # Then: Metadata fields are populated from row columns
+    assert clip is not None
+    assert clip.clip_id == clip_id
+    assert clip.created_at is not None
+    assert clip.created_at.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_clip_deleted_updates_persisted_status(state_store: PostgresStateStore) -> None:
+    """mark_clip_deleted should set status to deleted and persist the update."""
+    # Given: A clip state in a non-deleted status
+    clip_id = "test-mark-deleted-001"
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status="uploaded",
+            local_path="/tmp/deleted.mp4",
+        ),
+    )
+
+    # When: Marking the clip as deleted
+    deleted = await state_store.mark_clip_deleted(clip_id)
+
+    # Then: Returned state and persisted state both report deleted status
+    assert deleted.status == ClipStatus.DELETED
+    persisted = await state_store.get_clip(clip_id)
+    assert persisted is not None
+    assert persisted.status == ClipStatus.DELETED
+
+
+@pytest.mark.asyncio
+async def test_list_clips_applies_filters_and_includes_clip_ids(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should support camera/status/alerted filters."""
+    # Given: Clips with mixed status and alert outcomes
+    await state_store.upsert(
+        "test-list-filters-a",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/a.mp4",
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-filters-b",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/b.mp4",
+            alert_decision=AlertDecision(notify=False, notify_reason="risk_level=low"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-filters-c",
+        ClipStateData(
+            camera_name="back_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/c.mp4",
+        ),
+    )
+
+    # When: Listing only front-door analyzed clips with alerts enabled
+    clips, total = await state_store.list_clips(
+        camera="front_door",
+        status=ClipStatus.ANALYZED,
+        alerted=True,
+        offset=0,
+        limit=10,
+    )
+
+    # Then: Only the matching clip is returned with hydrated clip_id metadata
+    assert total == 1
+    assert [clip.clip_id for clip in clips] == ["test-list-filters-a"]
+
+
+@pytest.mark.asyncio
+async def test_count_alerts_since_counts_notification_sent_events(
+    state_store: PostgresStateStore,
+) -> None:
+    """count_alerts_since should count notification_sent events only."""
+    # Given: A stored clip and one notification_sent event
+    clip_id = "test-alert-count-001"
+    now = datetime.now(timezone.utc)
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status="analyzed",
+            local_path="/tmp/alert-count.mp4",
+        ),
+    )
+    event_store = state_store.create_event_store()
+    await event_store.append(
+        NotificationSentEvent(
+            clip_id=clip_id,
+            timestamp=now,
+            notifier_name="mqtt",
+            dedupe_key=clip_id,
+            attempt=1,
+        )
+    )
+
+    # When: Counting alerts over a past and future window
+    recent_count = await state_store.count_alerts_since(now - timedelta(minutes=1))
+    future_count = await state_store.count_alerts_since(now + timedelta(minutes=1))
+
+    # Then: The event is counted in the past window only
+    assert recent_count == 1
+    assert future_count == 0
