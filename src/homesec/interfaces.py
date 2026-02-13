@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from homesec.models.enums import ClipStatus
+
 if TYPE_CHECKING:
     from homesec.models.alert import Alert, AlertDecision
     from homesec.models.clip import Clip, ClipStateData
@@ -131,6 +133,43 @@ class StateStore(Shutdownable, ABC):
     @abstractmethod
     async def get(self, clip_id: str) -> ClipStateData | None:
         """Retrieve clip state. Returns None if not found."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        """Get clip state by ID."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ClipStateData], int]:
+        """List clips with filtering and pagination."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
+        """Mark a clip as deleted."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def count_clips_since(self, since: datetime) -> int:
+        """Count clips created since the given timestamp."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def count_alerts_since(self, since: datetime) -> int:
+        """Count alert events since the given timestamp."""
         raise NotImplementedError
 
     @abstractmethod

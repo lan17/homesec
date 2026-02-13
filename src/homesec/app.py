@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
+from homesec.config.manager import ConfigManager
 from homesec.health import HealthServer
 from homesec.interfaces import EventStore
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
@@ -63,8 +65,11 @@ class Application:
         self._filter: ObjectFilter | None = None
         self._vlm: VLMAnalyzer | None = None
         self._sources: list[ClipSource] = []
+        self._sources_by_camera: dict[str, ClipSource] = {}
         self._pipeline: ClipPipeline | None = None
         self._health_server: HealthServer | None = None
+        self._config_manager = ConfigManager(config_path)
+        self._start_time: float | None = None
 
         # Shutdown state
         self._shutdown_event = asyncio.Event()
@@ -119,6 +124,7 @@ class Application:
             summary = "; ".join(f"{camera_name}: {error}" for camera_name, error in startup_errors)
             raise RuntimeError(f"Source startup preflight failed: {summary}")
 
+        self._start_time = time.time()
         logger.info("Application started. Waiting for clips...")
 
         # Wait for shutdown signal
@@ -274,8 +280,11 @@ class Application:
     def _create_sources(self, config: Config) -> list[ClipSource]:
         """Create clip sources based on config using plugin registry."""
         sources: list[ClipSource] = []
+        self._sources_by_camera = {}
 
         for camera in config.cameras:
+            if not camera.enabled:
+                continue
             source_cfg = camera.source
             source = load_source_plugin(
                 source_backend=source_cfg.backend,
@@ -283,6 +292,7 @@ class Application:
                 camera_name=camera.name,
             )
             sources.append(source)
+            self._sources_by_camera[camera.name] = source
 
         return sources
 
@@ -358,3 +368,44 @@ class Application:
             await self._notifier.shutdown()
 
         logger.info("Application shutdown complete")
+
+    @property
+    def config(self) -> Config:
+        return self._require_config()
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return False
+
+    @property
+    def repository(self) -> ClipRepository:
+        if self._repository is None:
+            raise RuntimeError("Repository not initialized")
+        return self._repository
+
+    @property
+    def storage(self) -> StorageBackend:
+        if self._storage is None:
+            raise RuntimeError("Storage not initialized")
+        return self._storage
+
+    @property
+    def sources(self) -> list[ClipSource]:
+        return list(self._sources)
+
+    @property
+    def config_manager(self) -> ConfigManager:
+        return self._config_manager
+
+    @property
+    def pipeline_running(self) -> bool:
+        return self._pipeline is not None and not self._shutdown_event.is_set()
+
+    @property
+    def uptime_seconds(self) -> float:
+        if self._start_time is None:
+            return 0.0
+        return time.time() - self._start_time
+
+    def get_source(self, camera_name: str) -> ClipSource | None:
+        return self._sources_by_camera.get(camera_name)
