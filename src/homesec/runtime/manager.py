@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.models import (
-    RuntimeBundle,
+    ManagedRuntime,
     RuntimeReloadRequest,
     RuntimeReloadResult,
     RuntimeState,
@@ -31,7 +31,7 @@ class RuntimeManager:
         self,
         controller: RuntimeController,
         *,
-        on_runtime_activated: Callable[[RuntimeBundle], None] | None = None,
+        on_runtime_activated: Callable[[ManagedRuntime], None] | None = None,
         on_runtime_cleared: Callable[[], None] | None = None,
         reload_shutdown_grace_s: float = 30.0,
         reload_cancel_wait_s: float = 5.0,
@@ -42,7 +42,7 @@ class RuntimeManager:
         self._reload_shutdown_grace_s = reload_shutdown_grace_s
         self._reload_cancel_wait_s = reload_cancel_wait_s
 
-        self._active_runtime: RuntimeBundle | None = None
+        self._active_runtime: ManagedRuntime | None = None
         self._generation = 0
         self._reload_task: asyncio.Task[RuntimeReloadResult] | None = None
 
@@ -56,7 +56,7 @@ class RuntimeManager:
         )
 
     @property
-    def active_runtime(self) -> RuntimeBundle | None:
+    def active_runtime(self) -> ManagedRuntime | None:
         """Return the currently active runtime bundle, if any."""
         return self._active_runtime
 
@@ -65,7 +65,7 @@ class RuntimeManager:
         """Return current runtime generation."""
         return self._generation
 
-    async def start_initial_runtime(self, config: Config) -> RuntimeBundle:
+    async def start_initial_runtime(self, config: Config) -> ManagedRuntime:
         """Build and start the initial runtime."""
         if self._active_runtime is not None:
             logger.warning(
@@ -153,6 +153,9 @@ class RuntimeManager:
                     "In-flight reload exceeded shutdown grace period (%.1fs); cancelling task",
                     self._reload_shutdown_grace_s,
                 )
+                await self._safe_shutdown_all(
+                    context="controller shutdown sweep before reload cancel"
+                )
                 self._reload_task.cancel()
                 try:
                     await asyncio.wait_for(
@@ -168,6 +171,10 @@ class RuntimeManager:
                     pass
             except Exception as exc:
                 logger.error("In-flight reload task failed during shutdown: %s", exc, exc_info=exc)
+            finally:
+                await self._safe_shutdown_all(
+                    context="controller shutdown sweep after reload handling"
+                )
 
         active = self._active_runtime
         self._active_runtime = None
@@ -175,6 +182,8 @@ class RuntimeManager:
 
         if active is not None:
             await self._safe_shutdown(active, context="active runtime shutdown")
+
+        await self._safe_shutdown_all(context="controller final shutdown sweep")
 
         self._status = RuntimeStatusSnapshot(
             state=RuntimeState.IDLE,
@@ -194,7 +203,7 @@ class RuntimeManager:
         old_runtime = self._active_runtime
         old_generation = self._generation
         old_config_version = self._status.active_config_version
-        candidate: RuntimeBundle | None = None
+        candidate: ManagedRuntime | None = None
 
         try:
             candidate = await self._controller.build_candidate(config, generation=target_generation)
@@ -241,16 +250,22 @@ class RuntimeManager:
 
         return RuntimeReloadResult(success=True, generation=target_generation)
 
-    async def _safe_shutdown(self, runtime: RuntimeBundle, *, context: str) -> None:
+    async def _safe_shutdown(self, runtime: ManagedRuntime, *, context: str) -> None:
         try:
             await self._controller.shutdown_runtime(runtime)
+        except Exception as exc:
+            logger.error("%s failed: %s", context, exc, exc_info=exc)
+
+    async def _safe_shutdown_all(self, *, context: str) -> None:
+        try:
+            await self._controller.shutdown_all()
         except Exception as exc:
             logger.error("%s failed: %s", context, exc, exc_info=exc)
 
     def _rollback_to_previous_runtime(
         self,
         *,
-        old_runtime: RuntimeBundle | None,
+        old_runtime: ManagedRuntime | None,
         old_generation: int,
         old_config_version: str | None,
         error: str,

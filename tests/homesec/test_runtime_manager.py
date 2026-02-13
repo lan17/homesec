@@ -95,6 +95,8 @@ class _FakeController(RuntimeController):
         self.build_calls: list[int] = []
         self.start_calls: list[int] = []
         self.shutdown_calls: list[int] = []
+        self.shutdown_all_calls = 0
+        self.running_generations: set[int] = set()
         self.fail_build_generations: set[int] = set()
         self.fail_start_generations: set[int] = set()
         self.fail_shutdown_generations: set[int] = set()
@@ -109,6 +111,7 @@ class _FakeController(RuntimeController):
 
     async def start_runtime(self, runtime: RuntimeBundle) -> None:
         self.start_calls.append(runtime.generation)
+        self.running_generations.add(runtime.generation)
         if runtime.generation in self.block_start_generations:
             if self.start_gate is None:
                 raise AssertionError("start_gate must be set when blocking start")
@@ -118,8 +121,13 @@ class _FakeController(RuntimeController):
 
     async def shutdown_runtime(self, runtime: RuntimeBundle) -> None:
         self.shutdown_calls.append(runtime.generation)
+        self.running_generations.discard(runtime.generation)
         if runtime.generation in self.fail_shutdown_generations:
             raise RuntimeError("shutdown failed")
+
+    async def shutdown_all(self) -> None:
+        self.shutdown_all_calls += 1
+        self.running_generations.clear()
 
 
 def _make_config(*, camera_name: str, watch_dir: str) -> Config:
@@ -404,6 +412,8 @@ async def test_runtime_manager_shutdown_cancels_stuck_reload_task() -> None:
     # Then: Shutdown completes and clears active runtime state
     assert manager.active_runtime is None
     assert manager.generation == 0
+    assert controller.running_generations == set()
+    assert controller.shutdown_all_calls >= 1
     status = manager.get_status()
     assert status.state == RuntimeState.IDLE
     assert status.reload_in_progress is False

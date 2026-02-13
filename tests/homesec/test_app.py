@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -21,11 +24,19 @@ from homesec.models.config import (
 from homesec.models.filter import FilterConfig
 from homesec.models.storage import StorageUploadResult
 from homesec.models.vlm import VLMConfig
-from homesec.notifiers.multiplex import MultiplexNotifier
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
+from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import RuntimeReloadConfigError
+from homesec.runtime.models import (
+    RuntimeCameraStatus,
+    RuntimeReloadRequest,
+    RuntimeState,
+    RuntimeStatusSnapshot,
+    config_signature,
+)
+from homesec.runtime.subprocess_controller import SubprocessRuntimeHandle
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
@@ -38,21 +49,27 @@ class _StubStorage:
         return StorageUploadResult(storage_uri=f"mock:{dest_path}", view_url=None)
 
     async def get_view_url(self, storage_uri: str) -> str | None:
+        _ = storage_uri
         return None
 
     async def get(self, storage_uri: str, local_path: object) -> None:
+        _ = storage_uri
+        _ = local_path
         return None
 
     async def exists(self, storage_uri: str) -> bool:
+        _ = storage_uri
         return False
 
     async def delete(self, storage_uri: str) -> None:
+        _ = storage_uri
         return None
 
     async def ping(self) -> bool:
         return True
 
     async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
         self.shutdown_called = True
 
 
@@ -73,65 +90,66 @@ class _StubStateStore:
         return NoopEventStore()
 
     async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
         self.shutdown_called = True
 
 
-class _StubNotifier:
-    def __init__(self, config: object) -> None:
-        self.config = config
-        self.shutdown_called = False
-
-    async def send(self, alert: object) -> None:
-        return None
-
-    async def ping(self) -> bool:
-        return True
-
-    async def shutdown(self, timeout: float | None = None) -> None:
-        self.shutdown_called = True
+class _FakeProcess:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
 
 
-class _StubFilter:
-    async def shutdown(self, timeout: float | None = None) -> None:
-        return None
-
-
-class _StubVLM:
-    async def shutdown(self, timeout: float | None = None) -> None:
-        return None
-
-
-class _StubAlertPolicy:
-    def should_notify(
-        self,
-        camera_name: str,
-        filter_result: object,
-        analysis: object,
-    ) -> tuple[bool, str]:
-        _ = camera_name
-        _ = filter_result
-        _ = analysis
-        return False, "stub"
-
-
-class _StubSource:
-    """Stub source for testing."""
-
+class _StubRuntimeController(RuntimeController):
     def __init__(self) -> None:
-        self._callback: object = None
-        self.shutdown_called = False
+        self._handles: list[SubprocessRuntimeHandle] = []
 
-    def register_callback(self, callback: object) -> None:
-        self._callback = callback
+    async def build_candidate(self, config: Config, generation: int) -> SubprocessRuntimeHandle:
+        handle = SubprocessRuntimeHandle(
+            generation=generation,
+            config=config,
+            config_signature=config_signature(config),
+            correlation_id=f"test-{generation}",
+            temp_dir=Path("/tmp"),
+            control_socket_path=Path("/tmp/homesec-test.sock"),
+            config_json_path=Path("/tmp/homesec-test.json"),
+        )
+        self._handles.append(handle)
+        return handle
 
-    async def start(self) -> None:
-        return None
+    async def start_runtime(self, runtime: SubprocessRuntimeHandle) -> None:
+        runtime.process = cast(
+            asyncio.subprocess.Process, _FakeProcess(pid=1000 + runtime.generation)
+        )
+        runtime.last_heartbeat_at = datetime.now(timezone.utc)
+        runtime.camera_statuses = {
+            camera.name: RuntimeCameraStatus(healthy=camera.enabled, last_heartbeat=1.0)
+            for camera in runtime.config.cameras
+        }
 
-    def is_healthy(self) -> bool:
-        return True
+    async def shutdown_runtime(self, runtime: SubprocessRuntimeHandle) -> None:
+        process = runtime.process
+        if process is not None:
+            process.returncode = 0
+        runtime.process = None
 
-    async def shutdown(self, timeout: float | None = None) -> None:
-        self.shutdown_called = True
+    async def shutdown_all(self) -> None:
+        for handle in self._handles:
+            await self.shutdown_runtime(handle)
+
+
+class _StubRuntimeManagerStatus:
+    def __init__(
+        self,
+        *,
+        status: RuntimeStatusSnapshot,
+        active_runtime: SubprocessRuntimeHandle | None,
+    ) -> None:
+        self._status = status
+        self.active_runtime = active_runtime
+
+    def get_status(self) -> RuntimeStatusSnapshot:
+        return self._status
 
 
 def _make_config(notifiers: list[object]) -> Config:
@@ -168,38 +186,29 @@ def _make_config(notifiers: list[object]) -> Config:
 
 
 @pytest.fixture
-def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock plugin loading to return stubs."""
+def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeController:
+    """Mock runtime environment and return controller stub."""
+    # Given: Runtime dependencies mocked for deterministic tests
+    controller = _StubRuntimeController()
     monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
     monkeypatch.setattr("homesec.app.PostgresStateStore", _StubStateStore)
     monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
-
-    # Mock specific loads used by runtime assembler
-    monkeypatch.setattr("homesec.runtime.assembly.load_filter", lambda _: _StubFilter())
-    monkeypatch.setattr("homesec.runtime.assembly.load_analyzer", lambda _: _StubVLM())
-    monkeypatch.setattr("homesec.app.load_alert_policy", lambda *args, **kwargs: _StubAlertPolicy())
+    monkeypatch.setattr("homesec.app.validate_plugin_names", lambda *args, **kwargs: None)
+    monkeypatch.setattr("homesec.app.validate_config", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "homesec.app.load_source_plugin", lambda source_backend, config, camera_name: _StubSource()
+        Application,
+        "_create_runtime_controller",
+        lambda self: controller,
     )
-
-    # Mock registry validation
-    def _mock_validate(*args, **kwargs):
-        pass
-
-    monkeypatch.setattr("homesec.app.validate_plugin_names", _mock_validate)
-    monkeypatch.setattr("homesec.app.validate_config", _mock_validate)
-
-    # Mock notifier loading loop in app.py manually if needed,
-    # but app.py uses load_notifier_plugin.
-    monkeypatch.setattr(
-        "homesec.app.load_notifier_plugin", lambda backend, config: _StubNotifier(config)
-    )
+    return controller
 
 
 @pytest.mark.asyncio
-async def test_application_wires_pipeline_and_health(_mock_plugins: None) -> None:
-    """Application should wire pipeline, sources, and health server."""
-    # Given a config and stubbed dependencies
+async def test_application_wires_runtime_health_and_api(
+    _mock_runtime_environment: _StubRuntimeController,
+) -> None:
+    """Application should expose runtime camera health via app accessors."""
+    # Given: A config and runtime environment with subprocess controller stub
     config = _make_config(
         [
             NotifierConfig(
@@ -211,60 +220,29 @@ async def test_application_wires_pipeline_and_health(_mock_plugins: None) -> Non
     app = Application(config_path=__file__)
     app._config = config
 
-    # When creating components
+    # When: Creating components
     await app._create_components()
 
-    # Then pipeline, sources, and health server are wired
-    assert app._pipeline is not None
+    # Then: Runtime manager, API server, and camera health accessors are wired
     assert app._runtime_manager is not None
     assert app._health_server is not None
     assert app._api_server is not None
-    assert app._sources
-    for source in app._sources:
-        callback = source._callback
-        assert callback is not None
-        assert getattr(callback, "__self__", None) is app._pipeline
-        assert getattr(callback, "__func__", None) is app._pipeline.on_new_clip.__func__
+    assert app.pipeline_running is True
+    assert len(app.sources) == 1
+    assert app.sources[0].is_healthy() is True
+    source = app.get_source("front_door")
+    assert source is not None
+    assert source.last_heartbeat() == 1.0
     assert app._health_server._state_store is app._state_store
     assert app._health_server._storage is app._storage
-    assert app._health_server._notifier is app._notifier
 
 
 @pytest.mark.asyncio
-async def test_application_uses_multiplex_for_multiple_notifiers(
-    _mock_plugins: None,
+async def test_application_does_not_create_api_server_when_disabled(
+    _mock_runtime_environment: _StubRuntimeController,
 ) -> None:
-    """Multiple notifiers should use MultiplexNotifier."""
-    # Given a config with multiple notifiers and stubbed dependencies
-    config = _make_config(
-        [
-            NotifierConfig(
-                backend="mqtt",
-                config={"host": "localhost"},
-            ),
-            NotifierConfig(
-                backend="sendgrid_email",
-                config={
-                    "from_email": "sender@example.com",
-                    "to_emails": ["to@example.com"],
-                },
-            ),
-        ]
-    )
-    app = Application(config_path=__file__)
-    app._config = config
-
-    # When creating components
-    await app._create_components()
-
-    # Then a MultiplexNotifier is used
-    assert isinstance(app._notifier, MultiplexNotifier)
-
-
-@pytest.mark.asyncio
-async def test_application_does_not_create_api_server_when_disabled(_mock_plugins: None) -> None:
     """API server should not be created when disabled in config."""
-    # Given a config with API server disabled
+    # Given: A config with API server disabled
     config = _make_config(
         [
             NotifierConfig(
@@ -277,11 +255,96 @@ async def test_application_does_not_create_api_server_when_disabled(_mock_plugin
     app = Application(config_path=__file__)
     app._config = config
 
-    # When creating components
+    # When: Creating components
     await app._create_components()
 
-    # Then API server is not created
+    # Then: API server is not created
     assert app._api_server is None
+
+
+def test_get_runtime_status_preserves_reloading_when_heartbeat_is_stale() -> None:
+    """Runtime status should stay reloading during transitions despite stale heartbeat."""
+    # Given: A stale runtime heartbeat while manager state is actively reloading
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    runtime = SubprocessRuntimeHandle(
+        generation=2,
+        config=config,
+        config_signature="cfgsig",
+        correlation_id="test-2",
+        temp_dir=Path("/tmp"),
+        control_socket_path=Path("/tmp/homesec-test.sock"),
+        config_json_path=Path("/tmp/homesec-test.json"),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=1002))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+    runtime.camera_statuses = {
+        "front_door": RuntimeCameraStatus(healthy=True, last_heartbeat=1.0),
+    }
+    status = RuntimeStatusSnapshot(
+        state=RuntimeState.RELOADING,
+        generation=2,
+        reload_in_progress=True,
+        active_config_version="cfgsig",
+        last_reload_at=None,
+        last_reload_error=None,
+    )
+    app = Application(config_path=__file__)
+    app._runtime_manager = cast(
+        Any,
+        _StubRuntimeManagerStatus(status=status, active_runtime=runtime),
+    )
+
+    # When: Reading runtime status from the app facade
+    current = app.get_runtime_status()
+
+    # Then: Reloading state is preserved (not projected to failed)
+    assert current.state == RuntimeState.RELOADING
+    assert current.last_reload_error is None
+
+
+def test_camera_health_degrades_when_runtime_heartbeat_is_stale() -> None:
+    """Camera snapshots should be unhealthy when runtime heartbeat is stale."""
+    # Given: A stale runtime heartbeat with cached healthy camera statuses
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    runtime = SubprocessRuntimeHandle(
+        generation=2,
+        config=config,
+        config_signature="cfgsig",
+        correlation_id="test-2",
+        temp_dir=Path("/tmp"),
+        control_socket_path=Path("/tmp/homesec-test.sock"),
+        config_json_path=Path("/tmp/homesec-test.json"),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=1002))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+    runtime.camera_statuses = {
+        "front_door": RuntimeCameraStatus(healthy=True, last_heartbeat=10.0),
+    }
+    app = Application(config_path=__file__)
+    app._runtime_manager = cast(
+        Any,
+        _StubRuntimeManagerStatus(
+            status=RuntimeStatusSnapshot(
+                state=RuntimeState.IDLE,
+                generation=2,
+                reload_in_progress=False,
+                active_config_version="cfgsig",
+                last_reload_at=None,
+                last_reload_error=None,
+            ),
+            active_runtime=runtime,
+        ),
+    )
+
+    # When: Reading camera health from app accessors
+    source = app.get_source("front_door")
+    all_sources = app.sources
+
+    # Then: Source health is degraded to unhealthy due to stale runtime heartbeat
+    assert source is not None
+    assert source.is_healthy() is False
+    assert all_sources
+    assert all_sources[0].is_healthy() is False
 
 
 @pytest.mark.asyncio
@@ -382,3 +445,22 @@ async def test_request_runtime_reload_maps_source_config_error_to_400(
     # Then: API-facing error status/code are mapped from ConfigErrorCode
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_code == ConfigErrorCode.FILE_NOT_FOUND.value
+
+
+@pytest.mark.asyncio
+async def test_request_system_restart_delegates_to_runtime_reload() -> None:
+    """System restart should reuse runtime reload control-plane behavior."""
+    # Given: An app with request_runtime_reload mocked
+    app = Application(config_path=__file__)
+    expected = RuntimeReloadRequest(accepted=True, message="ok", target_generation=2)
+
+    async def _reload() -> RuntimeReloadRequest:
+        return expected
+
+    app.request_runtime_reload = _reload  # type: ignore[method-assign]
+
+    # When: Requesting system restart
+    result = await app.request_system_restart()
+
+    # Then: It delegates to runtime reload semantics
+    assert result is expected

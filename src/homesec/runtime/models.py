@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
@@ -15,6 +15,14 @@ from homesec.pipeline import ClipPipeline
 if TYPE_CHECKING:
     from homesec.interfaces import AlertPolicy, ClipSource, Notifier, ObjectFilter, VLMAnalyzer
     from homesec.models.config import Config
+
+
+class ManagedRuntime(Protocol):
+    """Runtime handle contract consumed by RuntimeManager."""
+
+    generation: int
+    config: Config
+    config_signature: str
 
 
 class RuntimeState(StrEnum):
@@ -40,6 +48,14 @@ class RuntimeBundle:
     pipeline: ClipPipeline
     sources: list[ClipSource]
     sources_by_camera: dict[str, ClipSource]
+
+
+@dataclass(slots=True)
+class RuntimeCameraStatus:
+    """Health status snapshot for a runtime camera source."""
+
+    healthy: bool
+    last_heartbeat: float | None
 
 
 @dataclass(slots=True)
