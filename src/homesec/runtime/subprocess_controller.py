@@ -92,7 +92,7 @@ class SubprocessRuntimeHandle:
 class SubprocessRuntimeController(RuntimeController):
     """Supervises runtime lifecycle through a worker subprocess."""
 
-    startup_timeout_s: float = 15.0
+    startup_timeout_s: float = 60.0
     shutdown_timeout_s: float = 30.0
     kill_timeout_s: float = 5.0
     worker_heartbeat_interval_s: float = 2.0
