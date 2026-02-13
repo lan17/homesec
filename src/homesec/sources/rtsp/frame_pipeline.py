@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import signal
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -20,6 +21,7 @@ from homesec.sources.rtsp.utils import (
     _format_cmd,
     _is_timeout_option_error,
     _redact_rtsp_url,
+    _signal_process_group,
 )
 
 logger = logging.getLogger(__name__)
@@ -278,6 +280,7 @@ class FfmpegFramePipeline:
                     stdout=subprocess.PIPE,
                     stderr=stderr_file,
                     bufsize=detect_width * detect_height,
+                    start_new_session=True,
                 )
             except Exception:
                 try:
@@ -339,11 +342,13 @@ class FfmpegFramePipeline:
         if proc.poll() is not None:
             return
         try:
-            proc.terminate()
+            if not _signal_process_group(proc.pid, signal.SIGTERM):
+                proc.terminate()
             proc.wait(timeout=terminate_timeout_s)
         except subprocess.TimeoutExpired:
             logger.warning("%s did not terminate, killing (PID: %s)", name, proc.pid)
-            proc.kill()
+            if not _signal_process_group(proc.pid, signal.SIGKILL):
+                proc.kill()
             try:
                 proc.wait(timeout=2)
             except Exception:

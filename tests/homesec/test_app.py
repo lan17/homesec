@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from homesec.app import Application
+from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.models.config import (
     AlertPolicyConfig,
     CameraConfig,
@@ -22,6 +25,7 @@ from homesec.notifiers.multiplex import MultiplexNotifier
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
+from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
@@ -170,9 +174,9 @@ def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("homesec.app.PostgresStateStore", _StubStateStore)
     monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
 
-    # Mock specific loads used in app.py
-    monkeypatch.setattr("homesec.app.load_filter", lambda _: _StubFilter())
-    monkeypatch.setattr("homesec.app.load_analyzer", lambda _: _StubVLM())
+    # Mock specific loads used by runtime assembler
+    monkeypatch.setattr("homesec.runtime.assembly.load_filter", lambda _: _StubFilter())
+    monkeypatch.setattr("homesec.runtime.assembly.load_analyzer", lambda _: _StubVLM())
     monkeypatch.setattr("homesec.app.load_alert_policy", lambda *args, **kwargs: _StubAlertPolicy())
     monkeypatch.setattr(
         "homesec.app.load_source_plugin", lambda source_backend, config, camera_name: _StubSource()
@@ -212,6 +216,7 @@ async def test_application_wires_pipeline_and_health(_mock_plugins: None) -> Non
 
     # Then pipeline, sources, and health server are wired
     assert app._pipeline is not None
+    assert app._runtime_manager is not None
     assert app._health_server is not None
     assert app._api_server is not None
     assert app._sources
@@ -277,3 +282,103 @@ async def test_application_does_not_create_api_server_when_disabled(_mock_plugin
 
     # Then API server is not created
     assert app._api_server is None
+
+
+@pytest.mark.asyncio
+async def test_application_shutdown_stops_api_before_runtime_manager() -> None:
+    """Shutdown should stop API server before runtime manager cleanup."""
+
+    class _StubAPIServer:
+        def __init__(self, calls: list[str]) -> None:
+            self._calls = calls
+
+        async def stop(self) -> None:
+            self._calls.append("api")
+
+    class _StubRuntimeManager:
+        def __init__(self, calls: list[str]) -> None:
+            self._calls = calls
+
+        async def shutdown(self) -> None:
+            self._calls.append("runtime")
+
+    class _StubHealthServer:
+        def __init__(self, calls: list[str]) -> None:
+            self._calls = calls
+
+        async def stop(self) -> None:
+            self._calls.append("health")
+
+    class _StubShutdownable:
+        def __init__(self, name: str, calls: list[str]) -> None:
+            self._name = name
+            self._calls = calls
+
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+            self._calls.append(self._name)
+
+    # Given: An application with lifecycle dependencies attached
+    calls: list[str] = []
+    app = Application(config_path=__file__)
+    app._api_server = cast(Any, _StubAPIServer(calls))
+    app._runtime_manager = cast(Any, _StubRuntimeManager(calls))
+    app._health_server = cast(Any, _StubHealthServer(calls))
+    app._state_store = cast(Any, _StubShutdownable("state", calls))
+    app._storage = cast(Any, _StubShutdownable("storage", calls))
+
+    # When: Triggering graceful shutdown
+    await app.shutdown()
+
+    # Then: API server is stopped before runtime manager shutdown
+    assert calls[:2] == ["api", "runtime"]
+
+
+@pytest.mark.asyncio
+async def test_request_runtime_reload_maps_semantic_config_error_to_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reload should classify semantic config failures as 422."""
+    # Given: Config loading fails with a semantic validation error code
+    app = Application(config_path=__file__)
+
+    def _raise_config_error() -> Config:
+        raise ConfigError(
+            "Config validation failed",
+            code=ConfigErrorCode.VALIDATION_FAILED,
+        )
+
+    monkeypatch.setattr(app._config_manager, "get_config", _raise_config_error)
+
+    # When: Requesting runtime reload
+    with pytest.raises(RuntimeReloadConfigError) as exc_info:
+        await app.request_runtime_reload()
+
+    # Then: API-facing error status/code are mapped from ConfigErrorCode
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.error_code == ConfigErrorCode.VALIDATION_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_request_runtime_reload_maps_source_config_error_to_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reload should classify source/input config failures as 400."""
+    # Given: Config loading fails because the config file cannot be read
+    app = Application(config_path=__file__)
+
+    def _raise_config_error() -> Config:
+        raise ConfigError(
+            "Config file not found",
+            code=ConfigErrorCode.FILE_NOT_FOUND,
+        )
+
+    monkeypatch.setattr(app._config_manager, "get_config", _raise_config_error)
+
+    # When: Requesting runtime reload
+    with pytest.raises(RuntimeReloadConfigError) as exc_info:
+        await app.request_runtime_reload()
+
+    # Then: API-facing error status/code are mapped from ConfigErrorCode
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_code == ConfigErrorCode.FILE_NOT_FOUND.value

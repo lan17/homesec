@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -32,6 +33,7 @@ from homesec.sources.rtsp.utils import (
     _format_cmd,
     _is_timeout_option_error,
     _redact_rtsp_url,
+    _signal_process_group,
 )
 
 logger = logging.getLogger(__name__)
@@ -514,12 +516,14 @@ class RTSPStartupPreflight:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     text=True,
+                    start_new_session=True,
                 )
                 recording_proc = subprocess.Popen(
                     recording_cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     text=True,
+                    start_new_session=True,
                 )
             except Exception as exc:
                 logger.warning(
@@ -675,12 +679,14 @@ class RTSPStartupPreflight:
         stderr_tail = ""
         try:
             if proc.poll() is None:
-                proc.terminate()
+                if not _signal_process_group(proc.pid, signal.SIGTERM):
+                    proc.terminate()
             _, stderr_text = proc.communicate(timeout=2)
             stderr_tail = stderr_text[-240:] if stderr_text else ""
         except Exception:
             try:
-                proc.kill()
+                if not _signal_process_group(proc.pid, signal.SIGKILL):
+                    proc.kill()
                 _, stderr_text = proc.communicate(timeout=2)
                 stderr_tail = stderr_text[-240:] if stderr_text else ""
             except Exception:

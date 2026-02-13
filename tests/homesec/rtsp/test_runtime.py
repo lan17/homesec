@@ -565,7 +565,14 @@ def test_frame_pipeline_retries_without_timeouts_when_unsupported(tmp_path: Path
         def poll(self) -> int | None:
             return self.returncode
 
-    def fake_popen(cmd: list[str], stdout=None, stderr=None, bufsize=None):  # type: ignore[no-untyped-def]
+    def fake_popen(  # type: ignore[no-untyped-def]
+        cmd: list[str],
+        stdout=None,
+        stderr=None,
+        bufsize=None,
+        **kwargs: object,
+    ):
+        assert kwargs.get("start_new_session") is True
         attempts.append(cmd)
         if len(attempts) == 1:
             if stderr is not None:
@@ -786,6 +793,7 @@ def test_recording_retries_without_timeouts_when_unsupported(tmp_path: Path) -> 
             return self._returncode
 
     def fake_popen(cmd: list[str], **kwargs: object) -> DummyPopen:
+        assert kwargs.get("start_new_session") is True
         calls.append(list(cmd))
         stderr = kwargs.get("stderr")
         if "-rw_timeout" in cmd or "-stimeout" in cmd:
@@ -831,6 +839,7 @@ def test_recording_disables_timeout_flags_after_first_unsupported(tmp_path: Path
             return self._returncode
 
     def fake_popen(cmd: list[str], **kwargs: object) -> DummyPopen:
+        assert kwargs.get("start_new_session") is True
         calls.append(list(cmd))
         stderr = kwargs.get("stderr")
         if "-rw_timeout" in cmd or "-stimeout" in cmd:

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from homesec.app import Application
+from homesec.runtime.assembly import RuntimeAssembler
+from homesec.runtime.models import RuntimeBundle
 
 
 class _StubSource:
@@ -37,27 +37,49 @@ class _StubSource:
         self.shutdown_called = True
 
 
+class _NoopShutdown:
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+
+
+async def _noop_notifier_health(entries: list[object]) -> None:
+    _ = entries
+
+
 @pytest.mark.asyncio
-async def test_application_fails_startup_when_any_source_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Application should shutdown started sources and fail when one source start fails."""
-    # Given: one source that starts and one that fails startup
+async def test_runtime_bundle_startup_fails_fast_when_any_source_fails() -> None:
+    """Runtime startup should shutdown started sources and fail when one source start fails."""
+    # Given: One source that starts and one source that fails startup
     good_source = _StubSource(camera_name="front_door")
     bad_source = _StubSource(camera_name="garage", fail_start=True)
-    app = Application(config_path=Path("config/config.yaml"))
+    assembler = RuntimeAssembler(
+        storage=cast(Any, _NoopShutdown()),
+        repository=cast(Any, object()),
+        notifier_factory=lambda _config: (
+            cast(Any, _NoopShutdown()),
+            [],
+        ),
+        notifier_health_logger=cast(Any, _noop_notifier_health),
+        alert_policy_factory=lambda _config: cast(Any, object()),
+        source_factory=lambda _config: ([], {}),
+    )
+    runtime = RuntimeBundle(
+        generation=1,
+        config=cast(Any, object()),
+        config_signature="cfgsig",
+        notifier=cast(Any, object()),
+        notifier_entries=[],
+        filter_plugin=cast(Any, object()),
+        vlm_plugin=cast(Any, object()),
+        alert_policy=cast(Any, object()),
+        pipeline=cast(Any, object()),
+        sources=[good_source, bad_source],
+        sources_by_camera={"front_door": good_source, "garage": bad_source},
+    )
 
-    async def _fake_create_components(self: Application) -> None:
-        self._sources = [good_source, bad_source]
-        self._health_server = None
-
-    monkeypatch.setattr(Application, "_create_components", _fake_create_components)
-    monkeypatch.setattr("homesec.app.load_config", lambda _path: cast(Any, object()))
-    monkeypatch.setattr(Application, "_setup_signal_handlers", lambda _self: None)
-
-    # When: running the application startup sequence
+    # When: Starting runtime sources for preflight
     with pytest.raises(RuntimeError, match="Source startup preflight failed"):
-        await app.run()
+        await assembler.start_bundle(runtime)
 
-    # Then: already-started sources are cleanly shut down
+    # Then: Already-started sources are cleanly shut down
     assert good_source.shutdown_called

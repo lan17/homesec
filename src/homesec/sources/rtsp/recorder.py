@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import signal
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -16,6 +17,7 @@ from homesec.sources.rtsp.utils import (
     _format_cmd,
     _is_timeout_option_error,
     _redact_rtsp_url,
+    _signal_process_group,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,7 +118,12 @@ class FfmpegRecorder:
 
             try:
                 with open(stderr_log, "w") as stderr_file:
-                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=stderr_file,
+                        start_new_session=True,
+                    )
 
                 self._clock.sleep(0.5)
                 if proc.poll() is None:
@@ -176,12 +183,14 @@ class FfmpegRecorder:
     def stop(self, proc: subprocess.Popen[bytes], output_file: Path | None) -> None:
         try:
             if proc.poll() is None:
-                proc.terminate()
+                if not _signal_process_group(proc.pid, signal.SIGTERM):
+                    proc.terminate()
                 proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             logger.warning("Recording process did not terminate, killing (PID: %s)", proc.pid)
             try:
-                proc.kill()
+                if not _signal_process_group(proc.pid, signal.SIGKILL):
+                    proc.kill()
                 proc.wait(timeout=2)
             except Exception:
                 logger.exception("Failed to kill recording process (PID: %s)", proc.pid)

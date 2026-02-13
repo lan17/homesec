@@ -16,6 +16,7 @@ from homesec.config import (
     validate_config,
     validate_plugin_names,
 )
+from homesec.config.loader import ConfigErrorCode
 from homesec.models.config import Config
 from homesec.plugins.registry import PluginType, plugin
 
@@ -126,6 +127,7 @@ def test_load_config_from_dict_missing_required_field() -> None:
 
     # Then a validation error is raised
     assert "validation failed" in str(exc_info.value).lower()
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
 
 
 def test_load_config_from_dict_invalid_risk_level() -> None:
@@ -142,6 +144,7 @@ def test_load_config_from_dict_invalid_risk_level() -> None:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
     # Then a validation error references the field
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_CONFIG_INVALID
     assert "min_risk_level" in str(exc_info.value)
 
 
@@ -213,6 +216,7 @@ def test_load_config_file_not_found() -> None:
 
     # Then a not found error is raised
     assert "not found" in str(exc_info.value).lower()
+    assert exc_info.value.code is ConfigErrorCode.FILE_NOT_FOUND
 
 
 def test_load_config_invalid_yaml() -> None:
@@ -229,6 +233,7 @@ def test_load_config_invalid_yaml() -> None:
             load_config(path)
         # Then an invalid YAML error is raised
         assert "invalid yaml" in str(exc_info.value).lower()
+        assert exc_info.value.code is ConfigErrorCode.YAML_INVALID
     finally:
         path.unlink()
 
@@ -247,6 +252,7 @@ def test_load_config_empty_file() -> None:
             load_config(path)
         # Then an empty file error is raised
         assert "empty" in str(exc_info.value).lower()
+        assert exc_info.value.code is ConfigErrorCode.EMPTY_FILE
     finally:
         path.unlink()
 
@@ -293,6 +299,7 @@ def test_resolve_env_var_missing_required() -> None:
 
     # Then a ConfigError is raised
     assert "not set" in str(exc_info.value).lower()
+    assert exc_info.value.code is ConfigErrorCode.ENV_VAR_MISSING
 
 
 def test_resolve_env_var_missing_optional() -> None:
@@ -327,6 +334,8 @@ def test_validate_camera_references_invalid() -> None:
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
+    # Then the camera reference validation code is surfaced
+    assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
     assert "unknown_camera" in str(exc_info.value)
 
 
@@ -346,6 +355,7 @@ def test_validate_config_rejects_unknown_camera_override() -> None:
         validate_config(config)
 
     # Then: unknown camera is reported
+    assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
     assert "unknown_camera" in str(exc_info.value)
 
 
@@ -365,6 +375,7 @@ def test_validate_config_rejects_unknown_plugin_backend() -> None:
         validate_config(config)
 
     # Then: unknown backend is reported
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_CONFIG_INVALID
     assert "missing_filter" in str(exc_info.value)
 
 
@@ -403,6 +414,7 @@ def test_validate_plugin_names_invalid() -> None:
         )
 
     # Then the missing backend is reported
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_NAMES_INVALID
     assert "mqtt" in str(exc_info.value)
 
 

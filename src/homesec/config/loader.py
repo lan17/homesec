@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +13,36 @@ from pydantic import ValidationError
 from homesec.models.config import Config
 
 
+class ConfigErrorCode(str, Enum):
+    """Stable config error codes for runtime and API mapping."""
+
+    FILE_NOT_FOUND = "CONFIG_FILE_NOT_FOUND"
+    YAML_INVALID = "CONFIG_YAML_INVALID"
+    EMPTY_FILE = "CONFIG_EMPTY_FILE"
+    ROOT_NOT_MAPPING = "CONFIG_ROOT_NOT_MAPPING"
+    VALIDATION_FAILED = "CONFIG_VALIDATION_FAILED"
+    CAMERA_REFERENCES_INVALID = "CONFIG_CAMERA_REFERENCES_INVALID"
+    PLUGIN_NAMES_INVALID = "CONFIG_PLUGIN_NAMES_INVALID"
+    PLUGIN_CONFIG_INVALID = "CONFIG_PLUGIN_CONFIG_INVALID"
+    ENV_VAR_MISSING = "CONFIG_ENV_VAR_MISSING"
+    UNKNOWN = "CONFIG_UNKNOWN"
+
+
 class ConfigError(Exception):
     """Configuration loading or validation error."""
 
-    def __init__(self, message: str, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: ConfigErrorCode = ConfigErrorCode.UNKNOWN,
+        path: Path | None = None,
+        cause: Exception | None = None,
+    ) -> None:
         super().__init__(message)
+        self.code = code
         self.path = path
+        self.__cause__ = cause
 
 
 def load_config(path: Path) -> Config:
@@ -33,24 +58,46 @@ def load_config(path: Path) -> Config:
         ConfigError: If file not found, YAML invalid, or validation fails
     """
     if not path.exists():
-        raise ConfigError(f"Config file not found: {path}", path=path)
+        raise ConfigError(
+            f"Config file not found: {path}",
+            code=ConfigErrorCode.FILE_NOT_FOUND,
+            path=path,
+        )
 
     try:
         with path.open() as f:
             raw = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ConfigError(f"Invalid YAML in {path}: {e}", path=path) from e
+        raise ConfigError(
+            f"Invalid YAML in {path}: {e}",
+            code=ConfigErrorCode.YAML_INVALID,
+            path=path,
+            cause=e,
+        ) from e
 
     if raw is None:
-        raise ConfigError(f"Config file is empty: {path}", path=path)
+        raise ConfigError(
+            f"Config file is empty: {path}",
+            code=ConfigErrorCode.EMPTY_FILE,
+            path=path,
+        )
 
     if not isinstance(raw, dict):
-        raise ConfigError(f"Config must be a YAML mapping, got {type(raw).__name__}", path=path)
+        raise ConfigError(
+            f"Config must be a YAML mapping, got {type(raw).__name__}",
+            code=ConfigErrorCode.ROOT_NOT_MAPPING,
+            path=path,
+        )
 
     try:
         config = Config.model_validate(raw)
     except ValidationError as e:
-        raise ConfigError(format_validation_error(e, path), path=path) from e
+        raise ConfigError(
+            format_validation_error(e, path),
+            code=ConfigErrorCode.VALIDATION_FAILED,
+            path=path,
+            cause=e,
+        ) from e
 
     # Discover plugins and validate plugin-specific config
     from homesec.config.validation import validate_config
@@ -76,7 +123,11 @@ def load_config_from_dict(data: dict[str, Any]) -> Config:
     try:
         config = Config.model_validate(data)
     except ValidationError as e:
-        raise ConfigError(format_validation_error(e, path=None)) from e
+        raise ConfigError(
+            format_validation_error(e, path=None),
+            code=ConfigErrorCode.VALIDATION_FAILED,
+            cause=e,
+        ) from e
 
     from homesec.config.validation import validate_config
     from homesec.plugins import discover_all_plugins
@@ -101,7 +152,10 @@ def resolve_env_var(env_var_name: str, required: bool = True) -> str | None:
     """
     value = os.environ.get(env_var_name)
     if value is None and required:
-        raise ConfigError(f"Required environment variable not set: {env_var_name}")
+        raise ConfigError(
+            f"Required environment variable not set: {env_var_name}",
+            code=ConfigErrorCode.ENV_VAR_MISSING,
+        )
     return value
 
 
