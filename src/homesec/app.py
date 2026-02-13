@@ -10,9 +10,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homesec.api import APIServer, create_app
-from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
+from homesec.config import (
+    load_config_or_bootstrap,
+    resolve_env_var,
+    validate_config,
+    validate_plugin_names,
+)
 from homesec.config.manager import ConfigManager
 from homesec.interfaces import EventStore
+from homesec.models.bootstrap import BootstrapConfig
+from homesec.models.config import FastAPIServerConfig
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.pipeline import ClipPipeline
 from homesec.plugins.alert_policies import load_alert_policy
@@ -54,12 +61,17 @@ class Application:
         """
         self._config_path = config_path
         self._config: Config | None = None
+        self._bootstrap_config: BootstrapConfig | None = None
+        self._bootstrap_mode = False
 
         # Components (created in _create_components)
         self._storage: StorageBackend | None = None
         self._state_store: StateStore = NoopStateStore()
         self._event_store: EventStore = NoopEventStore()
-        self._repository: ClipRepository | None = None
+        self._repository: ClipRepository | None = ClipRepository(
+            self._state_store,
+            self._event_store,
+        )
         self._notifier: Notifier | None = None
         self._notifier_entries: list[NotifierEntry] = []
         self._filter: ObjectFilter | None = None
@@ -83,17 +95,26 @@ class Application:
         logger.info("Starting HomeSec application...")
 
         # Load config
-        self._config = load_config(self._config_path)
-        logger.info("Config loaded from %s", self._config_path)
+        loaded = load_config_or_bootstrap(self._config_path)
+        if isinstance(loaded, BootstrapConfig):
+            self._bootstrap_mode = True
+            self._bootstrap_config = loaded
+            logger.warning(
+                "Starting in bootstrap mode (empty or missing config at %s)",
+                self._config_path,
+            )
+        else:
+            self._config = loaded
+            logger.info("Config loaded from %s", self._config_path)
 
-        # Create components
-        await self._create_components()
+            # Create components
+            await self._create_components()
 
         # Set up signal handlers
         self._setup_signal_handlers()
 
         # Start API server
-        server_cfg = self._require_config().server
+        server_cfg = self.server_config
         if server_cfg.enabled:
             self._api_server = APIServer(
                 create_app(self),
@@ -102,9 +123,10 @@ class Application:
             )
             await self._api_server.start()
 
-        # Start sources
-        for source in self._sources:
-            await source.start()
+        if not self._bootstrap_mode:
+            # Start sources
+            for source in self._sources:
+                await source.start()
 
         # Track start time for uptime
         self._start_time = time.time()
@@ -268,7 +290,7 @@ class Application:
 
     def _require_config(self) -> Config:
         if self._config is None:
-            raise RuntimeError("Config not loaded")
+            raise RuntimeError("Config not loaded (bootstrap mode)")
         return self._config
 
     def _validate_config(self, config: Config) -> None:
@@ -344,6 +366,18 @@ class Application:
         return self._require_config()
 
     @property
+    def server_config(self) -> FastAPIServerConfig:
+        if self._config is not None:
+            return self._config.server
+        if self._bootstrap_config is not None:
+            return self._bootstrap_config.server
+        return FastAPIServerConfig()
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return self._bootstrap_mode
+
+    @property
     def repository(self) -> ClipRepository:
         if self._repository is None:
             raise RuntimeError("Repository not initialized")
@@ -365,6 +399,8 @@ class Application:
 
     @property
     def pipeline_running(self) -> bool:
+        if self._bootstrap_mode:
+            return False
         return self._pipeline is not None and not self._shutdown_event.is_set()
 
     @property

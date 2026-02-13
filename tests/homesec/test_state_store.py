@@ -10,23 +10,24 @@ from homesec.models.filter import FilterResult
 from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
-# Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://homesec:homesec@127.0.0.1:5432/homesec"
-
-
-def get_test_dsn() -> str:
-    """Get test database DSN from environment or use default."""
-    return os.environ.get("TEST_DB_DSN", DEFAULT_DSN)
-
 
 @pytest.fixture
-async def state_store() -> PostgresStateStore:
+async def state_store(postgres_dsn: str) -> PostgresStateStore:
     """Create and initialize a PostgresStateStore for testing."""
-    dsn = get_test_dsn()
-    assert dsn is not None
-    store = PostgresStateStore(dsn)
-    initialized = await store.initialize()
-    assert initialized, "Failed to initialize state store"
+    store = PostgresStateStore(postgres_dsn)
+    try:
+        initialized = await store.initialize()
+    except Exception as exc:  # pragma: no cover - defensive
+        if _is_ci():
+            raise
+        pytest.skip(f"Postgres not available: {exc}")
+        return
+
+    if not initialized:
+        if _is_ci():
+            raise AssertionError("Failed to initialize state store")
+        pytest.skip("Postgres not available")
+        return
     if store._engine is not None:
         async with store._engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
@@ -37,6 +38,10 @@ async def state_store() -> PostgresStateStore:
         async with store._engine.begin() as conn:
             await conn.execute(delete(ClipState).where(ClipState.clip_id.like("test_%")))
     await store.shutdown()
+
+
+def _is_ci() -> bool:
+    return os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
 
 
 def sample_state(clip_id: str = "test_clip_001") -> ClipStateData:

@@ -27,6 +27,15 @@ class StatsResponse(BaseModel):
 @router.get("/api/v1/stats", response_model=StatsResponse)
 async def get_stats(app: Application = Depends(get_homesec_app)) -> StatsResponse:
     """Return system statistics."""
+    if app.bootstrap_mode:
+        return StatsResponse(
+            clips_today=0,
+            alerts_today=0,
+            cameras_total=0,
+            cameras_online=0,
+            uptime_seconds=app.uptime_seconds,
+        )
+
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     clips_today = await app.repository.count_clips_since(today_start)
     alerts_today = await app.repository.count_alerts_since(today_start)

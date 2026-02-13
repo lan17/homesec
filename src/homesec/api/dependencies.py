@@ -29,7 +29,7 @@ async def verify_api_key(request: Request, app: Application = Depends(get_homese
     if path in ("/api/v1/health", "/api/v1/diagnostics"):
         return
 
-    server_config = app.config.server
+    server_config = app.server_config
     if not server_config.auth_enabled:
         return
 
@@ -48,6 +48,8 @@ async def verify_api_key(request: Request, app: Application = Depends(get_homese
 
 async def require_database(app: Application = Depends(get_homesec_app)) -> None:
     """Ensure the database is reachable for data endpoints."""
+    if app.bootstrap_mode:
+        return
     repository = app.repository
     ok = await repository.ping()
     if not ok:

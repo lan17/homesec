@@ -47,6 +47,14 @@ class DiagnosticsResponse(BaseModel):
 @router.get("/api/v1/health", response_model=HealthResponse)
 async def get_health(app: Application = Depends(get_homesec_app)) -> HealthResponse | JSONResponse:
     """Basic health check."""
+    if app.bootstrap_mode:
+        return HealthResponse(
+            status="bootstrap",
+            pipeline="stopped",
+            postgres="unavailable",
+            cameras_online=0,
+        )
+
     pipeline_running = app.pipeline_running
     postgres_ok = await app.repository.ping()
     cameras_online = sum(1 for source in app.sources if source.is_healthy())
@@ -73,6 +81,15 @@ async def get_health(app: Application = Depends(get_homesec_app)) -> HealthRespo
 @router.get("/api/v1/diagnostics", response_model=DiagnosticsResponse)
 async def get_diagnostics(app: Application = Depends(get_homesec_app)) -> DiagnosticsResponse:
     """Detailed component diagnostics."""
+    if app.bootstrap_mode:
+        return DiagnosticsResponse(
+            status="bootstrap",
+            uptime_seconds=app.uptime_seconds,
+            postgres=ComponentStatus(status="error", error="bootstrap_mode"),
+            storage=ComponentStatus(status="error", error="bootstrap_mode"),
+            cameras={},
+        )
+
     pipeline_running = app.pipeline_running
 
     async def _check(ping: Any) -> ComponentStatus:

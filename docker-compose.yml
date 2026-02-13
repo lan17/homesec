@@ -1,7 +1,7 @@
 services:
   homesec:
     build: .
-    image: leva/homesec:latest
+    image: leva/homesec:claude-homesec-home-assistant-integration-6kzkl
     pull_policy: always
     container_name: homesec
     restart: unless-stopped

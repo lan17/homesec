@@ -1,8 +1,11 @@
 """Shared pytest fixtures for HomeSec tests."""
 
+import os
+import socket
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Add src to sys.path for imports
 src_path = Path(__file__).parent.parent.parent / "src"
@@ -87,9 +90,20 @@ def sample_clip() -> Clip:
 @pytest.fixture
 def postgres_dsn() -> str:
     """Return test Postgres DSN (requires local DB running)."""
-    import os
+    dsn = os.getenv(
+        "TEST_DB_DSN",
+        os.getenv("DB_DSN", "postgresql://homesec:homesec@127.0.0.1:5432/homesec"),
+    )
 
-    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@127.0.0.1:5432/homesec")
+    if os.getenv("SKIP_POSTGRES_TESTS") == "1":
+        pytest.skip("Skipping Postgres tests (SKIP_POSTGRES_TESTS=1)")
+
+    if not _is_ci():
+        host, port = _dsn_host_port(dsn)
+        if host and not _can_connect(host, port):
+            pytest.skip(f"Postgres not available at {host}:{port}")
+
+    return dsn
 
 
 @pytest.fixture
@@ -100,7 +114,19 @@ async def clean_test_db(postgres_dsn: str) -> None:
     from homesec.state.postgres import Base, ClipEvent, ClipState, PostgresStateStore
 
     store = PostgresStateStore(postgres_dsn)
-    await store.initialize()
+    try:
+        initialized = await store.initialize()
+    except Exception as exc:  # pragma: no cover - defensive
+        if _is_ci():
+            raise
+        pytest.skip(f"Postgres not available: {exc}")
+        return
+
+    if not initialized:
+        if _is_ci():
+            raise AssertionError("Failed to initialize PostgresStateStore")
+        pytest.skip("Postgres not available")
+        return
     if store._engine is not None:
         async with store._engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
@@ -115,3 +141,22 @@ async def clean_test_db(postgres_dsn: str) -> None:
             await conn.execute(delete(ClipEvent).where(ClipEvent.clip_id.like("test-%")))
             await conn.execute(delete(ClipState).where(ClipState.clip_id.like("test-%")))
     await store.shutdown()
+
+
+def _is_ci() -> bool:
+    return os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+
+
+def _dsn_host_port(dsn: str) -> tuple[str | None, int]:
+    parsed = urlsplit(dsn)
+    host = parsed.hostname
+    port = parsed.port or 5432
+    return host, port
+
+
+def _can_connect(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False

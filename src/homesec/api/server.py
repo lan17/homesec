@@ -25,7 +25,7 @@ def create_app(app_instance: Application) -> FastAPI:
     app = FastAPI(title="HomeSec API", version="1.0.0")
     app.state.homesec = app_instance
 
-    server_config = app_instance.config.server
+    server_config = app_instance.server_config
     app.add_middleware(
         CORSMiddleware,
         allow_origins=server_config.cors_origins,

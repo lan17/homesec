@@ -19,6 +19,10 @@ async def test_config_flow_manual_success(
     # Given: A reachable HomeSec API with cameras
     aioclient_mock.get(f"{homesec_base_url}/api/v1/health", json=health_payload)
     aioclient_mock.get(f"{homesec_base_url}/api/v1/cameras", json=cameras_payload)
+    aioclient_mock.post(
+        f"{homesec_base_url}/api/v1/notifiers/home_assistant/enable",
+        json={"restart_required": True},
+    )
 
     # When: User starts manual config flow
     result = await hass.config_entries.flow.async_init(
@@ -113,6 +117,10 @@ async def test_config_flow_addon_detected(
     )
     aioclient_mock.get("http://abc123-homesec:8080/api/v1/health", json=health_payload)
     aioclient_mock.get("http://abc123-homesec:8080/api/v1/cameras", json=cameras_payload)
+    aioclient_mock.post(
+        "http://abc123-homesec:8080/api/v1/notifiers/home_assistant/enable",
+        json={"restart_required": True},
+    )
 
     # When: User starts config flow
     result = await hass.config_entries.flow.async_init(

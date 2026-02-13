@@ -10,8 +10,14 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from homesec.config.loader import ConfigError, load_config, load_config_from_dict
-from homesec.models.config import CameraConfig, CameraSourceConfig, Config
+from homesec.config.loader import (
+    ConfigError,
+    load_config,
+    load_config_from_dict,
+    load_config_or_bootstrap,
+)
+from homesec.models.bootstrap import BootstrapConfig
+from homesec.models.config import CameraConfig, CameraSourceConfig, Config, NotifierConfig
 
 
 class ConfigUpdateResult(BaseModel):
@@ -33,6 +39,10 @@ class ConfigManager:
         """Get the current configuration."""
         return load_config(self._config_path)
 
+    def get_config_or_bootstrap(self) -> Config | BootstrapConfig:
+        """Get the current configuration or bootstrap config."""
+        return load_config_or_bootstrap(self._config_path)
+
     async def add_camera(
         self,
         name: str,
@@ -41,7 +51,9 @@ class ConfigManager:
         source_config: dict[str, object],
     ) -> ConfigUpdateResult:
         """Add a new camera to the config."""
-        config = await asyncio.to_thread(self.get_config)
+        config = await asyncio.to_thread(self.get_config_or_bootstrap)
+        if isinstance(config, BootstrapConfig):
+            raise ValueError("HomeSec is in bootstrap mode; configure full settings first")
 
         if any(camera.name == name for camera in config.cameras):
             raise ValueError(f"Camera already exists: {name}")
@@ -65,7 +77,9 @@ class ConfigManager:
         source_config: dict[str, object] | None,
     ) -> ConfigUpdateResult:
         """Update an existing camera in the config."""
-        config = await asyncio.to_thread(self.get_config)
+        config = await asyncio.to_thread(self.get_config_or_bootstrap)
+        if isinstance(config, BootstrapConfig):
+            raise ValueError("HomeSec is in bootstrap mode; configure full settings first")
 
         camera = next((cam for cam in config.cameras if cam.name == camera_name), None)
         if camera is None:
@@ -88,7 +102,9 @@ class ConfigManager:
         camera_name: str,
     ) -> ConfigUpdateResult:
         """Remove a camera from the config."""
-        config = await asyncio.to_thread(self.get_config)
+        config = await asyncio.to_thread(self.get_config_or_bootstrap)
+        if isinstance(config, BootstrapConfig):
+            raise ValueError("HomeSec is in bootstrap mode; configure full settings first")
 
         updated = [camera for camera in config.cameras if camera.name != camera_name]
         if len(updated) == len(config.cameras):
@@ -100,6 +116,46 @@ class ConfigManager:
         await self._save_config(validated)
         return ConfigUpdateResult()
 
+    async def upsert_notifier(
+        self,
+        backend: str,
+        enabled: bool | None = True,
+        config: dict[str, object] | None = None,
+    ) -> ConfigUpdateResult:
+        """Create or update a notifier configuration entry."""
+        current = await asyncio.to_thread(self.get_config_or_bootstrap)
+        backend_key = backend.lower()
+        notifier = next(
+            (entry for entry in current.notifiers if entry.backend.lower() == backend_key),
+            None,
+        )
+
+        if notifier is None:
+            current.notifiers.append(
+                NotifierConfig(
+                    backend=backend,
+                    enabled=enabled if enabled is not None else True,
+                    config=config or {},
+                )
+            )
+        else:
+            if enabled is not None:
+                notifier.enabled = enabled
+            if config is not None:
+                existing = _config_to_dict(notifier.config)
+                for key, value in config.items():
+                    if key not in existing or existing[key] in (None, ""):
+                        existing[key] = value
+                notifier.config = existing
+
+        if isinstance(current, BootstrapConfig):
+            await self._save_config(current)
+            return ConfigUpdateResult()
+
+        validated = await self._validate_config(current)
+        await self._save_config(validated)
+        return ConfigUpdateResult()
+
     async def _validate_config(self, config: Config) -> Config:
         """Validate configuration via the standard loader path."""
         payload = config.model_dump(mode="json")
@@ -108,7 +164,7 @@ class ConfigManager:
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
 
-    async def _save_config(self, config: Config) -> None:
+    async def _save_config(self, config: BaseModel) -> None:
         """Save config to disk with backup."""
 
         def _write() -> None:
@@ -128,3 +184,9 @@ class ConfigManager:
             os.replace(tmp_path, self._config_path)
 
         await asyncio.to_thread(_write)
+
+
+def _config_to_dict(value: dict[str, object] | BaseModel) -> dict[str, object]:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    return dict(value)

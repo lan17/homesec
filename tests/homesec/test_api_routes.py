@@ -145,10 +145,19 @@ class _StubApp:
         )
         self._pipeline_running = pipeline_running
         self.uptime_seconds = 0.0
+        self._bootstrap_mode = False
 
     @property
     def config(self):  # type: ignore[override]
         return self._config
+
+    @property
+    def server_config(self):
+        return self._config.server
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return self._bootstrap_mode
 
     @property
     def pipeline_running(self) -> bool:

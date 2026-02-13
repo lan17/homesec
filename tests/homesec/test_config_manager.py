@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from homesec.config.loader import load_config_or_bootstrap
 from homesec.config.manager import ConfigManager
+from homesec.models.bootstrap import BootstrapConfig
 
 
 def _write_config(path: Path, cameras: list[dict[str, object]]) -> ConfigManager:
@@ -150,3 +152,61 @@ async def test_config_manager_invalid_update_raises(tmp_path: Path) -> None:
         )
 
     # Then it raises a validation error
+
+
+@pytest.mark.asyncio
+async def test_config_manager_upsert_notifier_adds_and_merges(tmp_path: Path) -> None:
+    """ConfigManager should add and merge notifier config."""
+    # Given: A config with only MQTT notifier
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(config_path, cameras=[])
+
+    # When: Enabling the Home Assistant notifier
+    await manager.upsert_notifier(
+        backend="home_assistant",
+        enabled=True,
+        config={"url_env": "HA_URL", "token_env": "HA_TOKEN"},
+    )
+
+    # Then: The notifier is added with config values
+    config = manager.get_config()
+    notifier = next(n for n in config.notifiers if n.backend == "home_assistant")
+    assert notifier.enabled is True
+    assert notifier.config["url_env"] == "HA_URL"
+    assert notifier.config["token_env"] == "HA_TOKEN"
+
+    # When: Upserting again with only url_env
+    await manager.upsert_notifier(
+        backend="home_assistant",
+        enabled=True,
+        config={"url_env": "CUSTOM_HA_URL"},
+    )
+
+    # Then: Existing token_env is preserved
+    config = manager.get_config()
+    notifier = next(n for n in config.notifiers if n.backend == "home_assistant")
+    assert notifier.config["url_env"] == "HA_URL"
+    assert notifier.config["token_env"] == "HA_TOKEN"
+
+
+@pytest.mark.asyncio
+async def test_config_manager_upsert_notifier_bootstrap(tmp_path: Path) -> None:
+    """ConfigManager should create bootstrap config when empty."""
+    # Given: An empty config file
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("")
+    manager = ConfigManager(config_path)
+
+    # When: Enabling the Home Assistant notifier
+    await manager.upsert_notifier(
+        backend="home_assistant",
+        enabled=True,
+        config={"url_env": "HA_URL", "token_env": "HA_TOKEN"},
+    )
+
+    # Then: Bootstrap config is persisted with the notifier
+    loaded = load_config_or_bootstrap(config_path)
+    assert isinstance(loaded, BootstrapConfig)
+    notifier = next(n for n in loaded.notifiers if n.backend == "home_assistant")
+    assert notifier.config["url_env"] == "HA_URL"
+    assert notifier.config["token_env"] == "HA_TOKEN"

@@ -24,6 +24,8 @@ from .const import (
     CONF_HOST,
     CONF_PORT,
     CONF_VERIFY_SSL,
+    DEFAULT_HA_TOKEN_ENV,
+    DEFAULT_HA_URL_ENV,
     DEFAULT_MOTION_RESET_SECONDS,
     DEFAULT_PORT,
     DEFAULT_VERIFY_SSL,
@@ -36,6 +38,10 @@ class CannotConnect(Exception):
 
 class InvalidAuth(Exception):
     """Error to indicate there is invalid auth."""
+
+
+class NotifierSetupError(Exception):
+    """Error to indicate notifier setup failed."""
 
 
 class HomesecConfigFlow(config_entries.ConfigFlow, domain="homesec"):
@@ -78,6 +84,13 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain="homesec"):
                     None,
                     self._config_data[CONF_VERIFY_SSL],
                 )
+                await enable_home_assistant_notifier(
+                    self.hass,
+                    self._config_data[CONF_HOST],
+                    self._config_data[CONF_PORT],
+                    None,
+                    self._config_data[CONF_VERIFY_SSL],
+                )
                 self._title = info.get("title", "HomeSec")
                 self._cameras = info.get("cameras", [])
                 return await self.async_step_cameras()
@@ -85,6 +98,8 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain="homesec"):
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
+            except NotifierSetupError:
+                errors["base"] = "notifier_setup_failed"
 
         return self.async_show_form(
             step_id="addon",
@@ -105,6 +120,13 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain="homesec"):
                     user_input.get(CONF_API_KEY),
                     user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
                 )
+                await enable_home_assistant_notifier(
+                    self.hass,
+                    user_input[CONF_HOST],
+                    user_input[CONF_PORT],
+                    user_input.get(CONF_API_KEY),
+                    user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                )
                 self._title = info.get("title", "HomeSec")
                 self._cameras = info.get("cameras", [])
                 self._config_data = {
@@ -119,6 +141,8 @@ class HomesecConfigFlow(config_entries.ConfigFlow, domain="homesec"):
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
+            except NotifierSetupError:
+                errors["base"] = "notifier_setup_failed"
 
         schema = vol.Schema(
             {
@@ -233,6 +257,45 @@ async def validate_connection(
         "version": "unknown",
         "cameras": [camera.get("name") for camera in cameras if camera.get("name")],
     }
+
+
+async def enable_home_assistant_notifier(
+    hass: HomeAssistant,
+    host: str,
+    port: int,
+    api_key: str | None = None,
+    verify_ssl: bool = True,
+    url_env: str = DEFAULT_HA_URL_ENV,
+    token_env: str = DEFAULT_HA_TOKEN_ENV,
+) -> None:
+    """Ensure the Home Assistant notifier is enabled in HomeSec config."""
+    base_url = _format_base_url(host, port)
+    session = async_get_clientsession(hass)
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {"enabled": True, "config": {"url_env": url_env, "token_env": token_env}}
+
+    try:
+        async with (
+            async_timeout.timeout(10),
+            session.post(
+                f"{base_url}/api/v1/notifiers/home_assistant/enable",
+                json=payload,
+                headers=headers,
+                ssl=verify_ssl,
+            ) as response,
+        ):
+            if response.status in (401, 403):
+                raise InvalidAuth
+            if response.status >= 400:
+                message = await response.text()
+                raise NotifierSetupError(message)
+            await response.read()
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise CannotConnect from exc
 
 
 async def detect_addon(hass: HomeAssistant) -> tuple[bool, str | None]:

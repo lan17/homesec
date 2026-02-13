@@ -74,10 +74,19 @@ class _StubApp:
         self._sources_by_name = sources_by_name
         self._pipeline_running = pipeline_running
         self.uptime_seconds = 123.0
+        self._bootstrap_mode = False
 
     @property
     def config(self):  # type: ignore[override]
         return self._config
+
+    @property
+    def server_config(self):
+        return self._config.server
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return self._bootstrap_mode
 
     @property
     def pipeline_running(self) -> bool:
@@ -153,6 +162,28 @@ def test_health_unhealthy_when_pipeline_stopped() -> None:
     assert response.status_code == 503
     payload = response.json()
     assert payload["status"] == "unhealthy"
+    assert payload["pipeline"] == "stopped"
+
+
+def test_health_bootstrap_mode() -> None:
+    """Health should indicate bootstrap mode when config is empty."""
+    # Given a bootstrap-mode app
+    app = _StubApp(
+        repository=_StubRepository(ok=False),
+        storage=_StubStorage(ok=False),
+        sources_by_name={},
+        pipeline_running=False,
+    )
+    app._bootstrap_mode = True
+    client = _client(app)
+
+    # When requesting health
+    response = client.get("/api/v1/health")
+
+    # Then it reports bootstrap status
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "bootstrap"
     assert payload["pipeline"] == "stopped"
 
 

@@ -11,11 +11,13 @@ from homesec.config import (
     ConfigError,
     load_config,
     load_config_from_dict,
+    load_config_or_bootstrap,
     resolve_env_var,
     validate_camera_references,
     validate_config,
     validate_plugin_names,
 )
+from homesec.models.bootstrap import BootstrapConfig
 from homesec.models.config import Config
 from homesec.plugins.registry import PluginType, plugin
 
@@ -247,6 +249,40 @@ def test_load_config_empty_file() -> None:
             load_config(path)
         # Then an empty file error is raised
         assert "empty" in str(exc_info.value).lower()
+    finally:
+        path.unlink()
+
+
+def test_load_config_or_bootstrap_missing_file() -> None:
+    """Test that missing file returns bootstrap config."""
+    # Given a missing config path
+    path = Path("/tmp/homesec-missing-config.yaml")
+    if path.exists():
+        path.unlink()
+
+    # When loading with bootstrap fallback
+    config = load_config_or_bootstrap(path)
+
+    # Then bootstrap config is returned
+    assert isinstance(config, BootstrapConfig)
+    assert config.bootstrap is True
+
+
+def test_load_config_or_bootstrap_empty_file() -> None:
+    """Test that empty file returns bootstrap config."""
+    # Given an empty YAML file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("")
+        f.flush()
+        path = Path(f.name)
+
+    try:
+        # When loading with bootstrap fallback
+        config = load_config_or_bootstrap(path)
+
+        # Then bootstrap config is returned
+        assert isinstance(config, BootstrapConfig)
+        assert config.bootstrap is True
     finally:
         path.unlink()
 

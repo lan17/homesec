@@ -79,13 +79,46 @@ Replace:
 - `YOUR_LONG_LIVED_TOKEN` - The token from Step 1
 - `/path/to/clips` - Where you want video clips stored
 
-### Step 3: Install the Integration via HACS
+### Bootstrap Mode (Empty Config)
 
-1. Open HACS in Home Assistant
-2. Go to Integrations → Custom repositories
-3. Add: `https://github.com/lan17/homesec` (category: Integration)
-4. Search for "HomeSec" and install
-5. Restart Home Assistant
+HomeSec can start with an empty or missing `/config/config.yaml`. In this mode:
+- Only the API server runs (no pipeline, no cameras).
+- The HA integration can still connect.
+- The integration will enable the Home Assistant notifier automatically.
+
+You still need to provide a full config and restart HomeSec to run the pipeline.
+When you switch to a full config, remove any `bootstrap: true` flag if present.
+
+### Step 3: Install the Integration (Git Sparse-Checkout)
+
+If you want to install directly from git (e.g., a dev branch), use sparse checkout
+so only the integration files are pulled into Home Assistant.
+
+Run this inside the Home Assistant container (or on the host if `/config` is local):
+
+```bash
+cd /config/custom_components
+
+git clone --no-checkout https://github.com/lan17/homesec.git homesec_git
+cd homesec_git
+
+git sparse-checkout init --cone
+git sparse-checkout set homeassistant/integration/custom_components/homesec
+git checkout <your-branch>
+
+rm -rf /config/custom_components/homesec
+cp -a homeassistant/integration/custom_components/homesec /config/custom_components/homesec
+```
+
+After updating the repo later:
+
+```bash
+cd /config/custom_components/homesec_git
+git pull
+cp -a homeassistant/integration/custom_components/homesec /config/custom_components/homesec
+```
+
+Restart Home Assistant after any update.
 
 ### Step 4: Configure the Integration
 

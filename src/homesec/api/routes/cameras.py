@@ -72,6 +72,8 @@ def _camera_response(app: Application, camera: CameraConfig) -> CameraResponse:
 @router.get("/api/v1/cameras", response_model=list[CameraResponse])
 async def list_cameras(app: Application = Depends(get_homesec_app)) -> list[CameraResponse]:
     """List all cameras."""
+    if app.bootstrap_mode:
+        return []
     config = await asyncio.to_thread(app.config_manager.get_config)
     return [_camera_response(app, camera) for camera in config.cameras]
 
@@ -79,6 +81,8 @@ async def list_cameras(app: Application = Depends(get_homesec_app)) -> list[Came
 @router.get("/api/v1/cameras/{name}", response_model=CameraResponse)
 async def get_camera(name: str, app: Application = Depends(get_homesec_app)) -> CameraResponse:
     """Get a single camera."""
+    if app.bootstrap_mode:
+        raise HTTPException(status_code=404, detail="Camera not found")
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == name), None)
     if camera is None:
@@ -91,6 +95,10 @@ async def create_camera(
     payload: CameraCreate, app: Application = Depends(get_homesec_app)
 ) -> ConfigChangeResponse:
     """Create a new camera."""
+    if app.bootstrap_mode:
+        raise HTTPException(
+            status_code=409, detail="HomeSec is in bootstrap mode; configure full settings first"
+        )
     try:
         result = await app.config_manager.add_camera(
             name=payload.name,
@@ -119,6 +127,10 @@ async def update_camera(
     app: Application = Depends(get_homesec_app),
 ) -> ConfigChangeResponse:
     """Update a camera."""
+    if app.bootstrap_mode:
+        raise HTTPException(
+            status_code=409, detail="HomeSec is in bootstrap mode; configure full settings first"
+        )
     try:
         result = await app.config_manager.update_camera(
             camera_name=name,
@@ -147,6 +159,10 @@ async def delete_camera(
     name: str, app: Application = Depends(get_homesec_app)
 ) -> ConfigChangeResponse:
     """Delete a camera."""
+    if app.bootstrap_mode:
+        raise HTTPException(
+            status_code=409, detail="HomeSec is in bootstrap mode; configure full settings first"
+        )
     try:
         result = await app.config_manager.remove_camera(camera_name=name)
     except ValueError as exc:

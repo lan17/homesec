@@ -22,6 +22,7 @@
     "error": {
       "cannot_connect": "Failed to connect to HomeSec.",
       "invalid_auth": "Invalid authentication.",
+      "notifier_setup_failed": "Failed to enable Home Assistant notifier in HomeSec.",
       "single_instance_allowed": "Only one HomeSec instance is allowed."
     },
     "abort": {

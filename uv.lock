@@ -1848,7 +1848,7 @@ wheels = [
 
 [[package]]
 name = "homesec"
-version = "1.2.2"
+version = "1.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp", marker = "python_full_version >= '3.13.2' and sys_platform != 'win32'" },

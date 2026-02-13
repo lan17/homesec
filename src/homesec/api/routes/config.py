@@ -25,5 +25,5 @@ class ConfigResponse(BaseModel):
 @router.get("/api/v1/config", response_model=ConfigResponse)
 async def get_config(app: Application = Depends(get_homesec_app)) -> ConfigResponse:
     """Return full configuration."""
-    config = await asyncio.to_thread(app.config_manager.get_config)
+    config = await asyncio.to_thread(app.config_manager.get_config_or_bootstrap)
     return ConfigResponse(config=config.model_dump(mode="json"))

@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from homesec.models.bootstrap import BootstrapConfig
 from homesec.models.config import Config
 
 
@@ -59,6 +60,32 @@ def load_config(path: Path) -> Config:
     discover_all_plugins()
     validate_config(config)
     return config
+
+
+def load_config_or_bootstrap(path: Path) -> Config | BootstrapConfig:
+    """Load config or fall back to bootstrap mode for empty/missing config files."""
+    if not path.exists():
+        return BootstrapConfig()
+
+    try:
+        with path.open() as f:
+            raw = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Invalid YAML in {path}: {e}", path=path) from e
+
+    if raw is None or raw == {}:
+        return BootstrapConfig()
+
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Config must be a YAML mapping, got {type(raw).__name__}", path=path)
+
+    if raw.get("bootstrap") is True:
+        try:
+            return BootstrapConfig.model_validate(raw)
+        except ValidationError as e:
+            raise ConfigError(format_validation_error(e, path), path=path) from e
+
+    return load_config(path)
 
 
 def load_config_from_dict(data: dict[str, Any]) -> Config:

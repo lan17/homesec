@@ -83,6 +83,10 @@ async def list_clips(
     app: Application = Depends(get_homesec_app),
 ) -> ClipListResponse:
     """List clips with filtering and pagination."""
+    if app.bootstrap_mode:
+        raise HTTPException(
+            status_code=409, detail="HomeSec is in bootstrap mode; configure full settings first"
+        )
     offset = (page - 1) * page_size
     clips, total = await app.repository.list_clips(
         camera=camera,
@@ -107,6 +111,10 @@ async def list_clips(
 @router.get("/api/v1/clips/{clip_id}", response_model=ClipResponse)
 async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) -> ClipResponse:
     """Get a single clip."""
+    if app.bootstrap_mode:
+        raise HTTPException(
+            status_code=409, detail="HomeSec is in bootstrap mode; configure full settings first"
+        )
     state = await app.repository.get_clip(clip_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -116,6 +124,10 @@ async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) ->
 @router.delete("/api/v1/clips/{clip_id}", response_model=ClipResponse)
 async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app)) -> ClipResponse:
     """Delete a clip and its storage object."""
+    if app.bootstrap_mode:
+        raise HTTPException(
+            status_code=409, detail="HomeSec is in bootstrap mode; configure full settings first"
+        )
     try:
         state = await app.repository.delete_clip(clip_id)
     except ValueError as exc:
