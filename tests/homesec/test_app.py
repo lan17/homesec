@@ -125,12 +125,6 @@ class _StubSource:
     def is_healthy(self) -> bool:
         return True
 
-    def last_heartbeat(self) -> float:
-        return 0.0
-
-    async def ping(self) -> bool:
-        return True
-
     async def shutdown(self, timeout: float | None = None) -> None:
         self.shutdown_called = True
 
@@ -198,8 +192,8 @@ def _mock_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_application_wires_pipeline_and_sources(_mock_plugins: None) -> None:
-    """Application should wire pipeline and sources."""
+async def test_application_wires_pipeline_and_health(_mock_plugins: None) -> None:
+    """Application should wire pipeline, sources, and health server."""
     # Given a config and stubbed dependencies
     config = _make_config(
         [
@@ -215,14 +209,18 @@ async def test_application_wires_pipeline_and_sources(_mock_plugins: None) -> No
     # When creating components
     await app._create_components()
 
-    # Then pipeline and sources are wired
+    # Then pipeline, sources, and health server are wired
     assert app._pipeline is not None
+    assert app._health_server is not None
     assert app._sources
     for source in app._sources:
         callback = source._callback
         assert callback is not None
         assert getattr(callback, "__self__", None) is app._pipeline
         assert getattr(callback, "__func__", None) is app._pipeline.on_new_clip.__func__
+    assert app._health_server._state_store is app._state_store
+    assert app._health_server._storage is app._storage
+    assert app._health_server._notifier is app._notifier
 
 
 @pytest.mark.asyncio

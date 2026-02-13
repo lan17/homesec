@@ -1,251 +1,252 @@
-"""Tests for FastAPI health endpoints."""
+"""Tests for health check endpoint."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import time
 
-from fastapi.testclient import TestClient
+import pytest
 
-from homesec.api.server import create_app
-from homesec.models.config import CameraConfig, CameraSourceConfig, FastAPIServerConfig
-
-
-class _StubRepository:
-    def __init__(self, ok: bool) -> None:
-        self._ok = ok
-
-    async def ping(self) -> bool:
-        return self._ok
+from homesec.health import HealthServer
+from homesec.sources import LocalFolderSource, LocalFolderSourceConfig
+from tests.homesec.mocks import MockNotifier, MockStateStore, MockStorage
 
 
-class _StubStorage:
-    def __init__(self, ok: bool = True) -> None:
-        self._ok = ok
+class TestHealthServer:
+    """Test HealthServer implementation."""
 
-    async def ping(self) -> bool:
-        return self._ok
+    @pytest.mark.asyncio
+    async def test_all_healthy(self, tmp_path) -> None:
+        """Test health status when all components are healthy."""
+        server = HealthServer()
 
-    async def delete(self, storage_uri: str) -> None:
-        _ = storage_uri
-        return None
-
-
-class _StubSource:
-    def __init__(self, healthy: bool = True, heartbeat: float = 1.0) -> None:
-        self._healthy = healthy
-        self._heartbeat = heartbeat
-
-    def is_healthy(self) -> bool:
-        return self._healthy
-
-    def last_heartbeat(self) -> float:
-        return self._heartbeat
-
-
-class _StubApp:
-    def __init__(
-        self,
-        *,
-        repository: _StubRepository,
-        storage: _StubStorage,
-        sources_by_name: dict[str, _StubSource],
-        pipeline_running: bool,
-        cameras: list[CameraConfig] | None = None,
-    ) -> None:
-        if cameras is None:
-            cameras = [
-                CameraConfig(
-                    name=name,
-                    enabled=True,
-                    source=CameraSourceConfig(
-                        backend="local_folder",
-                        config={"watch_dir": "/tmp"},
-                    ),
-                )
-                for name in sources_by_name
-            ]
-        self._config = SimpleNamespace(
-            server=FastAPIServerConfig(),
-            cameras=cameras,
+        # Given healthy components
+        storage = MockStorage()
+        state_store = MockStateStore()
+        notifier = MockNotifier()
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="test"
         )
-        self.repository = repository
-        self.storage = storage
-        self.sources = list(sources_by_name.values())
-        self._sources_by_name = sources_by_name
-        self._pipeline_running = pipeline_running
-        self.uptime_seconds = 123.0
 
-    @property
-    def config(self):  # type: ignore[override]
-        return self._config
+        server.set_components(
+            storage=storage,
+            state_store=state_store,
+            notifier=notifier,
+            sources=[source],
+        )
 
-    @property
-    def pipeline_running(self) -> bool:
-        return self._pipeline_running
+        # When computing health
+        health = await server.compute_health()
 
-    def get_source(self, camera_name: str) -> _StubSource | None:
-        return self._sources_by_name.get(camera_name)
+        # Then health is healthy with no warnings
+        assert health["status"] == "healthy"
+        assert health["checks"]["db"] is True
+        assert health["checks"]["storage"] is True
+        assert health["checks"]["mqtt"] is True
+        assert health["checks"]["sources"] is True
+        assert health["warnings"] == []
+        assert len(health["sources"]) == 1
+        assert health["sources"][0]["name"] == "test"
+        assert health["sources"][0]["healthy"] is True
 
+    @pytest.mark.asyncio
+    async def test_degraded_when_db_down(self, tmp_path) -> None:
+        """Test degraded status when DB is down."""
+        server = HealthServer()
 
-def _client(app: _StubApp) -> TestClient:
-    return TestClient(create_app(app))
+        # Given a failing state store
+        storage = MockStorage()
+        state_store = MockStateStore(simulate_failure=True)
+        notifier = MockNotifier()
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="test"
+        )
 
+        server.set_components(
+            storage=storage,
+            state_store=state_store,
+            notifier=notifier,
+            sources=[source],
+        )
 
-def test_health_healthy() -> None:
-    """Health should be healthy when pipeline and DB are up."""
-    # Given a running pipeline with healthy DB and camera
-    app = _StubApp(
-        repository=_StubRepository(ok=True),
-        storage=_StubStorage(ok=True),
-        sources_by_name={"front": _StubSource(healthy=True)},
-        pipeline_running=True,
-    )
-    client = _client(app)
+        # When computing health
+        health = await server.compute_health()
 
-    # When requesting health
-    response = client.get("/api/v1/health")
+        # Then status is degraded
+        assert health["status"] == "degraded"
+        assert health["checks"]["db"] is False
+        assert health["checks"]["storage"] is True
 
-    # Then it reports healthy
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "healthy"
-    assert payload["postgres"] == "connected"
-    assert payload["pipeline"] == "running"
-    assert payload["cameras_online"] == 1
+    @pytest.mark.asyncio
+    async def test_degraded_when_mqtt_down(self, tmp_path) -> None:
+        """Test degraded status when MQTT is down (non-critical)."""
+        server = HealthServer()
 
+        # Given a failing notifier and mqtt_is_critical=False
+        storage = MockStorage()
+        state_store = MockStateStore()
+        notifier = MockNotifier(simulate_failure=True)
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="test"
+        )
 
-def test_health_degraded_when_db_down() -> None:
-    """Health should be degraded when DB is down."""
-    # Given a running pipeline with DB down
-    app = _StubApp(
-        repository=_StubRepository(ok=False),
-        storage=_StubStorage(ok=True),
-        sources_by_name={"front": _StubSource(healthy=True)},
-        pipeline_running=True,
-    )
-    client = _client(app)
+        server.set_components(
+            storage=storage,
+            state_store=state_store,
+            notifier=notifier,
+            sources=[source],
+            mqtt_is_critical=False,  # Non-critical
+        )
 
-    # When requesting health
-    response = client.get("/api/v1/health")
+        # When computing health
+        health = await server.compute_health()
 
-    # Then it reports degraded
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "degraded"
-    assert payload["postgres"] == "unavailable"
+        # Then status is degraded
+        assert health["status"] == "degraded"
+        assert health["checks"]["mqtt"] is False
 
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_storage_down(self, tmp_path) -> None:
+        """Test unhealthy status when storage is down."""
+        server = HealthServer()
 
-def test_health_unhealthy_when_pipeline_stopped() -> None:
-    """Health should be unhealthy when pipeline is stopped."""
-    # Given a stopped pipeline
-    app = _StubApp(
-        repository=_StubRepository(ok=True),
-        storage=_StubStorage(ok=True),
-        sources_by_name={"front": _StubSource(healthy=True)},
-        pipeline_running=False,
-    )
-    client = _client(app)
+        # Given failing storage
+        storage = MockStorage(simulate_failure=True)
+        state_store = MockStateStore()
+        notifier = MockNotifier()
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="test"
+        )
 
-    # When requesting health
-    response = client.get("/api/v1/health")
+        server.set_components(
+            storage=storage,
+            state_store=state_store,
+            notifier=notifier,
+            sources=[source],
+        )
 
-    # Then it returns 503 unhealthy
-    assert response.status_code == 503
-    payload = response.json()
-    assert payload["status"] == "unhealthy"
-    assert payload["pipeline"] == "stopped"
+        # When computing health
+        health = await server.compute_health()
 
+        # Then status is unhealthy
+        assert health["status"] == "unhealthy"
+        assert health["checks"]["storage"] is False
 
-def test_diagnostics_reports_camera_status() -> None:
-    """Diagnostics should include per-camera health."""
-    # Given a running pipeline with one camera
-    app = _StubApp(
-        repository=_StubRepository(ok=True),
-        storage=_StubStorage(ok=True),
-        sources_by_name={"front": _StubSource(healthy=True, heartbeat=42.0)},
-        pipeline_running=True,
-    )
-    client = _client(app)
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_sources_down(self, tmp_path) -> None:
+        """Test unhealthy status when sources are down."""
+        server = HealthServer()
 
-    # When requesting diagnostics
-    response = client.get("/api/v1/diagnostics")
+        # Given a missing source watch directory
+        storage = MockStorage()
+        state_store = MockStateStore()
+        notifier = MockNotifier()
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path / "nonexistent")),
+            camera_name="test",
+        )
 
-    # Then camera status is included
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "healthy"
-    assert payload["cameras"]["front"]["healthy"] is True
-    assert payload["cameras"]["front"]["last_heartbeat"] == 42.0
+        # When the watch dir is removed
+        (tmp_path / "nonexistent").rmdir()
 
+        server.set_components(
+            storage=storage,
+            state_store=state_store,
+            notifier=notifier,
+            sources=[source],
+        )
 
-def test_diagnostics_degraded_when_camera_unhealthy() -> None:
-    """Diagnostics should be degraded when a camera is unhealthy."""
-    # Given a running pipeline with an unhealthy camera
-    app = _StubApp(
-        repository=_StubRepository(ok=True),
-        storage=_StubStorage(ok=True),
-        sources_by_name={"front": _StubSource(healthy=False, heartbeat=10.0)},
-        pipeline_running=True,
-    )
-    client = _client(app)
+        # Then health is unhealthy due to sources
+        health = await server.compute_health()
 
-    # When requesting diagnostics
-    response = client.get("/api/v1/diagnostics")
+        assert health["status"] == "unhealthy"
+        assert health["checks"]["sources"] is False
+        assert len(health["sources"]) == 1
+        assert health["sources"][0]["name"] == "test"
+        assert health["sources"][0]["healthy"] is False
 
-    # Then it reports degraded and camera is unhealthy
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "degraded"
-    assert payload["cameras"]["front"]["healthy"] is False
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_mqtt_critical_and_down(self, tmp_path) -> None:
+        """Test unhealthy status when MQTT is critical and down."""
+        server = HealthServer()
 
+        # Given a failing notifier with mqtt_is_critical=True
+        storage = MockStorage()
+        state_store = MockStateStore()
+        notifier = MockNotifier(simulate_failure=True)
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="test"
+        )
 
-def test_diagnostics_degraded_when_storage_down_and_camera_disabled() -> None:
-    """Diagnostics should be degraded when storage is unavailable."""
-    # Given a running pipeline with storage down and a disabled camera
-    camera = CameraConfig(
-        name="front",
-        enabled=False,
-        source=CameraSourceConfig(
-            backend="local_folder",
-            config={"watch_dir": "/tmp"},
-        ),
-    )
-    app = _StubApp(
-        repository=_StubRepository(ok=True),
-        storage=_StubStorage(ok=False),
-        sources_by_name={},
-        pipeline_running=True,
-        cameras=[camera],
-    )
-    client = _client(app)
+        server.set_components(
+            storage=storage,
+            state_store=state_store,
+            notifier=notifier,
+            sources=[source],
+            mqtt_is_critical=True,  # Critical!
+        )
 
-    # When requesting diagnostics
-    response = client.get("/api/v1/diagnostics")
+        # When computing health
+        health = await server.compute_health()
 
-    # Then it reports degraded and camera is offline
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "degraded"
-    assert payload["storage"]["status"] == "error"
-    assert payload["cameras"]["front"]["healthy"] is False
-    assert payload["cameras"]["front"]["last_heartbeat"] is None
+        # Then status is unhealthy
+        assert health["status"] == "unhealthy"
+        assert health["checks"]["mqtt"] is False
 
+    @pytest.mark.asyncio
+    async def test_heartbeat_warnings(self, tmp_path) -> None:
+        """Test warnings for stale heartbeats."""
+        server = HealthServer()
 
-def test_diagnostics_unhealthy_when_pipeline_stopped() -> None:
-    """Diagnostics should be unhealthy when pipeline is stopped."""
-    # Given a stopped pipeline
-    app = _StubApp(
-        repository=_StubRepository(ok=True),
-        storage=_StubStorage(ok=True),
-        sources_by_name={"front": _StubSource(healthy=True)},
-        pipeline_running=False,
-    )
-    client = _client(app)
+        # Given a source with a stale heartbeat
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="front_door"
+        )
 
-    # When requesting diagnostics
-    response = client.get("/api/v1/diagnostics")
+        # When heartbeat is set far in the past
+        source._last_heartbeat = time.monotonic() - 180  # 3 minutes ago
 
-    # Then it reports unhealthy
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "unhealthy"
+        server.set_components(sources=[source])
+
+        # Then a warning is emitted
+        health = await server.compute_health()
+
+        assert len(health["warnings"]) == 1
+        assert "source_front_door_heartbeat_stale" in health["warnings"]
+        assert len(health["sources"]) == 1
+        assert health["sources"][0]["name"] == "front_door"
+        assert health["sources"][0]["last_heartbeat_age_s"] >= 180
+
+    @pytest.mark.asyncio
+    async def test_no_warnings_for_fresh_heartbeat(self, tmp_path) -> None:
+        """Test no warnings when heartbeat is fresh."""
+        server = HealthServer()
+
+        # Given a source with a fresh heartbeat
+        source = LocalFolderSource(
+            LocalFolderSourceConfig(watch_dir=str(tmp_path)), camera_name="front_door"
+        )
+
+        server.set_components(sources=[source])
+
+        # When computing health
+        health = await server.compute_health()
+
+        # Then no warnings are present
+        assert health["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_health_with_no_components(self) -> None:
+        """Test health status with no components configured."""
+        # Given: No components configured
+        server = HealthServer()
+
+        # When: Computing health
+        health = await server.compute_health()
+
+        # Then: Health is healthy
+        assert health["status"] == "healthy"
+        assert health["checks"]["db"] is True
+        assert health["checks"]["storage"] is True
+        assert health["checks"]["mqtt"] is True
+        assert health["sources"] == []
+        assert health["checks"]["sources"] is True

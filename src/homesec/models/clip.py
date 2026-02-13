@@ -32,7 +32,6 @@ class ClipStateData(BaseModel):
     """Lightweight snapshot of current clip state (stored in clip_states.data JSONB)."""
 
     schema_version: int = 1
-    clip_id: str | None = None
     camera_name: str
 
     # High-level status for queries
@@ -47,7 +46,6 @@ class ClipStateData(BaseModel):
     filter_result: FilterResult | None = None
     analysis_result: AnalysisResult | None = None
     alert_decision: AlertDecision | None = None
-    created_at: datetime | None = None
 
     @property
     def upload_completed(self) -> bool:

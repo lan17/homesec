@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
-from homesec.config.manager import ConfigManager
+from homesec.health import HealthServer
 from homesec.interfaces import EventStore
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.pipeline import ClipPipeline
@@ -65,11 +63,8 @@ class Application:
         self._filter: ObjectFilter | None = None
         self._vlm: VLMAnalyzer | None = None
         self._sources: list[ClipSource] = []
-        self._sources_by_camera: dict[str, ClipSource] = {}
         self._pipeline: ClipPipeline | None = None
-        self._api_server: APIServer | None = None
-        self._config_manager = ConfigManager(config_path)
-        self._start_time: float | None = None
+        self._health_server: HealthServer | None = None
 
         # Shutdown state
         self._shutdown_event = asyncio.Event()
@@ -92,15 +87,9 @@ class Application:
         # Set up signal handlers
         self._setup_signal_handlers()
 
-        # Start API server
-        server_cfg = self._require_config().server
-        if server_cfg.enabled:
-            self._api_server = APIServer(
-                create_app(self),
-                host=server_cfg.host,
-                port=server_cfg.port,
-            )
-            await self._api_server.start()
+        # Start health server
+        if self._health_server:
+            await self._health_server.start()
 
         # Start sources
         started_sources: list[ClipSource] = []
@@ -129,9 +118,6 @@ class Application:
                 )
             summary = "; ".join(f"{camera_name}: {error}" for camera_name, error in startup_errors)
             raise RuntimeError(f"Source startup preflight failed: {summary}")
-
-        # Track start time for uptime
-        self._start_time = time.time()
 
         logger.info("Application started. Waiting for clips...")
 
@@ -197,6 +183,20 @@ class Application:
         self._sources = self._create_sources(config)
         for source in self._sources:
             source.register_callback(self._pipeline.on_new_clip)
+
+        # Create health server
+        health_cfg = config.health
+        self._health_server = HealthServer(
+            host=health_cfg.host,
+            port=health_cfg.port,
+        )
+        self._health_server.set_components(
+            state_store=self._state_store,
+            storage=self._storage,
+            notifier=self._notifier,
+            sources=self._sources,
+            mqtt_is_critical=health_cfg.mqtt_is_critical,
+        )
 
         logger.info("All components created")
 
@@ -274,11 +274,8 @@ class Application:
     def _create_sources(self, config: Config) -> list[ClipSource]:
         """Create clip sources based on config using plugin registry."""
         sources: list[ClipSource] = []
-        self._sources_by_camera = {}
 
         for camera in config.cameras:
-            if not camera.enabled:
-                continue
             source_cfg = camera.source
             source = load_source_plugin(
                 source_backend=source_cfg.backend,
@@ -286,7 +283,6 @@ class Application:
                 camera_name=camera.name,
             )
             sources.append(source)
-            self._sources_by_camera[camera.name] = source
 
         return sources
 
@@ -328,10 +324,6 @@ class Application:
         """Graceful shutdown of all components."""
         logger.info("Shutting down application...")
 
-        # Stop API server
-        if self._api_server:
-            await self._api_server.stop()
-
         # Stop sources first
         if self._sources:
             await asyncio.gather(
@@ -342,6 +334,10 @@ class Application:
         # Shutdown pipeline (waits for in-flight clips)
         if self._pipeline:
             await self._pipeline.shutdown()
+
+        # Stop health server
+        if self._health_server:
+            await self._health_server.stop()
 
         # Close filter and VLM plugins
         if self._filter:
@@ -362,40 +358,3 @@ class Application:
             await self._notifier.shutdown()
 
         logger.info("Application shutdown complete")
-
-    @property
-    def config(self) -> Config:
-        return self._require_config()
-
-    @property
-    def repository(self) -> ClipRepository:
-        if self._repository is None:
-            raise RuntimeError("Repository not initialized")
-        return self._repository
-
-    @property
-    def storage(self) -> StorageBackend:
-        if self._storage is None:
-            raise RuntimeError("Storage not initialized")
-        return self._storage
-
-    @property
-    def sources(self) -> list[ClipSource]:
-        return list(self._sources)
-
-    @property
-    def config_manager(self) -> ConfigManager:
-        return self._config_manager
-
-    @property
-    def pipeline_running(self) -> bool:
-        return self._pipeline is not None and not self._shutdown_event.is_set()
-
-    @property
-    def uptime_seconds(self) -> float:
-        if self._start_time is None:
-            return 0.0
-        return time.time() - self._start_time
-
-    def get_source(self, camera_name: str) -> ClipSource | None:
-        return self._sources_by_camera.get(camera_name)

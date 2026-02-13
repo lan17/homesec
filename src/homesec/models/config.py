@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -101,27 +100,12 @@ class RetryConfig(BaseModel):
     backoff_s: float = Field(default=1.0, ge=0.0)
 
 
-class FastAPIServerConfig(BaseModel):
-    """Configuration for the FastAPI server."""
+class HealthConfig(BaseModel):
+    """Health endpoint configuration."""
 
-    enabled: bool = True
     host: str = "0.0.0.0"
     port: int = 8080
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
-    auth_enabled: bool = False
-    api_key_env: str | None = None  # Env var name, not the key itself
-
-    def get_api_key(self) -> str | None:
-        """Resolve API key from environment variable."""
-        if not self.api_key_env:
-            return None
-        return os.environ.get(self.api_key_env)
-
-    @model_validator(mode="after")
-    def _validate_auth(self) -> FastAPIServerConfig:
-        if self.auth_enabled and not self.api_key_env:
-            raise ValueError("server.api_key_env is required when server.auth_enabled is true")
-        return self
+    mqtt_is_critical: bool = False
 
 
 class CameraSourceConfig(BaseModel):
@@ -144,7 +128,6 @@ class CameraConfig(BaseModel):
     """Camera configuration and clip source selection."""
 
     name: str
-    enabled: bool = True
     source: CameraSourceConfig
 
 
@@ -159,7 +142,7 @@ class Config(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
-    server: FastAPIServerConfig = Field(default_factory=FastAPIServerConfig)
+    health: HealthConfig = Field(default_factory=HealthConfig)
     filter: FilterConfig
     vlm: VLMConfig
     alert_policy: AlertPolicyConfig

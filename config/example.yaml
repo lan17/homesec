@@ -196,12 +196,8 @@ alert_policy:
 #   filter_workers: 4
 #   vlm_workers: 2
 
-# FastAPI server
-# server:
-#   enabled: true
+# Health check server
+# health:
 #   host: "0.0.0.0"
 #   port: 8080
-#   cors_origins:
-#     - "*"
-#   auth_enabled: false
-#   api_key_env: "HOMESEC_API_KEY"
+#   mqtt_is_critical: false
