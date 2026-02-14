@@ -103,6 +103,19 @@ class ClipState(Base):
     __table_args__ = (
         Index("idx_clip_states_status", func.jsonb_extract_path_text(data, "status")),
         Index("idx_clip_states_camera", func.jsonb_extract_path_text(data, "camera_name")),
+        Index("idx_clip_states_created_at_desc", text("created_at DESC")),
+        Index(
+            "idx_clip_states_alerted",
+            func.jsonb_extract_path_text(data, "alert_decision", "notify"),
+        ),
+        Index(
+            "idx_clip_states_risk_level",
+            func.jsonb_extract_path_text(data, "analysis_result", "risk_level"),
+        ),
+        Index(
+            "idx_clip_states_activity_type",
+            func.jsonb_extract_path_text(data, "analysis_result", "activity_type"),
+        ),
     )
 
 

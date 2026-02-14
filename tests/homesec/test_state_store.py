@@ -11,6 +11,7 @@ from homesec.models.clip import ClipStateData
 from homesec.models.enums import ClipStatus
 from homesec.models.events import NotificationSentEvent
 from homesec.models.filter import FilterResult
+from homesec.models.vlm import AnalysisResult
 from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
@@ -356,6 +357,69 @@ async def test_list_clips_applies_filters_and_includes_clip_ids(
     # Then: Only the matching clip is returned with hydrated clip_id metadata
     assert total == 1
     assert [clip.clip_id for clip in clips] == ["test-list-filters-a"]
+
+
+@pytest.mark.asyncio
+async def test_list_clips_applies_risk_and_activity_filters(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should support risk_level and activity_type filters."""
+    # Given: Clips with different analysis results and alert decisions
+    await state_store.upsert(
+        "test-list-analysis-a",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/analysis-a.mp4",
+            analysis_result=AnalysisResult(
+                risk_level="high",
+                activity_type="person",
+                summary="person detected",
+            ),
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-analysis-b",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/analysis-b.mp4",
+            analysis_result=AnalysisResult(
+                risk_level="low",
+                activity_type="person",
+                summary="low-risk person",
+            ),
+            alert_decision=AlertDecision(notify=False, notify_reason="risk_level=low"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-analysis-c",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/analysis-c.mp4",
+            analysis_result=AnalysisResult(
+                risk_level="high",
+                activity_type="vehicle",
+                summary="vehicle detected",
+            ),
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+
+    # When: Filtering by risk, activity type, and alerted state
+    clips, total = await state_store.list_clips(
+        risk_level="high",
+        activity_type="person",
+        alerted=True,
+        offset=0,
+        limit=10,
+    )
+
+    # Then: Only the matching clip is returned
+    assert total == 1
+    assert [clip.clip_id for clip in clips] == ["test-list-analysis-a"]
 
 
 @pytest.mark.asyncio
