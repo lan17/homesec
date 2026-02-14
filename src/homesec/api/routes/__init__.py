@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI
 
 from homesec.api.dependencies import require_database, verify_api_key
-from homesec.api.routes import cameras, clips, config, health, runtime, stats, system
+from homesec.api.routes import cameras, clips, config, health, runtime, stats
 
 
 def register_routes(app: FastAPI) -> None:
@@ -22,4 +22,3 @@ def register_routes(app: FastAPI) -> None:
         dependencies=[Depends(verify_api_key), Depends(require_database)],
     )
     app.include_router(runtime.router, dependencies=[Depends(verify_api_key)])
-    app.include_router(system.router, dependencies=[Depends(verify_api_key)])

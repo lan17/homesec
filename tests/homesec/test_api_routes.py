@@ -19,7 +19,6 @@ from homesec.models.config import CameraConfig, CameraSourceConfig, FastAPIServe
 from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
-from homesec.runtime.models import RuntimeReloadRequest
 
 
 class _StubRepository:
@@ -127,7 +126,6 @@ class _StubApp:
         sources_by_name: dict[str, _StubSource] | None = None,
         server_config: FastAPIServerConfig | None = None,
         pipeline_running: bool = True,
-        system_restart_request: RuntimeReloadRequest | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.repository = repository
@@ -149,11 +147,6 @@ class _StubApp:
             ],
         )
         self._pipeline_running = pipeline_running
-        self._system_restart_request = system_restart_request or RuntimeReloadRequest(
-            accepted=True,
-            message="Runtime reload started",
-            target_generation=1,
-        )
         self.uptime_seconds = 0.0
 
     @property
@@ -166,9 +159,6 @@ class _StubApp:
 
     def get_source(self, camera_name: str) -> _StubSource | None:
         return self._sources_by_name.get(camera_name)
-
-    async def request_system_restart(self) -> RuntimeReloadRequest:
-        return self._system_restart_request
 
 
 def _write_config(tmp_path, cameras: list[dict]) -> ConfigManager:
@@ -830,56 +820,22 @@ def test_stats_endpoint_includes_camera_counts_and_uptime(tmp_path) -> None:
     assert payload["uptime_seconds"] == 12.5
 
 
-def test_system_restart_restarts_runtime_without_killing_api(tmp_path) -> None:
-    """POST /system/restart should return async runtime restart acceptance."""
-    # Given a running app with restart accepted
+def test_system_restart_endpoint_removed_returns_404(tmp_path) -> None:
+    """POST /system/restart should be removed from the API surface."""
+    # Given a running app with API routes registered
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
         config_manager=manager,
         repository=_StubRepository(),
         storage=_StubStorage(),
-        system_restart_request=RuntimeReloadRequest(
-            accepted=True,
-            message="Runtime reload started",
-            target_generation=2,
-        ),
     )
     client = _client(app)
 
-    # When requesting restart
+    # When requesting deprecated system restart endpoint
     response = client.post("/api/v1/system/restart")
 
-    # Then it accepts runtime restart without terminating parent
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["accepted"] is True
-    assert payload["target_generation"] == 2
-
-
-def test_system_restart_returns_conflict_when_restart_in_progress(tmp_path) -> None:
-    """POST /system/restart should return 409 when restart is already in progress."""
-    # Given a running app with a restart request rejected by single-flight guard
-    manager = _write_config(tmp_path, cameras=[])
-    app = _StubApp(
-        config_manager=manager,
-        repository=_StubRepository(),
-        storage=_StubStorage(),
-        system_restart_request=RuntimeReloadRequest(
-            accepted=False,
-            message="Runtime reload already in progress",
-            target_generation=3,
-        ),
-    )
-    client = _client(app)
-
-    # When requesting restart
-    response = client.post("/api/v1/system/restart")
-
-    # Then it returns a structured conflict response
-    assert response.status_code == 409
-    payload = response.json()
-    assert payload["error_code"] == "RESTART_IN_PROGRESS"
-    assert payload["target_generation"] == 3
+    # Then endpoint is not found
+    assert response.status_code == 404
 
 
 def test_db_unavailable_returns_503(tmp_path) -> None:

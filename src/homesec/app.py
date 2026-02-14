@@ -314,10 +314,6 @@ class Application:
             ) from exc
         return self._require_runtime_manager().request_reload(config)
 
-    async def request_system_restart(self) -> RuntimeReloadRequest:
-        """Restart runtime subprocess while keeping FastAPI control-plane alive."""
-        return await self.request_runtime_reload()
-
     async def wait_for_runtime_reload(self) -> RuntimeReloadResult | None:
         """Wait for the in-flight runtime reload (if any)."""
         return await self._require_runtime_manager().wait_for_reload()

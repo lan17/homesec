@@ -31,7 +31,6 @@ from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.models import (
     RuntimeCameraStatus,
-    RuntimeReloadRequest,
     RuntimeState,
     RuntimeStatusSnapshot,
     config_signature,
@@ -445,22 +444,3 @@ async def test_request_runtime_reload_maps_source_config_error_to_400(
     # Then: API-facing error status/code are mapped from ConfigErrorCode
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_code == ConfigErrorCode.FILE_NOT_FOUND.value
-
-
-@pytest.mark.asyncio
-async def test_request_system_restart_delegates_to_runtime_reload() -> None:
-    """System restart should reuse runtime reload control-plane behavior."""
-    # Given: An app with request_runtime_reload mocked
-    app = Application(config_path=__file__)
-    expected = RuntimeReloadRequest(accepted=True, message="ok", target_generation=2)
-
-    async def _reload() -> RuntimeReloadRequest:
-        return expected
-
-    app.request_runtime_reload = _reload  # type: ignore[method-assign]
-
-    # When: Requesting system restart
-    result = await app.request_system_restart()
-
-    # Then: It delegates to runtime reload semantics
-    assert result is expected
