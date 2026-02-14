@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homesec.config import resolve_env_var
+from homesec.logging_setup import configure_logging
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.alert_policies import load_alert_policy
@@ -363,11 +364,11 @@ async def _run_worker(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
     args = _parse_args(sys.argv[1:])
+    configure_logging(
+        log_level="INFO",
+        camera_name=f"runtime-worker-g{args.generation}",
+    )
     try:
         asyncio.run(_run_worker(args))
     except KeyboardInterrupt:
