@@ -62,7 +62,7 @@ def _make_config(*, watch_dir: str) -> Config:
 @pytest.mark.asyncio
 @pytest.mark.subprocess
 async def test_subprocess_controller_starts_and_stops_test_worker() -> None:
-    """Controller should start and stop a test-mode runtime worker."""
+    """Controller should start and stop the dedicated test harness worker."""
     # Given: A subprocess runtime controller and candidate runtime handle
     controller = SubprocessRuntimeController(
         startup_timeout_s=3.0,
@@ -70,7 +70,7 @@ async def test_subprocess_controller_starts_and_stops_test_worker() -> None:
         kill_timeout_s=1.0,
         worker_heartbeat_interval_s=0.05,
         heartbeat_stale_s=1.0,
-        worker_extra_args=("--test-mode",),
+        worker_module="homesec.runtime.test_worker_harness",
     )
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -93,14 +93,15 @@ async def test_subprocess_controller_starts_and_stops_test_worker() -> None:
 @pytest.mark.subprocess
 async def test_subprocess_controller_escalates_to_sigkill_when_worker_ignores_term() -> None:
     """Controller should SIGKILL runtime worker when graceful TERM does not stop it."""
-    # Given: A test-mode worker configured to ignore SIGTERM
+    # Given: A harness worker configured to ignore SIGTERM
     controller = SubprocessRuntimeController(
         startup_timeout_s=3.0,
         shutdown_timeout_s=0.1,
         kill_timeout_s=1.0,
         worker_heartbeat_interval_s=0.05,
         heartbeat_stale_s=1.0,
-        worker_extra_args=("--test-mode", "--test-ignore-term"),
+        worker_module="homesec.runtime.test_worker_harness",
+        worker_extra_args=("--harness-scenario", "ignore-term"),
     )
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -122,14 +123,14 @@ async def test_subprocess_controller_escalates_to_sigkill_when_worker_ignores_te
 @pytest.mark.subprocess
 async def test_runtime_manager_rolls_back_when_subprocess_candidate_fails_startup() -> None:
     """Reload should rollback to prior generation when candidate worker fails startup."""
-    # Given: Runtime manager with generation 1 active using test-mode worker
+    # Given: Runtime manager with generation 1 active using harness worker
     controller = SubprocessRuntimeController(
         startup_timeout_s=3.0,
         shutdown_timeout_s=1.0,
         kill_timeout_s=1.0,
         worker_heartbeat_interval_s=0.05,
         heartbeat_stale_s=1.0,
-        worker_extra_args=("--test-mode",),
+        worker_module="homesec.runtime.test_worker_harness",
     )
     manager = RuntimeManager(controller)
     config_v1 = _make_config(watch_dir="/tmp/v1")
@@ -138,7 +139,7 @@ async def test_runtime_manager_rolls_back_when_subprocess_candidate_fails_startu
 
     try:
         # When: Reloading with a candidate configured to fail startup
-        controller.worker_extra_args = ("--test-mode", "--test-fail-startup")
+        controller.worker_extra_args = ("--harness-scenario", "startup-fail")
         request = manager.request_reload(config_v2)
         result = await manager.wait_for_reload()
 

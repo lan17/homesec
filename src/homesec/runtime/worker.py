@@ -132,27 +132,6 @@ class _RuntimeWorkerService:
             if started:
                 self._emit_event(WorkerEventType.STOPPED)
 
-    async def run_test_mode(
-        self,
-        stop_event: asyncio.Event,
-        *,
-        fail_startup: bool,
-    ) -> None:
-        if fail_startup:
-            raise RuntimeError("runtime worker test-mode startup failure")
-
-        self._emit_event(WorkerEventType.STARTED)
-        heartbeat_task = asyncio.create_task(self._heartbeat_loop(stop_event))
-        try:
-            await stop_event.wait()
-        finally:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
-            self._emit_event(WorkerEventType.STOPPED)
-
     def emit_error(self, exc: Exception) -> None:
         self._emit_event(
             WorkerEventType.ERROR,
@@ -319,11 +298,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--control-socket-path", type=Path, required=True)
     parser.add_argument("--correlation-id", type=str, required=True)
     parser.add_argument("--heartbeat-interval-s", type=float, default=2.0)
-    # TODO(ticket-28 / 306d8336c59f81cba320f7edd58c0cd2): move test-only
-    # flags into a dedicated test worker harness once runtime hardening is complete.
-    parser.add_argument("--test-mode", action="store_true")
-    parser.add_argument("--test-fail-startup", action="store_true")
-    parser.add_argument("--test-ignore-term", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -343,19 +317,10 @@ async def _run_worker(args: argparse.Namespace) -> None:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        if args.test_ignore_term:
-            loop.add_signal_handler(sig, lambda: None)
-        else:
-            loop.add_signal_handler(sig, stop_event.set)
+        loop.add_signal_handler(sig, stop_event.set)
 
     try:
-        if args.test_mode:
-            await service.run_test_mode(
-                stop_event,
-                fail_startup=args.test_fail_startup,
-            )
-        else:
-            await service.run_runtime(stop_event)
+        await service.run_runtime(stop_event)
     except Exception as exc:
         service.emit_error(exc)
         raise
