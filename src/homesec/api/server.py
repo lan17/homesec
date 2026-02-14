@@ -20,9 +20,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def create_contract_app() -> FastAPI:
+    """Create a FastAPI app containing only the API contract wiring."""
+    app = FastAPI(title="HomeSec API", version="1.0.0")
+    register_exception_handlers(app)
+    register_routes(app)
+    return app
+
+
 def create_app(app_instance: Application) -> FastAPI:
     """Create the FastAPI application."""
-    app = FastAPI(title="HomeSec API", version="1.0.0")
+    app = create_contract_app()
     app.state.homesec = app_instance
 
     server_config = app_instance.config.server
@@ -35,8 +43,6 @@ def create_app(app_instance: Application) -> FastAPI:
         allow_headers=["*"],
     )
 
-    register_exception_handlers(app)
-    register_routes(app)
     return app
 
 

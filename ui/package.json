@@ -6,13 +6,15 @@
   "packageManager": "pnpm@10.15.1",
   "scripts": {
     "dev": "vite",
+    "api:generate": "node ./scripts/api_codegen.mjs generate",
+    "api:check": "node ./scripts/api_codegen.mjs check",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "build": "pnpm typecheck && vite build",
     "lint": "eslint .",
-    "check": "pnpm lint && pnpm test && pnpm build",
+    "check": "pnpm api:check && pnpm lint && pnpm test && pnpm build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -36,6 +38,7 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "jsdom": "^28.0.0",
+    "openapi-typescript": "^7.10.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",
     "vite": "^7.3.1",

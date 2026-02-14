@@ -15,10 +15,37 @@ React + TypeScript SPA for HomeSec self-serve control plane.
 ```bash
 pnpm install
 pnpm dev
+pnpm api:generate
+pnpm api:check
 pnpm check
 ```
 
 `pnpm check` runs lint, unit tests, typecheck, and production build.
+
+## API Client Generation
+
+The UI uses generated OpenAPI artifacts in `src/api/generated/`:
+
+- `openapi.json` (exported from FastAPI contract)
+- `schema.ts` (generated via `openapi-typescript`)
+- `types.ts` + `client.ts` (generated adapter layer consumed by the app)
+
+Generation flow:
+
+1. Export OpenAPI schema from backend using `uv run python -m homesec.api.openapi_export`.
+2. Attempt Speakeasy workflow first if both are present:
+   - `speakeasy` binary available (or `SPEAKEASY_BIN` is set)
+   - `ui/.speakeasy/workflow.yaml` exists
+3. Always regenerate fallback TypeScript artifacts using `openapi-typescript` to keep app wrapper contract stable.
+
+Use:
+
+```bash
+pnpm api:generate
+pnpm api:check
+```
+
+`api:check` fails if committed generated artifacts are stale.
 
 ## Environment
 
