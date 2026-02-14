@@ -8,7 +8,7 @@
 #          -v ./recordings:/data/recordings \
 #          -v ./storage:/data/storage \
 #          -v ./yolo_cache:/app/yolo_cache \
-#          -p 8080:8080 homesec
+#          -p 8081:8081 homesec
 
 # =============================================================================
 # Stage 1: Builder
@@ -86,9 +86,9 @@ RUN chmod +x /app/docker-entrypoint.sh \
 USER homesec
 
 # Health check endpoint
-EXPOSE 8080
+EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')" || exit 1
 
 # Entrypoint runs migrations then starts app
 # Config and env are expected to be mounted at /config/

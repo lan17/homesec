@@ -898,6 +898,95 @@ def test_db_health_probe_is_cached_for_burst_requests(tmp_path) -> None:
     assert repository.ping_calls == 1
 
 
+def test_root_health_endpoint_matches_versioned_health(tmp_path) -> None:
+    """GET /health should expose the same probe payload as /api/v1/health."""
+    # Given a healthy app with one online camera
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+    )
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=True),
+        storage=_StubStorage(),
+        sources_by_name={"front": _StubSource(healthy=True, heartbeat=1.0)},
+    )
+    client = _client(app)
+
+    # When requesting both health endpoints
+    root_response = client.get("/health")
+    versioned_response = client.get("/api/v1/health")
+
+    # Then both return the same healthy payload
+    assert root_response.status_code == 200
+    assert versioned_response.status_code == 200
+    assert root_response.json() == versioned_response.json()
+
+
+def test_health_endpoints_degrade_when_postgres_unavailable(tmp_path) -> None:
+    """Health endpoints should report degraded when pipeline runs but DB is unavailable."""
+    # Given a running pipeline with DB unavailable
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+    )
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=False),
+        storage=_StubStorage(),
+        sources_by_name={"front": _StubSource(healthy=True, heartbeat=1.0)},
+        pipeline_running=True,
+    )
+    client = _client(app)
+
+    # When requesting health probe endpoints
+    root_response = client.get("/health")
+    versioned_response = client.get("/api/v1/health")
+
+    # Then both report degraded health with 200 status
+    assert root_response.status_code == 200
+    assert versioned_response.status_code == 200
+    assert root_response.json()["status"] == "degraded"
+    assert root_response.json()["postgres"] == "unavailable"
+    assert root_response.json() == versioned_response.json()
+
+
+def test_health_endpoints_return_503_when_pipeline_stopped(tmp_path) -> None:
+    """Health probe endpoints should return 503 when pipeline is stopped."""
+    # Given a stopped pipeline
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=True),
+        storage=_StubStorage(),
+        pipeline_running=False,
+    )
+    client = _client(app)
+
+    # When requesting health probe endpoints
+    root_response = client.get("/health")
+    versioned_response = client.get("/api/v1/health")
+
+    # Then both report unhealthy with 503 status
+    assert root_response.status_code == 503
+    assert versioned_response.status_code == 503
+    assert root_response.json()["status"] == "unhealthy"
+    assert root_response.json()["pipeline"] == "stopped"
+    assert root_response.json() == versioned_response.json()
+
+
 def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Auth should be enforced for non-public endpoints."""
     # Given auth is enabled
@@ -932,6 +1021,18 @@ def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -
 
     # When hitting a public endpoint without auth
     response = client.get("/api/v1/health")
+
+    # Then it returns 200
+    assert response.status_code == 200
+
+    # When hitting the root health probe endpoint without auth
+    response = client.get("/health")
+
+    # Then it returns 200
+    assert response.status_code == 200
+
+    # When hitting diagnostics without auth
+    response = client.get("/api/v1/diagnostics")
 
     # Then it returns 200
     assert response.status_code == 200

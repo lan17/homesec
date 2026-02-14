@@ -583,10 +583,10 @@ retry:
   backoff_s: 5.0
   on_exhausted: "alert_and_continue"  # Options: "alert_and_continue", "fail"
 
-health:
+server:
   enabled: true
-  port: 8080
-  endpoint: "/health"
+  host: "0.0.0.0"
+  port: 8081
 
 cameras:
   - name: "front_door"
@@ -1079,100 +1079,23 @@ async def main():
   - clip count/day, upload failures, filter latency, VLM latency/cost, alert count.
 - Postgres enabled via `DB_DSN` provides telemetry + workflow state; if DB writes fail, emit ERROR logs and continue best-effort.
 
-### Health Check Endpoint
-- Simple HTTP endpoint on `:8080/health` (configurable)
-- **Component-based health checks**: Verify each component can do its job, not whether it's doing work
-- Returns JSON with:
-  - `status`: "healthy" | "degraded" | "unhealthy"
-  - `checks`: dict of component health results
-    - `db`: bool (Postgres ping)
-    - `storage`: bool (Dropbox/storage ping)
-    - `mqtt`: bool (MQTT broker ping)
-    - `sources`: bool (all ClipSource.is_healthy() checks)
-    - `plugins`: bool (optional: plugin health checks)
-  - `clips_in_flight`: count of clips currently being processed
-  - `last_clip_ts`: timestamp of most recent clip (informational only, not used for health status)
-  - `warnings`: list of non-critical issues (e.g., "no_clips_24h")
+### Health Check Endpoints
+- FastAPI is the only HTTP listener.
+- Public probe endpoints:
+  - `GET /health`: unauthenticated ops probe endpoint.
+  - `GET /api/v1/health`: versioned health summary endpoint.
+  - `GET /api/v1/diagnostics`: versioned detailed diagnostics endpoint.
+- Health status is derived from runtime heartbeat, database ping, storage ping, and camera/source health.
+- Non-health API endpoints may require API key auth when enabled.
 
-**Health status logic:**
-- `healthy`: All critical components operational
-- `degraded`: Non-critical component failure (DB or MQTT down; pipeline can still process clips)
-- `unhealthy`: Critical component failure (clip sources, storage, or plugins down; pipeline cannot function)
-
-**Critical checks (unhealthy if fail):**
-- `sources`: At least one ClipSource is healthy (can receive clips)
-- `storage`: Storage backend is reachable (can upload clips)
-- `plugins`: Object detection and VLM plugins are available (optional check)
-
-**Non-critical checks (degraded if fail):**
-- `db`: Postgres unavailable (state tracking disabled, but processing continues)
-- `mqtt`: MQTT broker unreachable (notifications disabled, but processing continues)
-  - Configurable via `health.mqtt_is_critical`: if `true`, MQTT failure is treated as critical (unhealthy)
-  - Failed notifications are retried at `alert_policy.mqtt_retry_interval_s` intervals
-
-**Activity monitoring:**
-- `last_clip_ts` is informational only; no automatic alerting on "no recent clips"
-- Users can create custom Home Assistant automations for suspicious inactivity (e.g., no motion in 7 days)
-
-**Heartbeat monitoring:**
-- Each ClipSource updates `last_heartbeat()` continuously (~60s) independent of motion/clips
-- Health check uses `is_healthy()` for status (checks if source is functional)
-- Heartbeat age appears in `warnings` if stale (>2 minutes), not in health status
-- Purpose: distinguish between "no motion" (normal) vs "source dead" (actionable)
-
-**Implementation example:**
-```python
-class HealthServer:
-    async def health(self, request):
-        checks = {
-            "db": await self.pipeline.state_store.ping(),
-            "storage": await self.pipeline.storage.ping(),
-            "mqtt": await self.pipeline.notifier.ping(),
-            "sources": all(source.is_healthy() for source in self.pipeline.sources),
-        }
-        
-        # Determine status
-        status = "healthy"
-        if not checks["sources"] or not checks["storage"]:
-            status = "unhealthy"  # Critical failure
-        elif not checks["mqtt"] and self.config.health.mqtt_is_critical:
-            status = "unhealthy"  # MQTT failure treated as critical (configurable)
-        elif not checks["db"] or not checks["mqtt"]:
-            status = "degraded"  # Non-critical failure
-        
-        # Add warnings (informational)
-        warnings = []
-        last_clip_ts = self.pipeline.get_last_clip_timestamp()
-        if last_clip_ts and (time.time() - last_clip_ts) > 86400:
-            warnings.append("no_clips_24h")  # No motion in 24h (informational only)
-        
-        # Check heartbeats (separate from clip activity)
-        for source in self.pipeline.sources:
-            heartbeat_age = time.monotonic() - source.last_heartbeat()
-            if heartbeat_age > 120:  # 2 minutes without heartbeat
-                warnings.append(f"source_{source.camera_name}_heartbeat_stale")
-        
-        return web.json_response({
-            "status": status,
-            "checks": checks,
-            "clips_in_flight": self.pipeline.get_in_flight_count(),
-            "last_clip_ts": last_clip_ts,
-            "warnings": warnings,
-        })
-```
-
-**Home Assistant integration:**
+**Probe integration example:**
 ```yaml
 binary_sensor:
   - platform: rest
     name: "Camera Pipeline Health"
-    resource: "http://pipeline-host:8080/health"
+    resource: "http://pipeline-host:8081/health"
     value_template: "{{ value_json.status == 'healthy' }}"
     scan_interval: 60
-    json_attributes:
-      - checks
-      - last_clip_ts
-      - warnings
 ```
 
 ### Testing Strategy
@@ -1244,6 +1167,6 @@ binary_sensor:
 9. **Wire stages with retry logic**: Upload → Filter → VLM (conditional) → Alert → Notify (conditional), with error handling as values
 10. **Implement `AlertPolicy`**: Evaluate `min_risk_level` + `notify_on_activity_types` per camera
 11. **Implement `Notifier`**: MQTT integration (Mosquitto), send alerts to `homecam/alerts/{camera_name}` with full payload including `upload_failed` flag
-12. **Add health check endpoint**: Simple HTTP server on `:8080/health` with component checks + heartbeat warnings
+12. **Add health check endpoints**: FastAPI-served `/health` + `/api/v1/health` with component checks
 13. **Integration tests**: End-to-end tests with pytest, real Postgres/MQTT, mock plugins, validate full pipeline including shutdown
 14. **Config validation**: YAML schema validation on startup, fail fast on errors

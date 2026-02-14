@@ -45,9 +45,10 @@ class DiagnosticsResponse(BaseModel):
     cameras: dict[str, CameraStatus]
 
 
-@router.get("/api/v1/health", response_model=HealthResponse)
-async def get_health(app: Application = Depends(get_homesec_app)) -> HealthResponse | JSONResponse:
-    """Basic health check."""
+async def _compute_health_response(
+    app: Application,
+) -> HealthResponse | JSONResponse:
+    """Compute shared health payload for public and versioned health endpoints."""
     pipeline_running = app.pipeline_running
     postgres_ok = await app.repository.ping()
     cameras_online = sum(1 for source in app.sources if source.is_healthy())
@@ -69,6 +70,20 @@ async def get_health(app: Application = Depends(get_homesec_app)) -> HealthRespo
     if not pipeline_running:
         return JSONResponse(status_code=503, content=response.model_dump(mode="json"))
     return response
+
+
+@router.get("/health", response_model=HealthResponse, include_in_schema=False)
+async def get_root_health(
+    app: Application = Depends(get_homesec_app),
+) -> HealthResponse | JSONResponse:
+    """Public liveness/readiness health check for ops probes."""
+    return await _compute_health_response(app)
+
+
+@router.get("/api/v1/health", response_model=HealthResponse)
+async def get_health(app: Application = Depends(get_homesec_app)) -> HealthResponse | JSONResponse:
+    """Versioned health check endpoint."""
+    return await _compute_health_response(app)
 
 
 @router.get("/api/v1/diagnostics", response_model=DiagnosticsResponse)

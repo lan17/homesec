@@ -124,14 +124,6 @@ class FastAPIServerConfig(BaseModel):
         return self
 
 
-class HealthConfig(BaseModel):
-    """Health endpoint configuration."""
-
-    host: str = "0.0.0.0"
-    port: int = 8080
-    mqtt_is_critical: bool = False
-
-
 class CameraSourceConfig(BaseModel):
     """Camera source configuration wrapper."""
 
@@ -159,6 +151,8 @@ class CameraConfig(BaseModel):
 class Config(BaseModel):
     """Main configuration with per-camera override support."""
 
+    model_config = {"extra": "forbid"}
+
     version: int = 1
     cameras: list[CameraConfig]
     storage: StorageConfig
@@ -167,7 +161,6 @@ class Config(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
-    health: HealthConfig = Field(default_factory=HealthConfig)
     server: FastAPIServerConfig = Field(default_factory=FastAPIServerConfig)
     filter: FilterConfig
     vlm: VLMConfig

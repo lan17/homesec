@@ -14,7 +14,6 @@ from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
-from homesec.health import HealthServer
 from homesec.interfaces import EventStore
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.plugins.storage import load_storage_plugin
@@ -80,7 +79,6 @@ class Application:
         self._state_store: StateStore = NoopStateStore()
         self._event_store: EventStore = NoopEventStore()
         self._repository: ClipRepository | None = None
-        self._health_server: HealthServer | None = None
         self._api_server: APIServer | None = None
         self._runtime_manager: RuntimeManager | None = None
         self._runtime_heartbeat_stale_s = 10.0
@@ -107,10 +105,6 @@ class Application:
 
         # Set up signal handlers
         self._setup_signal_handlers()
-
-        # Start health server
-        if self._health_server:
-            await self._health_server.start()
 
         if self._api_server:
             await self._api_server.start()
@@ -147,24 +141,10 @@ class Application:
         )
         assert self._storage is not None
 
-        health_cfg = config.health
-        self._health_server = HealthServer(
-            host=health_cfg.host,
-            port=health_cfg.port,
-        )
-        self._health_server.set_components(
-            state_store=self._state_store,
-            storage=self._storage,
-            notifier=None,
-            sources=[],
-            mqtt_is_critical=health_cfg.mqtt_is_critical,
-        )
-
         # Create runtime manager and start the initial runtime.
         self._runtime_manager = RuntimeManager(
             self._create_runtime_controller(),
             on_runtime_activated=self._bind_active_runtime,
-            on_runtime_cleared=self._clear_active_runtime,
         )
         await self._runtime_manager.start_initial_runtime(config)
 
@@ -214,27 +194,6 @@ class Application:
     def _bind_active_runtime(self, runtime: ManagedRuntime) -> None:
         """Bind activated runtime metadata to application state."""
         self._config = runtime.config
-
-        if self._health_server is not None and self._storage is not None:
-            self._health_server.set_components(
-                state_store=self._state_store,
-                storage=self._storage,
-                notifier=None,
-                sources=[],
-                mqtt_is_critical=runtime.config.health.mqtt_is_critical,
-            )
-
-    def _clear_active_runtime(self) -> None:
-        """Clear active runtime references from application accessors."""
-        if self._health_server is not None and self._storage is not None:
-            mqtt_is_critical = self._config.health.mqtt_is_critical if self._config else False
-            self._health_server.set_components(
-                state_store=self._state_store,
-                storage=self._storage,
-                notifier=None,
-                sources=[],
-                mqtt_is_critical=mqtt_is_critical,
-            )
 
     def _require_runtime_manager(self) -> RuntimeManager:
         if self._runtime_manager is None:
@@ -363,10 +322,6 @@ class Application:
         # Stop runtime manager (sources/pipeline/plugins).
         if self._runtime_manager:
             await self._runtime_manager.shutdown()
-
-        # Stop health server
-        if self._health_server:
-            await self._health_server.stop()
 
         # Close state store
         if self._state_store:

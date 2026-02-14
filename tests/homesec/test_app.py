@@ -203,7 +203,7 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
 
 
 @pytest.mark.asyncio
-async def test_application_wires_runtime_health_and_api(
+async def test_application_wires_runtime_and_api(
     _mock_runtime_environment: _StubRuntimeController,
 ) -> None:
     """Application should expose runtime camera health via app accessors."""
@@ -224,7 +224,6 @@ async def test_application_wires_runtime_health_and_api(
 
     # Then: Runtime manager, API server, and camera health accessors are wired
     assert app._runtime_manager is not None
-    assert app._health_server is not None
     assert app._api_server is not None
     assert app.pipeline_running is True
     assert len(app.sources) == 1
@@ -232,8 +231,6 @@ async def test_application_wires_runtime_health_and_api(
     source = app.get_source("front_door")
     assert source is not None
     assert source.last_heartbeat() == 1.0
-    assert app._health_server._state_store is app._state_store
-    assert app._health_server._storage is app._storage
 
 
 @pytest.mark.asyncio
@@ -364,13 +361,6 @@ async def test_application_shutdown_stops_api_before_runtime_manager() -> None:
         async def shutdown(self) -> None:
             self._calls.append("runtime")
 
-    class _StubHealthServer:
-        def __init__(self, calls: list[str]) -> None:
-            self._calls = calls
-
-        async def stop(self) -> None:
-            self._calls.append("health")
-
     class _StubShutdownable:
         def __init__(self, name: str, calls: list[str]) -> None:
             self._name = name
@@ -385,7 +375,6 @@ async def test_application_shutdown_stops_api_before_runtime_manager() -> None:
     app = Application(config_path=__file__)
     app._api_server = cast(Any, _StubAPIServer(calls))
     app._runtime_manager = cast(Any, _StubRuntimeManager(calls))
-    app._health_server = cast(Any, _StubHealthServer(calls))
     app._state_store = cast(Any, _StubShutdownable("state", calls))
     app._storage = cast(Any, _StubShutdownable("storage", calls))
 

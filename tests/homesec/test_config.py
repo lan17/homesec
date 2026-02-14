@@ -257,6 +257,24 @@ def test_load_config_empty_file() -> None:
         path.unlink()
 
 
+def test_load_config_rejects_legacy_health_block() -> None:
+    """Config loading should fail fast when legacy health block is provided."""
+    # Given a config payload still using retired health server settings
+    data = minimal_config()
+    data["health"] = {
+        "host": "0.0.0.0",
+        "port": 8080,
+    }
+
+    # When loading the config
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)  # type: ignore[arg-type]
+
+    # Then validation fails and surfaces the unknown key
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
+    assert "health" in str(exc_info.value)
+
+
 def test_per_camera_override_merge() -> None:
     """Test that per-camera overrides are preserved in config."""
     # Given a config with per-camera alert overrides

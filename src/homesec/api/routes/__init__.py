@@ -10,7 +10,7 @@ from homesec.api.routes import cameras, clips, config, health, runtime, stats
 
 def register_routes(app: FastAPI) -> None:
     """Register all API routers."""
-    app.include_router(health.router, dependencies=[Depends(verify_api_key)])
+    app.include_router(health.router)
     app.include_router(config.router, dependencies=[Depends(verify_api_key)])
     app.include_router(cameras.router, dependencies=[Depends(verify_api_key)])
     app.include_router(

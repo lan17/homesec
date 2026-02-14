@@ -45,10 +45,6 @@ async def get_homesec_app(request: Request) -> Application:
 
 async def verify_api_key(request: Request, app: Application = Depends(get_homesec_app)) -> None:
     """Verify API key if authentication is enabled."""
-    path = request.url.path
-    if path in ("/api/v1/health", "/api/v1/diagnostics"):
-        return
-
     server_config = app.config.server
     if not server_config.auth_enabled:
         return
