@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import get_homesec_app, verify_api_key
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -86,7 +86,11 @@ async def get_health(app: Application = Depends(get_homesec_app)) -> HealthRespo
     return await _compute_health_response(app)
 
 
-@router.get("/api/v1/diagnostics", response_model=DiagnosticsResponse)
+@router.get(
+    "/api/v1/diagnostics",
+    response_model=DiagnosticsResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_diagnostics(app: Application = Depends(get_homesec_app)) -> DiagnosticsResponse:
     """Detailed component diagnostics."""
     pipeline_running = app.pipeline_running

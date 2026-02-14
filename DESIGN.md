@@ -1084,7 +1084,8 @@ async def main():
 - Public probe endpoints:
   - `GET /health`: unauthenticated ops probe endpoint.
   - `GET /api/v1/health`: versioned health summary endpoint.
-  - `GET /api/v1/diagnostics`: versioned detailed diagnostics endpoint.
+- Authenticated endpoint:
+  - `GET /api/v1/diagnostics`: versioned detailed diagnostics endpoint (API key required when auth is enabled).
 - Health status is derived from runtime heartbeat, database ping, storage ping, and camera/source health.
 - Non-health API endpoints may require API key auth when enabled.
 

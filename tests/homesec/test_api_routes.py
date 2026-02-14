@@ -1034,6 +1034,12 @@ def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     # When hitting diagnostics without auth
     response = client.get("/api/v1/diagnostics")
 
+    # Then it returns 401
+    assert response.status_code == 401
+
+    # When hitting diagnostics with correct auth
+    response = client.get("/api/v1/diagnostics", headers={"Authorization": "Bearer secret"})
+
     # Then it returns 200
     assert response.status_code == 200
 
