@@ -22,6 +22,13 @@ pnpm check
 
 `pnpm check` runs lint, unit tests, typecheck, and production build.
 
+Make target shortcuts are available too:
+
+```bash
+make run-local
+make check
+```
+
 ## API Client Generation
 
 The UI uses generated OpenAPI artifacts in `src/api/generated/`:

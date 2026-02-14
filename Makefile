@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish ui-%
 
 help:
 	@echo "Targets:"
@@ -27,6 +27,9 @@ help:
 	@echo ""
 	@echo "  Release:"
 	@echo "    make publish       Build and upload to PyPI"
+	@echo ""
+	@echo "  UI proxy:"
+	@echo "    make ui-<target>   Run make target in ui/ (example: make ui-api-generate)"
 
 # Config
 HOMESEC_CONFIG ?= config/config.yaml
@@ -101,3 +104,7 @@ publish: check
 	uv run --with build python -m build
 	uv run --with twine python -m twine check dist/*
 	uv run --with twine python -m twine upload dist/*
+
+# Proxy any ui-* target to the UI Makefile (e.g., ui-api-generate -> make -C ui api-generate).
+ui-%:
+	@$(MAKE) -C ui $*
