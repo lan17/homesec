@@ -51,16 +51,6 @@ function runCommand(command, args, options = {}) {
   return result
 }
 
-function commandExists(command) {
-  if (command.includes('/')) {
-    return existsSync(command)
-  }
-  const result = runCommand('which', [command], {
-    allowFailure: true,
-  })
-  return result.status === 0
-}
-
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf-8'))
 }
@@ -120,33 +110,6 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
     ['run', 'python', '-m', 'homesec.api.openapi_export', '--output', openapiJsonPath],
     { cwd: repoRoot },
   )
-
-  const generatorPreference = process.env.HOMESEC_UI_CODEGEN_ENGINE ?? 'auto'
-  const speakeasyBin = process.env.SPEAKEASY_BIN ?? 'speakeasy'
-  const speakeasyWorkflow = path.join(uiRoot, '.speakeasy', 'workflow.yaml')
-
-  if (generatorPreference !== 'openapi-typescript') {
-    const hasSpeakeasy = commandExists(speakeasyBin)
-    const hasWorkflow = existsSync(speakeasyWorkflow)
-    if (hasSpeakeasy && hasWorkflow) {
-      const result = runCommand(speakeasyBin, ['run'], {
-        cwd: uiRoot,
-        allowFailure: generatorPreference === 'auto',
-        stdio: 'inherit',
-        env: {
-          HOMESEC_OPENAPI_SCHEMA_PATH: openapiJsonPath,
-        },
-      })
-
-      if (result.status !== 0 && generatorPreference === 'speakeasy') {
-        throw new Error('Speakeasy workflow failed with HOMESEC_UI_CODEGEN_ENGINE=speakeasy')
-      }
-    } else if (generatorPreference === 'speakeasy') {
-      throw new Error(
-        'Speakeasy requested but binary or workflow is missing. Configure SPEAKEASY_BIN and ui/.speakeasy/workflow.yaml.',
-      )
-    }
-  }
 
   runCommand(
     'pnpm',

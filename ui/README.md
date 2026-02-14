@@ -47,10 +47,8 @@ The UI uses generated OpenAPI artifacts in `src/api/generated/`:
 Generation flow:
 
 1. Export OpenAPI schema from backend using `uv run python -m homesec.api.openapi_export`.
-2. Attempt Speakeasy workflow first if both are present:
-   - `speakeasy` binary available (or `SPEAKEASY_BIN` is set)
-   - `ui/.speakeasy/workflow.yaml` exists
-3. Always regenerate fallback TypeScript artifacts using `openapi-typescript` to keep app wrapper contract stable.
+2. Generate `schema.ts` from OpenAPI using `openapi-typescript`.
+3. Generate `types.ts` + `client.ts` adapter artifacts consumed by the app.
 
 Use:
 
