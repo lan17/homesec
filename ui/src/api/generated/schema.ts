@@ -602,6 +602,7 @@ export interface operations {
                 camera?: string | null;
                 status?: components["schemas"]["ClipStatus"] | null;
                 alerted?: boolean | null;
+                detected?: boolean | null;
                 risk_level?: string | null;
                 activity_type?: string | null;
                 since?: string | null;

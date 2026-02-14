@@ -15,6 +15,7 @@ describe('parseClipsQuery', () => {
       camera: 'front-door',
       status: 'done',
       alerted: 'false',
+      detected: 'true',
       risk_level: 'high',
       activity_type: 'PackageDrop',
       since: '2026-02-14T00:00:00.000Z',
@@ -31,6 +32,7 @@ describe('parseClipsQuery', () => {
       camera: 'front-door',
       status: 'done',
       alerted: false,
+      detected: true,
       risk_level: 'high',
       activity_type: 'packagedrop',
       since: '2026-02-14T00:00:00.000Z',
@@ -46,6 +48,7 @@ describe('parseClipsQuery', () => {
       status: 'unknown',
       limit: '-10',
       alerted: 'maybe',
+      detected: 'also-maybe',
     })
 
     // When: Parsing into query object
@@ -54,6 +57,7 @@ describe('parseClipsQuery', () => {
     // Then: Unsupported values should be dropped or clamped to defaults
     expect(query.status).toBeUndefined()
     expect(query.alerted).toBeUndefined()
+    expect(query.detected).toBeUndefined()
     expect(query.limit).toBe(1)
     expect(query.cursor).toBeUndefined()
   })
@@ -66,6 +70,7 @@ describe('form/query conversion', () => {
       camera: 'garage',
       status: 'uploaded',
       alerted: 'true',
+      detected: 'false',
       riskLevel: 'medium',
       activityType: 'Vehicle',
       sinceLocal: '2026-02-14T10:15',
@@ -83,10 +88,12 @@ describe('form/query conversion', () => {
     expect(parsed.camera).toBe('garage')
     expect(parsed.status).toBe('uploaded')
     expect(parsed.alerted).toBe(true)
+    expect(parsed.detected).toBe(false)
     expect(parsed.activity_type).toBe('vehicle')
     expect(hydratedForm.camera).toBe('garage')
     expect(hydratedForm.status).toBe('uploaded')
     expect(hydratedForm.alerted).toBe('true')
+    expect(hydratedForm.detected).toBe('false')
     expect(hydratedForm.activityType).toBe('vehicle')
     expect(hydratedForm.limit).toBe(DEFAULT_CLIPS_LIMIT)
   })

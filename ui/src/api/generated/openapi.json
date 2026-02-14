@@ -857,6 +857,22 @@
           },
           {
             "in": "query",
+            "name": "detected",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Detected"
+            }
+          },
+          {
+            "in": "query",
             "name": "risk_level",
             "required": false,
             "schema": {

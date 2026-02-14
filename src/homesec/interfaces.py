@@ -147,6 +147,7 @@ class StateStore(Shutdownable, ABC):
         camera: str | None = None,
         status: ClipStatus | None = None,
         alerted: bool | None = None,
+        detected: bool | None = None,
         risk_level: str | None = None,
         activity_type: str | None = None,
         since: datetime | None = None,

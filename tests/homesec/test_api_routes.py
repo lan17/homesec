@@ -50,6 +50,7 @@ class _StubRepository:
         camera: str | None = None,
         status: ClipStatus | None = None,
         alerted: bool | None = None,
+        detected: bool | None = None,
         risk_level: str | None = None,
         activity_type: str | None = None,
         since: dt.datetime | None = None,
@@ -61,6 +62,7 @@ class _StubRepository:
             "camera": camera,
             "status": status,
             "alerted": alerted,
+            "detected": detected,
             "risk_level": risk_level,
             "activity_type": activity_type,
             "since": since,
@@ -817,6 +819,26 @@ def test_list_clips_forwards_alerted_filter_to_repository(tmp_path) -> None:
     # Then alerted filter is forwarded as a boolean
     assert response.status_code == 200
     assert repository.list_clips_calls[-1]["alerted"] is False
+
+
+def test_list_clips_forwards_detected_filter_to_repository(tmp_path) -> None:
+    """GET /clips should forward the detected filter to the repository."""
+    # Given an app with a call-recording repository
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository()
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When filtering for detected=true
+    response = client.get("/api/v1/clips?detected=true")
+
+    # Then detected filter is forwarded as a boolean
+    assert response.status_code == 200
+    assert repository.list_clips_calls[-1]["detected"] is True
 
 
 def test_list_clips_invalid_query_returns_canonical_validation_error(tmp_path) -> None:

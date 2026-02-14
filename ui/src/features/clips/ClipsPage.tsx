@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { clearApiKey, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
+import { useCamerasQuery } from '../../api/hooks/useCamerasQuery'
 import { useClipsQuery } from '../../api/hooks/useClipsQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
@@ -27,12 +28,18 @@ import {
 import { describeClipError, formatTimestamp, renderDetectedObjects } from './presentation'
 
 interface ClipsFilterPanelProps {
+  cameraOptions: string[]
   initialFormState: ClipsFilterFormState
   onApply: (form: ClipsFilterFormState) => void
   onReset: () => void
 }
 
-function ClipsFilterPanel({ initialFormState, onApply, onReset }: ClipsFilterPanelProps) {
+function ClipsFilterPanel({
+  cameraOptions,
+  initialFormState,
+  onApply,
+  onReset,
+}: ClipsFilterPanelProps) {
   const [formState, setFormState] = useState<ClipsFilterFormState>(initialFormState)
 
   function updateFormState<Key extends keyof ClipsFilterFormState>(
@@ -50,12 +57,18 @@ function ClipsFilterPanel({ initialFormState, onApply, onReset }: ClipsFilterPan
       <div className="clips-filter-grid">
         <label className="field-label">
           Camera
-          <input
+          <select
             className="input"
             value={formState.camera}
             onChange={(event) => updateFormState('camera', event.target.value)}
-            placeholder="front_door"
-          />
+          >
+            <option value="">Any</option>
+            {cameraOptions.map((cameraName) => (
+              <option key={cameraName} value={cameraName}>
+                {cameraName}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label className="field-label">
@@ -83,6 +96,21 @@ function ClipsFilterPanel({ initialFormState, onApply, onReset }: ClipsFilterPan
             value={formState.alerted}
             onChange={(event) =>
               updateFormState('alerted', event.target.value as ClipsFilterFormState['alerted'])
+            }
+          >
+            <option value="any">Any</option>
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+        </label>
+
+        <label className="field-label">
+          Detected
+          <select
+            className="input"
+            value={formState.detected}
+            onChange={(event) =>
+              updateFormState('detected', event.target.value as ClipsFilterFormState['detected'])
             }
           >
             <option value="any">Any</option>
@@ -171,9 +199,23 @@ export function ClipsPage() {
   const cursorHistory = historyForSignature(cursorState, filterSignature)
 
   const clipsQuery = useClipsQuery(query)
+  const camerasQuery = useCamerasQuery()
 
   const unauthorized = isUnauthorizedAPIError(clipsQuery.error)
-  const clipItems = clipsQuery.data?.clips ?? []
+  const clipItems = useMemo(() => clipsQuery.data?.clips ?? [], [clipsQuery.data])
+  const cameraOptions = useMemo(() => {
+    const uniqueNames = new Set<string>()
+    for (const camera of camerasQuery.data ?? []) {
+      uniqueNames.add(camera.name)
+    }
+    for (const clip of clipItems) {
+      uniqueNames.add(clip.camera)
+    }
+    if (query.camera) {
+      uniqueNames.add(query.camera)
+    }
+    return [...uniqueNames].sort((left, right) => left.localeCompare(right))
+  }, [camerasQuery.data, clipItems, query.camera])
 
   function clearCursorHistory(nextSignature: string): void {
     setCursorState(resetCursorHistory(nextSignature))
@@ -197,16 +239,16 @@ export function ClipsPage() {
 
   async function submitApiKey(apiKey: string): Promise<void> {
     saveApiKey(apiKey)
-    await clipsQuery.refetch()
+    await Promise.all([clipsQuery.refetch(), camerasQuery.refetch()])
   }
 
   async function clearStoredApiKey(): Promise<void> {
     clearApiKey()
-    await clipsQuery.refetch()
+    await Promise.all([clipsQuery.refetch(), camerasQuery.refetch()])
   }
 
   async function refreshClips(): Promise<void> {
-    await clipsQuery.refetch()
+    await Promise.all([clipsQuery.refetch(), camerasQuery.refetch()])
   }
 
   function goToNextCursor(): void {
@@ -251,6 +293,7 @@ export function ClipsPage() {
 
       <ClipsFilterPanel
         key={filterSignature}
+        cameraOptions={cameraOptions}
         initialFormState={initialFormState}
         onApply={applyFilters}
         onReset={resetFilters}

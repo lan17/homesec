@@ -264,6 +264,7 @@ class PostgresStateStore(StateStore):
         camera: str | None = None,
         status: ClipStatus | None = None,
         alerted: bool | None = None,
+        detected: bool | None = None,
         risk_level: str | None = None,
         activity_type: str | None = None,
         since: datetime | None = None,
@@ -279,6 +280,12 @@ class PostgresStateStore(StateStore):
         status_expr = func.jsonb_extract_path_text(ClipState.data, "status")
         camera_expr = func.jsonb_extract_path_text(ClipState.data, "camera_name")
         alerted_expr = func.jsonb_extract_path_text(ClipState.data, "alert_decision", "notify")
+        detected_count_expr = func.coalesce(
+            func.jsonb_array_length(
+                func.jsonb_extract_path(ClipState.data, "filter_result", "detected_classes")
+            ),
+            0,
+        )
         risk_expr = func.jsonb_extract_path_text(ClipState.data, "analysis_result", "risk_level")
         activity_expr = func.jsonb_extract_path_text(
             ClipState.data, "analysis_result", "activity_type"
@@ -295,6 +302,10 @@ class PostgresStateStore(StateStore):
             conditions.append(alerted_expr == "true")
         elif alerted is False:
             conditions.append(or_(alerted_expr == "false", alerted_expr.is_(None)))
+        if detected is True:
+            conditions.append(detected_count_expr > 0)
+        elif detected is False:
+            conditions.append(detected_count_expr == 0)
         # Keep case-insensitive comparisons in SQL. If expression indexes are added for
         # these filters, index expressions must match the lower(...) form below.
         if risk_level is not None:
@@ -691,6 +702,7 @@ class NoopStateStore(StateStore):
         camera: str | None = None,
         status: ClipStatus | None = None,
         alerted: bool | None = None,
+        detected: bool | None = None,
         risk_level: str | None = None,
         activity_type: str | None = None,
         since: datetime | None = None,
@@ -701,6 +713,7 @@ class NoopStateStore(StateStore):
         _ = camera
         _ = status
         _ = alerted
+        _ = detected
         _ = risk_level
         _ = activity_type
         _ = since

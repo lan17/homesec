@@ -401,6 +401,65 @@ async def test_list_clips_alerted_false_includes_false_and_missing(
 
 
 @pytest.mark.asyncio
+async def test_list_clips_detected_filter_distinguishes_present_and_missing(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should support detected=true/false filtering via filter_result classes."""
+    # Given: Clips with detected classes, empty classes, and no filter_result
+    await state_store.upsert(
+        "test-detected-true",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/detected-true.mp4",
+            filter_result=FilterResult(
+                detected_classes=["person"],
+                confidence=0.99,
+                model="yolo",
+                sampled_frames=1,
+            ),
+        ),
+    )
+    await state_store.upsert(
+        "test-detected-empty",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/detected-empty.mp4",
+            filter_result=FilterResult(
+                detected_classes=[],
+                confidence=0.0,
+                model="yolo",
+                sampled_frames=1,
+            ),
+        ),
+    )
+    await state_store.upsert(
+        "test-detected-missing",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/detected-missing.mp4",
+        ),
+    )
+
+    # When: Listing with detected=true
+    detected_page = await state_store.list_clips(detected=True, limit=10)
+
+    # Then: Only clips with at least one detected class are returned
+    assert [clip.clip_id for clip in detected_page.clips] == ["test-detected-true"]
+
+    # When: Listing with detected=false
+    not_detected_page = await state_store.list_clips(detected=False, limit=10)
+
+    # Then: Empty and missing detection payloads are both included
+    assert {clip.clip_id for clip in not_detected_page.clips} == {
+        "test-detected-empty",
+        "test-detected-missing",
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_clips_applies_risk_and_activity_filters(
     state_store: PostgresStateStore,
 ) -> None:

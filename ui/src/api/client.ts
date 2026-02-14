@@ -1,5 +1,7 @@
 import type { ApiRequestOptions, GeneratedHomeSecClient } from './generated/client'
 import type {
+  CameraListResponse,
+  CameraResponse,
   ClipListResponse,
   ClipResponse,
   DiagnosticsResponse,
@@ -110,6 +112,39 @@ function expectStringArray(value: unknown, fieldName: string): string[] {
     parsed.push(element)
   }
   return parsed
+}
+
+function parseCameraResponse(payload: unknown): CameraResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Camera response is not a JSON object')
+  }
+  const sourceConfig = payload.source_config
+  if (!isJsonObject(sourceConfig)) {
+    throw new Error('source_config must be an object')
+  }
+
+  return {
+    name: expectString(payload.name, 'name'),
+    enabled: expectBoolean(payload.enabled, 'enabled'),
+    source_backend: expectString(payload.source_backend, 'source_backend'),
+    healthy: expectBoolean(payload.healthy, 'healthy'),
+    last_heartbeat: expectNullableNumber(payload.last_heartbeat, 'last_heartbeat'),
+    source_config: sourceConfig,
+  }
+}
+
+function parseCameraListResponse(payload: unknown): CameraListResponse {
+  if (!Array.isArray(payload)) {
+    throw new Error('Camera list response must be an array')
+  }
+
+  return payload.map((camera, index) => {
+    try {
+      return parseCameraResponse(camera)
+    } catch (error) {
+      throw new Error(`cameras[${index}] invalid: ${(error as Error).message}`)
+    }
+  })
 }
 
 function parseHealthResponse(payload: unknown): HealthResponse {
@@ -327,6 +362,16 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
 
   constructor(baseUrl = DEFAULT_API_BASE_URL) {
     this.baseUrl = baseUrl
+  }
+
+  async getCameras(options: ApiRequestOptions = {}): Promise<CameraListResponse> {
+    const { status, payload } = await this.requestJson('/api/v1/cameras', options)
+
+    try {
+      return parseCameraListResponse(payload)
+    } catch {
+      throw new APIError('Invalid cameras response payload', status, payload, null)
+    }
   }
 
   async getHealth(options: ApiRequestOptions = {}): Promise<HealthSnapshot> {

@@ -2,6 +2,45 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { APIError, HomeSecApiClient } from './client'
 
+describe('HomeSecApiClient.getCameras', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns structured camera list data for successful responses', async () => {
+    // Given: A cameras endpoint with one camera payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            name: 'front_door',
+            enabled: true,
+            source_backend: 'rtsp',
+            healthy: true,
+            last_heartbeat: 1739590400.0,
+            source_config: {
+              stream_url: 'rtsp://example/stream',
+            },
+          },
+        ]),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting cameras
+    const result = await client.getCameras()
+
+    // Then: Response should include typed payload and HTTP metadata
+    expect(result.length).toBe(1)
+    expect(result[0]?.name).toBe('front_door')
+    expect(result[0]?.source_backend).toBe('rtsp')
+  })
+})
+
 describe('HomeSecApiClient.getHealth', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -239,6 +278,7 @@ describe('HomeSecApiClient.getClips', () => {
     const result = await client.getClips({
       camera: 'front_door',
       status: 'done',
+      detected: true,
       activity_type: 'package',
       limit: 25,
       cursor: 'cursor-1',
@@ -247,7 +287,7 @@ describe('HomeSecApiClient.getClips', () => {
     // Then: Query should be serialized and payload parsed
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-      'http://localhost:8081/api/v1/clips?camera=front_door&status=done&activity_type=package&limit=25&cursor=cursor-1',
+      'http://localhost:8081/api/v1/clips?camera=front_door&status=done&detected=true&activity_type=package&limit=25&cursor=cursor-1',
     )
     expect(result.httpStatus).toBe(200)
     expect(result.has_more).toBe(true)

@@ -16,11 +16,13 @@ export const CLIP_STATUS_OPTIONS = [
 ] as const satisfies readonly ClipStatus[]
 
 export type AlertedFilter = 'any' | 'true' | 'false'
+export type DetectedFilter = 'any' | 'true' | 'false'
 
 export interface ClipsFilterFormState {
   camera: string
   status: ClipStatus | ''
   alerted: AlertedFilter
+  detected: DetectedFilter
   riskLevel: string
   activityType: string
   sinceLocal: string
@@ -78,12 +80,15 @@ function toLocalDateTimeInput(isoValue: string | null | undefined): string {
 export function parseClipsQuery(searchParams: URLSearchParams): ListClipsQuery {
   const alertedRaw = searchParams.get('alerted')
   const alerted = alertedRaw === 'true' ? true : alertedRaw === 'false' ? false : undefined
+  const detectedRaw = searchParams.get('detected')
+  const detected = detectedRaw === 'true' ? true : detectedRaw === 'false' ? false : undefined
   const statusRaw = searchParams.get('status')
 
   return {
     camera: searchParams.get('camera')?.trim() || undefined,
     status: isClipStatus(statusRaw) ? statusRaw : undefined,
     alerted,
+    detected,
     risk_level: searchParams.get('risk_level')?.trim() || undefined,
     activity_type: searchParams.get('activity_type')?.trim().toLowerCase() || undefined,
     since: searchParams.get('since')?.trim() || undefined,
@@ -98,6 +103,7 @@ export function queryToFormState(query: ListClipsQuery): ClipsFilterFormState {
     camera: query.camera ?? '',
     status: query.status ?? '',
     alerted: query.alerted === true ? 'true' : query.alerted === false ? 'false' : 'any',
+    detected: query.detected === true ? 'true' : query.detected === false ? 'false' : 'any',
     riskLevel: query.risk_level ?? '',
     activityType: query.activity_type ?? '',
     sinceLocal: toLocalDateTimeInput(query.since),
@@ -111,6 +117,7 @@ export function formStateToQuery(form: ClipsFilterFormState): ListClipsQuery {
     camera: form.camera.trim() || undefined,
     status: form.status || undefined,
     alerted: form.alerted === 'any' ? undefined : form.alerted === 'true',
+    detected: form.detected === 'any' ? undefined : form.detected === 'true',
     risk_level: form.riskLevel.trim() || undefined,
     activity_type: form.activityType.trim().toLowerCase() || undefined,
     since: toIsoUtc(form.sinceLocal),
@@ -130,6 +137,9 @@ export function queryToSearchParams(query: ListClipsQuery): URLSearchParams {
   }
   if (typeof query.alerted === 'boolean') {
     params.set('alerted', query.alerted ? 'true' : 'false')
+  }
+  if (typeof query.detected === 'boolean') {
+    params.set('detected', query.detected ? 'true' : 'false')
   }
   if (query.risk_level) {
     params.set('risk_level', query.risk_level)

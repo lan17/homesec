@@ -4,6 +4,7 @@
  */
 
 import type {
+  CameraListResponse,
   ClipListResponse,
   ClipResponse,
   DiagnosticsResponse,
@@ -18,6 +19,7 @@ export interface ApiRequestOptions {
 }
 
 export interface GeneratedHomeSecClient {
+  getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>
   getHealth(options?: ApiRequestOptions): Promise<HealthResponse>
   getStats(options?: ApiRequestOptions): Promise<StatsResponse>
   getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>

@@ -66,6 +66,7 @@ function readJson(filePath) {
 }
 
 function buildTypesFile({
+  cameraSchemaName,
   healthSchemaName,
   statsSchemaName,
   diagnosticsSchemaName,
@@ -73,11 +74,11 @@ function buildTypesFile({
   clipSchemaName,
   clipStatusSchemaName,
 }) {
-  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\nexport type ClipListResponse = components["schemas"]["${clipListSchemaName}"]\nexport type ClipResponse = components["schemas"]["${clipSchemaName}"]\nexport type ClipStatus = components["schemas"]["${clipStatusSchemaName}"]\nexport type ListClipsQuery = NonNullable<paths["/api/v1/clips"]["get"]["parameters"]["query"]>\n`
+  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type CameraResponse = components["schemas"]["${cameraSchemaName}"]\nexport type CameraListResponse = CameraResponse[]\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\nexport type ClipListResponse = components["schemas"]["${clipListSchemaName}"]\nexport type ClipResponse = components["schemas"]["${clipSchemaName}"]\nexport type ClipStatus = components["schemas"]["${clipStatusSchemaName}"]\nexport type ListClipsQuery = NonNullable<paths["/api/v1/clips"]["get"]["parameters"]["query"]>\n`
 }
 
 function buildClientFile() {
-  return `${GENERATED_HEADER}\nimport type {\n  ClipListResponse,\n  ClipResponse,\n  DiagnosticsResponse,\n  HealthResponse,\n  ListClipsQuery,\n  StatsResponse,\n} from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface GeneratedHomeSecClient {\n  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>\n  getStats(options?: ApiRequestOptions): Promise<StatsResponse>\n  getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>\n  getClips(query?: ListClipsQuery, options?: ApiRequestOptions): Promise<ClipListResponse>\n  getClip(clipId: string, options?: ApiRequestOptions): Promise<ClipResponse>\n}\n`
+  return `${GENERATED_HEADER}\nimport type {\n  CameraListResponse,\n  ClipListResponse,\n  ClipResponse,\n  DiagnosticsResponse,\n  HealthResponse,\n  ListClipsQuery,\n  StatsResponse,\n} from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface GeneratedHomeSecClient {\n  getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>\n  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>\n  getStats(options?: ApiRequestOptions): Promise<StatsResponse>\n  getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>\n  getClips(query?: ListClipsQuery, options?: ApiRequestOptions): Promise<ClipListResponse>\n  getClip(clipId: string, options?: ApiRequestOptions): Promise<ClipResponse>\n}\n`
 }
 
 function resolveResponseSchemaName(openapiSchema, { pathName, method, statuses, fallbackSchemaName }) {
@@ -154,6 +155,9 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
   )
 
   const schema = readJson(openapiJsonPath)
+  if (!schema.components?.schemas?.CameraResponse) {
+    throw new Error('Missing CameraResponse schema in exported OpenAPI spec')
+  }
   const healthSchemaName = resolveResponseSchemaName(schema, {
     pathName: '/api/v1/health',
     method: 'get',
@@ -190,6 +194,7 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
   writeFileSync(
     typesTsPath,
     buildTypesFile({
+      cameraSchemaName: 'CameraResponse',
       healthSchemaName,
       statsSchemaName,
       diagnosticsSchemaName,
