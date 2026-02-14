@@ -32,7 +32,7 @@ install:
 run-local:
 	VITE_API_PROXY_TARGET="$(VITE_API_PROXY_TARGET)" \
 	VITE_API_BASE_URL="$(VITE_API_BASE_URL)" \
-	$(PNPM) dev -- --host "$(VITE_DEV_HOST)" $(if $(VITE_DEV_PORT),--port "$(VITE_DEV_PORT)",)
+	$(PNPM) exec vite --host "$(VITE_DEV_HOST)" $(if $(VITE_DEV_PORT),--port "$(VITE_DEV_PORT)",)
 
 dev: run-local
 
