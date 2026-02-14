@@ -8,3 +8,5 @@ import type { components, paths } from './schema'
 export type OpenAPIComponents = components
 export type OpenAPIPaths = paths
 export type HealthResponse = components["schemas"]["HealthResponse"]
+export type StatsResponse = components["schemas"]["StatsResponse"]
+export type DiagnosticsResponse = components["schemas"]["DiagnosticsResponse"]

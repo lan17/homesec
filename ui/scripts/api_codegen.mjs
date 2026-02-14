@@ -65,23 +65,22 @@ function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf-8'))
 }
 
-function buildTypesFile(healthSchemaName) {
-  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\n`
+function buildTypesFile({ healthSchemaName, statsSchemaName, diagnosticsSchemaName }) {
+  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\n`
 }
 
 function buildClientFile() {
-  return `${GENERATED_HEADER}\nimport type { HealthResponse } from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface GeneratedHomeSecClient {\n  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>\n}\n`
+  return `${GENERATED_HEADER}\nimport type { DiagnosticsResponse, HealthResponse, StatsResponse } from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface GeneratedHomeSecClient {\n  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>\n  getStats(options?: ApiRequestOptions): Promise<StatsResponse>\n  getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>\n}\n`
 }
 
-function resolveHealthSchemaName(openapiSchema) {
-  const healthRoute = openapiSchema.paths?.['/api/v1/health']?.get
-  if (!healthRoute || typeof healthRoute !== 'object') {
-    throw new Error('Missing /api/v1/health GET route in exported OpenAPI schema')
+function resolveResponseSchemaName(openapiSchema, { pathName, method, statuses, fallbackSchemaName }) {
+  const route = openapiSchema.paths?.[pathName]?.[method]
+  if (!route || typeof route !== 'object') {
+    throw new Error(`Missing ${method.toUpperCase()} ${pathName} route in exported OpenAPI schema`)
   }
 
-  const statusCodes = ['200', '503', 'default']
-  for (const statusCode of statusCodes) {
-    const schema = healthRoute.responses?.[statusCode]?.content?.['application/json']?.schema
+  for (const statusCode of statuses) {
+    const schema = route.responses?.[statusCode]?.content?.['application/json']?.schema
     if (schema?.$ref && typeof schema.$ref === 'string') {
       const prefix = '#/components/schemas/'
       if (schema.$ref.startsWith(prefix)) {
@@ -90,11 +89,16 @@ function resolveHealthSchemaName(openapiSchema) {
     }
   }
 
-  if (openapiSchema.components?.schemas?.HealthResponse) {
-    return 'HealthResponse'
+  if (
+    typeof fallbackSchemaName === 'string'
+    && openapiSchema.components?.schemas?.[fallbackSchemaName]
+  ) {
+    return fallbackSchemaName
   }
 
-  throw new Error('Unable to derive HealthResponse schema type from OpenAPI schema')
+  throw new Error(
+    `Unable to derive schema type for ${method.toUpperCase()} ${pathName} from OpenAPI schema`,
+  )
 }
 
 function generateOpenApiArtifacts(tempGeneratedDir) {
@@ -143,8 +147,33 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
   )
 
   const schema = readJson(openapiJsonPath)
-  const healthSchemaName = resolveHealthSchemaName(schema)
-  writeFileSync(typesTsPath, buildTypesFile(healthSchemaName), 'utf-8')
+  const healthSchemaName = resolveResponseSchemaName(schema, {
+    pathName: '/api/v1/health',
+    method: 'get',
+    statuses: ['200', '503', 'default'],
+    fallbackSchemaName: 'HealthResponse',
+  })
+  const statsSchemaName = resolveResponseSchemaName(schema, {
+    pathName: '/api/v1/stats',
+    method: 'get',
+    statuses: ['200', 'default'],
+    fallbackSchemaName: 'StatsResponse',
+  })
+  const diagnosticsSchemaName = resolveResponseSchemaName(schema, {
+    pathName: '/api/v1/diagnostics',
+    method: 'get',
+    statuses: ['200', 'default'],
+    fallbackSchemaName: 'DiagnosticsResponse',
+  })
+  writeFileSync(
+    typesTsPath,
+    buildTypesFile({
+      healthSchemaName,
+      statsSchemaName,
+      diagnosticsSchemaName,
+    }),
+    'utf-8',
+  )
   writeFileSync(clientTsPath, buildClientFile(), 'utf-8')
 
   return {
