@@ -338,6 +338,57 @@ a:hover {
   flex-wrap: wrap;
 }
 
+.clip-detail-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.clip-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.clip-detail-link-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.clip-detail-kv {
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.clip-detail-kv-row {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+  padding: 0.6rem 0.7rem;
+}
+
+.clip-detail-kv-row dt {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.clip-detail-kv-row dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.clip-detail-mono {
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+
 .button {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
@@ -483,5 +534,9 @@ a:hover {
   .clips-pagination {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .clip-detail-grid {
+    grid-template-columns: 1fr;
   }
 }

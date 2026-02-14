@@ -26,3 +26,20 @@ export function renderDetectedObjects(clip: ClipResponse): string {
   }
   return detectedObjects.join(', ')
 }
+
+function isHttpUrl(value: string | null | undefined): value is string {
+  if (!value) {
+    return false
+  }
+  return /^https?:\/\//i.test(value)
+}
+
+export function resolveClipPlaybackUrl(clip: ClipResponse): string | null {
+  if (isHttpUrl(clip.view_url)) {
+    return clip.view_url
+  }
+  if (isHttpUrl(clip.storage_uri)) {
+    return clip.storage_uri
+  }
+  return null
+}

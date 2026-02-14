@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { APIError } from '../../api/client'
-import { describeClipError, renderDetectedObjects } from './presentation'
+import {
+  describeClipError,
+  renderDetectedObjects,
+  resolveClipPlaybackUrl,
+} from './presentation'
 
 describe('describeClipError', () => {
   it('formats APIError with canonical error code', () => {
@@ -32,5 +36,45 @@ describe('renderDetectedObjects', () => {
 
     // Then: UI should show explicit empty-state text
     expect(value).toBe('None')
+  })
+})
+
+describe('resolveClipPlaybackUrl', () => {
+  it('prefers explicit view_url over storage_uri when both are present', () => {
+    // Given: A clip with both a view URL and a storage URI
+    const clip = {
+      id: 'clip-1',
+      camera: 'front_door',
+      status: 'done',
+      created_at: '2026-02-14T00:00:00.000Z',
+      alerted: false,
+      view_url: 'https://dropbox.example/view/clip-1',
+      storage_uri: 'https://storage.example/clip-1.mp4',
+    }
+
+    // When: Resolving playback URL
+    const value = resolveClipPlaybackUrl(clip)
+
+    // Then: View URL should be chosen as the canonical playback target
+    expect(value).toBe('https://dropbox.example/view/clip-1')
+  })
+
+  it('returns null for non-http storage handles', () => {
+    // Given: A clip with backend storage handle but no public URL
+    const clip = {
+      id: 'clip-1',
+      camera: 'front_door',
+      status: 'done',
+      created_at: '2026-02-14T00:00:00.000Z',
+      alerted: false,
+      storage_uri: 'dropbox:/clips/clip-1.mp4',
+      view_url: null,
+    }
+
+    // When: Resolving playback URL
+    const value = resolveClipPlaybackUrl(clip)
+
+    // Then: UI should treat this as non-playable link without backend view URL
+    expect(value).toBeNull()
   })
 })
