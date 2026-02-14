@@ -65,12 +65,19 @@ function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf-8'))
 }
 
-function buildTypesFile({ healthSchemaName, statsSchemaName, diagnosticsSchemaName }) {
-  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\n`
+function buildTypesFile({
+  healthSchemaName,
+  statsSchemaName,
+  diagnosticsSchemaName,
+  clipListSchemaName,
+  clipSchemaName,
+  clipStatusSchemaName,
+}) {
+  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\nexport type ClipListResponse = components["schemas"]["${clipListSchemaName}"]\nexport type ClipResponse = components["schemas"]["${clipSchemaName}"]\nexport type ClipStatus = components["schemas"]["${clipStatusSchemaName}"]\nexport type ListClipsQuery = NonNullable<paths["/api/v1/clips"]["get"]["parameters"]["query"]>\n`
 }
 
 function buildClientFile() {
-  return `${GENERATED_HEADER}\nimport type { DiagnosticsResponse, HealthResponse, StatsResponse } from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface GeneratedHomeSecClient {\n  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>\n  getStats(options?: ApiRequestOptions): Promise<StatsResponse>\n  getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>\n}\n`
+  return `${GENERATED_HEADER}\nimport type {\n  ClipListResponse,\n  ClipResponse,\n  DiagnosticsResponse,\n  HealthResponse,\n  ListClipsQuery,\n  StatsResponse,\n} from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface GeneratedHomeSecClient {\n  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>\n  getStats(options?: ApiRequestOptions): Promise<StatsResponse>\n  getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>\n  getClips(query?: ListClipsQuery, options?: ApiRequestOptions): Promise<ClipListResponse>\n  getClip(clipId: string, options?: ApiRequestOptions): Promise<ClipResponse>\n}\n`
 }
 
 function resolveResponseSchemaName(openapiSchema, { pathName, method, statuses, fallbackSchemaName }) {
@@ -165,12 +172,30 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
     statuses: ['200', 'default'],
     fallbackSchemaName: 'DiagnosticsResponse',
   })
+  const clipListSchemaName = resolveResponseSchemaName(schema, {
+    pathName: '/api/v1/clips',
+    method: 'get',
+    statuses: ['200', 'default'],
+    fallbackSchemaName: 'ClipListResponse',
+  })
+  const clipSchemaName = resolveResponseSchemaName(schema, {
+    pathName: '/api/v1/clips/{clip_id}',
+    method: 'get',
+    statuses: ['200', 'default'],
+    fallbackSchemaName: 'ClipResponse',
+  })
+  if (!schema.components?.schemas?.ClipStatus) {
+    throw new Error('Missing ClipStatus schema in exported OpenAPI spec')
+  }
   writeFileSync(
     typesTsPath,
     buildTypesFile({
       healthSchemaName,
       statsSchemaName,
       diagnosticsSchemaName,
+      clipListSchemaName,
+      clipSchemaName,
+      clipStatusSchemaName: 'ClipStatus',
     }),
     'utf-8',
   )

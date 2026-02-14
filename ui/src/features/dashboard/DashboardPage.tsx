@@ -1,10 +1,10 @@
 import { clearApiKey, isAPIError, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
 import { useHealthQuery } from '../../api/hooks/useHealthQuery'
 import { useStatsQuery } from '../../api/hooks/useStatsQuery'
+import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-import { ApiKeyGate } from './ApiKeyGate'
 import { describeAPIError, formatLastUpdated, healthTone } from './status'
 
 export function DashboardPage() {

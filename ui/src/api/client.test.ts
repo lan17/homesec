@@ -197,3 +197,120 @@ describe('HomeSecApiClient.getDiagnostics', () => {
     expect(result.cameras.front_door.healthy).toBe(true)
   })
 })
+
+describe('HomeSecApiClient.getClips', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('serializes filters to query string and parses clip list payload', async () => {
+    // Given: A clips endpoint returning a paginated list payload
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          clips: [
+            {
+              id: 'clip-1',
+              camera: 'front_door',
+              status: 'done',
+              created_at: '2026-02-14T12:00:00.000Z',
+              activity_type: 'package',
+              risk_level: 'low',
+              summary: 'Package dropped',
+              detected_objects: ['person'],
+              storage_uri: 'dropbox:/clips/clip-1.mp4',
+              view_url: null,
+              alerted: true,
+            },
+          ],
+          limit: 25,
+          next_cursor: 'cursor-2',
+          has_more: true,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting clips with filters
+    const result = await client.getClips({
+      camera: 'front_door',
+      status: 'done',
+      activity_type: 'package',
+      limit: 25,
+      cursor: 'cursor-1',
+    })
+
+    // Then: Query should be serialized and payload parsed
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      'http://localhost:8081/api/v1/clips?camera=front_door&status=done&activity_type=package&limit=25&cursor=cursor-1',
+    )
+    expect(result.httpStatus).toBe(200)
+    expect(result.has_more).toBe(true)
+    expect(result.next_cursor).toBe('cursor-2')
+    expect(result.clips[0]?.id).toBe('clip-1')
+  })
+
+  it('throws APIError when clip list payload is malformed', async () => {
+    // Given: A malformed list payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          clips: {},
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: The malformed payload should raise APIError
+    await expect(client.getClips()).rejects.toBeInstanceOf(APIError)
+  })
+})
+
+describe('HomeSecApiClient.getClip', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('fetches a clip by id and parses response payload', async () => {
+    // Given: A clip endpoint returning a single clip payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'clip-42',
+          camera: 'garage',
+          status: 'uploaded',
+          created_at: '2026-02-14T12:10:00.000Z',
+          activity_type: null,
+          risk_level: null,
+          summary: null,
+          detected_objects: [],
+          storage_uri: 'dropbox:/clips/clip-42.mp4',
+          view_url: 'https://example.com/view/clip-42',
+          alerted: false,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting clip detail by ID
+    const result = await client.getClip('clip-42')
+
+    // Then: Parsed clip should include HTTP metadata
+    expect(result.httpStatus).toBe(200)
+    expect(result.id).toBe('clip-42')
+    expect(result.view_url).toBe('https://example.com/view/clip-42')
+  })
+})

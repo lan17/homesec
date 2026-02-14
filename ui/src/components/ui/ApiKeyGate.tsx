@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 
-import { Button } from '../../components/ui/Button'
+import { Button } from './Button'
 
 interface ApiKeyGateProps {
   busy: boolean
@@ -32,7 +32,7 @@ export function ApiKeyGate({ busy, onSubmit, onClear }: ApiKeyGateProps) {
 
   return (
     <form className="inline-form" onSubmit={handleSubmit}>
-      <p className="muted">Stats endpoint requires API authentication.</p>
+      <p className="muted">This endpoint requires API authentication.</p>
       <label className="field-label" htmlFor="api-key-input">
         API key
       </label>

@@ -252,6 +252,92 @@ a:hover {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+.clips-filter-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.clips-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.clips-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.clips-table th,
+.clips-table td {
+  text-align: left;
+  padding: 0.64rem 0.72rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.clips-table thead th {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.clips-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.clips-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-1) 75%, transparent);
+  padding: 0.14rem 0.5rem;
+  font-size: 0.74rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+}
+
+.clips-mobile-list {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: var(--space-3);
+}
+
+.clips-mobile-item {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 78%, transparent);
+  padding: var(--space-3);
+}
+
+.clips-mobile-id {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.clips-mobile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.clips-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
 .button {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
@@ -380,5 +466,22 @@ a:hover {
 
   .page__header {
     flex-direction: column;
+  }
+
+  .clips-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .clips-table-wrap {
+    display: none;
+  }
+
+  .clips-mobile-list {
+    display: grid;
+  }
+
+  .clips-pagination {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
