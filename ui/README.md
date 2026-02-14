@@ -29,6 +29,13 @@ make run-local
 make check
 ```
 
+`make run-local` binds Vite to `0.0.0.0` by default so other devices on your LAN can access it.
+Override host/port if needed:
+
+```bash
+VITE_DEV_HOST=0.0.0.0 VITE_DEV_PORT=5173 make run-local
+```
+
 ## API Client Generation
 
 The UI uses generated OpenAPI artifacts in `src/api/generated/`:

@@ -4,6 +4,8 @@ SHELL := /bin/bash
 PNPM ?= pnpm
 VITE_API_PROXY_TARGET ?=
 VITE_API_BASE_URL ?=
+VITE_DEV_HOST ?= 0.0.0.0
+VITE_DEV_PORT ?=
 
 .PHONY: help install run-local dev api-generate api-check lint test build check
 
@@ -21,6 +23,8 @@ help:
 	@echo "Optional env vars:"
 	@echo "  VITE_API_PROXY_TARGET=http://127.0.0.1:8081"
 	@echo "  VITE_API_BASE_URL=http://127.0.0.1:8081"
+	@echo "  VITE_DEV_HOST=0.0.0.0"
+	@echo "  VITE_DEV_PORT=5173"
 
 install:
 	$(PNPM) install
@@ -28,7 +32,7 @@ install:
 run-local:
 	VITE_API_PROXY_TARGET="$(VITE_API_PROXY_TARGET)" \
 	VITE_API_BASE_URL="$(VITE_API_BASE_URL)" \
-	$(PNPM) dev
+	$(PNPM) dev -- --host "$(VITE_DEV_HOST)" $(if $(VITE_DEV_PORT),--port "$(VITE_DEV_PORT)",)
 
 dev: run-local
 
