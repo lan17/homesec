@@ -12,7 +12,7 @@ from homesec.models.enums import ClipStatus
 
 if TYPE_CHECKING:
     from homesec.models.alert import Alert, AlertDecision
-    from homesec.models.clip import Clip, ClipStateData
+    from homesec.models.clip import Clip, ClipListCursor, ClipListPage, ClipStateData
     from homesec.models.events import ClipLifecycleEvent
     from homesec.models.filter import FilterOverrides, FilterResult
     from homesec.models.storage import StorageUploadResult
@@ -151,9 +151,9 @@ class StateStore(Shutdownable, ABC):
         activity_type: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
-        offset: int = 0,
+        cursor: ClipListCursor | None = None,
         limit: int = 50,
-    ) -> tuple[list[ClipStateData], int]:
+    ) -> ClipListPage:
         """List clips with filtering and pagination."""
         raise NotImplementedError
 

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from homesec.interfaces import EventStore, StateStore
-from homesec.models.clip import ClipStateData
+from homesec.models.clip import ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.enums import ClipStatus, EventType
 from homesec.models.events import (
     AlertDecisionMadeEvent,
@@ -268,13 +268,13 @@ class PostgresStateStore(StateStore):
         activity_type: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
-        offset: int = 0,
+        cursor: ClipListCursor | None = None,
         limit: int = 50,
-    ) -> tuple[list[ClipStateData], int]:
-        """List clips with filtering and pagination."""
+    ) -> ClipListPage:
+        """List clips with filtering and keyset pagination."""
         if self._engine is None:
             logger.warning("StateStore not initialized, returning empty clip list")
-            return ([], 0)
+            return ClipListPage(clips=[], next_cursor=None, has_more=False)
 
         status_expr = func.jsonb_extract_path_text(ClipState.data, "status")
         camera_expr = func.jsonb_extract_path_text(ClipState.data, "camera_name")
@@ -287,45 +287,57 @@ class PostgresStateStore(StateStore):
         conditions = []
         if camera is not None:
             conditions.append(camera_expr == camera)
-        if status is not None:
+        if status is None:
+            conditions.append(or_(status_expr.is_(None), status_expr != ClipStatus.DELETED.value))
+        else:
             conditions.append(status_expr == status.value)
         if alerted is True:
             conditions.append(alerted_expr == "true")
         elif alerted is False:
             conditions.append(or_(alerted_expr == "false", alerted_expr.is_(None)))
+        # Keep case-insensitive comparisons in SQL. If expression indexes are added for
+        # these filters, index expressions must match the lower(...) form below.
         if risk_level is not None:
-            conditions.append(risk_expr == risk_level.lower())
+            conditions.append(func.lower(risk_expr) == risk_level.lower())
         if activity_type is not None:
-            conditions.append(activity_expr == activity_type)
+            conditions.append(func.lower(activity_expr) == activity_type.lower())
         if since is not None:
             conditions.append(ClipState.created_at >= since)
         if until is not None:
             conditions.append(ClipState.created_at <= until)
+        if cursor is not None:
+            conditions.append(
+                or_(
+                    ClipState.created_at < cursor.created_at,
+                    and_(
+                        ClipState.created_at == cursor.created_at,
+                        ClipState.clip_id < cursor.clip_id,
+                    ),
+                )
+            )
 
         where_clause = and_(*conditions) if conditions else None
 
+        fetch_limit = max(1, int(limit))
         query = select(ClipState.clip_id, ClipState.data, ClipState.created_at)
         if where_clause is not None:
             query = query.where(where_clause)
         query = query.order_by(ClipState.created_at.desc(), ClipState.clip_id.desc())
-        query = query.offset(int(offset)).limit(int(limit))
-
-        count_query = select(func.count()).select_from(ClipState)
-        if where_clause is not None:
-            count_query = count_query.where(where_clause)
+        query = query.limit(fetch_limit + 1)
 
         try:
             async with self._engine.connect() as conn:
                 result = await conn.execute(query)
                 rows = result.all()
-                count_result = await conn.execute(count_query)
-                total = int(count_result.scalar() or 0)
         except Exception as e:
             logger.error("Failed to list clips: %s", e, exc_info=True)
-            return ([], 0)
+            return ClipListPage(clips=[], next_cursor=None, has_more=False)
+
+        has_more = len(rows) > fetch_limit
+        visible_rows = rows[:fetch_limit]
 
         items: list[ClipStateData] = []
-        for clip_id, raw, created_at in rows:
+        for clip_id, raw, created_at in visible_rows:
             try:
                 data_dict = self._parse_state_data(raw)
                 data_dict["clip_id"] = clip_id
@@ -334,7 +346,12 @@ class PostgresStateStore(StateStore):
             except Exception as exc:
                 logger.warning("Failed parsing clip state %s: %s", clip_id, exc, exc_info=True)
 
-        return (items, total)
+        next_cursor: ClipListCursor | None = None
+        if has_more and visible_rows:
+            last_clip_id, _raw, last_created_at = visible_rows[-1]
+            next_cursor = ClipListCursor(created_at=last_created_at, clip_id=last_clip_id)
+
+        return ClipListPage(clips=items, next_cursor=next_cursor, has_more=has_more)
 
     async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
         """Mark a clip as deleted."""
@@ -678,9 +695,9 @@ class NoopStateStore(StateStore):
         activity_type: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
-        offset: int = 0,
+        cursor: ClipListCursor | None = None,
         limit: int = 50,
-    ) -> tuple[list[ClipStateData], int]:
+    ) -> ClipListPage:
         _ = camera
         _ = status
         _ = alerted
@@ -688,9 +705,9 @@ class NoopStateStore(StateStore):
         _ = activity_type
         _ = since
         _ = until
-        _ = offset
+        _ = cursor
         _ = limit
-        return ([], 0)
+        return ClipListPage(clips=[], next_cursor=None, has_more=False)
 
     async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
         raise ValueError(f"Clip not found: {clip_id}")

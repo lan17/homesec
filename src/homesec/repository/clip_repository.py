@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, TypeVar
 
-from homesec.models.clip import Clip, ClipStateData
+from homesec.models.clip import Clip, ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.config import RetryConfig
 from homesec.models.enums import ClipStatus, RiskLevelField
 from homesec.models.events import (
@@ -491,9 +491,9 @@ class ClipRepository:
         activity_type: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
-        offset: int = 0,
+        cursor: ClipListCursor | None = None,
         limit: int = 50,
-    ) -> tuple[list[ClipStateData], int]:
+    ) -> ClipListPage:
         """List clips with filtering and pagination."""
         try:
             return await self._run_with_retries(
@@ -507,13 +507,13 @@ class ClipRepository:
                     activity_type=activity_type,
                     since=since,
                     until=until,
-                    offset=offset,
+                    cursor=cursor,
                     limit=limit,
                 ),
             )
         except Exception as exc:
             logger.error("State store list clips failed: %s", exc, exc_info=exc)
-            return ([], 0)
+            return ClipListPage(clips=[], next_cursor=None, has_more=False)
 
     async def delete_clip(self, clip_id: str) -> ClipStateData:
         """Mark clip as deleted in database and return state."""

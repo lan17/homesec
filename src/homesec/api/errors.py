@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.exceptions import RequestValidationError
@@ -28,6 +29,9 @@ class APIErrorCode(StrEnum):
     CAMERA_CONFIG_INVALID = "CAMERA_CONFIG_INVALID"
     CLIP_NOT_FOUND = "CLIP_NOT_FOUND"
     CLIP_STORAGE_DELETE_FAILED = "CLIP_STORAGE_DELETE_FAILED"
+    CLIPS_CURSOR_INVALID = "CLIPS_CURSOR_INVALID"
+    CLIPS_TIME_RANGE_INVALID = "CLIPS_TIME_RANGE_INVALID"
+    CLIPS_TIMESTAMP_TZ_REQUIRED = "CLIPS_TIMESTAMP_TZ_REQUIRED"
     RELOAD_IN_PROGRESS = "RELOAD_IN_PROGRESS"
     REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
     BAD_REQUEST = "BAD_REQUEST"

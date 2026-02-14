@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 from homesec.api.server import create_app
 from homesec.config.manager import ConfigManager
 from homesec.models.alert import AlertDecision
-from homesec.models.clip import ClipStateData
+from homesec.models.clip import ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.config import CameraConfig, CameraSourceConfig, FastAPIServerConfig
 from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.filter import FilterResult
@@ -28,12 +29,15 @@ class _StubRepository:
         ok: bool = True,
         clips_count: int | None = None,
         alerts_count: int | None = None,
+        list_clips_handler: Callable[..., ClipListPage] | None = None,
     ) -> None:
         self._clips = clips or []
         self._ok = ok
         self._clips_count = clips_count
         self._alerts_count = alerts_count
+        self._list_clips_handler = list_clips_handler
         self.deleted_clip_ids: list[str] = []
+        self.list_clips_calls: list[dict[str, object]] = []
         self.ping_calls = 0
 
     async def ping(self) -> bool:
@@ -44,24 +48,42 @@ class _StubRepository:
         self,
         *,
         camera: str | None = None,
-        status: object | None = None,
+        status: ClipStatus | None = None,
         alerted: bool | None = None,
         risk_level: str | None = None,
         activity_type: str | None = None,
         since: dt.datetime | None = None,
         until: dt.datetime | None = None,
-        offset: int = 0,
+        cursor: ClipListCursor | None = None,
         limit: int = 50,
-    ) -> tuple[list[ClipStateData], int]:
-        _ = camera
-        _ = status
-        _ = alerted
-        _ = risk_level
-        _ = activity_type
-        _ = since
-        _ = until
-        total = len(self._clips)
-        return (self._clips[offset : offset + limit], total)
+    ) -> ClipListPage:
+        call = {
+            "camera": camera,
+            "status": status,
+            "alerted": alerted,
+            "risk_level": risk_level,
+            "activity_type": activity_type,
+            "since": since,
+            "until": until,
+            "cursor": cursor,
+            "limit": limit,
+        }
+        self.list_clips_calls.append(call)
+
+        if self._list_clips_handler is not None:
+            return self._list_clips_handler(**call)
+
+        fetch_limit = max(1, int(limit))
+        has_more = len(self._clips) > fetch_limit
+        visible = self._clips[:fetch_limit]
+
+        next_cursor = None
+        if has_more and visible:
+            last = visible[-1]
+            if last.created_at is not None and last.clip_id is not None:
+                next_cursor = ClipListCursor(created_at=last.created_at, clip_id=last.clip_id)
+
+        return ClipListPage(clips=visible, next_cursor=next_cursor, has_more=has_more)
 
     async def get_clip(self, clip_id: str) -> ClipStateData | None:
         for clip in self._clips:
@@ -595,35 +617,206 @@ def test_cors_allows_credentials_for_explicit_origins(tmp_path) -> None:
     assert cors.kwargs["allow_credentials"] is True
 
 
-def test_list_clips_pagination(tmp_path) -> None:
-    """GET /clips should paginate results."""
-    # Given 100 clips in the repository
-    now = dt.datetime.now(dt.timezone.utc)
-    clips = [
-        ClipStateData(
-            clip_id=f"clip-{idx}",
-            camera_name="front",
-            status="uploaded",
-            local_path=f"/tmp/{idx}.mp4",
-            created_at=now + dt.timedelta(seconds=idx),
-        )
-        for idx in range(100)
-    ]
+def test_list_clips_cursor_pagination(tmp_path) -> None:
+    """GET /clips should paginate with cursor keyset semantics."""
+    # Given repository pages keyed by decoded cursor
+    now = dt.datetime(2026, 2, 14, 2, 0, tzinfo=dt.timezone.utc)
+    clip_a = ClipStateData(
+        clip_id="clip-a",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/a.mp4",
+        created_at=now,
+    )
+    clip_b = ClipStateData(
+        clip_id="clip-b",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/b.mp4",
+        created_at=now,
+    )
+    clip_c = ClipStateData(
+        clip_id="clip-c",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/c.mp4",
+        created_at=now - dt.timedelta(seconds=1),
+    )
+    page_two_cursor = ClipListCursor(created_at=now, clip_id="clip-a")
+    first_page = ClipListPage(
+        clips=[clip_b, clip_a],
+        next_cursor=page_two_cursor,
+        has_more=True,
+    )
+    second_page = ClipListPage(
+        clips=[clip_c],
+        next_cursor=None,
+        has_more=False,
+    )
+
+    def list_clips_handler(**kwargs: object) -> ClipListPage:
+        cursor = kwargs["cursor"]
+        if cursor is None:
+            return first_page
+        if cursor == page_two_cursor:
+            return second_page
+        return ClipListPage(clips=[], next_cursor=None, has_more=False)
+
     manager = _write_config(tmp_path, cameras=[])
-    repository = _StubRepository(clips=clips)
-    app = _StubApp(config_manager=manager, repository=repository, storage=_StubStorage())
+    repository = _StubRepository(list_clips_handler=list_clips_handler)
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
     client = _client(app)
 
-    # When requesting page 2
-    response = client.get("/api/v1/clips?page=2&page_size=10")
+    # When requesting the first page
+    first_response = client.get("/api/v1/clips?limit=2")
 
-    # Then it returns the second page
-    assert response.status_code == 200
+    # Then first page returns two clips and a cursor
+    assert first_response.status_code == 200
+    first_payload = first_response.json()
+    assert first_payload["limit"] == 2
+    assert [clip["id"] for clip in first_payload["clips"]] == ["clip-b", "clip-a"]
+    assert first_payload["has_more"] is True
+    assert isinstance(first_payload["next_cursor"], str)
+
+    # When requesting the next page with the returned cursor
+    second_response = client.get(f"/api/v1/clips?limit=2&cursor={first_payload['next_cursor']}")
+
+    # Then second page returns remaining clips and no next cursor
+    assert second_response.status_code == 200
+    second_payload = second_response.json()
+    assert [clip["id"] for clip in second_payload["clips"]] == ["clip-c"]
+    assert second_payload["has_more"] is False
+    assert second_payload["next_cursor"] is None
+    assert repository.list_clips_calls[0]["cursor"] is None
+    assert repository.list_clips_calls[1]["cursor"] == page_two_cursor
+    assert repository.list_clips_calls[0]["limit"] == 2
+    assert repository.list_clips_calls[1]["limit"] == 2
+
+
+def test_list_clips_invalid_cursor_returns_canonical_error(tmp_path) -> None:
+    """GET /clips should return canonical 400 for invalid cursor tokens."""
+    # Given a healthy app
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting clips with an invalid cursor token
+    response = client.get("/api/v1/clips?cursor=not-a-valid-token")
+
+    # Then it returns canonical bad-request error
+    assert response.status_code == 400
     payload = response.json()
-    assert payload["total"] == 100
-    assert payload["page"] == 2
-    assert payload["page_size"] == 10
-    assert len(payload["clips"]) == 10
+    assert payload["error_code"] == "CLIPS_CURSOR_INVALID"
+
+
+def test_list_clips_rejects_naive_datetime_filter(tmp_path) -> None:
+    """GET /clips should reject datetime filters without timezone."""
+    # Given a healthy app
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting clips with a naive timestamp
+    response = client.get("/api/v1/clips?since=2026-02-14T02:00:00")
+
+    # Then it returns canonical bad-request error
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "CLIPS_TIMESTAMP_TZ_REQUIRED"
+
+
+def test_list_clips_rejects_inverted_time_window(tmp_path) -> None:
+    """GET /clips should reject when since is greater than until."""
+    # Given a healthy app
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting clips with inverted time window
+    response = client.get("/api/v1/clips?since=2026-02-14T03:00:00Z&until=2026-02-14T02:00:00Z")
+
+    # Then it returns canonical bad-request error
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "CLIPS_TIME_RANGE_INVALID"
+
+
+def test_list_clips_forwards_filter_values_without_route_normalization(tmp_path) -> None:
+    """GET /clips should forward filter values as provided by the caller."""
+    # Given an app with a call-recording repository
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository()
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When filtering with mixed-case values
+    response = client.get("/api/v1/clips?risk_level=HIGH&activity_type=DELIVERY")
+
+    # Then route forwards raw values to repository
+    assert response.status_code == 200
+    call = repository.list_clips_calls[-1]
+    assert call["risk_level"] == "HIGH"
+    assert call["activity_type"] == "DELIVERY"
+
+
+def test_list_clips_forwards_status_alias_to_repository(tmp_path) -> None:
+    """GET /clips should map query param status to repository status argument."""
+    # Given an app with a call-recording repository
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository()
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When calling list with explicit status
+    response = client.get("/api/v1/clips?status=deleted")
+
+    # Then status is forwarded as ClipStatus enum
+    assert response.status_code == 200
+    assert repository.list_clips_calls[-1]["status"] == ClipStatus.DELETED
+
+
+def test_list_clips_forwards_alerted_filter_to_repository(tmp_path) -> None:
+    """GET /clips should forward the alerted filter to the repository."""
+    # Given an app with a call-recording repository
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository()
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When filtering for alerted=false
+    response = client.get("/api/v1/clips?alerted=false")
+
+    # Then alerted filter is forwarded as a boolean
+    assert response.status_code == 200
+    assert repository.list_clips_calls[-1]["alerted"] is False
 
 
 def test_list_clips_invalid_query_returns_canonical_validation_error(tmp_path) -> None:
@@ -637,8 +830,8 @@ def test_list_clips_invalid_query_returns_canonical_validation_error(tmp_path) -
     )
     client = _client(app)
 
-    # When requesting clips with an invalid page value
-    response = client.get("/api/v1/clips?page=0")
+    # When requesting clips with an invalid limit value
+    response = client.get("/api/v1/clips?limit=0")
 
     # Then it returns canonical validation envelope with error details
     assert response.status_code == 422
