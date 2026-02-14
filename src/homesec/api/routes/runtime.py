@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
 from homesec.api.dependencies import get_homesec_app
+from homesec.api.errors import APIError, APIErrorCode
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.models import RuntimeState
 
@@ -51,27 +51,23 @@ async def get_runtime_status(app: Application = Depends(get_homesec_app)) -> Run
 @router.post("/api/v1/runtime/reload", response_model=RuntimeReloadResponse, status_code=202)
 async def reload_runtime(
     app: Application = Depends(get_homesec_app),
-) -> RuntimeReloadResponse | JSONResponse:
+) -> RuntimeReloadResponse:
     """Trigger runtime reload and return async acceptance outcome."""
     try:
         request = await app.request_runtime_reload()
     except RuntimeReloadConfigError as exc:
-        return JSONResponse(
+        raise APIError(
+            str(exc),
             status_code=exc.status_code,
-            content={
-                "detail": str(exc),
-                "error_code": exc.error_code,
-            },
-        )
+            error_code=exc.error_code,
+        ) from exc
 
     if not request.accepted:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "detail": request.message,
-                "error_code": "RELOAD_IN_PROGRESS",
-                "target_generation": request.target_generation,
-            },
+        raise APIError(
+            request.message,
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.RELOAD_IN_PROGRESS,
+            extra={"target_generation": request.target_generation},
         )
 
     return RuntimeReloadResponse(

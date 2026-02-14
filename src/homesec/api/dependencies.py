@@ -8,16 +8,14 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request, status
+
+from homesec.api.errors import APIError, APIErrorCode
 
 if TYPE_CHECKING:
     from homesec.app import Application
 
 DB_PING_CACHE_TTL_S = 0.5
-
-
-class DatabaseUnavailableError(RuntimeError):
-    """Raised when database is unavailable for API requests."""
 
 
 @dataclass
@@ -39,7 +37,11 @@ async def get_homesec_app(request: Request) -> Application:
     """Get the HomeSec Application instance from request state."""
     app = cast("Application | None", getattr(request.app.state, "homesec", None))
     if app is None:
-        raise HTTPException(status_code=503, detail="Application not initialized")
+        raise APIError(
+            "Application not initialized",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code=APIErrorCode.APP_NOT_INITIALIZED,
+        )
     return app
 
 
@@ -51,15 +53,27 @@ async def verify_api_key(request: Request, app: Application = Depends(get_homese
 
     api_key = server_config.get_api_key()
     if not api_key:
-        raise HTTPException(status_code=500, detail="API key not configured")
+        raise APIError(
+            "API key not configured",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=APIErrorCode.API_KEY_NOT_CONFIGURED,
+        )
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise APIError(
+            "Unauthorized",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.UNAUTHORIZED,
+        )
 
     token = auth_header.removeprefix("Bearer ").strip()
     if not secrets.compare_digest(token, api_key):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise APIError(
+            "Unauthorized",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.UNAUTHORIZED,
+        )
 
 
 async def require_database(app: Application = Depends(get_homesec_app)) -> None:
@@ -75,4 +89,8 @@ async def require_database(app: Application = Depends(get_homesec_app)) -> None:
                 cache.last_check_monotonic = now
 
     if not cache.last_ok:
-        raise DatabaseUnavailableError("Database unavailable")
+        raise APIError(
+            "Database unavailable",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code=APIErrorCode.DB_UNAVAILABLE,
+        )

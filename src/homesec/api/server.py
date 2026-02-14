@@ -10,9 +10,8 @@ from typing import TYPE_CHECKING, Any, cast
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
-from homesec.api.dependencies import DatabaseUnavailableError
+from homesec.api.errors import register_exception_handlers
 from homesec.api.routes import register_routes
 
 if TYPE_CHECKING:
@@ -36,17 +35,7 @@ def create_app(app_instance: Application) -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.exception_handler(DatabaseUnavailableError)
-    async def _db_unavailable_handler(
-        request: object, exc: DatabaseUnavailableError
-    ) -> JSONResponse:
-        _ = request
-        _ = exc
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Database unavailable", "error_code": "DB_UNAVAILABLE"},
-        )
-
+    register_exception_handlers(app)
     register_routes(app)
     return app
 

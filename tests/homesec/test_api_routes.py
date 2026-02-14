@@ -209,8 +209,8 @@ def test_create_camera(tmp_path) -> None:
     assert payload["camera"]["name"] == "front"
 
 
-def test_create_camera_duplicate_returns_400(tmp_path) -> None:
-    """POST /cameras should reject duplicate names."""
+def test_create_camera_duplicate_returns_409(tmp_path) -> None:
+    """POST /cameras should return 409 for duplicate names."""
     # Given a config with an existing camera
     manager = _write_config(
         tmp_path,
@@ -236,8 +236,10 @@ def test_create_camera_duplicate_returns_400(tmp_path) -> None:
         },
     )
 
-    # Then it returns a 400
-    assert response.status_code == 400
+    # Then it returns 409 conflict with a canonical error code
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_ALREADY_EXISTS"
 
 
 def test_get_camera(tmp_path) -> None:
@@ -276,8 +278,10 @@ def test_get_camera_missing_returns_404(tmp_path) -> None:
     # When requesting a missing camera
     response = client.get("/api/v1/cameras/missing")
 
-    # Then it returns 404
+    # Then it returns 404 with canonical error code
     assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_NOT_FOUND"
 
 
 def test_list_cameras_includes_health_fields(tmp_path) -> None:
@@ -392,8 +396,10 @@ def test_delete_camera_missing_returns_404(tmp_path) -> None:
     # When deleting a missing camera
     response = client.delete("/api/v1/cameras/missing")
 
-    # Then it returns 404
+    # Then it returns 404 with canonical error code
     assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_NOT_FOUND"
 
 
 def test_update_camera(tmp_path) -> None:
@@ -447,8 +453,10 @@ def test_update_camera_invalid_config_returns_400(tmp_path) -> None:
         json={"source_config": {"poll_interval": -1.0}},
     )
 
-    # Then it returns 400
+    # Then it returns 400 with canonical error code
     assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_CONFIG_INVALID"
 
 
 def test_update_camera_missing_returns_404(tmp_path) -> None:
@@ -461,8 +469,10 @@ def test_update_camera_missing_returns_404(tmp_path) -> None:
     # When updating a missing camera
     response = client.put("/api/v1/cameras/missing", json={"enabled": False})
 
-    # Then it returns 404
+    # Then it returns 404 with canonical error code
     assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_NOT_FOUND"
 
 
 def test_get_config_returns_full_config(tmp_path) -> None:
@@ -616,6 +626,29 @@ def test_list_clips_pagination(tmp_path) -> None:
     assert len(payload["clips"]) == 10
 
 
+def test_list_clips_invalid_query_returns_canonical_validation_error(tmp_path) -> None:
+    """GET /clips should return canonical envelope for query validation failures."""
+    # Given a healthy app and authenticated clips endpoint
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting clips with an invalid page value
+    response = client.get("/api/v1/clips?page=0")
+
+    # Then it returns canonical validation envelope with error details
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"] == "Request validation failed"
+    assert payload["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert isinstance(payload["validation_errors"], list)
+    assert payload["validation_errors"]
+
+
 def test_get_clip_includes_analysis_and_alert_details(tmp_path) -> None:
     """GET /clips/{id} should include analysis, detection, and alert fields."""
     # Given a clip with analysis and alert details
@@ -679,8 +712,10 @@ def test_get_clip_missing_returns_404(tmp_path) -> None:
     # When requesting a missing clip
     response = client.get("/api/v1/clips/missing")
 
-    # Then it returns 404
+    # Then it returns 404 with canonical error code
     assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_NOT_FOUND"
 
 
 def test_delete_clip_storage_failure_returns_500(tmp_path) -> None:
@@ -702,8 +737,10 @@ def test_delete_clip_storage_failure_returns_500(tmp_path) -> None:
     # When deleting the clip
     response = client.delete("/api/v1/clips/clip-1")
 
-    # Then it returns 500
+    # Then it returns 500 and does not delete DB state
     assert response.status_code == 500
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_STORAGE_DELETE_FAILED"
     assert repository.deleted_clip_ids == []
 
 
@@ -717,8 +754,10 @@ def test_delete_clip_missing_returns_404(tmp_path) -> None:
     # When deleting a missing clip
     response = client.delete("/api/v1/clips/missing")
 
-    # Then it returns 404
+    # Then it returns 404 with canonical error code
     assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_NOT_FOUND"
 
 
 def test_delete_clip_success_removes_storage(tmp_path) -> None:
@@ -834,8 +873,10 @@ def test_system_restart_endpoint_removed_returns_404(tmp_path) -> None:
     # When requesting deprecated system restart endpoint
     response = client.post("/api/v1/system/restart")
 
-    # Then endpoint is not found
+    # Then endpoint is not found with canonical error code
     assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "NOT_FOUND"
 
 
 def test_db_unavailable_returns_503(tmp_path) -> None:
@@ -1006,12 +1047,16 @@ def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -
 
     # Then it returns 401
     assert response.status_code == 401
+    payload = response.json()
+    assert payload["error_code"] == "UNAUTHORIZED"
 
     # When using an incorrect token
     response = client.get("/api/v1/cameras", headers={"Authorization": "Bearer wrong"})
 
     # Then it returns 401
     assert response.status_code == 401
+    payload = response.json()
+    assert payload["error_code"] == "UNAUTHORIZED"
 
     # When using the correct token
     response = client.get("/api/v1/cameras", headers={"Authorization": "Bearer secret"})
@@ -1036,6 +1081,8 @@ def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -
 
     # Then it returns 401
     assert response.status_code == 401
+    payload = response.json()
+    assert payload["error_code"] == "UNAUTHORIZED"
 
     # When hitting diagnostics with correct auth
     response = client.get("/api/v1/diagnostics", headers={"Authorization": "Bearer secret"})
@@ -1061,5 +1108,7 @@ def test_auth_env_missing_returns_500(tmp_path, monkeypatch: pytest.MonkeyPatch)
     # When requesting an authenticated endpoint
     response = client.get("/api/v1/cameras")
 
-    # Then it returns 500
+    # Then it returns 500 with canonical error code
     assert response.status_code == 500
+    payload = response.json()
+    assert payload["error_code"] == "API_KEY_NOT_CONFIGURED"

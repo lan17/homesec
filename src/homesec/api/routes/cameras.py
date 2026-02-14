@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
 from homesec.api.dependencies import get_homesec_app
+from homesec.api.errors import APIError, APIErrorCode
 from homesec.models.config import CameraConfig
 
 if TYPE_CHECKING:
@@ -69,6 +70,27 @@ def _camera_response(app: Application, camera: CameraConfig) -> CameraResponse:
     )
 
 
+def _map_camera_config_error(exc: ValueError) -> APIError:
+    detail = str(exc)
+    if detail.startswith("Camera not found:"):
+        return APIError(
+            detail,
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CAMERA_NOT_FOUND,
+        )
+    if detail.startswith("Camera already exists:"):
+        return APIError(
+            detail,
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.CAMERA_ALREADY_EXISTS,
+        )
+    return APIError(
+        detail,
+        status_code=status.HTTP_400_BAD_REQUEST,
+        error_code=APIErrorCode.CAMERA_CONFIG_INVALID,
+    )
+
+
 @router.get("/api/v1/cameras", response_model=list[CameraResponse])
 async def list_cameras(app: Application = Depends(get_homesec_app)) -> list[CameraResponse]:
     """List all cameras."""
@@ -82,7 +104,11 @@ async def get_camera(name: str, app: Application = Depends(get_homesec_app)) -> 
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == name), None)
     if camera is None:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise APIError(
+            "Camera not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CAMERA_NOT_FOUND,
+        )
     return _camera_response(app, camera)
 
 
@@ -99,10 +125,7 @@ async def create_camera(
             source_config=payload.source_config,
         )
     except ValueError as exc:
-        detail = str(exc)
-        if "Camera not found" in detail:
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
+        raise _map_camera_config_error(exc) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == payload.name), None)
@@ -126,15 +149,16 @@ async def update_camera(
             source_config=payload.source_config,
         )
     except ValueError as exc:
-        detail = str(exc)
-        if "Camera not found" in detail:
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
+        raise _map_camera_config_error(exc) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == name), None)
     if camera is None:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise APIError(
+            "Camera not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CAMERA_NOT_FOUND,
+        )
 
     return ConfigChangeResponse(
         restart_required=result.restart_required,
@@ -150,9 +174,6 @@ async def delete_camera(
     try:
         result = await app.config_manager.remove_camera(camera_name=name)
     except ValueError as exc:
-        detail = str(exc)
-        if "Camera not found" in detail:
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
+        raise _map_camera_config_error(exc) from exc
 
     return ConfigChangeResponse(restart_required=result.restart_required, camera=None)

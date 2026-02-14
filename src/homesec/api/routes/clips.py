@@ -6,10 +6,11 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from homesec.api.dependencies import get_homesec_app
+from homesec.api.errors import APIError, APIErrorCode
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -109,7 +110,11 @@ async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) ->
     """Get a single clip."""
     state = await app.repository.get_clip(clip_id)
     if state is None:
-        raise HTTPException(status_code=404, detail="Clip not found")
+        raise APIError(
+            "Clip not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CLIP_NOT_FOUND,
+        )
     return _clip_response(state)
 
 
@@ -118,7 +123,11 @@ async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app))
     """Delete a clip and its storage object."""
     state = await app.repository.get_clip(clip_id)
     if state is None:
-        raise HTTPException(status_code=404, detail=f"Clip not found: {clip_id}")
+        raise APIError(
+            f"Clip not found: {clip_id}",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CLIP_NOT_FOUND,
+        )
 
     try:
         if state.storage_uri:
@@ -130,12 +139,20 @@ async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app))
             exc,
             exc_info=exc,
         )
-        raise HTTPException(status_code=500, detail="Storage deletion failed") from exc
+        raise APIError(
+            "Storage deletion failed",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=APIErrorCode.CLIP_STORAGE_DELETE_FAILED,
+        ) from exc
 
     try:
         deleted = await app.repository.delete_clip(clip_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise APIError(
+            str(exc),
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CLIP_NOT_FOUND,
+        ) from exc
 
     if deleted.storage_uri is None:
         deleted.storage_uri = state.storage_uri
