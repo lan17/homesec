@@ -110,6 +110,31 @@ class FastAPIServerConfig(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     auth_enabled: bool = False
     api_key_env: str | None = None
+    serve_ui: bool = False
+    ui_dist_dir: str = "ui/dist"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_env_defaults(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        config = dict(value)
+
+        if "serve_ui" not in config:
+            serve_ui_env = os.environ.get("HOMESEC_SERVER_SERVE_UI")
+            if serve_ui_env is not None:
+                config["serve_ui"] = _parse_bool_env(
+                    "HOMESEC_SERVER_SERVE_UI",
+                    serve_ui_env,
+                )
+
+        if "ui_dist_dir" not in config:
+            ui_dist_dir_env = os.environ.get("HOMESEC_SERVER_UI_DIST_DIR")
+            if ui_dist_dir_env:
+                config["ui_dist_dir"] = ui_dist_dir_env
+
+        return config
 
     def get_api_key(self) -> str | None:
         """Resolve API key from environment variable."""
@@ -122,6 +147,17 @@ class FastAPIServerConfig(BaseModel):
         if self.auth_enabled and not self.api_key_env:
             raise ValueError("server.api_key_env is required when server.auth_enabled is true")
         return self
+
+
+def _parse_bool_env(name: str, raw: str) -> bool:
+    normalized = raw.strip().lower()
+    truthy = {"1", "true", "yes", "on"}
+    falsy = {"0", "false", "no", "off"}
+    if normalized in truthy:
+        return True
+    if normalized in falsy:
+        return False
+    raise ValueError(f"{name} must be a boolean string, got {raw!r}")
 
 
 class CameraSourceConfig(BaseModel):

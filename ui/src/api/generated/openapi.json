@@ -173,6 +173,37 @@
         "title": "ClipListResponse",
         "type": "object"
       },
+      "ClipMediaTokenResponse": {
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "media_url": {
+            "title": "Media Url",
+            "type": "string"
+          },
+          "tokenized": {
+            "title": "Tokenized",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "media_url",
+          "tokenized",
+          "expires_at"
+        ],
+        "title": "ClipMediaTokenResponse",
+        "type": "object"
+      },
       "ClipResponse": {
         "properties": {
           "activity_type": {
@@ -1073,6 +1104,106 @@
           }
         },
         "summary": "Get Clip",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/v1/clips/{clip_id}/media": {
+      "get": {
+        "description": "Stream clip media through HomeSec for in-app playback.",
+        "operationId": "get_clip_media_api_v1_clips__clip_id__media_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clip Media",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/v1/clips/{clip_id}/media-token": {
+      "post": {
+        "description": "Create media playback URL.\n\nWhen auth is disabled, returns direct media URL with tokenized=False and expires_at=None.\nWhen auth is enabled, returns tokenized URL with tokenized=True and non-null expires_at.",
+        "operationId": "create_clip_media_token_api_v1_clips__clip_id__media_token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipMediaTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Clip Media Token",
         "tags": [
           "clips"
         ]

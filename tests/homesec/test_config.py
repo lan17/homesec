@@ -534,3 +534,37 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
     assert config.vlm.config["custom_api_key"] == "secret123"
     assert config.vlm.config["custom_model"] == "custom-model-v1"
     assert config.vlm.config["custom_setting"] is True
+
+
+def test_server_ui_env_defaults_apply_when_fields_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Server UI env defaults should apply when config does not set values."""
+    # Given HomeSec server UI env defaults and config without explicit server block
+    monkeypatch.setenv("HOMESEC_SERVER_SERVE_UI", "true")
+    monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
+    data = minimal_config()
+
+    # When loading config
+    config = load_config_from_dict(data)
+
+    # Then server UI values come from environment defaults
+    assert config.server.serve_ui is True
+    assert config.server.ui_dist_dir == "/app/ui/dist"
+
+
+def test_server_ui_config_values_override_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit server UI config should win over env defaults."""
+    # Given env defaults and explicit server config values
+    monkeypatch.setenv("HOMESEC_SERVER_SERVE_UI", "true")
+    monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
+    data = minimal_config()
+    data["server"] = {
+        "serve_ui": False,
+        "ui_dist_dir": "./custom-ui-dist",
+    }
+
+    # When loading config
+    config = load_config_from_dict(data)
+
+    # Then explicit config values are preserved
+    assert config.server.serve_ui is False
+    assert config.server.ui_dist_dir == "./custom-ui-dist"

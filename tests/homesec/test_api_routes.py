@@ -222,6 +222,17 @@ def _write_config(tmp_path, cameras: list[dict]) -> ConfigManager:
     return ConfigManager(path)
 
 
+def _write_ui_dist(tmp_path: Path) -> Path:
+    dist_dir = tmp_path / "ui-dist"
+    assets_dir = dist_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text("<!doctype html><html><body>HomeSec UI</body></html>")
+    (dist_dir / "favicon.ico").write_bytes(b"ico")
+    (assets_dir / "app.js").write_text("console.log('homesec ui');")
+    (dist_dir / "secrets.map").write_text("{}")
+    return dist_dir
+
+
 def _client(app: _StubApp) -> TestClient:
     return TestClient(create_app(app))
 
@@ -635,6 +646,75 @@ def test_cors_allows_credentials_for_explicit_origins(tmp_path) -> None:
     # Then CORS credentials are enabled
     cors = next(m for m in fastapi_app.user_middleware if m.cls is CORSMiddleware)
     assert cors.kwargs["allow_credentials"] is True
+
+
+def test_ui_serving_serves_spa_shell_without_shadowing_api(tmp_path) -> None:
+    """UI serving should return SPA shell while preserving API and docs routes."""
+    # Given a built UI dist directory and UI serving enabled
+    dist_dir = _write_ui_dist(tmp_path)
+    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(dist_dir))
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        server_config=server_config,
+    )
+    client = _client(app)
+
+    # When requesting index, a deep SPA path, assets, and API/docs paths
+    index_response = client.get("/")
+    deep_link_response = client.get("/clips/clip-1")
+    asset_response = client.get("/assets/app.js")
+    favicon_response = client.get("/favicon.ico")
+    map_response = client.get("/secrets.map")
+    health_response = client.get("/api/v1/health")
+    missing_api_response = client.get("/api/v1/unknown")
+    docs_response = client.get("/docs")
+
+    # Then SPA paths serve UI content while API/docs behavior remains intact
+    assert index_response.status_code == 200
+    assert "HomeSec UI" in index_response.text
+    assert deep_link_response.status_code == 200
+    assert "HomeSec UI" in deep_link_response.text
+    assert asset_response.status_code == 200
+    assert "homesec ui" in asset_response.text
+    assert favicon_response.status_code == 200
+    assert favicon_response.content == b"ico"
+    assert map_response.status_code == 404
+    assert health_response.status_code == 200
+    assert health_response.headers["content-type"].startswith("application/json")
+    assert missing_api_response.status_code == 404
+    assert missing_api_response.json() == {"detail": "Not Found", "error_code": "NOT_FOUND"}
+    assert docs_response.status_code == 200
+    assert "Swagger UI" in docs_response.text
+
+
+def test_ui_serving_skips_routes_when_dist_missing(tmp_path, caplog) -> None:
+    """UI serving should no-op with warning when configured dist is missing."""
+    # Given UI serving enabled with a missing dist directory
+    missing_dist = tmp_path / "missing-dist"
+    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(missing_dist))
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        server_config=server_config,
+    )
+
+    # When creating app and requesting root
+    with caplog.at_level("WARNING"):
+        client = _client(app)
+    root_response = client.get("/")
+    health_response = client.get("/api/v1/health")
+
+    # Then root remains unresolved and a warning is emitted without breaking API routes
+    assert root_response.status_code == 404
+    assert health_response.status_code == 200
+    assert any(
+        "UI serving enabled but index file not found" in rec.message for rec in caplog.records
+    )
 
 
 def test_list_clips_cursor_pagination(tmp_path) -> None:

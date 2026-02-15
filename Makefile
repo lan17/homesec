@@ -19,7 +19,7 @@ help:
 	@echo "    make coverage      Run tests and generate HTML coverage report"
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
-	@echo "    make check         Run lint + typecheck + test"
+	@echo "    make check         Run lint + typecheck + test + ui-check"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make db-migrate    Run migrations"
@@ -85,7 +85,7 @@ lint-fix:
 	uv run ruff check --fix src tests
 	uv run ruff format src tests
 
-check: lint typecheck test
+check: lint typecheck test ui-check
 
 # Database
 db-migrate:

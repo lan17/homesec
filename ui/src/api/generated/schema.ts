@@ -100,6 +100,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clips/{clip_id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clip Media
+         * @description Stream clip media through HomeSec for in-app playback.
+         */
+        get: operations["get_clip_media_api_v1_clips__clip_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clips/{clip_id}/media-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Clip Media Token
+         * @description Create media playback URL.
+         *
+         *     When auth is disabled, returns direct media URL with tokenized=False and expires_at=None.
+         *     When auth is enabled, returns tokenized URL with tokenized=True and non-null expires_at.
+         */
+        post: operations["create_clip_media_token_api_v1_clips__clip_id__media_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config": {
         parameters: {
             query?: never;
@@ -285,6 +328,15 @@ export interface components {
             limit: number;
             /** Next Cursor */
             next_cursor: string | null;
+        };
+        /** ClipMediaTokenResponse */
+        ClipMediaTokenResponse: {
+            /** Expires At */
+            expires_at: string | null;
+            /** Media Url */
+            media_url: string;
+            /** Tokenized */
+            tokenized: boolean;
         };
         /** ClipResponse */
         ClipResponse: {
@@ -685,6 +737,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClipResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clip_media_api_v1_clips__clip_id__media_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                clip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_clip_media_token_api_v1_clips__clip_id__media_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClipMediaTokenResponse"];
                 };
             };
             /** @description Validation Error */
