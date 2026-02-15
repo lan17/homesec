@@ -6,8 +6,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+import homesec.api.media_tokens as media_tokens
 from homesec.api.media_tokens import (
     MediaTokenError,
+    MediaTokenErrorCode,
     issue_clip_media_token,
     validate_clip_media_token,
 )
@@ -109,3 +111,124 @@ def test_validate_clip_media_token_rejects_tampered_signature() -> None:
         )
 
     # Then validation fails
+
+
+def test_validate_clip_media_token_rejects_invalid_version() -> None:
+    """Token should be rejected when version prefix is not supported."""
+    # Given a valid token issued for clip-1
+    issued_at = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    token, _ = issue_clip_media_token(
+        api_key="secret-key",
+        clip_id="clip-1",
+        ttl_s=600,
+        now=issued_at,
+    )
+
+    # When mutating the token version segment
+    token_parts = token.split(".")
+    assert len(token_parts) == 3
+    invalid_version_token = f"v2.{token_parts[1]}.{token_parts[2]}"
+
+    # Then validation fails with malformed-version classification
+    with pytest.raises(MediaTokenError) as exc_info:
+        validate_clip_media_token(
+            api_key="secret-key",
+            token=invalid_version_token,
+            clip_id="clip-1",
+            now=issued_at,
+        )
+    assert exc_info.value.code is MediaTokenErrorCode.MALFORMED
+
+
+def test_validate_clip_media_token_rejects_scope_mismatch() -> None:
+    """Token should be rejected when scope does not match clip-media scope."""
+    # Given a forged token payload signed with a non-media scope
+    issued_at = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    payload_json = b'{"clip_id":"clip-1","exp":1897396800,"scope":"other_scope"}'
+    payload_segment = media_tokens._base64url_encode(payload_json)
+    signature = media_tokens._base64url_encode(
+        media_tokens._sign("secret-key", media_tokens._signing_input(payload_segment))
+    )
+    scope_mismatch_token = f"{media_tokens.TOKEN_VERSION}.{payload_segment}.{signature}"
+
+    # When validating token for clip-1
+    with pytest.raises(MediaTokenError) as exc_info:
+        validate_clip_media_token(
+            api_key="secret-key",
+            token=scope_mismatch_token,
+            clip_id="clip-1",
+            now=issued_at,
+        )
+
+    # Then validation fails with scope mismatch
+    assert exc_info.value.code is MediaTokenErrorCode.SCOPE_MISMATCH
+
+
+def test_validate_clip_media_token_rejects_non_json_payload() -> None:
+    """Token should be rejected when payload is not valid JSON."""
+    # Given a signed token whose payload is not JSON
+    issued_at = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    payload_segment = media_tokens._base64url_encode(b"not-json")
+    signature = media_tokens._base64url_encode(
+        media_tokens._sign("secret-key", media_tokens._signing_input(payload_segment))
+    )
+    malformed_token = f"{media_tokens.TOKEN_VERSION}.{payload_segment}.{signature}"
+
+    # When validating the token
+    with pytest.raises(MediaTokenError) as exc_info:
+        validate_clip_media_token(
+            api_key="secret-key",
+            token=malformed_token,
+            clip_id="clip-1",
+            now=issued_at,
+        )
+
+    # Then validation fails with malformed payload classification
+    assert exc_info.value.code is MediaTokenErrorCode.MALFORMED
+
+
+def test_validate_clip_media_token_rejects_non_object_payload() -> None:
+    """Token should be rejected when decoded payload is not an object."""
+    # Given a signed token with a JSON array payload
+    issued_at = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    payload_segment = media_tokens._base64url_encode(b'["clip-1"]')
+    signature = media_tokens._base64url_encode(
+        media_tokens._sign("secret-key", media_tokens._signing_input(payload_segment))
+    )
+    malformed_token = f"{media_tokens.TOKEN_VERSION}.{payload_segment}.{signature}"
+
+    # When validating the token
+    with pytest.raises(MediaTokenError) as exc_info:
+        validate_clip_media_token(
+            api_key="secret-key",
+            token=malformed_token,
+            clip_id="clip-1",
+            now=issued_at,
+        )
+
+    # Then validation fails with malformed payload classification
+    assert exc_info.value.code is MediaTokenErrorCode.MALFORMED
+
+
+def test_validate_clip_media_token_rejects_wrong_payload_types() -> None:
+    """Token should be rejected when payload field types are invalid."""
+    # Given a signed token with invalid payload field types
+    issued_at = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    payload_json = b'{"clip_id":1,"scope":"clip_media","exp":"bad"}'
+    payload_segment = media_tokens._base64url_encode(payload_json)
+    signature = media_tokens._base64url_encode(
+        media_tokens._sign("secret-key", media_tokens._signing_input(payload_segment))
+    )
+    malformed_token = f"{media_tokens.TOKEN_VERSION}.{payload_segment}.{signature}"
+
+    # When validating the token
+    with pytest.raises(MediaTokenError) as exc_info:
+        validate_clip_media_token(
+            api_key="secret-key",
+            token=malformed_token,
+            clip_id="clip-1",
+            now=issued_at,
+        )
+
+    # Then validation fails with malformed payload classification
+    assert exc_info.value.code is MediaTokenErrorCode.MALFORMED

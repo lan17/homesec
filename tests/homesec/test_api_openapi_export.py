@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from homesec.api import openapi_export
 from homesec.api.openapi_export import build_openapi_schema, write_openapi_schema
 
 
@@ -30,4 +33,37 @@ def test_write_openapi_schema_writes_deterministic_json(tmp_path: Path) -> None:
     text = output_path.read_text(encoding="utf-8")
     assert text.endswith("\n")
     payload = json.loads(text)
+    assert "/api/v1/health" in payload["paths"]
+
+
+def test_openapi_export_parser_requires_output() -> None:
+    # Given: The OpenAPI export CLI parser
+    parser = openapi_export._build_parser()
+
+    # When: Parsing arguments without the required --output flag
+    with pytest.raises(SystemExit):
+        parser.parse_args([])
+
+    # Then: argparse exits due to missing required argument
+
+
+def test_openapi_export_main_writes_requested_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given: A target output path and CLI argv containing --output
+    output_path = tmp_path / "cli-openapi.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "openapi_export",
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    # When: Running OpenAPI export CLI entrypoint
+    openapi_export.main()
+
+    # Then: output file is created with expected API paths
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert "/api/v1/health" in payload["paths"]

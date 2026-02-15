@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -528,6 +529,42 @@ def test_update_camera_missing_returns_404(tmp_path) -> None:
     assert payload["error_code"] == "CAMERA_NOT_FOUND"
 
 
+def test_update_camera_returns_404_when_camera_removed_after_update(tmp_path, monkeypatch) -> None:
+    """PUT /cameras/{name} should return 404 when camera disappears after update."""
+    # Given a config manager whose update succeeds but subsequent read omits the camera
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+    )
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    async def _update_camera(
+        camera_name: str,
+        enabled: bool | None = None,
+        source_config: dict[str, object] | None = None,
+    ) -> SimpleNamespace:
+        _ = (camera_name, enabled, source_config)
+        return SimpleNamespace(restart_required=True)
+
+    monkeypatch.setattr(app.config_manager, "update_camera", _update_camera)
+    monkeypatch.setattr(app.config_manager, "get_config", lambda: SimpleNamespace(cameras=[]))
+
+    # When updating an existing camera
+    response = client.put("/api/v1/cameras/front", json={"enabled": False})
+
+    # Then route returns canonical not-found because camera vanished post-update
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_NOT_FOUND"
+
+
 def test_get_config_returns_full_config(tmp_path) -> None:
     """GET /config should return the full configuration."""
     # Given a config with one camera
@@ -612,6 +649,24 @@ def test_get_config_redacts_sensitive_fields(tmp_path) -> None:
     )
     assert config["cameras"][0]["source"]["config"]["rtsp_url_env"] == "FRONT_RTSP_URL"
     assert config["vlm"]["config"]["api_key_env"] == "OPENAI_API_KEY"
+
+
+def test_get_config_returns_empty_mapping_when_redaction_result_is_not_mapping(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /config should fallback to empty object when redaction returns non-mapping."""
+    # Given a valid config and a redaction helper patched to return a list
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+    monkeypatch.setattr("homesec.api.routes.config._redact_config", lambda value, key=None: [])
+
+    # When requesting config
+    response = client.get("/api/v1/config")
+
+    # Then route returns a safe empty config mapping
+    assert response.status_code == 200
+    assert response.json() == {"config": {}}
 
 
 def test_cors_disables_credentials_for_wildcard_origins(tmp_path) -> None:
@@ -1102,6 +1157,34 @@ def test_get_clip_media_proxy_success_returns_inline_video(tmp_path) -> None:
     assert response.headers["content-disposition"] == 'inline; filename="clip-1.mp4"'
 
 
+def test_get_clip_media_defaults_filename_suffix_when_storage_uri_has_no_extension(
+    tmp_path,
+) -> None:
+    """GET /clips/{id}/media should default filename suffix to .mp4 when storage URI lacks one."""
+    # Given a clip with storage URI path missing a file extension
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(media_bytes=b"video-bytes"),
+    )
+    client = _client(app)
+
+    # When requesting clip media
+    response = client.get("/api/v1/clips/clip-1/media")
+
+    # Then route serves content with default .mp4 filename
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'inline; filename="clip-1.mp4"'
+
+
 def test_get_clip_media_storage_failure_returns_502(tmp_path) -> None:
     """GET /clips/{id}/media should return 502 when storage fetch fails."""
     # Given a clip with storage URI but failing storage backend
@@ -1195,6 +1278,48 @@ def test_create_clip_media_token_auth_disabled_returns_direct_media_url(tmp_path
     assert payload["expires_at"] is None
 
 
+def test_create_clip_media_token_missing_clip_returns_404(tmp_path) -> None:
+    """POST /clips/{id}/media-token should return 404 when clip is missing."""
+    # Given no clip state exists for requested id
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When requesting media token metadata
+    response = client.post("/api/v1/clips/missing/media-token")
+
+    # Then it returns canonical clip-not-found error
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_NOT_FOUND"
+
+
+def test_create_clip_media_token_missing_storage_uri_returns_409(tmp_path) -> None:
+    """POST /clips/{id}/media-token should return 409 when media is unavailable."""
+    # Given clip exists but has not been uploaded to storage
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.QUEUED_LOCAL,
+        local_path="/tmp/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting media token metadata
+    response = client.post("/api/v1/clips/clip-1/media-token")
+
+    # Then it returns canonical media-unavailable error
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_MEDIA_UNAVAILABLE"
+
+
 def test_get_clip_media_accepts_api_key_when_auth_enabled(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1255,6 +1380,38 @@ def test_get_clip_media_rejects_invalid_token_when_auth_enabled(
     response = client.get("/api/v1/clips/clip-1/media?token=invalid-token")
 
     # Then it returns canonical media token rejection
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["error_code"] == "MEDIA_TOKEN_REJECTED"
+
+
+def test_get_clip_media_rejects_missing_token_when_auth_enabled(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /clips/{id}/media should reject unauthenticated requests without token query parameter."""
+    # Given auth enabled and a clip available for playback
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(media_bytes=b"video-bytes"),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+    )
+    client = _client(app)
+
+    # When requesting media without Authorization header and without token query parameter
+    response = client.get("/api/v1/clips/clip-1/media")
+
+    # Then request is rejected with canonical media-token error
     assert response.status_code == 401
     payload = response.json()
     assert payload["error_code"] == "MEDIA_TOKEN_REJECTED"
@@ -1428,6 +1585,79 @@ def test_delete_clip_success_removes_storage(tmp_path) -> None:
     assert repository.deleted_clip_ids == ["clip-2"]
 
 
+def test_delete_clip_returns_404_when_repository_delete_races(tmp_path) -> None:
+    """DELETE /clips/{id} should return 404 when repository delete fails after initial read."""
+    # Given clip exists for initial read but repository delete raises ValueError
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+
+    class _RaceDeleteRepository(_StubRepository):
+        async def delete_clip(self, clip_id: str) -> ClipStateData:
+            _ = clip_id
+            raise ValueError("Clip not found: clip-1")
+
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_RaceDeleteRepository(clips=[clip]),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When deleting the clip
+    response = client.delete("/api/v1/clips/clip-1")
+
+    # Then it returns canonical clip-not-found response
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_NOT_FOUND"
+
+
+def test_delete_clip_restores_storage_uri_when_repository_clears_it(tmp_path) -> None:
+    """DELETE /clips/{id} should preserve storage URI in response when repository omits it."""
+    # Given repository delete result drops storage_uri unexpectedly
+    original = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    deleted = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.DELETED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri=None,
+    )
+
+    class _ClearingDeleteRepository(_StubRepository):
+        async def delete_clip(self, clip_id: str) -> ClipStateData:
+            _ = clip_id
+            return deleted
+
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_ClearingDeleteRepository(clips=[original]),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When deleting the clip
+    response = client.delete("/api/v1/clips/clip-1")
+
+    # Then response preserves original storage URI for client continuity
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["storage_uri"] == "dropbox:/clips/clip-1.mp4"
+
+
 def test_stats_endpoint_returns_counts(tmp_path) -> None:
     """GET /stats should return clip and alert counts."""
     # Given a repository with known counts
@@ -1569,6 +1799,32 @@ def test_db_health_probe_is_cached_for_burst_requests(tmp_path) -> None:
     assert repository.ping_calls == 1
 
 
+def test_db_health_probe_rechecks_after_ttl_and_detects_outage(tmp_path) -> None:
+    """DB-backed endpoints should re-check health after TTL and fail closed when DB drops."""
+    # Given a repository that starts healthy and later becomes unavailable
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository(ok=True)
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When first request succeeds, then DB is flipped down after cache TTL expires
+    first = client.get("/api/v1/clips")
+    repository._ok = False  # Simulate DB outage after initial successful probe.
+    time.sleep(0.6)
+    second = client.get("/api/v1/clips")
+
+    # Then second request rechecks DB and returns canonical outage error
+    assert first.status_code == 200
+    assert second.status_code == 503
+    payload = second.json()
+    assert payload["error_code"] == "DB_UNAVAILABLE"
+    assert repository.ping_calls >= 2
+
+
 def test_root_health_endpoint_matches_versioned_health(tmp_path) -> None:
     """GET /health should expose the same probe payload as /api/v1/health."""
     # Given a healthy app with one online camera
@@ -1656,6 +1912,129 @@ def test_health_endpoints_return_503_when_pipeline_stopped(tmp_path) -> None:
     assert root_response.json()["status"] == "unhealthy"
     assert root_response.json()["pipeline"] == "stopped"
     assert root_response.json() == versioned_response.json()
+
+
+def test_diagnostics_reports_degraded_when_storage_ping_raises(tmp_path) -> None:
+    """Diagnostics should degrade when component ping raises and preserve error detail."""
+
+    class _RaisingStorage(_StubStorage):
+        async def ping(self) -> bool:
+            raise RuntimeError("storage ping boom")
+
+    # Given a running pipeline with storage ping failures
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+    )
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=True),
+        storage=_RaisingStorage(),
+        sources_by_name={"front": _StubSource(healthy=True, heartbeat=1.0)},
+        pipeline_running=True,
+    )
+    client = _client(app)
+
+    # When requesting diagnostics
+    response = client.get("/api/v1/diagnostics")
+
+    # Then diagnostics degrades and surfaces storage component error state
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["storage"]["status"] == "error"
+    assert payload["storage"]["error"] == "storage ping boom"
+
+
+def test_diagnostics_ignores_disabled_unhealthy_camera_for_global_status(tmp_path) -> None:
+    """Diagnostics should not degrade when only disabled cameras are unhealthy."""
+    # Given a running pipeline where only disabled camera appears unhealthy
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=True),
+        storage=_StubStorage(),
+        sources_by_name={},
+        pipeline_running=True,
+    )
+    app._config.cameras = [  # type: ignore[attr-defined]
+        CameraConfig(
+            name="garage",
+            enabled=False,
+            source=CameraSourceConfig(backend="local_folder", config={"watch_dir": "/tmp"}),
+        )
+    ]
+    client = _client(app)
+
+    # When requesting diagnostics
+    response = client.get("/api/v1/diagnostics")
+
+    # Then diagnostics remains healthy and marks camera disabled with no heartbeat
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "healthy"
+    assert payload["cameras"]["garage"]["enabled"] is False
+    assert payload["cameras"]["garage"]["healthy"] is False
+    assert payload["cameras"]["garage"]["last_heartbeat"] is None
+
+
+def test_diagnostics_degrades_when_enabled_camera_has_no_source(tmp_path) -> None:
+    """Diagnostics should degrade when an enabled camera has no live source object."""
+    # Given a running pipeline with an enabled camera that is missing its source
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=True),
+        storage=_StubStorage(),
+        sources_by_name={},
+        pipeline_running=True,
+    )
+    app._config.cameras = [  # type: ignore[attr-defined]
+        CameraConfig(
+            name="front",
+            enabled=True,
+            source=CameraSourceConfig(backend="local_folder", config={"watch_dir": "/tmp"}),
+        )
+    ]
+    client = _client(app)
+
+    # When requesting diagnostics
+    response = client.get("/api/v1/diagnostics")
+
+    # Then diagnostics degrades due to enabled camera health failure
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["cameras"]["front"]["enabled"] is True
+    assert payload["cameras"]["front"]["healthy"] is False
+
+
+def test_diagnostics_reports_unhealthy_when_pipeline_stopped(tmp_path) -> None:
+    """Diagnostics should report unhealthy status when runtime pipeline is stopped."""
+    # Given pipeline is stopped while components otherwise report healthy
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(ok=True),
+        storage=_StubStorage(),
+        sources_by_name={},
+        pipeline_running=False,
+    )
+    client = _client(app)
+
+    # When requesting diagnostics
+    response = client.get("/api/v1/diagnostics")
+
+    # Then diagnostics status is unhealthy
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unhealthy"
 
 
 def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
