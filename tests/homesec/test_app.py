@@ -433,3 +433,175 @@ async def test_request_runtime_reload_maps_source_config_error_to_400(
     # Then: API-facing error status/code are mapped from ConfigErrorCode
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_code == ConfigErrorCode.FILE_NOT_FOUND.value
+
+
+@pytest.mark.asyncio
+async def test_application_run_starts_api_and_performs_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run() should create components, start API, wait for shutdown signal, and shutdown."""
+    # Given: A configured application with controllable startup/shutdown hooks
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    app = Application(config_path=Path(__file__))
+    calls: list[str] = []
+
+    class _StubAPIServer:
+        async def start(self) -> None:
+            calls.append("api-start")
+            app._shutdown_event.set()
+
+        async def stop(self) -> None:
+            calls.append("api-stop")
+
+    async def _create_components() -> None:
+        calls.append("create-components")
+        app._api_server = cast(Any, _StubAPIServer())
+
+    def _setup_signal_handlers() -> None:
+        calls.append("setup-handlers")
+
+    async def _shutdown() -> None:
+        calls.append("shutdown")
+
+    monkeypatch.setattr("homesec.app.load_config", lambda _: config)
+    monkeypatch.setattr(app, "_create_components", _create_components)
+    monkeypatch.setattr(app, "_setup_signal_handlers", _setup_signal_handlers)
+    monkeypatch.setattr(app, "shutdown", _shutdown)
+
+    # When: Running the application loop
+    await app.run()
+
+    # Then: Startup and shutdown lifecycle executes in expected order
+    assert calls == [
+        "create-components",
+        "setup-handlers",
+        "api-start",
+        "shutdown",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_state_store_prefers_env_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_create_state_store should resolve DSN from dsn_env when configured."""
+    # Given: State store config with both inline DSN and dsn_env override
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    config.state_store = StateStoreConfig(
+        dsn="postgresql://ignored-inline",
+        dsn_env="HOMESEC_POSTGRES_DSN",
+    )
+    created: dict[str, object] = {}
+
+    class _RecordingStateStore:
+        def __init__(self, dsn: str) -> None:
+            created["dsn"] = dsn
+
+        async def initialize(self) -> bool:
+            created["initialized"] = True
+            return True
+
+    app = Application(config_path=Path(__file__))
+    monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "postgresql://from-env")
+    monkeypatch.setattr("homesec.app.PostgresStateStore", _RecordingStateStore)
+
+    # When: Creating the state store
+    store = await app._create_state_store(config)
+
+    # Then: The environment DSN is used and initialization is awaited
+    assert created["dsn"] == "postgresql://from-env"
+    assert created["initialized"] is True
+    assert isinstance(store, _RecordingStateStore)
+
+
+@pytest.mark.asyncio
+async def test_create_state_store_raises_when_env_resolution_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_create_state_store should fail fast when env DSN resolution yields no value."""
+    # Given: State store config that relies on env resolution for DSN
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    config.state_store = StateStoreConfig(dsn="postgresql://ignored-inline", dsn_env="HOMESEC_DSN")
+    app = Application(config_path=Path(__file__))
+    monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "")
+
+    # When: Creating the state store without DSN
+    with pytest.raises(RuntimeError, match="Postgres DSN is required"):
+        await app._create_state_store(config)
+
+
+def test_get_runtime_status_uses_worker_exit_code_for_stale_runtime() -> None:
+    """Runtime status should surface worker exit code when heartbeat is stale."""
+    # Given: A stale subprocess runtime with a known worker exit code
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    runtime = SubprocessRuntimeHandle(
+        generation=3,
+        config=config,
+        config_signature="cfgsig",
+        correlation_id="test-3",
+        temp_dir=Path("/tmp"),
+        control_socket_path=Path("/tmp/homesec-test.sock"),
+        config_json_path=Path("/tmp/homesec-test.json"),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=1003))
+    runtime.worker_exit_code = 137
+    runtime.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+    status = RuntimeStatusSnapshot(
+        state=RuntimeState.IDLE,
+        generation=3,
+        reload_in_progress=False,
+        active_config_version="cfgsig",
+        last_reload_at=None,
+        last_reload_error=None,
+    )
+    app = Application(config_path=Path(__file__))
+    app._runtime_manager = cast(
+        Any,
+        _StubRuntimeManagerStatus(status=status, active_runtime=runtime),
+    )
+
+    # When: Reading runtime status from application facade
+    current = app.get_runtime_status()
+
+    # Then: Status degrades to failed with exit-code-specific error message
+    assert current.state == RuntimeState.FAILED
+    assert current.last_reload_error == "runtime worker exited with code 137"
+
+
+def test_pipeline_running_returns_false_without_runtime_or_after_shutdown() -> None:
+    """pipeline_running should be false when no runtime is active or shutdown started."""
+    # Given: An app without an active subprocess runtime
+    status = RuntimeStatusSnapshot(
+        state=RuntimeState.IDLE,
+        generation=0,
+        reload_in_progress=False,
+        active_config_version="cfgsig",
+        last_reload_at=None,
+        last_reload_error=None,
+    )
+    app = Application(config_path=Path(__file__))
+    app._runtime_manager = cast(
+        Any,
+        _StubRuntimeManagerStatus(status=status, active_runtime=None),
+    )
+
+    # When: Querying pipeline state before and after shutdown flag
+    before_shutdown = app.pipeline_running
+    app._shutdown_event.set()
+    after_shutdown = app.pipeline_running
+
+    # Then: The pipeline is considered not running in both cases
+    assert before_shutdown is False
+    assert after_shutdown is False
+
+
+def test_repository_and_storage_accessors_require_initialization() -> None:
+    """repository/storage properties should raise before components are created."""
+    # Given: A freshly constructed application with no created components
+    app = Application(config_path=Path(__file__))
+
+    # When/Then: Accessing repository before init fails explicitly
+    with pytest.raises(RuntimeError, match="Repository not initialized"):
+        _ = app.repository
+
+    # When/Then: Accessing storage before init fails explicitly
+    with pytest.raises(RuntimeError, match="Storage not initialized"):
+        _ = app.storage

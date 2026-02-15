@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 import yaml
+from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -831,6 +832,60 @@ def test_ui_serving_skips_routes_when_dist_missing(tmp_path, caplog) -> None:
     assert any(
         "UI serving enabled but index file not found" in rec.message for rec in caplog.records
     )
+
+
+def test_ui_serving_warns_when_assets_directory_missing(tmp_path, caplog) -> None:
+    """UI serving should warn when index exists but assets directory is missing."""
+    # Given a dist directory with index.html but no /assets directory
+    dist_dir = tmp_path / "ui-dist"
+    dist_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text("<!doctype html><html><body>HomeSec UI</body></html>")
+    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(dist_dir))
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        server_config=server_config,
+    )
+
+    # When creating app and requesting root
+    with caplog.at_level("WARNING"):
+        client = _client(app)
+    root_response = client.get("/")
+
+    # Then root still serves SPA shell and missing-assets warning is emitted
+    assert root_response.status_code == 200
+    assert "HomeSec UI" in root_response.text
+    assert any("UI assets directory not found" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_ui_serving_catch_all_rejects_path_traversal_input(tmp_path) -> None:
+    """SPA catch-all should reject traversal-like full_path values."""
+    # Given a FastAPI app with SPA serving enabled
+    dist_dir = _write_ui_dist(tmp_path)
+    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(dist_dir))
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        server_config=server_config,
+    )
+    fastapi_app = create_app(app)
+    catch_all = next(
+        route.endpoint
+        for route in fastapi_app.routes
+        if getattr(route, "path", None) == "/{full_path:path}"
+    )
+
+    # When calling the catch-all endpoint with traversal-like path
+    with pytest.raises(HTTPException) as exc_info:
+        await catch_all("../outside.txt")
+
+    # Then request is rejected with 404 instead of serving arbitrary files
+    assert exc_info.value.status_code == 404
 
 
 def test_list_clips_cursor_pagination(tmp_path) -> None:

@@ -7,6 +7,7 @@ import asyncio
 import pytest
 from fastapi import FastAPI
 
+from homesec.api import server as api_server
 from homesec.api.server import APIServer
 
 
@@ -187,3 +188,45 @@ async def test_api_server_stop_swallows_server_exit_exception(
 
     # Then: stop completes without propagating the server exception
     await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_started_requires_initialized_server() -> None:
+    """_wait_until_started should fail fast when start() has not initialized internals."""
+    # Given: A freshly constructed API server that has not been started
+    server = APIServer(FastAPI(), host="127.0.0.1", port=8130, startup_timeout_s=0.2)
+
+    # When: Waiting on startup state directly
+    with pytest.raises(RuntimeError, match="task not initialized"):
+        await server._wait_until_started()
+
+
+def test_spa_path_helpers_cover_edge_cases() -> None:
+    """SPA helper predicates should classify reserved/static/route paths correctly."""
+    # Given: Representative edge-case path values
+    empty_path = ""
+    health_path = "health"
+    nested_api_path = "api/v1/health"
+    favicon_path = "favicon.ico"
+    dotted_route = "clips/clip-1.mp4"
+    route_without_ext = "clips/clip-1"
+
+    # When: Evaluating SPA path predicates
+    is_empty_static = api_server._is_allowed_root_static_file(empty_path)
+    is_favicon_static = api_server._is_allowed_root_static_file(favicon_path)
+    empty_is_spa_route = api_server._is_spa_route_path(empty_path)
+    dotted_is_spa_route = api_server._is_spa_route_path(dotted_route)
+    route_is_spa_route = api_server._is_spa_route_path(route_without_ext)
+    empty_is_reserved = api_server._is_reserved_spa_path(empty_path)
+    health_is_reserved = api_server._is_reserved_spa_path(health_path)
+    nested_api_is_reserved = api_server._is_reserved_spa_path(nested_api_path)
+
+    # Then: Classification matches intended SPA routing behavior
+    assert is_empty_static is False
+    assert is_favicon_static is True
+    assert empty_is_spa_route is True
+    assert dotted_is_spa_route is False
+    assert route_is_spa_route is True
+    assert empty_is_reserved is False
+    assert health_is_reserved is True
+    assert nested_api_is_reserved is True
