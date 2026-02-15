@@ -34,7 +34,7 @@ function isHttpUrl(value: string | null | undefined): value is string {
   return /^https?:\/\//i.test(value)
 }
 
-export function resolveClipPlaybackUrl(clip: ClipResponse): string | null {
+export function resolveClipExternalLink(clip: ClipResponse): string | null {
   if (isHttpUrl(clip.view_url)) {
     return clip.view_url
   }

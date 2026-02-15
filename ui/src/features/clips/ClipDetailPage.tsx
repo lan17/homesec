@@ -1,6 +1,8 @@
+import { useRef } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { clearApiKey, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
+import { useClipMediaUrl } from '../../api/hooks/useClipMediaUrl'
 import { useClipQuery } from '../../api/hooks/useClipQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
@@ -9,19 +11,22 @@ import {
   describeClipError,
   formatTimestamp,
   renderDetectedObjects,
-  resolveClipPlaybackUrl,
+  resolveClipExternalLink,
 } from './presentation'
 
 export function ClipDetailPage() {
   const { clipId } = useParams<{ clipId: string }>()
   const clipQuery = useClipQuery(clipId)
+  const mediaQuery = useClipMediaUrl(clipId)
   const unauthorized = isUnauthorizedAPIError(clipQuery.error)
   const clip = clipQuery.data
-  const playbackUrl = clip ? resolveClipPlaybackUrl(clip) : null
+  const externalLink = clip ? resolveClipExternalLink(clip) : null
+  const retryAttemptedForSource = useRef<string | null>(null)
 
   async function submitApiKey(apiKey: string): Promise<void> {
     saveApiKey(apiKey)
     await clipQuery.refetch()
+    await mediaQuery.refresh()
   }
 
   async function clearStoredApiKey(): Promise<void> {
@@ -31,6 +36,20 @@ export function ClipDetailPage() {
 
   async function refreshClip(): Promise<void> {
     await clipQuery.refetch()
+    await mediaQuery.refresh()
+  }
+
+  async function refreshPlaybackSourceAfterError(): Promise<void> {
+    const source = mediaQuery.mediaUrl
+    if (!source || !mediaQuery.usesToken) {
+      return
+    }
+    if (retryAttemptedForSource.current === source) {
+      return
+    }
+    retryAttemptedForSource.current = source
+
+    await mediaQuery.refresh()
   }
 
   return (
@@ -56,7 +75,7 @@ export function ClipDetailPage() {
 
       {clipQuery.isPending ? (
         <Card title="Loading clip">
-          <p className="muted">Fetching clip metadata and storage links...</p>
+          <p className="muted">Fetching clip metadata...</p>
         </Card>
       ) : null}
 
@@ -78,20 +97,42 @@ export function ClipDetailPage() {
 
       {clip ? (
         <>
-          <Card title="Playback + Storage">
+          <Card title="Playback + Storage" subtitle="Primary playback is served by HomeSec /media">
+            <div className="clip-detail-video-shell">
+              {mediaQuery.isPending ? (
+                <p className="muted">Preparing secure playback URL...</p>
+              ) : mediaQuery.mediaUrl ? (
+                <video
+                  className="clip-detail-video"
+                  controls
+                  preload="metadata"
+                  src={mediaQuery.mediaUrl}
+                  onError={() => {
+                    void refreshPlaybackSourceAfterError()
+                  }}
+                >
+                  Your browser does not support video playback.
+                </video>
+              ) : (
+                <p className="muted">Clip media is not available for playback.</p>
+              )}
+            </div>
+
+            {mediaQuery.error ? (
+              <p className="error-text">{describeClipError(mediaQuery.error)}</p>
+            ) : null}
+
             <div className="clip-detail-actions">
-              {playbackUrl ? (
+              {externalLink ? (
                 <a
                   className="button button--primary"
-                  href={playbackUrl}
+                  href={externalLink}
                   target="_blank"
                   rel="noreferrer noopener"
                 >
-                  Open clip
+                  Open in storage
                 </a>
-              ) : (
-                <p className="muted">No direct playback URL available for this storage backend.</p>
-              )}
+              ) : null}
               <Link className="button button--ghost" to="/clips">
                 Back to clips
               </Link>

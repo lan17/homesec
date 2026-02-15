@@ -4,7 +4,7 @@ import { APIError } from '../../api/client'
 import {
   describeClipError,
   renderDetectedObjects,
-  resolveClipPlaybackUrl,
+  resolveClipExternalLink,
 } from './presentation'
 
 describe('describeClipError', () => {
@@ -39,7 +39,7 @@ describe('renderDetectedObjects', () => {
   })
 })
 
-describe('resolveClipPlaybackUrl', () => {
+describe('resolveClipExternalLink', () => {
   it('prefers explicit view_url over storage_uri when both are present', () => {
     // Given: A clip with both a view URL and a storage URI
     const clip = {
@@ -52,8 +52,8 @@ describe('resolveClipPlaybackUrl', () => {
       storage_uri: 'https://storage.example/clip-1.mp4',
     }
 
-    // When: Resolving playback URL
-    const value = resolveClipPlaybackUrl(clip)
+    // When: Resolving external storage link
+    const value = resolveClipExternalLink(clip)
 
     // Then: View URL should be chosen as the canonical playback target
     expect(value).toBe('https://dropbox.example/view/clip-1')
@@ -71,8 +71,8 @@ describe('resolveClipPlaybackUrl', () => {
       view_url: null,
     }
 
-    // When: Resolving playback URL
-    const value = resolveClipPlaybackUrl(clip)
+    // When: Resolving external storage link
+    const value = resolveClipExternalLink(clip)
 
     // Then: UI should treat this as non-playable link without backend view URL
     expect(value).toBeNull()

@@ -351,6 +351,21 @@ a:hover {
   align-items: center;
 }
 
+.clip-detail-video-shell {
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+  overflow: hidden;
+}
+
+.clip-detail-video {
+  display: block;
+  width: 100%;
+  max-height: min(60vh, 560px);
+  background: #000;
+}
+
 .clip-detail-link-list {
   display: grid;
   gap: var(--space-2);

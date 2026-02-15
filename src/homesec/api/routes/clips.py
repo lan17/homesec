@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import logging
-import mimetypes
-import shutil
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Query, status
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from starlette.background import BackgroundTask
 
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
+from homesec.api.media_tokens import issue_clip_media_token
 from homesec.api.pagination import CursorDecodeError, decode_clip_cursor, encode_clip_cursor
 
 if TYPE_CHECKING:
@@ -47,6 +43,12 @@ class ClipListResponse(BaseModel):
     limit: int
     next_cursor: str | None
     has_more: bool
+
+
+class ClipMediaTokenResponse(BaseModel):
+    media_url: str
+    tokenized: bool
+    expires_at: datetime | None
 
 
 def _status_value(status: ClipStatus | str) -> str:
@@ -149,9 +151,16 @@ async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) ->
     return _clip_response(state)
 
 
-@router.get("/api/v1/clips/{clip_id}/media")
-async def get_clip_media(clip_id: str, app: Application = Depends(get_homesec_app)) -> FileResponse:
-    """Stream clip media through HomeSec for in-app playback."""
+@router.post("/api/v1/clips/{clip_id}/media-token", response_model=ClipMediaTokenResponse)
+async def create_clip_media_token(
+    clip_id: str,
+    app: Application = Depends(get_homesec_app),
+) -> ClipMediaTokenResponse:
+    """Create media playback URL.
+
+    When auth is disabled, returns direct media URL with tokenized=False and expires_at=None.
+    When auth is enabled, returns tokenized URL with tokenized=True and non-null expires_at.
+    """
     state = await app.repository.get_clip(clip_id)
     if state is None:
         raise APIError(
@@ -166,33 +175,19 @@ async def get_clip_media(clip_id: str, app: Application = Depends(get_homesec_ap
             error_code=APIErrorCode.CLIP_MEDIA_UNAVAILABLE,
         )
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="homesec-media-"))
-    media_suffix = _infer_media_suffix(state.storage_uri)
-    media_path = temp_dir / _build_media_filename(clip_id, media_suffix)
+    media_path = _build_media_path(clip_id)
+    if not app.config.server.auth_enabled:
+        return ClipMediaTokenResponse(media_url=media_path, tokenized=False, expires_at=None)
 
-    try:
-        await app.storage.get(state.storage_uri, media_path)
-    except Exception as exc:
-        _cleanup_media_temp_dir(temp_dir)
-        logger.error(
-            "Clip media fetch failed for clip_id=%s storage_uri=%s: %s",
-            clip_id,
-            state.storage_uri,
-            exc,
-            exc_info=True,
-        )
-        raise APIError(
-            "Clip media fetch failed",
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            error_code=APIErrorCode.CLIP_MEDIA_FETCH_FAILED,
-        ) from exc
+    api_key = app.config.server.get_api_key()
+    # API key is guaranteed here by router-level verify_api_key dependency when auth is enabled.
+    assert api_key is not None
 
-    filename = media_path.name
-    return FileResponse(
-        path=media_path,
-        media_type=_guess_media_type(media_path),
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
-        background=BackgroundTask(_cleanup_media_temp_dir, temp_dir),
+    token, expires_at = issue_clip_media_token(api_key=api_key, clip_id=clip_id)
+    return ClipMediaTokenResponse(
+        media_url=_build_media_path(clip_id, token=token),
+        tokenized=True,
+        expires_at=expires_at,
     )
 
 
@@ -250,30 +245,8 @@ def _normalize_aware_datetime(field_name: str, value: datetime | None) -> dateti
     return value.astimezone(timezone.utc)
 
 
-def _cleanup_media_temp_dir(temp_dir: Path) -> None:
-    try:
-        shutil.rmtree(temp_dir)
-    except FileNotFoundError:
-        return
-    except Exception as exc:
-        logger.warning("Failed to remove temp media dir %s: %s", temp_dir, exc, exc_info=True)
-
-
-def _infer_media_suffix(storage_uri: str) -> str:
-    _, _, uri_path = storage_uri.partition(":")
-    normalized = uri_path.split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
-    suffix = Path(normalized).suffix
-    if suffix:
-        return suffix
-    return ".mp4"
-
-
-def _build_media_filename(clip_id: str, suffix: str) -> str:
-    safe_clip_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in clip_id)
-    normalized_suffix = suffix if suffix.startswith(".") else ".mp4"
-    return f"{safe_clip_id or 'clip'}{normalized_suffix}"
-
-
-def _guess_media_type(path: Path) -> str:
-    guessed, _ = mimetypes.guess_type(path.name)
-    return guessed or "application/octet-stream"
+def _build_media_path(clip_id: str, *, token: str | None = None) -> str:
+    path = f"/api/v1/clips/{quote(clip_id, safe='')}/media"
+    if token is None:
+        return path
+    return f"{path}?{urlencode({'token': token})}"

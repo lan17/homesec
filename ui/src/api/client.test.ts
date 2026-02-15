@@ -354,3 +354,58 @@ describe('HomeSecApiClient.getClip', () => {
     expect(result.view_url).toBe('https://example.com/view/clip-42')
   })
 })
+
+describe('HomeSecApiClient.createClipMediaToken', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('posts media-token request and parses token payload', async () => {
+    // Given: A media-token endpoint returning tokenized media URL
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          media_url: '/api/v1/clips/clip-42/media?token=abc',
+          tokenized: true,
+          expires_at: '2026-02-15T20:00:00.000Z',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting media-token for a clip
+    const result = await client.createClipMediaToken('clip-42')
+
+    // Then: Client should POST and return parsed token metadata
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/clips/clip-42/media-token')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+    expect(result.httpStatus).toBe(200)
+    expect(result.media_url).toBe('/api/v1/clips/clip-42/media?token=abc')
+    expect(result.tokenized).toBe(true)
+    expect(result.expires_at).toBe('2026-02-15T20:00:00.000Z')
+  })
+
+  it('throws APIError when media-token payload is malformed', async () => {
+    // Given: A malformed media-token payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          expires_at: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client rejects malformed response
+    await expect(client.createClipMediaToken('clip-42')).rejects.toBeInstanceOf(APIError)
+  })
+})

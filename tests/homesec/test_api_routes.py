@@ -6,6 +6,7 @@ import datetime as dt
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 import yaml
@@ -1074,7 +1075,7 @@ def test_get_clip_media_success_cleans_temp_directory(tmp_path, monkeypatch) -> 
         temp_dir.mkdir(parents=True, exist_ok=True)
         return str(temp_dir)
 
-    monkeypatch.setattr("homesec.api.routes.clips.tempfile.mkdtemp", _mkdtemp)
+    monkeypatch.setattr("homesec.api.routes.media.tempfile.mkdtemp", _mkdtemp)
 
     # When requesting clip media
     response = client.get("/api/v1/clips/clip-1/media")
@@ -1082,6 +1083,189 @@ def test_get_clip_media_success_cleans_temp_directory(tmp_path, monkeypatch) -> 
     # Then response succeeds and temp directory is removed
     assert response.status_code == 200
     assert not temp_dir.exists()
+
+
+def test_create_clip_media_token_auth_disabled_returns_direct_media_url(tmp_path) -> None:
+    """POST /clips/{id}/media-token should return direct media path when auth is disabled."""
+    # Given a clip with storage available and auth disabled
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(),
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    # When requesting media token metadata
+    response = client.post("/api/v1/clips/clip-1/media-token")
+
+    # Then it returns a direct /media URL without token metadata
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["media_url"] == "/api/v1/clips/clip-1/media"
+    assert payload["tokenized"] is False
+    assert payload["expires_at"] is None
+
+
+def test_get_clip_media_accepts_api_key_when_auth_enabled(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /clips/{id}/media should allow API-key authenticated playback."""
+    # Given auth is enabled with valid API key and media available
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(media_bytes=b"video-bytes"),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+    )
+    client = _client(app)
+
+    # When requesting media with a valid API key header
+    response = client.get(
+        "/api/v1/clips/clip-1/media",
+        headers={"Authorization": "Bearer secret"},
+    )
+
+    # Then playback succeeds without a token query parameter
+    assert response.status_code == 200
+    assert response.content == b"video-bytes"
+
+
+def test_get_clip_media_rejects_invalid_token_when_auth_enabled(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /clips/{id}/media should reject invalid tokens when auth is enabled."""
+    # Given auth enabled and a valid clip state
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(media_bytes=b"video-bytes"),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+    )
+    client = _client(app)
+
+    # When requesting media with an invalid token and no API key header
+    response = client.get("/api/v1/clips/clip-1/media?token=invalid-token")
+
+    # Then it returns canonical media token rejection
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["error_code"] == "MEDIA_TOKEN_REJECTED"
+
+
+def test_get_clip_media_accepts_valid_media_token_when_auth_enabled(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /clips/{id}/media should allow token-authenticated browser playback."""
+    # Given auth enabled with a clip and API key
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(media_bytes=b"video-bytes"),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+    )
+    client = _client(app)
+
+    # When minting a media token with API key auth
+    mint_response = client.post(
+        "/api/v1/clips/clip-1/media-token",
+        headers={"Authorization": "Bearer secret"},
+    )
+
+    # Then minting succeeds and returns tokenized media URL
+    assert mint_response.status_code == 200
+    mint_payload = mint_response.json()
+    media_url = mint_payload["media_url"]
+    assert mint_payload["tokenized"] is True
+    parsed_url = urlparse(media_url)
+    query = parse_qs(parsed_url.query)
+    assert "token" in query
+    assert query["token"]
+
+    # When requesting media with token and no API key header
+    response = client.get(media_url)
+
+    # Then playback succeeds for browser-style token access
+    assert response.status_code == 200
+    assert response.content == b"video-bytes"
+
+
+def test_create_clip_media_token_rejects_token_only_auth(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /clips/{id}/media-token should reject token-only access to prevent token chaining."""
+    # Given auth enabled with a clip and valid API key
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(media_bytes=b"video-bytes"),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+    )
+    client = _client(app)
+
+    # When minting once with API key to obtain a media token
+    first_mint = client.post(
+        "/api/v1/clips/clip-1/media-token",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert first_mint.status_code == 200
+    tokenized_url = first_mint.json()["media_url"]
+    token = parse_qs(urlparse(tokenized_url).query)["token"][0]
+
+    # When trying to mint again using only media token and no API key header
+    second_mint = client.post(f"/api/v1/clips/clip-1/media-token?token={token}")
+
+    # Then request is rejected because mint endpoint requires API key auth
+    assert second_mint.status_code == 401
+    payload = second_mint.json()
+    assert payload["error_code"] == "UNAUTHORIZED"
 
 
 def test_delete_clip_storage_failure_returns_500(tmp_path) -> None:

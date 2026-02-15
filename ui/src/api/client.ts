@@ -36,9 +36,17 @@ export interface ClipSnapshot extends ClipResponse {
   httpStatus: number
 }
 
+export interface ClipMediaTokenSnapshot {
+  media_url: string
+  tokenized: boolean
+  expires_at: string | null
+  httpStatus: number
+}
+
 interface RequestJsonOptions extends ApiRequestOptions {
   allowStatuses?: number[]
   query?: Record<string, QueryValue>
+  method?: 'GET' | 'POST'
 }
 
 interface APIErrorEnvelope {
@@ -268,6 +276,18 @@ function parseClipListResponse(payload: unknown): ClipListResponse {
   }
 }
 
+function parseClipMediaTokenResponse(payload: unknown): Omit<ClipMediaTokenSnapshot, 'httpStatus'> {
+  if (!isJsonObject(payload)) {
+    throw new Error('Clip media token response is not a JSON object')
+  }
+
+  return {
+    media_url: expectString(payload.media_url, 'media_url'),
+    tokenized: expectBoolean(payload.tokenized, 'tokenized'),
+    expires_at: expectNullableString(payload.expires_at, 'expires_at'),
+  }
+}
+
 function resolveApiKey(explicitApiKey: string | null | undefined): string | null {
   if (explicitApiKey !== undefined) {
     return explicitApiKey
@@ -436,12 +456,35 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     }
   }
 
+  async createClipMediaToken(
+    clipId: string,
+    options: ApiRequestOptions = {},
+  ): Promise<ClipMediaTokenSnapshot> {
+    const { status, payload } = await this.requestJson(
+      `/api/v1/clips/${encodeURIComponent(clipId)}/media-token`,
+      {
+        ...options,
+        method: 'POST',
+      },
+    )
+
+    try {
+      return asSnapshot(parseClipMediaTokenResponse(payload), status)
+    } catch {
+      throw new APIError('Invalid clip media token response payload', status, payload, null)
+    }
+  }
+
+  resolvePath(path: string): string {
+    return joinUrl(this.baseUrl, path)
+  }
+
   private async requestJson(
     path: string,
-    { signal, apiKey, allowStatuses = [], query }: RequestJsonOptions,
+    { signal, apiKey, allowStatuses = [], query, method = 'GET' }: RequestJsonOptions,
   ): Promise<{ status: number; payload: unknown }> {
     const response = await fetch(joinUrl(this.baseUrl, withQueryString(path, query)), {
-      method: 'GET',
+      method,
       headers: buildHeaders(resolveApiKey(apiKey)),
       signal,
     })
@@ -484,6 +527,18 @@ export function saveApiKey(apiKey: string): void {
   }
 
   window.sessionStorage.setItem(API_KEY_STORAGE_KEY, apiKey)
+}
+
+export function getStoredApiKey(): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  return window.sessionStorage.getItem(API_KEY_STORAGE_KEY)
+}
+
+export function hasStoredApiKey(): boolean {
+  const value = getStoredApiKey()
+  return Boolean(value && value.trim().length > 0)
 }
 
 export function clearApiKey(): void {
