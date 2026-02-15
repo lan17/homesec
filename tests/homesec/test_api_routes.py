@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -114,12 +115,28 @@ class _StubRepository:
 
 
 class _StubStorage:
-    def __init__(self, *, ok: bool = True, fail_delete: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        ok: bool = True,
+        fail_delete: bool = False,
+        fail_get: bool = False,
+        media_bytes: bytes = b"",
+    ) -> None:
         self._ok = ok
         self._fail_delete = fail_delete
+        self._fail_get = fail_get
+        self._media_bytes = media_bytes
 
     async def ping(self) -> bool:
         return self._ok
+
+    async def get(self, storage_uri: str, local_path: Path) -> None:
+        _ = storage_uri
+        if self._fail_get:
+            raise RuntimeError("get failed")
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_bytes(self._media_bytes)
 
     async def delete(self, storage_uri: str) -> None:
         _ = storage_uri
@@ -931,6 +948,140 @@ def test_get_clip_missing_returns_404(tmp_path) -> None:
     assert response.status_code == 404
     payload = response.json()
     assert payload["error_code"] == "CLIP_NOT_FOUND"
+
+
+def test_get_clip_media_missing_returns_404(tmp_path) -> None:
+    """GET /clips/{id}/media should return 404 when clip is missing."""
+    # Given an empty repository
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When requesting media for a missing clip
+    response = client.get("/api/v1/clips/missing/media")
+
+    # Then it returns 404 with canonical clip error
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_NOT_FOUND"
+
+
+def test_get_clip_media_missing_storage_uri_returns_409(tmp_path) -> None:
+    """GET /clips/{id}/media should return 409 when media is unavailable."""
+    # Given a clip state without storage URI
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.QUEUED_LOCAL,
+        local_path="/tmp/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When requesting media for the clip
+    response = client.get("/api/v1/clips/clip-1/media")
+
+    # Then it returns canonical media-unavailable error
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_MEDIA_UNAVAILABLE"
+
+
+def test_get_clip_media_proxy_success_returns_inline_video(tmp_path) -> None:
+    """GET /clips/{id}/media should proxy media inline for playback."""
+    # Given a clip with storage URI and downloadable media
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    storage = _StubStorage(media_bytes=b"video-bytes")
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=storage,
+    )
+    client = _client(app)
+
+    # When requesting clip media
+    response = client.get("/api/v1/clips/clip-1/media")
+
+    # Then it returns inline media payload for in-app playback
+    assert response.status_code == 200
+    assert response.content == b"video-bytes"
+    assert response.headers["content-type"] == "video/mp4"
+    assert response.headers["content-disposition"] == 'inline; filename="clip-1.mp4"'
+
+
+def test_get_clip_media_storage_failure_returns_502(tmp_path) -> None:
+    """GET /clips/{id}/media should return 502 when storage fetch fails."""
+    # Given a clip with storage URI but failing storage backend
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    storage = _StubStorage(fail_get=True)
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=storage,
+    )
+    client = _client(app)
+
+    # When requesting clip media
+    response = client.get("/api/v1/clips/clip-1/media")
+
+    # Then it returns canonical upstream fetch failure
+    assert response.status_code == 502
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_MEDIA_FETCH_FAILED"
+
+
+def test_get_clip_media_success_cleans_temp_directory(tmp_path, monkeypatch) -> None:
+    """GET /clips/{id}/media should clean temporary media files after response."""
+    # Given a clip with storage URI and deterministic temp directory
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+    manager = _write_config(tmp_path, cameras=[])
+    storage = _StubStorage(media_bytes=b"video-bytes")
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(clips=[clip]),
+        storage=storage,
+    )
+    client = _client(app)
+    temp_dir = tmp_path / "media-temp-dir"
+
+    def _mkdtemp(*, prefix: str) -> str:
+        _ = prefix
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        return str(temp_dir)
+
+    monkeypatch.setattr("homesec.api.routes.clips.tempfile.mkdtemp", _mkdtemp)
+
+    # When requesting clip media
+    response = client.get("/api/v1/clips/clip-1/media")
+
+    # Then response succeeds and temp directory is removed
+    assert response.status_code == 200
+    assert not temp_dir.exists()
 
 
 def test_delete_clip_storage_failure_returns_500(tmp_path) -> None:
