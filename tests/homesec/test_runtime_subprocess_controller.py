@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import signal
+import tempfile
+import uuid
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -25,7 +29,9 @@ from homesec.runtime.manager import RuntimeManager
 from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
     SubprocessRuntimeHandle,
+    _WorkerEventProtocol,
 )
+from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
@@ -154,3 +160,110 @@ async def test_runtime_manager_rolls_back_when_subprocess_candidate_fails_startu
         assert active.is_running is True
     finally:
         await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_build_candidate_cleans_temp_dir_when_socket_bind_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_candidate should clean temporary artifacts when IPC endpoint setup fails."""
+
+    class _FailingLoop:
+        async def create_datagram_endpoint(self, *args: object, **kwargs: object) -> object:
+            _ = (args, kwargs)
+            raise RuntimeError("socket bind failed")
+
+    uuid_values = iter(
+        [
+            uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        ]
+    )
+    monkeypatch.setattr(
+        "homesec.runtime.subprocess_controller.uuid.uuid4",
+        lambda: next(uuid_values),
+    )
+    monkeypatch.setattr(
+        "homesec.runtime.subprocess_controller.asyncio.get_running_loop",
+        lambda: _FailingLoop(),
+    )
+
+    # Given: Controller candidate creation where socket binding fails after temp files are written
+    controller = SubprocessRuntimeController()
+    expected_temp_dir = Path(tempfile.gettempdir()) / "hsrt-aaaaaaaaaa"
+
+    # When: Building a candidate runtime
+    with pytest.raises(RuntimeError, match="socket bind failed"):
+        await controller.build_candidate(_make_config(watch_dir="/tmp/fail"), generation=1)
+
+    # Then: Temporary directory and config artifacts are cleaned up
+    assert not expected_temp_dir.exists()
+
+
+def test_worker_event_protocol_drops_mismatched_correlation_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Worker protocol should reject events with a mismatched correlation_id."""
+    # Given: Worker protocol configured for generation 1 and correlation 'expected'
+    queue: asyncio.Queue[WorkerEvent] = asyncio.Queue()
+    protocol = _WorkerEventProtocol(queue, generation=1, correlation_id="expected")
+    event = WorkerEvent(
+        event=WorkerEventType.HEARTBEAT,
+        generation=1,
+        correlation_id="unexpected",
+        pid=1234,
+    )
+
+    # When: Receiving a datagram from a mismatched correlation id
+    with caplog.at_level("WARNING"):
+        protocol.datagram_received(event.model_dump_json().encode("utf-8"), ("", 0))
+
+    # Then: Event is dropped and warning is emitted
+    assert queue.empty()
+    assert "Dropped worker event with mismatched correlation id" in caplog.text
+
+
+def test_signal_process_group_logs_warning_on_getpgid_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Process-group signaling should warn on unexpected getpgid OS errors."""
+
+    def _raise_permission_error(pid: int) -> int:
+        _ = pid
+        raise PermissionError("permission denied")
+
+    # Given: getpgid unexpectedly fails with permission error
+    monkeypatch.setattr("homesec.runtime.subprocess_controller.os.getpgid", _raise_permission_error)
+
+    # When: Signaling the process group
+    with caplog.at_level("WARNING"):
+        SubprocessRuntimeController._signal_process_group(1234, signal.SIGTERM)
+
+    # Then: Controller logs a warning instead of silently swallowing the error
+    assert "Failed to resolve process group" in caplog.text
+
+
+def test_signal_process_group_logs_warning_on_killpg_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Process-group signaling should warn on unexpected killpg OS errors."""
+
+    def _return_pgid(pid: int) -> int:
+        return pid
+
+    def _raise_permission_error(pgid: int, sig: signal.Signals) -> None:
+        _ = (pgid, sig)
+        raise PermissionError("permission denied")
+
+    # Given: getpgid succeeds but killpg fails with permission error
+    monkeypatch.setattr("homesec.runtime.subprocess_controller.os.getpgid", _return_pgid)
+    monkeypatch.setattr("homesec.runtime.subprocess_controller.os.killpg", _raise_permission_error)
+
+    # When: Signaling the process group
+    with caplog.at_level("WARNING"):
+        SubprocessRuntimeController._signal_process_group(1234, signal.SIGTERM)
+
+    # Then: Controller logs a warning for unexpected killpg failure
+    assert "Failed to signal process group" in caplog.text

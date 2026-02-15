@@ -129,6 +129,7 @@ class _StubStorage:
         self._fail_delete = fail_delete
         self._fail_get = fail_get
         self._media_bytes = media_bytes
+        self.delete_calls: list[str] = []
 
     async def ping(self) -> bool:
         return self._ok
@@ -141,6 +142,7 @@ class _StubStorage:
         local_path.write_bytes(self._media_bytes)
 
     async def delete(self, storage_uri: str) -> None:
+        self.delete_calls.append(storage_uri)
         _ = storage_uri
         if self._fail_delete:
             raise RuntimeError("delete failed")
@@ -415,6 +417,59 @@ def test_list_cameras_serializes_model_config(tmp_path) -> None:
     assert payload[0]["source_config"]["watch_dir"] == "/tmp"
 
 
+def test_list_cameras_redacts_sensitive_source_config(tmp_path) -> None:
+    """GET /cameras should redact sensitive source_config fields."""
+    # Given a camera config loaded from a static manager with direct secret values
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "local_folder",
+                    "config": {"watch_dir": "/tmp"},
+                },
+            }
+        ],
+    )
+    config = manager.get_config()
+    config.cameras[0].source.config = {
+        "rtsp_url": "rtsp://user:pass@10.0.0.5:554/stream",
+        "rtsp_url_env": "FRONT_RTSP_URL",
+        "password": "top-secret",
+        "password_env": "FRONT_PASSWORD",
+        "private_key": "super-private",
+    }
+
+    class _StaticConfigManager:
+        def __init__(self, cfg) -> None:
+            self._cfg = cfg
+
+        def get_config(self):
+            return self._cfg
+
+    app = _StubApp(
+        config_manager=_StaticConfigManager(config),
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+    )
+    client = _client(app)
+
+    # When listing cameras
+    response = client.get("/api/v1/cameras")
+
+    # Then sensitive fields are redacted and *_env values are preserved
+    assert response.status_code == 200
+    payload = response.json()
+    source_config = payload[0]["source_config"]
+    assert source_config["rtsp_url"] == "rtsp://***redacted***@10.0.0.5:554/stream"
+    assert source_config["rtsp_url_env"] == "FRONT_RTSP_URL"
+    assert source_config["password"] == "***redacted***"
+    assert source_config["password_env"] == "FRONT_PASSWORD"
+    assert source_config["private_key"] == "***redacted***"
+
+
 def test_delete_camera(tmp_path) -> None:
     """DELETE /cameras/{name} should remove a camera."""
     # Given a config with one camera
@@ -619,7 +674,10 @@ def test_get_config_redacts_sensitive_fields(tmp_path) -> None:
                     "host": "localhost",
                     "auth": {
                         "password_env": "MQTT_PASSWORD",
+                        "passphrase": "mqtt-passphrase",
+                        "bearer_token": "mqtt-bearer-token",
                     },
+                    "connection_string": "postgresql://user:pass@localhost:5432/mqtt",
                 },
             }
         ],
@@ -649,6 +707,9 @@ def test_get_config_redacts_sensitive_fields(tmp_path) -> None:
     )
     assert config["cameras"][0]["source"]["config"]["rtsp_url_env"] == "FRONT_RTSP_URL"
     assert config["vlm"]["config"]["api_key_env"] == "OPENAI_API_KEY"
+    assert config["notifiers"][0]["config"]["auth"]["passphrase"] == "***redacted***"
+    assert config["notifiers"][0]["config"]["auth"]["bearer_token"] == "***redacted***"
+    assert config["notifiers"][0]["config"]["connection_string"] == "***redacted***"
 
 
 def test_get_config_returns_empty_mapping_when_redaction_result_is_not_mapping(
@@ -1524,11 +1585,11 @@ def test_delete_clip_storage_failure_returns_500(tmp_path) -> None:
     # When deleting the clip
     response = client.delete("/api/v1/clips/clip-1")
 
-    # Then it returns 500 and does not delete DB state
+    # Then it returns 500 after DB state has already been marked deleted
     assert response.status_code == 500
     payload = response.json()
     assert payload["error_code"] == "CLIP_STORAGE_DELETE_FAILED"
-    assert repository.deleted_clip_ids == []
+    assert repository.deleted_clip_ids == ["clip-1"]
 
 
 def test_delete_clip_missing_returns_404(tmp_path) -> None:
@@ -1601,11 +1662,12 @@ def test_delete_clip_returns_404_when_repository_delete_races(tmp_path) -> None:
             _ = clip_id
             raise ValueError("Clip not found: clip-1")
 
+    storage = _StubStorage()
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
         config_manager=manager,
         repository=_RaceDeleteRepository(clips=[clip]),
-        storage=_StubStorage(),
+        storage=storage,
     )
     client = _client(app)
 
@@ -1616,6 +1678,42 @@ def test_delete_clip_returns_404_when_repository_delete_races(tmp_path) -> None:
     assert response.status_code == 404
     payload = response.json()
     assert payload["error_code"] == "CLIP_NOT_FOUND"
+    assert storage.delete_calls == []
+
+
+def test_delete_clip_returns_500_when_repository_delete_fails_unexpectedly(tmp_path) -> None:
+    """DELETE /clips/{id} should map unexpected repository failures to canonical 500."""
+    # Given clip exists for initial read but delete operation fails unexpectedly
+    clip = ClipStateData(
+        clip_id="clip-1",
+        camera_name="front",
+        status=ClipStatus.UPLOADED,
+        local_path="/tmp/clip-1.mp4",
+        storage_uri="dropbox:/clips/clip-1.mp4",
+    )
+
+    class _BrokenDeleteRepository(_StubRepository):
+        async def delete_clip(self, clip_id: str) -> ClipStateData:
+            _ = clip_id
+            raise RuntimeError("database write failed")
+
+    storage = _StubStorage()
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_BrokenDeleteRepository(clips=[clip]),
+        storage=storage,
+    )
+    client = _client(app)
+
+    # When deleting the clip
+    response = client.delete("/api/v1/clips/clip-1")
+
+    # Then it returns canonical 500 and does not attempt storage deletion
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["error_code"] == "CLIP_DELETE_MARK_FAILED"
+    assert storage.delete_calls == []
 
 
 def test_delete_clip_restores_storage_uri_when_repository_clears_it(tmp_path) -> None:

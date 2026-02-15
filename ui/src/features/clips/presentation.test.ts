@@ -5,6 +5,7 @@ import {
   describeClipError,
   renderDetectedObjects,
   resolveClipExternalLink,
+  resolveClipViewLink,
 } from './presentation'
 
 describe('describeClipError', () => {
@@ -75,6 +76,27 @@ describe('resolveClipExternalLink', () => {
     const value = resolveClipExternalLink(clip)
 
     // Then: UI should treat this as non-playable link without backend view URL
+    expect(value).toBeNull()
+  })
+})
+
+describe('resolveClipViewLink', () => {
+  it('returns null for non-http view_url schemes', () => {
+    // Given: A clip payload with a non-http view_url
+    const clip = {
+      id: 'clip-unsafe',
+      camera: 'front_door',
+      status: 'done',
+      created_at: '2026-02-14T00:00:00.000Z',
+      alerted: false,
+      view_url: 'javascript:alert(1)',
+      storage_uri: null,
+    }
+
+    // When: Resolving the direct view URL link
+    const value = resolveClipViewLink(clip)
+
+    // Then: Unsafe schemes are rejected
     expect(value).toBeNull()
   })
 })

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
+from homesec.api.redaction import redact_config
 from homesec.models.config import CameraConfig
 
 if TYPE_CHECKING:
@@ -60,13 +61,17 @@ def _camera_response(app: Application, camera: CameraConfig) -> CameraResponse:
         healthy = False
         last_heartbeat = None
 
+    redacted_source_config = redact_config(_source_config_to_dict(camera))
+
     return CameraResponse(
         name=camera.name,
         enabled=camera.enabled,
         source_backend=camera.source.backend,
         healthy=healthy,
         last_heartbeat=last_heartbeat,
-        source_config=_source_config_to_dict(camera),
+        source_config=cast(dict[str, object], redacted_source_config)
+        if isinstance(redacted_source_config, dict)
+        else {},
     )
 
 

@@ -21,6 +21,7 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
@@ -366,26 +367,34 @@ class PostgresStateStore(StateStore):
 
     async def mark_clip_deleted(self, clip_id: str) -> ClipStateData:
         """Mark a clip as deleted."""
-        state = await self.get_clip(clip_id)
-        if state is None:
-            raise ValueError(f"Clip not found: {clip_id}")
-
-        state.status = ClipStatus.DELETED
-        state.clip_id = clip_id
-
         if self._engine is None:
             raise RuntimeError("StateStore not initialized")
 
-        payload = state.model_dump(mode="json")
         stmt = (
             update(ClipState)
             .where(ClipState.clip_id == clip_id)
-            .values(data=payload, updated_at=func.now())
+            .values(
+                data=func.jsonb_set(
+                    ClipState.data,
+                    text("'{status}'"),
+                    func.to_jsonb(sa_cast(ClipStatus.DELETED.value, Text)),
+                    True,
+                ),
+                updated_at=func.now(),
+            )
+            .returning(ClipState.data, ClipState.created_at)
         )
         async with self._engine.begin() as conn:
-            await conn.execute(stmt)
+            row = (await conn.execute(stmt)).one_or_none()
 
-        return state
+        if row is None:
+            raise ValueError(f"Clip not found: {clip_id}")
+
+        raw_data, created_at = row
+        data_dict = self._parse_state_data(raw_data)
+        data_dict["clip_id"] = clip_id
+        data_dict["created_at"] = created_at
+        return ClipStateData.model_validate(data_dict)
 
     async def count_clips_since(self, since: datetime) -> int:
         """Count clips created since the given timestamp."""

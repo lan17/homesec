@@ -388,6 +388,57 @@ async def test_runtime_manager_rollback_when_activation_callback_fails() -> None
 
 
 @pytest.mark.asyncio
+async def test_runtime_manager_shuts_down_candidate_before_rollback_on_activation_failure() -> None:
+    """Reload rollback should restore previous runtime only after candidate shutdown is attempted."""
+
+    class _FailOnSecondActivation:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, _: RuntimeBundle) -> None:
+            self.calls += 1
+            if self.calls >= 2:
+                raise RuntimeError("bind failed")
+
+    class _ObservingController(_FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.manager: RuntimeManager | None = None
+            self.active_generation_seen_during_candidate_shutdown: int | None = None
+
+        async def shutdown_runtime(self, runtime: RuntimeBundle) -> None:
+            if runtime.generation == 2 and self.manager is not None:
+                active_runtime = self.manager.active_runtime
+                if active_runtime is not None:
+                    self.active_generation_seen_during_candidate_shutdown = (
+                        active_runtime.generation
+                    )
+            await super().shutdown_runtime(runtime)
+
+    # Given: Reload activation callback fails and controller observes active runtime during cleanup
+    activation = _FailOnSecondActivation()
+    controller = _ObservingController()
+    manager = RuntimeManager(controller, on_runtime_activated=activation)
+    controller.manager = manager
+    config_v1 = _make_config(camera_name="front", watch_dir="/tmp/front-v1")
+    config_v2 = _make_config(camera_name="front", watch_dir="/tmp/front-v2")
+    await manager.start_initial_runtime(config_v1)
+
+    # When: Requesting reload that fails during activation callback
+    request = manager.request_reload(config_v2)
+    result = await manager.wait_for_reload()
+
+    # Then: Candidate shutdown sees generation 2 active before rollback restores generation 1
+    assert request.accepted is True
+    assert result is not None
+    assert result.success is False
+    assert controller.active_generation_seen_during_candidate_shutdown == 2
+    assert manager.active_runtime is not None
+    assert manager.active_runtime.generation == 1
+    assert manager.generation == 1
+
+
+@pytest.mark.asyncio
 async def test_runtime_manager_shutdown_cancels_stuck_reload_task() -> None:
     """Shutdown should cancel in-flight reloads that exceed graceful wait."""
     # Given: A manager with a reload stuck in start_runtime

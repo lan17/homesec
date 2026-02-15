@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { clearApiKey, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
@@ -12,7 +12,12 @@ import {
   formatTimestamp,
   renderDetectedObjects,
   resolveClipExternalLink,
+  resolveClipViewLink,
 } from './presentation'
+import {
+  nextAttemptsAfterMediaSourceChange,
+  shouldRefreshPlaybackSource,
+} from './playbackRetry'
 
 export function ClipDetailPage() {
   const { clipId } = useParams<{ clipId: string }>()
@@ -21,10 +26,22 @@ export function ClipDetailPage() {
   const unauthorized = isUnauthorizedAPIError(clipQuery.error)
   const clip = clipQuery.data
   const externalLink = clip ? resolveClipExternalLink(clip) : null
-  const retryAttemptedForSource = useRef<string | null>(null)
+  const viewUrlLink = clip ? resolveClipViewLink(clip) : null
+  const playbackRefreshAttempts = useRef(0)
+  const previousMediaUrl = useRef<string | null>(null)
+
+  useEffect(() => {
+    playbackRefreshAttempts.current = nextAttemptsAfterMediaSourceChange(
+      previousMediaUrl.current,
+      mediaQuery.mediaUrl,
+      playbackRefreshAttempts.current,
+    )
+    previousMediaUrl.current = mediaQuery.mediaUrl
+  }, [mediaQuery.mediaUrl])
 
   async function submitApiKey(apiKey: string): Promise<void> {
     saveApiKey(apiKey)
+    playbackRefreshAttempts.current = 0
     await clipQuery.refetch()
     await mediaQuery.refresh()
   }
@@ -35,19 +52,17 @@ export function ClipDetailPage() {
   }
 
   async function refreshClip(): Promise<void> {
+    playbackRefreshAttempts.current = 0
     await clipQuery.refetch()
     await mediaQuery.refresh()
   }
 
   async function refreshPlaybackSourceAfterError(): Promise<void> {
     const source = mediaQuery.mediaUrl
-    if (!source || !mediaQuery.usesToken) {
+    if (!shouldRefreshPlaybackSource(source, mediaQuery.usesToken, playbackRefreshAttempts.current)) {
       return
     }
-    if (retryAttemptedForSource.current === source) {
-      return
-    }
-    retryAttemptedForSource.current = source
+    playbackRefreshAttempts.current += 1
 
     await mediaQuery.refresh()
   }
@@ -140,9 +155,9 @@ export function ClipDetailPage() {
             <div className="clip-detail-link-list">
               <p className="muted">
                 <strong>view_url:</strong>{' '}
-                {clip.view_url ? (
-                  <a href={clip.view_url} target="_blank" rel="noreferrer noopener">
-                    {clip.view_url}
+                {viewUrlLink ? (
+                  <a href={viewUrlLink} target="_blank" rel="noreferrer noopener">
+                    {viewUrlLink}
                   </a>
                 ) : (
                   'not available'

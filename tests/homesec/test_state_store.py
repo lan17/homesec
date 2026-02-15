@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import delete, update
+from sqlalchemy import delete, select, text, update
 
 from homesec.models.alert import AlertDecision
 from homesec.models.clip import ClipListCursor, ClipStateData
@@ -310,6 +310,51 @@ async def test_mark_clip_deleted_updates_persisted_status(state_store: PostgresS
     persisted = await state_store.get_clip(clip_id)
     assert persisted is not None
     assert persisted.status == ClipStatus.DELETED
+
+
+@pytest.mark.asyncio
+async def test_mark_clip_deleted_preserves_existing_jsonb_fields(
+    state_store: PostgresStateStore,
+) -> None:
+    """mark_clip_deleted should mutate status without clobbering unrelated JSONB fields."""
+    # Given: A clip row with extra JSONB fields outside ClipStateData schema
+    clip_id = "test-mark-deleted-preserve-001"
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/deleted-preserve.mp4",
+        ),
+    )
+    assert state_store._engine is not None
+    async with state_store._engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE clip_states
+                SET data = data || jsonb_build_object(
+                    'worker_metadata',
+                    jsonb_build_object('pid', CAST(:worker_pid AS integer))
+                )
+                WHERE clip_id = :clip_id
+                """
+            ),
+            {"clip_id": clip_id, "worker_pid": 42},
+        )
+
+    # When: Marking the clip as deleted
+    deleted = await state_store.mark_clip_deleted(clip_id)
+
+    # Then: Status is deleted and unrelated JSONB fields remain present
+    assert deleted.status == ClipStatus.DELETED
+    async with state_store._engine.connect() as conn:
+        raw_data = (
+            await conn.execute(select(ClipState.data).where(ClipState.clip_id == clip_id))
+        ).scalar_one()
+    assert isinstance(raw_data, dict)
+    assert raw_data["status"] == ClipStatus.DELETED.value
+    assert raw_data["worker_metadata"]["pid"] == 42
 
 
 @pytest.mark.asyncio

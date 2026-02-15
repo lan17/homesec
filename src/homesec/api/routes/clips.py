@@ -203,11 +203,32 @@ async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app))
         )
 
     try:
-        if state.storage_uri:
-            await app.storage.delete(state.storage_uri)
+        deleted = await app.repository.delete_clip(clip_id)
+    except ValueError as exc:
+        logger.warning("Clip delete mark failed (not found): clip_id=%s", clip_id)
+        raise APIError(
+            str(exc),
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.CLIP_NOT_FOUND,
+        ) from exc
+    except Exception as exc:
+        logger.error("Clip delete mark failed: clip_id=%s error=%s", clip_id, exc, exc_info=True)
+        raise APIError(
+            "Clip delete mark failed",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=APIErrorCode.CLIP_DELETE_MARK_FAILED,
+        ) from exc
+
+    storage_uri = state.storage_uri or deleted.storage_uri
+    if deleted.storage_uri is None:
+        deleted.storage_uri = state.storage_uri
+
+    try:
+        if storage_uri:
+            await app.storage.delete(storage_uri)
     except Exception as exc:
         logger.error(
-            "Storage delete failed for clip %s: %s",
+            "Storage delete failed after DB mark-deleted for clip %s: %s",
             clip_id,
             exc,
             exc_info=True,
@@ -217,18 +238,6 @@ async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app))
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             error_code=APIErrorCode.CLIP_STORAGE_DELETE_FAILED,
         ) from exc
-
-    try:
-        deleted = await app.repository.delete_clip(clip_id)
-    except ValueError as exc:
-        raise APIError(
-            str(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-            error_code=APIErrorCode.CLIP_NOT_FOUND,
-        ) from exc
-
-    if deleted.storage_uri is None:
-        deleted.storage_uri = state.storage_uri
 
     return _clip_response(deleted)
 

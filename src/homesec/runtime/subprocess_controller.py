@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import shutil
@@ -29,9 +30,16 @@ logger = logging.getLogger(__name__)
 class _WorkerEventProtocol(asyncio.DatagramProtocol):
     """Parses worker datagrams into typed events."""
 
-    def __init__(self, queue: asyncio.Queue[WorkerEvent], *, generation: int) -> None:
+    def __init__(
+        self,
+        queue: asyncio.Queue[WorkerEvent],
+        *,
+        generation: int,
+        correlation_id: str,
+    ) -> None:
         self._queue = queue
         self._generation = generation
+        self._correlation_id = correlation_id
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         _ = addr
@@ -39,7 +47,7 @@ class _WorkerEventProtocol(asyncio.DatagramProtocol):
             payload = data.decode("utf-8")
             event = WorkerEvent.model_validate_json(payload)
         except Exception as exc:
-            logger.error("Dropped invalid runtime worker datagram: %s", exc, exc_info=exc)
+            logger.error("Dropped invalid runtime worker datagram: %s", exc, exc_info=True)
             return
 
         if event.generation != self._generation:
@@ -47,6 +55,13 @@ class _WorkerEventProtocol(asyncio.DatagramProtocol):
                 "Dropped worker event with mismatched generation: expected=%d got=%d",
                 self._generation,
                 event.generation,
+            )
+            return
+        if event.correlation_id != self._correlation_id:
+            logger.warning(
+                "Dropped worker event with mismatched correlation id: expected=%s got=%s",
+                self._correlation_id,
+                event.correlation_id,
             )
             return
         self._queue.put_nowait(event)
@@ -112,22 +127,38 @@ class SubprocessRuntimeController(RuntimeController):
         temp_dir.mkdir(mode=0o700, exist_ok=False)
 
         config_json_path = temp_dir / "runtime_config.json"
-        config_json_path.write_text(config.model_dump_json(), encoding="utf-8")
-
         control_socket_path = temp_dir / "events.sock"
+        correlation_id = uuid.uuid4().hex
         queue: asyncio.Queue[WorkerEvent] = asyncio.Queue()
-        loop = asyncio.get_running_loop()
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _WorkerEventProtocol(queue, generation=generation),
-            local_addr=str(control_socket_path),
-            family=socket.AF_UNIX,
-        )
+        transport: asyncio.DatagramTransport | None = None
+
+        try:
+            config_json_path.write_text(config.model_dump_json(), encoding="utf-8")
+            config_json_path.chmod(0o600)
+
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _WorkerEventProtocol(
+                    queue,
+                    generation=generation,
+                    correlation_id=correlation_id,
+                ),
+                local_addr=str(control_socket_path),
+                family=socket.AF_UNIX,
+            )
+        except Exception:
+            if transport is not None:
+                transport.close()
+            control_socket_path.unlink(missing_ok=True)
+            config_json_path.unlink(missing_ok=True)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
         handle = SubprocessRuntimeHandle(
             generation=generation,
             config=config,
             config_signature=config_signature(config),
-            correlation_id=uuid.uuid4().hex,
+            correlation_id=correlation_id,
             temp_dir=temp_dir,
             control_socket_path=control_socket_path,
             config_json_path=config_json_path,
@@ -292,7 +323,16 @@ class SubprocessRuntimeController(RuntimeController):
     async def _drain_worker_events(self, handle: SubprocessRuntimeHandle) -> None:
         while True:
             event = await handle.event_queue.get()
-            self._apply_event(handle, event)
+            try:
+                self._apply_event(handle, event)
+            except Exception as exc:
+                logger.error(
+                    "Failed to apply runtime worker event: generation=%d event=%s error=%s",
+                    handle.generation,
+                    event.event,
+                    exc,
+                    exc_info=True,
+                )
 
     async def _watch_worker_exit(self, handle: SubprocessRuntimeHandle) -> None:
         process = handle.process
@@ -392,11 +432,32 @@ class SubprocessRuntimeController(RuntimeController):
     def _signal_process_group(pid: int, sig: signal.Signals) -> None:
         try:
             pgid = os.getpgid(pid)
-        except OSError:
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            logger.warning(
+                "Failed to resolve process group: pid=%d signal=%s error=%s",
+                pid,
+                sig.name,
+                exc,
+                exc_info=True,
+            )
             return
         try:
             os.killpg(pgid, sig)
-        except OSError:
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            if exc.errno == errno.ESRCH:
+                return
+            logger.warning(
+                "Failed to signal process group: pid=%d pgid=%d signal=%s error=%s",
+                pid,
+                pgid,
+                sig.name,
+                exc,
+                exc_info=True,
+            )
             return
 
     async def _cancel_task(self, task: asyncio.Task[None] | None, *, context: str) -> None:
@@ -408,7 +469,7 @@ class SubprocessRuntimeController(RuntimeController):
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.error("%s failed: %s", context, exc, exc_info=exc)
+            logger.error("%s failed: %s", context, exc, exc_info=True)
 
     @staticmethod
     def _drain_queue(queue: asyncio.Queue[WorkerEvent]) -> None:

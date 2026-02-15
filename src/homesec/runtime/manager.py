@@ -235,13 +235,13 @@ class RuntimeManager:
                 self._on_runtime_activated(candidate)
             except Exception as exc:
                 error = self._sanitize_error(exc)
+                await self._safe_shutdown(candidate, context="failed candidate runtime cleanup")
                 self._rollback_to_previous_runtime(
                     old_runtime=old_runtime,
                     old_generation=old_generation,
                     old_config_version=old_config_version,
                     error=error,
                 )
-                await self._safe_shutdown(candidate, context="failed candidate runtime cleanup")
                 logger.error("Runtime activation callback failed: %s", error, exc_info=exc)
                 return RuntimeReloadResult(success=False, generation=self._generation, error=error)
 
