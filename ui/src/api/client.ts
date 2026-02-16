@@ -1,12 +1,18 @@
 import type { ApiRequestOptions, GeneratedHomeSecClient } from './generated/client'
 import type {
+  CameraCreate,
   CameraListResponse,
   CameraResponse,
+  CameraUpdate,
   ClipListResponse,
   ClipResponse,
+  ConfigChangeResponse,
   DiagnosticsResponse,
   HealthResponse,
   ListClipsQuery,
+  RuntimeReloadResponse,
+  RuntimeState,
+  RuntimeStatusResponse,
   StatsResponse,
 } from './generated/types'
 
@@ -36,6 +42,18 @@ export interface ClipSnapshot extends ClipResponse {
   httpStatus: number
 }
 
+export interface ConfigChangeSnapshot extends ConfigChangeResponse {
+  httpStatus: number
+}
+
+export interface RuntimeReloadSnapshot extends RuntimeReloadResponse {
+  httpStatus: number
+}
+
+export interface RuntimeStatusSnapshot extends RuntimeStatusResponse {
+  httpStatus: number
+}
+
 export interface ClipMediaTokenSnapshot {
   media_url: string
   tokenized: boolean
@@ -46,7 +64,8 @@ export interface ClipMediaTokenSnapshot {
 interface RequestJsonOptions extends ApiRequestOptions {
   allowStatuses?: number[]
   query?: Record<string, QueryValue>
-  method?: 'GET' | 'POST'
+  method?: 'DELETE' | 'GET' | 'POST' | 'PUT'
+  body?: unknown
 }
 
 interface APIErrorEnvelope {
@@ -155,6 +174,19 @@ function parseCameraListResponse(payload: unknown): CameraListResponse {
   })
 }
 
+function parseConfigChangeResponse(payload: unknown): ConfigChangeResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Config change response is not a JSON object')
+  }
+
+  const camera = payload.camera
+  return {
+    restart_required: expectBoolean(payload.restart_required, 'restart_required'),
+    camera:
+      camera === null || camera === undefined ? null : parseCameraResponse(payload.camera),
+  }
+}
+
 function parseHealthResponse(payload: unknown): HealthResponse {
   if (!isJsonObject(payload)) {
     throw new Error('Health response is not a JSON object')
@@ -225,6 +257,40 @@ function parseDiagnosticsResponse(payload: unknown): DiagnosticsResponse {
     postgres: parseComponentStatus(payload.postgres, 'postgres'),
     storage: parseComponentStatus(payload.storage, 'storage'),
     cameras,
+  }
+}
+
+function parseRuntimeState(value: unknown, fieldName: string): RuntimeState {
+  if (value === 'idle' || value === 'reloading' || value === 'failed') {
+    return value
+  }
+  throw new Error(`${fieldName} must be one of idle|reloading|failed`)
+}
+
+function parseRuntimeReloadResponse(payload: unknown): RuntimeReloadResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Runtime reload response is not a JSON object')
+  }
+
+  return {
+    accepted: expectBoolean(payload.accepted, 'accepted'),
+    message: expectString(payload.message, 'message'),
+    target_generation: expectNumber(payload.target_generation, 'target_generation'),
+  }
+}
+
+function parseRuntimeStatusResponse(payload: unknown): RuntimeStatusResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Runtime status response is not a JSON object')
+  }
+
+  return {
+    state: parseRuntimeState(payload.state, 'state'),
+    generation: expectNumber(payload.generation, 'generation'),
+    reload_in_progress: expectBoolean(payload.reload_in_progress, 'reload_in_progress'),
+    active_config_version: expectNullableString(payload.active_config_version, 'active_config_version'),
+    last_reload_at: expectNullableString(payload.last_reload_at, 'last_reload_at'),
+    last_reload_error: expectNullableString(payload.last_reload_error, 'last_reload_error'),
   }
 }
 
@@ -329,9 +395,13 @@ function withQueryString(path: string, query: Record<string, QueryValue> | undef
   return `${path}?${queryString}`
 }
 
-function buildHeaders(apiKey: string | null): HeadersInit {
+function buildHeaders(apiKey: string | null, hasJsonBody: boolean): HeadersInit {
   const headers: Record<string, string> = {
     Accept: 'application/json',
+  }
+
+  if (hasJsonBody) {
+    headers['content-type'] = 'application/json'
   }
 
   if (apiKey && apiKey.trim().length > 0) {
@@ -394,6 +464,82 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     }
   }
 
+  async getCamera(name: string, options: ApiRequestOptions = {}): Promise<CameraResponse> {
+    const { status, payload } = await this.requestJson(
+      `/api/v1/cameras/${encodeURIComponent(name)}`,
+      options,
+    )
+
+    try {
+      return parseCameraResponse(payload)
+    } catch {
+      throw new APIError('Invalid camera response payload', status, payload, null)
+    }
+  }
+
+  async createCamera(
+    payload: CameraCreate,
+    options: ApiRequestOptions = {},
+  ): Promise<ConfigChangeSnapshot> {
+    const response = await this.requestJson('/api/v1/cameras', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return asSnapshot(parseConfigChangeResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid create-camera response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async updateCamera(
+    name: string,
+    payload: CameraUpdate,
+    options: ApiRequestOptions = {},
+  ): Promise<ConfigChangeSnapshot> {
+    const response = await this.requestJson(`/api/v1/cameras/${encodeURIComponent(name)}`, {
+      ...options,
+      method: 'PUT',
+      body: payload,
+    })
+
+    try {
+      return asSnapshot(parseConfigChangeResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid update-camera response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async deleteCamera(name: string, options: ApiRequestOptions = {}): Promise<ConfigChangeSnapshot> {
+    const response = await this.requestJson(`/api/v1/cameras/${encodeURIComponent(name)}`, {
+      ...options,
+      method: 'DELETE',
+    })
+
+    try {
+      return asSnapshot(parseConfigChangeResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid delete-camera response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
   async getHealth(options: ApiRequestOptions = {}): Promise<HealthSnapshot> {
     const { status, payload } = await this.requestJson('/api/v1/health', {
       ...options,
@@ -424,6 +570,39 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
       return asSnapshot(parseDiagnosticsResponse(payload), status)
     } catch {
       throw new APIError('Invalid diagnostics response payload', status, payload, null)
+    }
+  }
+
+  async reloadRuntime(options: ApiRequestOptions = {}): Promise<RuntimeReloadSnapshot> {
+    const response = await this.requestJson('/api/v1/runtime/reload', {
+      ...options,
+      method: 'POST',
+    })
+
+    try {
+      return asSnapshot(parseRuntimeReloadResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid runtime reload response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async getRuntimeStatus(options: ApiRequestOptions = {}): Promise<RuntimeStatusSnapshot> {
+    const response = await this.requestJson('/api/v1/runtime/status', options)
+
+    try {
+      return asSnapshot(parseRuntimeStatusResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid runtime status response payload',
+        response.status,
+        response.payload,
+        null,
+      )
     }
   }
 
@@ -481,12 +660,14 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
 
   private async requestJson(
     path: string,
-    { signal, apiKey, allowStatuses = [], query, method = 'GET' }: RequestJsonOptions,
+    { signal, apiKey, allowStatuses = [], query, method = 'GET', body }: RequestJsonOptions,
   ): Promise<{ status: number; payload: unknown }> {
+    const hasJsonBody = body !== undefined
     const response = await fetch(joinUrl(this.baseUrl, withQueryString(path, query)), {
       method,
-      headers: buildHeaders(resolveApiKey(apiKey)),
+      headers: buildHeaders(resolveApiKey(apiKey), hasJsonBody),
       signal,
+      body: hasJsonBody ? JSON.stringify(body) : undefined,
     })
 
     const payload = await this.parseResponsePayload(response)

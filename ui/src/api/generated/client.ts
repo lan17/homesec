@@ -4,12 +4,18 @@
  */
 
 import type {
+  CameraCreate,
   CameraListResponse,
+  CameraResponse,
+  CameraUpdate,
   ClipListResponse,
   ClipResponse,
+  ConfigChangeResponse,
   DiagnosticsResponse,
   HealthResponse,
   ListClipsQuery,
+  RuntimeReloadResponse,
+  RuntimeStatusResponse,
   StatsResponse,
 } from './types'
 
@@ -20,9 +26,19 @@ export interface ApiRequestOptions {
 
 export interface GeneratedHomeSecClient {
   getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>
+  getCamera(name: string, options?: ApiRequestOptions): Promise<CameraResponse>
+  createCamera(payload: CameraCreate, options?: ApiRequestOptions): Promise<ConfigChangeResponse>
+  updateCamera(
+    name: string,
+    payload: CameraUpdate,
+    options?: ApiRequestOptions,
+  ): Promise<ConfigChangeResponse>
+  deleteCamera(name: string, options?: ApiRequestOptions): Promise<ConfigChangeResponse>
   getHealth(options?: ApiRequestOptions): Promise<HealthResponse>
   getStats(options?: ApiRequestOptions): Promise<StatsResponse>
   getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>
+  reloadRuntime(options?: ApiRequestOptions): Promise<RuntimeReloadResponse>
+  getRuntimeStatus(options?: ApiRequestOptions): Promise<RuntimeStatusResponse>
   getClips(query?: ListClipsQuery, options?: ApiRequestOptions): Promise<ClipListResponse>
   getClip(clipId: string, options?: ApiRequestOptions): Promise<ClipResponse>
 }

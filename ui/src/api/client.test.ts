@@ -409,3 +409,247 @@ describe('HomeSecApiClient.createClipMediaToken', () => {
     await expect(client.createClipMediaToken('clip-42')).rejects.toBeInstanceOf(APIError)
   })
 })
+
+describe('HomeSecApiClient camera mutation methods', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('gets a camera by name and parses response payload', async () => {
+    // Given: A camera detail endpoint returning a single camera payload
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          name: 'garage',
+          enabled: true,
+          source_backend: 'local_folder',
+          healthy: true,
+          last_heartbeat: 1739590400.0,
+          source_config: {
+            watch_dir: './recordings',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Fetching camera detail by name
+    const result = await client.getCamera('garage')
+
+    // Then: Client should call camera detail route and return typed camera fields
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/cameras/garage')
+    expect(result.name).toBe('garage')
+    expect(result.source_backend).toBe('local_folder')
+    expect(result.enabled).toBe(true)
+  })
+
+  it('posts create-camera payload with JSON headers and parses response', async () => {
+    // Given: A camera create endpoint returning restart-required response payload
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: true,
+          camera: {
+            name: 'front_door',
+            enabled: true,
+            source_backend: 'rtsp',
+            healthy: false,
+            last_heartbeat: null,
+            source_config: {
+              rtsp_url: '***',
+            },
+          },
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Creating a camera through the typed API client
+    const result = await client.createCamera({
+      name: 'front_door',
+      enabled: true,
+      source_backend: 'rtsp',
+      source_config: { rtsp_url: 'rtsp://secret' },
+    })
+
+    // Then: Client should issue JSON POST and parse restart metadata
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/cameras')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'content-type': 'application/json',
+      },
+    })
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        name: 'front_door',
+        enabled: true,
+        source_backend: 'rtsp',
+        source_config: { rtsp_url: 'rtsp://secret' },
+      }),
+    )
+    expect(result.restart_required).toBe(true)
+    expect(result.camera?.name).toBe('front_door')
+    expect(result.httpStatus).toBe(201)
+  })
+
+  it('puts camera enabled toggle payload and parses config-change response', async () => {
+    // Given: A camera update endpoint with restart-required response
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: true,
+          camera: {
+            name: 'garage',
+            enabled: false,
+            source_backend: 'rtsp',
+            healthy: false,
+            last_heartbeat: null,
+            source_config: {},
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Updating camera enabled state
+    const result = await client.updateCamera('garage', { enabled: false })
+
+    // Then: Client should issue PUT request and return parsed camera payload
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/cameras/garage')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' })
+    expect(result.restart_required).toBe(true)
+    expect(result.camera?.enabled).toBe(false)
+  })
+
+  it('deletes camera and handles null camera payloads', async () => {
+    // Given: A camera delete endpoint returning null camera in response body
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: true,
+          camera: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Deleting a camera by name
+    const result = await client.deleteCamera('garage')
+
+    // Then: Client should issue DELETE and preserve null camera semantics
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'DELETE' })
+    expect(result.restart_required).toBe(true)
+    expect(result.camera).toBeNull()
+  })
+})
+
+describe('HomeSecApiClient runtime methods', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('requests runtime reload and parses accepted response', async () => {
+    // Given: Runtime reload endpoint returning async acceptance metadata
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accepted: true,
+          message: 'Runtime reload accepted',
+          target_generation: 4,
+        }),
+        {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Triggering runtime reload
+    const result = await client.reloadRuntime()
+
+    // Then: Client should POST and return typed acceptance payload
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/runtime/reload')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+    expect(result.httpStatus).toBe(202)
+    expect(result.accepted).toBe(true)
+    expect(result.target_generation).toBe(4)
+  })
+
+  it('parses runtime status payload for control-plane rendering', async () => {
+    // Given: Runtime status endpoint with a reloading state payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          state: 'reloading',
+          generation: 4,
+          reload_in_progress: true,
+          active_config_version: 'abc123',
+          last_reload_at: '2026-02-16T01:00:00.000Z',
+          last_reload_error: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Fetching runtime status snapshot
+    const result = await client.getRuntimeStatus()
+
+    // Then: Runtime fields should be parsed into a typed snapshot
+    expect(result.httpStatus).toBe(200)
+    expect(result.state).toBe('reloading')
+    expect(result.reload_in_progress).toBe(true)
+    expect(result.active_config_version).toBe('abc123')
+  })
+
+  it('rejects malformed runtime status payloads', async () => {
+    // Given: Runtime status payload with unsupported state value
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          state: 'booting',
+          generation: 4,
+          reload_in_progress: false,
+          active_config_version: null,
+          last_reload_at: null,
+          last_reload_error: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client should fail fast on contract mismatch
+    await expect(client.getRuntimeStatus()).rejects.toBeInstanceOf(APIError)
+  })
+})
