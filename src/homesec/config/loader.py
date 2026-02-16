@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,9 @@ import yaml
 from pydantic import ValidationError
 
 from homesec.models.config import Config
+
+logger = logging.getLogger(__name__)
+_SENSITIVE_MODE_MASK = 0o077
 
 
 class ConfigErrorCode(str, Enum):
@@ -63,6 +68,7 @@ def load_config(path: Path) -> Config:
             code=ConfigErrorCode.FILE_NOT_FOUND,
             path=path,
         )
+    _warn_if_permissive_config_mode(path)
 
     try:
         with path.open() as f:
@@ -176,3 +182,19 @@ def format_validation_error(e: ValidationError, path: Path | None = None) -> str
         msg = err["msg"]
         errors.append(f"  {loc}: {msg}")
     return prefix + "\n" + "\n".join(errors)
+
+
+def _warn_if_permissive_config_mode(path: Path) -> None:
+    """Warn when config file mode exposes secrets to group/other users."""
+    if os.name != "posix":
+        return
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return
+    if mode & _SENSITIVE_MODE_MASK:
+        logger.warning(
+            "Config file permissions are too permissive for secret-bearing config: path=%s mode=%04o expected=0600",
+            path,
+            mode,
+        )

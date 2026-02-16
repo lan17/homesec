@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
 import yaml
 
+from homesec.config.loader import load_config_from_dict
 from homesec.config.manager import ConfigManager
 
 
@@ -182,3 +184,71 @@ async def test_config_manager_add_camera_concurrent_updates_preserve_all_changes
     config = manager.get_config()
     names = {camera.name for camera in config.cameras}
     assert names == {"front", "back"}
+
+
+@pytest.mark.asyncio
+async def test_config_manager_enforces_restrictive_file_modes_on_save(tmp_path: Path) -> None:
+    """Config writes should enforce 0600 mode for config and backup files."""
+    if os.name != "posix":
+        pytest.skip("File mode enforcement semantics are POSIX-specific")
+
+    # Given a permissive config file that will be mutated
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(config_path, cameras=[])
+    os.chmod(config_path, 0o644)
+
+    # When adding a camera (which writes config + backup)
+    await manager.add_camera(
+        name="front",
+        enabled=True,
+        source_backend="local_folder",
+        source_config={"watch_dir": "/tmp/front"},
+    )
+
+    # Then config and backup are both restricted to owner read/write
+    config_mode = config_path.stat().st_mode & 0o777
+    backup_mode = config_path.with_suffix(".yaml.bak").stat().st_mode & 0o777
+    assert config_mode == 0o600
+    assert backup_mode == 0o600
+
+
+@pytest.mark.asyncio
+async def test_config_manager_first_save_creates_restrictive_mode_file(tmp_path: Path) -> None:
+    """First-time save path should create config file with 0600 mode."""
+    if os.name != "posix":
+        pytest.skip("File mode enforcement semantics are POSIX-specific")
+
+    # Given a manager pointing at a config path that does not yet exist
+    config_path = tmp_path / "config.yaml"
+    manager = ConfigManager(config_path)
+    config = load_config_from_dict(
+        {
+            "version": 1,
+            "cameras": [
+                {
+                    "name": "front_door",
+                    "source": {
+                        "backend": "local_folder",
+                        "config": {"watch_dir": "recordings", "poll_interval": 1.0},
+                    },
+                }
+            ],
+            "storage": {"backend": "dropbox", "config": {"root": "/homecam"}},
+            "state_store": {"dsn": "postgresql://user:pass@localhost/db"},
+            "notifiers": [{"backend": "mqtt", "config": {"host": "localhost"}}],
+            "filter": {"backend": "yolo", "config": {}},
+            "vlm": {
+                "backend": "openai",
+                "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+            },
+            "alert_policy": {"backend": "default", "config": {}},
+        }
+    )
+
+    # When saving config for the first time
+    await manager._save_config(config)
+
+    # Then the created file exists and is owner read/write only
+    assert config_path.exists()
+    config_mode = config_path.stat().st_mode & 0o777
+    assert config_mode == 0o600

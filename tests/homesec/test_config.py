@@ -207,6 +207,130 @@ alert_policy:
         path.unlink()
 
 
+def test_load_config_warns_when_permissions_are_too_open(caplog: pytest.LogCaptureFixture) -> None:
+    """Loading config should warn when file permissions expose secrets."""
+    if os.name != "posix":
+        pytest.skip("Permission warnings are POSIX-specific")
+
+    # Given a valid config file with permissive mode
+    yaml_content = """
+cameras:
+  - name: front_door
+    source:
+      backend: local_folder
+      config:
+        watch_dir: recordings
+        poll_interval: 1.0
+
+storage:
+  backend: dropbox
+  config:
+    root: /homecam
+
+state_store:
+  dsn: postgresql://user:pass@localhost/db
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: localhost
+
+filter:
+  backend: yolo
+  config: {}
+
+vlm:
+  backend: openai
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+
+alert_policy:
+  backend: default
+  config:
+    min_risk_level: low
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        path = Path(f.name)
+    os.chmod(path, 0o644)
+
+    try:
+        # When loading the config
+        with caplog.at_level("WARNING"):
+            config = load_config(path)
+
+        # Then loading succeeds and a permissions warning is emitted
+        assert config.cameras[0].name == "front_door"
+        assert any("permissions are too permissive" in rec.message for rec in caplog.records)
+    finally:
+        path.unlink()
+
+
+def test_load_config_does_not_warn_when_permissions_are_restrictive(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Loading config should not warn when file permissions are already restrictive."""
+    if os.name != "posix":
+        pytest.skip("Permission warnings are POSIX-specific")
+
+    # Given a valid config file with restrictive mode
+    yaml_content = """
+cameras:
+  - name: front_door
+    source:
+      backend: local_folder
+      config:
+        watch_dir: recordings
+        poll_interval: 1.0
+
+storage:
+  backend: dropbox
+  config:
+    root: /homecam
+
+state_store:
+  dsn: postgresql://user:pass@localhost/db
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: localhost
+
+filter:
+  backend: yolo
+  config: {}
+
+vlm:
+  backend: openai
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+
+alert_policy:
+  backend: default
+  config:
+    min_risk_level: low
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        path = Path(f.name)
+    os.chmod(path, 0o600)
+
+    try:
+        # When loading the config
+        with caplog.at_level("WARNING"):
+            config = load_config(path)
+
+        # Then loading succeeds without a permissions warning
+        assert config.cameras[0].name == "front_door"
+        assert all("permissions are too permissive" not in rec.message for rec in caplog.records)
+    finally:
+        path.unlink()
+
+
 def test_load_config_file_not_found() -> None:
     """Test that missing file raises ConfigError."""
     # Given a nonexistent path

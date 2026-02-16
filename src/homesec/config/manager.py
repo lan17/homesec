@@ -13,6 +13,8 @@ from pydantic import BaseModel
 from homesec.config.loader import ConfigError, load_config, load_config_from_dict
 from homesec.models.config import CameraConfig, CameraSourceConfig, Config
 
+_SENSITIVE_CONFIG_FILE_MODE = 0o600
+
 
 class ConfigUpdateResult(BaseModel):
     """Result of a config update operation."""
@@ -34,6 +36,13 @@ class ConfigManager:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
+
+    @staticmethod
+    def _enforce_sensitive_file_mode(path: Path) -> None:
+        """Enforce restrictive config file mode on POSIX platforms."""
+        if os.name != "posix":
+            return
+        os.chmod(path, _SENSITIVE_CONFIG_FILE_MODE)
 
     def get_config(self) -> Config:
         """Get the current configuration."""
@@ -124,16 +133,24 @@ class ConfigManager:
             backup_path = Path(str(self._config_path) + ".bak")
             if self._config_path.exists():
                 shutil.copy2(self._config_path, backup_path)
+                self._enforce_sensitive_file_mode(backup_path)
 
             payload = config.model_dump(mode="json")
             tmp_path = self._config_path.with_suffix(self._config_path.suffix + ".tmp")
             tmp_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with tmp_path.open("w", encoding="utf-8") as handle:
+            fd = os.open(
+                tmp_path,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                _SENSITIVE_CONFIG_FILE_MODE,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 yaml.safe_dump(payload, handle, sort_keys=False)
                 handle.flush()
                 os.fsync(handle.fileno())
+            self._enforce_sensitive_file_mode(tmp_path)
 
             os.replace(tmp_path, self._config_path)
+            self._enforce_sensitive_file_mode(self._config_path)
 
         await asyncio.to_thread(_write)
