@@ -24,21 +24,34 @@ export interface ApiRequestOptions {
   apiKey?: string | null
 }
 
+export type ApiResponseWithStatus<TPayload extends object> = TPayload & { httpStatus: number }
+
 export interface GeneratedHomeSecClient {
   getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>
   getCamera(name: string, options?: ApiRequestOptions): Promise<CameraResponse>
-  createCamera(payload: CameraCreate, options?: ApiRequestOptions): Promise<ConfigChangeResponse>
+  createCamera(
+    payload: CameraCreate,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
   updateCamera(
     name: string,
     payload: CameraUpdate,
     options?: ApiRequestOptions,
-  ): Promise<ConfigChangeResponse>
-  deleteCamera(name: string, options?: ApiRequestOptions): Promise<ConfigChangeResponse>
-  getHealth(options?: ApiRequestOptions): Promise<HealthResponse>
-  getStats(options?: ApiRequestOptions): Promise<StatsResponse>
-  getDiagnostics(options?: ApiRequestOptions): Promise<DiagnosticsResponse>
-  reloadRuntime(options?: ApiRequestOptions): Promise<RuntimeReloadResponse>
-  getRuntimeStatus(options?: ApiRequestOptions): Promise<RuntimeStatusResponse>
-  getClips(query?: ListClipsQuery, options?: ApiRequestOptions): Promise<ClipListResponse>
-  getClip(clipId: string, options?: ApiRequestOptions): Promise<ClipResponse>
+  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
+  deleteCamera(
+    name: string,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
+  getHealth(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<HealthResponse>>
+  getStats(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<StatsResponse>>
+  getDiagnostics(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<DiagnosticsResponse>>
+  reloadRuntime(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<RuntimeReloadResponse>>
+  getRuntimeStatus(
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<RuntimeStatusResponse>>
+  getClips(
+    query?: ListClipsQuery,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<ClipListResponse>>
+  getClip(clipId: string, options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ClipResponse>>
 }
