@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
 
 from homesec.models.clip import Clip, ClipListCursor, ClipListPage, ClipStateData
@@ -70,7 +70,7 @@ class ClipRepository:
 
         event = ClipRecordedEvent(
             clip_id=clip.clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             camera_name=clip.camera_name,
             duration_s=clip.duration_s,
             source_backend=clip.source_backend,
@@ -85,7 +85,7 @@ class ClipRepository:
         await self._safe_append(
             UploadStartedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 dest_key=dest_key,
                 attempt=attempt,
             )
@@ -116,7 +116,7 @@ class ClipRepository:
 
         event = UploadCompletedEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             storage_uri=storage_uri,
             view_url=view_url,
             attempt=attempt,
@@ -140,7 +140,7 @@ class ClipRepository:
         await self._safe_append(
             UploadFailedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 attempt=attempt,
                 error_message=error_message,
                 error_type=error_type,
@@ -153,7 +153,7 @@ class ClipRepository:
         await self._safe_append(
             FilterStartedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 attempt=attempt,
             )
         )
@@ -174,7 +174,7 @@ class ClipRepository:
 
         event = FilterCompletedEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             detected_classes=result.detected_classes,
             confidence=result.confidence,
             model=result.model,
@@ -199,7 +199,7 @@ class ClipRepository:
         """Record filter failure + mark state as error."""
         event = FilterFailedEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             attempt=attempt,
             error_message=error_message,
             error_type=error_type,
@@ -224,7 +224,7 @@ class ClipRepository:
         await self._safe_append(
             VLMStartedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 attempt=attempt,
             )
         )
@@ -249,7 +249,7 @@ class ClipRepository:
 
         event = VLMCompletedEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             risk_level=result.risk_level,
             activity_type=result.activity_type,
             summary=result.summary,
@@ -277,7 +277,7 @@ class ClipRepository:
         await self._safe_append(
             VLMFailedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 attempt=attempt,
                 error_message=error_message,
                 error_type=error_type,
@@ -290,7 +290,7 @@ class ClipRepository:
         await self._safe_append(
             VLMSkippedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 reason=reason,
             )
         )
@@ -311,7 +311,7 @@ class ClipRepository:
 
         event = AlertDecisionMadeEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             should_notify=decision.notify,
             reason=decision.notify_reason,
             detected_classes=detected_classes,
@@ -339,7 +339,7 @@ class ClipRepository:
 
         event = NotificationSentEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             notifier_name=notifier_name,
             dedupe_key=dedupe_key,
             attempt=attempt,
@@ -363,7 +363,7 @@ class ClipRepository:
         await self._safe_append(
             NotificationFailedEvent(
                 clip_id=clip_id,
-                timestamp=datetime.now(),
+                timestamp=self._now_utc(),
                 notifier_name=notifier_name,
                 error_message=error_message,
                 error_type=error_type,
@@ -390,7 +390,7 @@ class ClipRepository:
 
         event = ClipDeletedEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             camera_name=state.camera_name,
             reason=reason,
             run_id=run_id,
@@ -424,7 +424,7 @@ class ClipRepository:
 
         event = ClipRecheckedEvent(
             clip_id=clip_id,
-            timestamp=datetime.now(),
+            timestamp=self._now_utc(),
             camera_name=state.camera_name,
             reason=reason,
             run_id=run_id,
@@ -641,3 +641,7 @@ class ClipRepository:
                 if delay > 0:
                     await asyncio.sleep(delay)
                 attempt += 1
+
+    @staticmethod
+    def _now_utc() -> datetime:
+        return datetime.now(timezone.utc)

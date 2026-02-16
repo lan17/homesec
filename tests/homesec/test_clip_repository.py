@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,6 +17,7 @@ from homesec.models.vlm import (
 )
 from homesec.repository import ClipRepository
 from homesec.state.postgres import PostgresEventStore, PostgresStateStore
+from tests.homesec.mocks import MockEventStore, MockStateStore
 
 
 @pytest.mark.asyncio
@@ -53,6 +54,32 @@ async def test_initialize_clip(postgres_dsn: str, tmp_path: Path, clean_test_db:
 
     # Cleanup
     await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_initialize_clip_records_timezone_aware_timestamp(tmp_path: Path) -> None:
+    """Initialize clip events should be emitted with UTC-aware timestamps."""
+    # Given: A repository using in-memory mock stores
+    event_store = MockEventStore()
+    repository = ClipRepository(MockStateStore(), event_store)
+    clip = Clip(
+        clip_id="test-clip-tz-001",
+        camera_name="front_door",
+        local_path=tmp_path / "test.mp4",
+        start_ts=datetime.now(timezone.utc),
+        end_ts=datetime.now(timezone.utc) + timedelta(seconds=10),
+        duration_s=10.0,
+        source_backend="test",
+    )
+
+    # When: Initializing the clip through the repository
+    await repository.initialize_clip(clip)
+    events = event_store.events
+
+    # Then: The recorded event timestamp is timezone-aware
+    assert len(events) == 1
+    assert events[0].timestamp.tzinfo is not None
+    assert events[0].timestamp.utcoffset() is not None
 
 
 @pytest.mark.asyncio

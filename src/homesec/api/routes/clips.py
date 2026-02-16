@@ -180,8 +180,12 @@ async def create_clip_media_token(
         return ClipMediaTokenResponse(media_url=media_path, tokenized=False, expires_at=None)
 
     api_key = app.config.server.get_api_key()
-    # API key is guaranteed here by router-level verify_api_key dependency when auth is enabled.
-    assert api_key is not None
+    if api_key is None:
+        raise APIError(
+            "API key not configured",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=APIErrorCode.API_KEY_NOT_CONFIGURED,
+        )
 
     token, expires_at = issue_clip_media_token(api_key=api_key, clip_id=clip_id)
     return ClipMediaTokenResponse(
