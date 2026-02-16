@@ -258,6 +258,12 @@ a:hover {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.camera-form-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 .clips-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -291,6 +297,18 @@ a:hover {
 }
 
 .clips-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-1) 75%, transparent);
+  padding: 0.14rem 0.5rem;
+  font-size: 0.74rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+}
+
+.camera-chip {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
@@ -672,6 +690,10 @@ a:hover {
   }
 
   .clips-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-form-grid {
     grid-template-columns: 1fr;
   }
 

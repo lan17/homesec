@@ -50,7 +50,7 @@ export function CameraList({
                   <StatusBadge tone={cameraHealthTone(camera)}>
                     {camera.healthy && camera.enabled ? 'HEALTHY' : camera.enabled ? 'UNHEALTHY' : 'DISABLED'}
                   </StatusBadge>
-                  <span className="clips-chip">{camera.source_backend}</span>
+                  <span className="camera-chip">{camera.source_backend}</span>
                 </div>
               </header>
 

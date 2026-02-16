@@ -1,5 +1,5 @@
-import { isAPIError } from '../../api/client'
 import type { RuntimeState } from '../../api/generated/types'
+import { describeUnknownError } from '../shared/errorPresentation'
 
 interface RuntimeStatusLike {
   state: RuntimeState
@@ -7,13 +7,7 @@ interface RuntimeStatusLike {
 }
 
 export function describeCameraError(error: unknown): string {
-  if (isAPIError(error)) {
-    return error.errorCode ? `${error.message} (${error.errorCode})` : error.message
-  }
-  if (error instanceof Error) {
-    return error.message
-  }
-  return 'Unknown error'
+  return describeUnknownError(error)
 }
 
 export function runtimeStatusTone(status: RuntimeStatusLike): 'degraded' | 'healthy' | 'unhealthy' {

@@ -38,7 +38,7 @@ export function CameraCreateForm({
   return (
     <Card title="Create Camera" subtitle="MVP form with backend template + JSON config">
       <form className="inline-form" onSubmit={onSubmit}>
-        <div className="clips-filter-grid">
+        <div className="camera-form-grid">
           <label className="field-label" htmlFor="camera-name-input">
             Camera name
             <input

@@ -1,5 +1,7 @@
 import type { APIError } from '../../api/client'
 
+import { describeAPIError as describeSharedAPIError } from '../shared/errorPresentation'
+
 export type HealthTone = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
 export function healthTone(status: string): HealthTone {
@@ -22,8 +24,5 @@ export function formatLastUpdated(dataUpdatedAt: number): string {
 }
 
 export function describeAPIError(error: APIError): string {
-  if (error.errorCode) {
-    return `${error.message} (${error.errorCode})`
-  }
-  return error.message
+  return describeSharedAPIError(error)
 }

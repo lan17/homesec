@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { apiClient, hasStoredApiKey } from '../client'
 import type { ClipMediaTokenSnapshot } from '../client'
+import { QUERY_KEYS } from './queryKeys'
 
 const MEDIA_TOKEN_REFRESH_LEAD_MS = 60_000
 
@@ -47,7 +48,7 @@ export function useClipMediaUrl(clipId: string | undefined): ClipMediaUrlState {
   const shouldRequestToken = Boolean(clipId) && hasStoredApiKey()
 
   const tokenQuery = useQuery<ClipMediaTokenSnapshot>({
-    queryKey: ['clip-media-token', clipId],
+    queryKey: QUERY_KEYS.clipMediaToken(clipId),
     queryFn: ({ signal }) => apiClient.createClipMediaToken(clipId ?? '', { signal }),
     enabled: Boolean(clipId) && shouldRequestToken,
     staleTime: 0,

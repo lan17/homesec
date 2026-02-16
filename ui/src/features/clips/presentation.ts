@@ -1,5 +1,5 @@
-import { isAPIError } from '../../api/client'
 import type { ClipResponse } from '../../api/generated/types'
+import { describeUnknownError } from '../shared/errorPresentation'
 
 export function formatTimestamp(value: string): string {
   const date = new Date(value)
@@ -10,13 +10,7 @@ export function formatTimestamp(value: string): string {
 }
 
 export function describeClipError(error: unknown): string {
-  if (isAPIError(error)) {
-    return error.errorCode ? `${error.message} (${error.errorCode})` : error.message
-  }
-  if (error instanceof Error) {
-    return error.message
-  }
-  return 'Unknown error'
+  return describeUnknownError(error)
 }
 
 export function renderDetectedObjects(clip: ClipResponse): string {
