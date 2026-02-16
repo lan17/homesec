@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 
 import { Button } from './Button'
+import { toApiKeyGateActionErrorMessage } from './apiKeyGateErrors'
 
 interface ApiKeyGateProps {
   busy: boolean
@@ -11,6 +12,7 @@ interface ApiKeyGateProps {
 export function ApiKeyGate({ busy, onSubmit, onClear }: ApiKeyGateProps) {
   const [value, setValue] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -21,13 +23,23 @@ export function ApiKeyGate({ busy, onSubmit, onClear }: ApiKeyGateProps) {
     }
 
     setValidationError(null)
-    await onSubmit(apiKey)
-    setValue('')
+    setSubmitError(null)
+    try {
+      await onSubmit(apiKey)
+      setValue('')
+    } catch (error) {
+      setSubmitError(toApiKeyGateActionErrorMessage(error))
+    }
   }
 
   async function handleClear(): Promise<void> {
     setValidationError(null)
-    await onClear()
+    setSubmitError(null)
+    try {
+      await onClear()
+    } catch (error) {
+      setSubmitError(toApiKeyGateActionErrorMessage(error))
+    }
   }
 
   return (
@@ -47,6 +59,7 @@ export function ApiKeyGate({ busy, onSubmit, onClear }: ApiKeyGateProps) {
         disabled={busy}
       />
       {validationError ? <p className="error-text">{validationError}</p> : null}
+      {submitError ? <p className="error-text">{submitError}</p> : null}
       <div className="inline-form__actions">
         <Button type="submit" disabled={busy}>
           {busy ? 'Applying...' : 'Apply key'}
