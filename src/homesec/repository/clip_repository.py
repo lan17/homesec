@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, TypeVar
 
-from homesec.models.clip import Clip, ClipStateData
+from homesec.models.clip import Clip, ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.config import RetryConfig
 from homesec.models.enums import ClipStatus, RiskLevelField
 from homesec.models.events import (
@@ -477,6 +477,86 @@ class ClipRepository:
         await self._safe_upsert(clip_id, state)
         return state
 
+    async def get_clip(self, clip_id: str) -> ClipStateData | None:
+        """Get clip state by ID."""
+        return await self._safe_get(clip_id)
+
+    async def list_clips(
+        self,
+        *,
+        camera: str | None = None,
+        status: ClipStatus | None = None,
+        alerted: bool | None = None,
+        detected: bool | None = None,
+        risk_level: str | None = None,
+        activity_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        cursor: ClipListCursor | None = None,
+        limit: int = 50,
+    ) -> ClipListPage:
+        """List clips with filtering and pagination."""
+        try:
+            return await self._run_with_retries(
+                label="State store list clips",
+                clip_id="list",
+                op=lambda: self._state.list_clips(
+                    camera=camera,
+                    status=status,
+                    alerted=alerted,
+                    detected=detected,
+                    risk_level=risk_level,
+                    activity_type=activity_type,
+                    since=since,
+                    until=until,
+                    cursor=cursor,
+                    limit=limit,
+                ),
+            )
+        except Exception as exc:
+            logger.error("State store list clips failed: %s", exc, exc_info=exc)
+            return ClipListPage(clips=[], next_cursor=None, has_more=False)
+
+    async def delete_clip(self, clip_id: str) -> ClipStateData:
+        """Mark clip as deleted in database and return state."""
+        return await self._run_with_retries(
+            label="State store mark deleted",
+            clip_id=clip_id,
+            op=lambda: self._state.mark_clip_deleted(clip_id),
+        )
+
+    async def count_clips_since(self, since: datetime) -> int:
+        """Count clips created since the given timestamp."""
+        try:
+            return await self._run_with_retries(
+                label="State store count clips",
+                clip_id="count",
+                op=lambda: self._state.count_clips_since(since),
+            )
+        except Exception as exc:
+            logger.error("State store count clips failed: %s", exc, exc_info=exc)
+            return 0
+
+    async def count_alerts_since(self, since: datetime) -> int:
+        """Count alert events since the given timestamp."""
+        try:
+            return await self._run_with_retries(
+                label="State store count alerts",
+                clip_id="count",
+                op=lambda: self._state.count_alerts_since(since),
+            )
+        except Exception as exc:
+            logger.error("State store count alerts failed: %s", exc, exc_info=exc)
+            return 0
+
+    async def ping(self) -> bool:
+        """Health check - verify database is reachable."""
+        try:
+            return await self._state.ping()
+        except Exception as exc:
+            logger.error("State store ping failed: %s", exc, exc_info=exc)
+            return False
+
     async def _load_state(self, clip_id: str, *, action: str) -> ClipStateData | None:
         state = await self._safe_get(clip_id)
         if state is None:
@@ -485,11 +565,14 @@ class ClipRepository:
 
     async def _safe_get(self, clip_id: str) -> ClipStateData | None:
         try:
-            return await self._run_with_retries(
+            state = await self._run_with_retries(
                 label="State store get",
                 clip_id=clip_id,
                 op=lambda: self._state.get(clip_id),
             )
+            if state is not None and state.clip_id is None:
+                state.clip_id = clip_id
+            return state
         except Exception as exc:
             logger.error(
                 "State store get failed for %s after retries: %s",
@@ -500,6 +583,7 @@ class ClipRepository:
             return None
 
     async def _safe_upsert(self, clip_id: str, state: ClipStateData) -> None:
+        state.clip_id = clip_id
         try:
             await self._run_with_retries(
                 label="State store upsert",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ class ClipStateData(BaseModel):
     """Lightweight snapshot of current clip state (stored in clip_states.data JSONB)."""
 
     schema_version: int = 1
+    clip_id: str | None = None
     camera_name: str
 
     # High-level status for queries
@@ -46,6 +48,7 @@ class ClipStateData(BaseModel):
     filter_result: FilterResult | None = None
     analysis_result: AnalysisResult | None = None
     alert_decision: AlertDecision | None = None
+    created_at: datetime | None = None
 
     @property
     def upload_completed(self) -> bool:
@@ -61,6 +64,23 @@ class ClipStateData(BaseModel):
     def vlm_completed(self) -> bool:
         """Check if VLM stage completed."""
         return self.analysis_result is not None
+
+
+@dataclass(frozen=True)
+class ClipListCursor:
+    """Keyset cursor for clip listing (`created_at DESC, clip_id DESC`)."""
+
+    created_at: datetime
+    clip_id: str
+
+
+@dataclass(frozen=True)
+class ClipListPage:
+    """Clip listing page using keyset pagination semantics."""
+
+    clips: list[ClipStateData]
+    next_cursor: ClipListCursor | None
+    has_more: bool
 
 
 # Resolve forward references after imports are available

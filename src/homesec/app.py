@@ -5,37 +5,58 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
-from homesec.health import HealthServer
+from homesec.config.loader import ConfigError, ConfigErrorCode
+from homesec.config.manager import ConfigManager
 from homesec.interfaces import EventStore
-from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
-from homesec.pipeline import ClipPipeline
-from homesec.plugins.alert_policies import load_alert_policy
-from homesec.plugins.analyzers import load_analyzer
-from homesec.plugins.filters import load_filter
-from homesec.plugins.notifiers import load_notifier_plugin
 from homesec.plugins.registry import PluginType, get_plugin_names
-from homesec.plugins.sources import load_source_plugin
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository import ClipRepository
+from homesec.runtime.controller import RuntimeController
+from homesec.runtime.errors import RuntimeReloadConfigError
+from homesec.runtime.manager import RuntimeManager
+from homesec.runtime.models import (
+    ManagedRuntime,
+    RuntimeCameraStatus,
+    RuntimeReloadRequest,
+    RuntimeReloadResult,
+    RuntimeState,
+    RuntimeStatusSnapshot,
+)
+from homesec.runtime.subprocess_controller import (
+    SubprocessRuntimeController,
+    SubprocessRuntimeHandle,
+)
 from homesec.state import NoopEventStore, NoopStateStore, PostgresStateStore
 
 if TYPE_CHECKING:
     from homesec.interfaces import (
-        AlertPolicy,
-        ClipSource,
-        Notifier,
-        ObjectFilter,
         StateStore,
         StorageBackend,
-        VLMAnalyzer,
     )
     from homesec.models.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _CameraSourceSnapshot:
+    """Minimal source health view exposed to API routes."""
+
+    healthy: bool
+    heartbeat: float | None
+
+    def is_healthy(self) -> bool:
+        return self.healthy
+
+    def last_heartbeat(self) -> float | None:
+        return self.heartbeat
 
 
 class Application:
@@ -58,13 +79,11 @@ class Application:
         self._state_store: StateStore = NoopStateStore()
         self._event_store: EventStore = NoopEventStore()
         self._repository: ClipRepository | None = None
-        self._notifier: Notifier | None = None
-        self._notifier_entries: list[NotifierEntry] = []
-        self._filter: ObjectFilter | None = None
-        self._vlm: VLMAnalyzer | None = None
-        self._sources: list[ClipSource] = []
-        self._pipeline: ClipPipeline | None = None
-        self._health_server: HealthServer | None = None
+        self._api_server: APIServer | None = None
+        self._runtime_manager: RuntimeManager | None = None
+        self._runtime_heartbeat_stale_s = 10.0
+        self._config_manager = ConfigManager(config_path)
+        self._start_time: float | None = None
 
         # Shutdown state
         self._shutdown_event = asyncio.Event()
@@ -87,38 +106,10 @@ class Application:
         # Set up signal handlers
         self._setup_signal_handlers()
 
-        # Start health server
-        if self._health_server:
-            await self._health_server.start()
+        if self._api_server:
+            await self._api_server.start()
 
-        # Start sources
-        started_sources: list[ClipSource] = []
-        startup_errors: list[tuple[str, Exception]] = []
-        for source in self._sources:
-            camera_name = getattr(source, "camera_name", source.__class__.__name__)
-            try:
-                await source.start()
-            except Exception as exc:
-                startup_errors.append((str(camera_name), exc))
-            else:
-                started_sources.append(source)
-
-        if startup_errors:
-            if started_sources:
-                await asyncio.gather(
-                    *(source.shutdown() for source in started_sources),
-                    return_exceptions=True,
-                )
-            for camera_name, error in startup_errors:
-                logger.error(
-                    "Source startup failed: camera=%s error=%s",
-                    camera_name,
-                    error,
-                    exc_info=error,
-                )
-            summary = "; ".join(f"{camera_name}: {error}" for camera_name, error in startup_errors)
-            raise RuntimeError(f"Source startup preflight failed: {summary}")
-
+        self._start_time = time.time()
         logger.info("Application started. Waiting for clips...")
 
         # Wait for shutdown signal
@@ -139,10 +130,8 @@ class Application:
         # Validate config references and plugin names before instantiating components
         self._validate_config(config)
 
-        # Create storage backend
+        # Create shell components that remain stable across runtime reloads.
         self._storage = self._create_storage(config)
-
-        # Create state store
         self._state_store = await self._create_state_store(config)
         self._event_store = self._create_event_store(self._state_store)
         self._repository = ClipRepository(
@@ -151,52 +140,24 @@ class Application:
             retry=config.retry,
         )
         assert self._storage is not None
-        assert self._repository is not None
 
-        # Create notifier
-        self._notifier = self._create_notifier(config)
-        assert self._notifier is not None
-        await self._log_notifier_health()
-
-        # Create filter, VLM, and alert policy plugins
-        filter_plugin = load_filter(config.filter)
-        vlm_plugin = load_analyzer(config.vlm)
-        self._filter = filter_plugin
-        self._vlm = vlm_plugin
-        alert_policy = self._create_alert_policy(config)
-
-        # Create pipeline
-        self._pipeline = ClipPipeline(
-            config=config,
-            storage=self._storage,
-            repository=self._repository,
-            filter_plugin=filter_plugin,
-            vlm_plugin=vlm_plugin,
-            notifier=self._notifier,
-            alert_policy=alert_policy,
-            notifier_entries=self._notifier_entries,
+        # Create runtime manager and start the initial runtime.
+        self._runtime_manager = RuntimeManager(
+            self._create_runtime_controller(),
+            on_runtime_activated=self._bind_active_runtime,
         )
-        # Set event loop for thread-safe callbacks from sources
-        self._pipeline.set_event_loop(asyncio.get_running_loop())
+        await self._runtime_manager.start_initial_runtime(config)
 
-        # Create sources and register callback
-        self._sources = self._create_sources(config)
-        for source in self._sources:
-            source.register_callback(self._pipeline.on_new_clip)
-
-        # Create health server
-        health_cfg = config.health
-        self._health_server = HealthServer(
-            host=health_cfg.host,
-            port=health_cfg.port,
-        )
-        self._health_server.set_components(
-            state_store=self._state_store,
-            storage=self._storage,
-            notifier=self._notifier,
-            sources=self._sources,
-            mqtt_is_critical=health_cfg.mqtt_is_critical,
-        )
+        server_cfg = config.server
+        if server_cfg.enabled:
+            api_app = create_app(self)
+            self._api_server = APIServer(
+                app=api_app,
+                host=server_cfg.host,
+                port=server_cfg.port,
+            )
+        else:
+            self._api_server = None
 
         logger.info("All components created")
 
@@ -225,66 +186,96 @@ class Application:
             )
         return event_store
 
-    def _create_notifier(self, config: Config) -> Notifier:
-        """Create notifier(s) based on config using plugin registry."""
-        entries: list[NotifierEntry] = []
-        for index, notifier_cfg in enumerate(config.notifiers):
-            if not notifier_cfg.enabled:
-                continue
-            notifier = load_notifier_plugin(notifier_cfg.backend, notifier_cfg.config)
-            name = f"{notifier_cfg.backend}[{index}]"
-            entries.append(NotifierEntry(name=name, notifier=notifier))
+    def _create_runtime_controller(self) -> RuntimeController:
+        controller = SubprocessRuntimeController()
+        self._runtime_heartbeat_stale_s = controller.heartbeat_stale_s
+        return controller
 
-        self._notifier_entries = entries
-        if not entries:
-            raise RuntimeError("No enabled notifiers configured")
-        if len(entries) == 1:
-            return entries[0].notifier
-        return MultiplexNotifier(entries)
+    def _bind_active_runtime(self, runtime: ManagedRuntime) -> None:
+        """Bind activated runtime metadata to application state."""
+        self._config = runtime.config
 
-    async def _log_notifier_health(self) -> None:
-        if not self._notifier_entries:
-            return
+    def _require_runtime_manager(self) -> RuntimeManager:
+        if self._runtime_manager is None:
+            raise RuntimeError("Runtime manager not initialized")
+        return self._runtime_manager
 
-        tasks = [asyncio.create_task(entry.notifier.ping()) for entry in self._notifier_entries]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    def _active_subprocess_runtime(self) -> SubprocessRuntimeHandle | None:
+        manager = self._runtime_manager
+        if manager is None:
+            return None
+        runtime = manager.active_runtime
+        if isinstance(runtime, SubprocessRuntimeHandle):
+            return runtime
+        return None
 
-        for entry, result in zip(self._notifier_entries, results, strict=True):
-            match result:
-                case bool() as ok:
-                    if ok:
-                        logger.info("Notifier reachable at startup: %s", entry.name)
-                    else:
-                        logger.error("Notifier unreachable at startup: %s", entry.name)
-                case BaseException() as err:
-                    logger.error(
-                        "Notifier ping failed at startup: %s error=%s",
-                        entry.name,
-                        err,
-                        exc_info=err,
-                    )
+    def _camera_statuses(self) -> dict[str, RuntimeCameraStatus]:
+        runtime = self._active_subprocess_runtime()
+        if runtime is None:
+            return {}
+        statuses = dict(runtime.camera_statuses)
+        if runtime.heartbeat_is_fresh(max_age_s=self._runtime_heartbeat_stale_s):
+            return statuses
 
-    def _create_alert_policy(self, config: Config) -> AlertPolicy:
-        """Create alert policy using the plugin registry."""
-        return load_alert_policy(
-            config.alert_policy,
-            trigger_classes=config.vlm.trigger_classes,
-        )
-
-    def _create_sources(self, config: Config) -> list[ClipSource]:
-        """Create clip sources based on config using plugin registry."""
-        sources: list[ClipSource] = []
-
-        for camera in config.cameras:
-            source_cfg = camera.source
-            source = load_source_plugin(
-                source_backend=source_cfg.backend,
-                config=source_cfg.config,
-                camera_name=camera.name,
+        return {
+            camera: RuntimeCameraStatus(
+                healthy=False,
+                last_heartbeat=status.last_heartbeat,
             )
-            sources.append(source)
+            for camera, status in statuses.items()
+        }
 
-        return sources
+    @staticmethod
+    def _classify_reload_config_error(exc: ConfigError) -> tuple[int, str]:
+        unprocessable_codes = {
+            ConfigErrorCode.VALIDATION_FAILED,
+            ConfigErrorCode.CAMERA_REFERENCES_INVALID,
+            ConfigErrorCode.PLUGIN_NAMES_INVALID,
+            ConfigErrorCode.PLUGIN_CONFIG_INVALID,
+        }
+        if exc.code in unprocessable_codes:
+            return 422, exc.code.value
+        return 400, exc.code.value
+
+    def get_runtime_status(self) -> RuntimeStatusSnapshot:
+        """Return current runtime-manager status."""
+        snapshot = self._require_runtime_manager().get_status()
+        if snapshot.state == RuntimeState.RELOADING:
+            return snapshot
+
+        runtime = self._active_subprocess_runtime()
+        if runtime is None:
+            return snapshot
+
+        if not runtime.heartbeat_is_fresh(max_age_s=self._runtime_heartbeat_stale_s):
+            snapshot.state = RuntimeState.FAILED
+            if runtime.last_error is not None:
+                snapshot.last_reload_error = runtime.last_error
+            elif runtime.worker_exit_code is not None:
+                snapshot.last_reload_error = (
+                    f"runtime worker exited with code {runtime.worker_exit_code}"
+                )
+            else:
+                snapshot.last_reload_error = "runtime worker heartbeat timed out"
+        return snapshot
+
+    async def request_runtime_reload(self) -> RuntimeReloadRequest:
+        """Request a runtime reload using the latest persisted config."""
+        try:
+            config = await asyncio.to_thread(self._config_manager.get_config)
+            self._validate_config(config)
+        except ConfigError as exc:
+            status_code, error_code = self._classify_reload_config_error(exc)
+            raise RuntimeReloadConfigError(
+                str(exc),
+                status_code=status_code,
+                error_code=error_code,
+            ) from exc
+        return self._require_runtime_manager().request_reload(config)
+
+    async def wait_for_runtime_reload(self) -> RuntimeReloadResult | None:
+        """Wait for the in-flight runtime reload (if any)."""
+        return await self._require_runtime_manager().wait_for_reload()
 
     def _require_config(self) -> Config:
         if self._config is None:
@@ -324,26 +315,13 @@ class Application:
         """Graceful shutdown of all components."""
         logger.info("Shutting down application...")
 
-        # Stop sources first
-        if self._sources:
-            await asyncio.gather(
-                *(source.shutdown() for source in self._sources),
-                return_exceptions=True,
-            )
+        # Stop API server first to prevent new requests during shutdown.
+        if self._api_server:
+            await self._api_server.stop()
 
-        # Shutdown pipeline (waits for in-flight clips)
-        if self._pipeline:
-            await self._pipeline.shutdown()
-
-        # Stop health server
-        if self._health_server:
-            await self._health_server.stop()
-
-        # Close filter and VLM plugins
-        if self._filter:
-            await self._filter.shutdown()
-        if self._vlm:
-            await self._vlm.shutdown()
+        # Stop runtime manager (sources/pipeline/plugins).
+        if self._runtime_manager:
+            await self._runtime_manager.shutdown()
 
         # Close state store
         if self._state_store:
@@ -353,8 +331,62 @@ class Application:
         if self._storage:
             await self._storage.shutdown()
 
-        # Close notifier
-        if self._notifier:
-            await self._notifier.shutdown()
-
         logger.info("Application shutdown complete")
+
+    @property
+    def config(self) -> Config:
+        return self._require_config()
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return False
+
+    @property
+    def repository(self) -> ClipRepository:
+        if self._repository is None:
+            raise RuntimeError("Repository not initialized")
+        return self._repository
+
+    @property
+    def storage(self) -> StorageBackend:
+        if self._storage is None:
+            raise RuntimeError("Storage not initialized")
+        return self._storage
+
+    @property
+    def sources(self) -> list[_CameraSourceSnapshot]:
+        return [
+            _CameraSourceSnapshot(
+                healthy=status.healthy,
+                heartbeat=status.last_heartbeat,
+            )
+            for status in self._camera_statuses().values()
+        ]
+
+    @property
+    def config_manager(self) -> ConfigManager:
+        return self._config_manager
+
+    @property
+    def pipeline_running(self) -> bool:
+        if self._shutdown_event.is_set():
+            return False
+        runtime = self._active_subprocess_runtime()
+        if runtime is None:
+            return False
+        return runtime.heartbeat_is_fresh(max_age_s=self._runtime_heartbeat_stale_s)
+
+    @property
+    def uptime_seconds(self) -> float:
+        if self._start_time is None:
+            return 0.0
+        return time.time() - self._start_time
+
+    def get_source(self, camera_name: str) -> _CameraSourceSnapshot | None:
+        status = self._camera_statuses().get(camera_name)
+        if status is None:
+            return None
+        return _CameraSourceSnapshot(
+            healthy=status.healthy,
+            heartbeat=status.last_heartbeat,
+        )

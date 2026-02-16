@@ -8,7 +8,7 @@
 #          -v ./recordings:/data/recordings \
 #          -v ./storage:/data/storage \
 #          -v ./yolo_cache:/app/yolo_cache \
-#          -p 8080:8080 homesec
+#          -p 8081:8081 homesec
 
 # =============================================================================
 # Stage 1: Builder
@@ -45,7 +45,25 @@ COPY alembic.ini ./
 RUN uv pip install --no-deps .
 
 # =============================================================================
-# Stage 2: Runtime
+# Stage 2: UI Builder
+# =============================================================================
+FROM node:22-bookworm-slim AS ui-builder
+
+WORKDIR /app/ui
+
+# Use pinned package manager from ui/package.json via corepack.
+RUN corepack enable
+
+# Copy lockfile first for better build caching.
+COPY ui/package.json ui/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+# Copy UI sources and build static assets.
+COPY ui/ ./
+RUN pnpm build
+
+# =============================================================================
+# Stage 3: Runtime
 # =============================================================================
 FROM python:3.14-slim-bookworm AS runtime
 
@@ -68,6 +86,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/alembic /app/alembic
 COPY --from=builder /app/alembic.ini /app/alembic.ini
+COPY --from=ui-builder /app/ui/dist /app/ui/dist
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
@@ -76,6 +95,8 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+ENV HOMESEC_SERVER_SERVE_UI=true
+ENV HOMESEC_SERVER_UI_DIST_DIR=/app/ui/dist
 
 # Create directories for volume mounts and make entrypoint executable
 RUN chmod +x /app/docker-entrypoint.sh \
@@ -86,9 +107,9 @@ RUN chmod +x /app/docker-entrypoint.sh \
 USER homesec
 
 # Health check endpoint
-EXPOSE 8080
+EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')" || exit 1
 
 # Entrypoint runs migrations then starts app
 # Config and env are expected to be mounted at /config/

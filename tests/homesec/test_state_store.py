@@ -1,12 +1,17 @@
 """Tests for PostgresStateStore."""
 
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select, text, update
 
-from homesec.models.clip import ClipStateData
+from homesec.models.alert import AlertDecision
+from homesec.models.clip import ClipListCursor, ClipStateData
+from homesec.models.enums import ClipStatus
+from homesec.models.events import NotificationSentEvent
 from homesec.models.filter import FilterResult
+from homesec.models.vlm import AnalysisResult
 from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
@@ -257,3 +262,442 @@ async def test_list_candidate_clips_for_cleanup_skips_deleted_and_filters_camera
 
     # Then: Only that camera's non-deleted rows are returned
     assert ids_front == {"test-cleanup-a"}
+
+
+@pytest.mark.asyncio
+async def test_get_clip_returns_clip_id_and_created_at(state_store: PostgresStateStore) -> None:
+    """get_clip should hydrate clip_id and created_at metadata."""
+    # Given: A persisted clip state
+    clip_id = "test-get-clip-meta-001"
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status="queued_local",
+            local_path="/tmp/meta.mp4",
+        ),
+    )
+
+    # When: Fetching it by clip id
+    clip = await state_store.get_clip(clip_id)
+
+    # Then: Metadata fields are populated from row columns
+    assert clip is not None
+    assert clip.clip_id == clip_id
+    assert clip.created_at is not None
+    assert clip.created_at.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_clip_deleted_updates_persisted_status(state_store: PostgresStateStore) -> None:
+    """mark_clip_deleted should set status to deleted and persist the update."""
+    # Given: A clip state in a non-deleted status
+    clip_id = "test-mark-deleted-001"
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status="uploaded",
+            local_path="/tmp/deleted.mp4",
+        ),
+    )
+
+    # When: Marking the clip as deleted
+    deleted = await state_store.mark_clip_deleted(clip_id)
+
+    # Then: Returned state and persisted state both report deleted status
+    assert deleted.status == ClipStatus.DELETED
+    persisted = await state_store.get_clip(clip_id)
+    assert persisted is not None
+    assert persisted.status == ClipStatus.DELETED
+
+
+@pytest.mark.asyncio
+async def test_mark_clip_deleted_preserves_existing_jsonb_fields(
+    state_store: PostgresStateStore,
+) -> None:
+    """mark_clip_deleted should mutate status without clobbering unrelated JSONB fields."""
+    # Given: A clip row with extra JSONB fields outside ClipStateData schema
+    clip_id = "test-mark-deleted-preserve-001"
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/deleted-preserve.mp4",
+        ),
+    )
+    assert state_store._engine is not None
+    async with state_store._engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE clip_states
+                SET data = data || jsonb_build_object(
+                    'worker_metadata',
+                    jsonb_build_object('pid', CAST(:worker_pid AS integer))
+                )
+                WHERE clip_id = :clip_id
+                """
+            ),
+            {"clip_id": clip_id, "worker_pid": 42},
+        )
+
+    # When: Marking the clip as deleted
+    deleted = await state_store.mark_clip_deleted(clip_id)
+
+    # Then: Status is deleted and unrelated JSONB fields remain present
+    assert deleted.status == ClipStatus.DELETED
+    async with state_store._engine.connect() as conn:
+        raw_data = (
+            await conn.execute(select(ClipState.data).where(ClipState.clip_id == clip_id))
+        ).scalar_one()
+    assert isinstance(raw_data, dict)
+    assert raw_data["status"] == ClipStatus.DELETED.value
+    assert raw_data["worker_metadata"]["pid"] == 42
+
+
+@pytest.mark.asyncio
+async def test_list_clips_applies_filters_and_includes_clip_ids(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should support camera/status/alerted filters."""
+    # Given: Clips with mixed status and alert outcomes
+    await state_store.upsert(
+        "test-list-filters-a",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/a.mp4",
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-filters-b",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/b.mp4",
+            alert_decision=AlertDecision(notify=False, notify_reason="risk_level=low"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-filters-c",
+        ClipStateData(
+            camera_name="back_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/c.mp4",
+        ),
+    )
+
+    # When: Listing only front-door analyzed clips with alerts enabled
+    page = await state_store.list_clips(
+        camera="front_door",
+        status=ClipStatus.ANALYZED,
+        alerted=True,
+        limit=10,
+    )
+
+    # Then: Only the matching clip is returned with hydrated clip_id metadata
+    assert page.has_more is False
+    assert page.next_cursor is None
+    assert [clip.clip_id for clip in page.clips] == ["test-list-filters-a"]
+
+
+@pytest.mark.asyncio
+async def test_list_clips_alerted_false_includes_false_and_missing(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should treat missing alert_decision as alerted=false."""
+    # Given: Clips with true, false, and missing alert decisions
+    await state_store.upsert(
+        "test-alerted-false",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/alerted-false.mp4",
+            alert_decision=AlertDecision(notify=False, notify_reason="risk_level=low"),
+        ),
+    )
+    await state_store.upsert(
+        "test-alerted-missing",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/alerted-missing.mp4",
+        ),
+    )
+    await state_store.upsert(
+        "test-alerted-true",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/alerted-true.mp4",
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+
+    # When: Listing with alerted=false
+    page = await state_store.list_clips(alerted=False, limit=10)
+
+    # Then: Both explicit false and missing alert decision clips are returned
+    clip_ids = {clip.clip_id for clip in page.clips}
+    assert clip_ids == {"test-alerted-false", "test-alerted-missing"}
+
+
+@pytest.mark.asyncio
+async def test_list_clips_detected_filter_distinguishes_present_and_missing(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should support detected=true/false filtering via filter_result classes."""
+    # Given: Clips with detected classes, empty classes, and no filter_result
+    await state_store.upsert(
+        "test-detected-true",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/detected-true.mp4",
+            filter_result=FilterResult(
+                detected_classes=["person"],
+                confidence=0.99,
+                model="yolo",
+                sampled_frames=1,
+            ),
+        ),
+    )
+    await state_store.upsert(
+        "test-detected-empty",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/detected-empty.mp4",
+            filter_result=FilterResult(
+                detected_classes=[],
+                confidence=0.0,
+                model="yolo",
+                sampled_frames=1,
+            ),
+        ),
+    )
+    await state_store.upsert(
+        "test-detected-missing",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/detected-missing.mp4",
+        ),
+    )
+
+    # When: Listing with detected=true
+    detected_page = await state_store.list_clips(detected=True, limit=10)
+
+    # Then: Only clips with at least one detected class are returned
+    assert [clip.clip_id for clip in detected_page.clips] == ["test-detected-true"]
+
+    # When: Listing with detected=false
+    not_detected_page = await state_store.list_clips(detected=False, limit=10)
+
+    # Then: Empty and missing detection payloads are both included
+    assert {clip.clip_id for clip in not_detected_page.clips} == {
+        "test-detected-empty",
+        "test-detected-missing",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_clips_applies_risk_and_activity_filters(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should support risk_level and activity_type filters."""
+    # Given: Clips with different analysis results and alert decisions
+    await state_store.upsert(
+        "test-list-analysis-a",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/analysis-a.mp4",
+            analysis_result=AnalysisResult(
+                risk_level="high",
+                activity_type="person",
+                summary="person detected",
+            ),
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-analysis-b",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/analysis-b.mp4",
+            analysis_result=AnalysisResult(
+                risk_level="low",
+                activity_type="person",
+                summary="low-risk person",
+            ),
+            alert_decision=AlertDecision(notify=False, notify_reason="risk_level=low"),
+        ),
+    )
+    await state_store.upsert(
+        "test-list-analysis-c",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/analysis-c.mp4",
+            analysis_result=AnalysisResult(
+                risk_level="high",
+                activity_type="vehicle",
+                summary="vehicle detected",
+            ),
+            alert_decision=AlertDecision(notify=True, notify_reason="risk_level=high"),
+        ),
+    )
+
+    # When: Filtering by risk, activity type, and alerted state
+    page = await state_store.list_clips(
+        risk_level="high",
+        activity_type="PERSON",
+        alerted=True,
+        limit=10,
+    )
+
+    # Then: Only the matching clip is returned with case-insensitive filter behavior
+    assert page.has_more is False
+    assert page.next_cursor is None
+    assert [clip.clip_id for clip in page.clips] == ["test-list-analysis-a"]
+
+
+@pytest.mark.asyncio
+async def test_list_clips_excludes_deleted_by_default(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should exclude deleted records unless status filter requests them."""
+    # Given: One deleted clip and one active clip
+    await state_store.upsert(
+        "test-list-deleted-hidden",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.DELETED,
+            local_path="/tmp/deleted.mp4",
+        ),
+    )
+    await state_store.upsert(
+        "test-list-deleted-visible",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/visible.mp4",
+        ),
+    )
+
+    # When: Listing without a status filter
+    default_page = await state_store.list_clips(limit=10)
+
+    # Then: Deleted clip is excluded by default
+    assert [clip.clip_id for clip in default_page.clips] == ["test-list-deleted-visible"]
+
+    # When: Listing with explicit deleted status
+    deleted_page = await state_store.list_clips(status=ClipStatus.DELETED, limit=10)
+
+    # Then: Deleted clip is returned
+    assert [clip.clip_id for clip in deleted_page.clips] == ["test-list-deleted-hidden"]
+
+
+@pytest.mark.asyncio
+async def test_list_clips_keyset_cursor_uses_created_at_and_clip_id(
+    state_store: PostgresStateStore,
+) -> None:
+    """list_clips should page deterministically with keyset cursor and tie-break clip_id."""
+    # Given: Three clips with deterministic timestamps including a tie
+    tied_ts = datetime(2026, 2, 14, 3, 0, tzinfo=timezone.utc)
+    older_ts = datetime(2026, 2, 14, 2, 59, tzinfo=timezone.utc)
+    await state_store.upsert(
+        "test-keyset-b",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/keyset-b.mp4",
+        ),
+    )
+    await state_store.upsert(
+        "test-keyset-a",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/keyset-a.mp4",
+        ),
+    )
+    await state_store.upsert(
+        "test-keyset-c",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.UPLOADED,
+            local_path="/tmp/keyset-c.mp4",
+        ),
+    )
+    assert state_store._engine is not None
+    async with state_store._engine.begin() as conn:
+        await conn.execute(
+            update(ClipState).where(ClipState.clip_id == "test-keyset-b").values(created_at=tied_ts)
+        )
+        await conn.execute(
+            update(ClipState).where(ClipState.clip_id == "test-keyset-a").values(created_at=tied_ts)
+        )
+        await conn.execute(
+            update(ClipState)
+            .where(ClipState.clip_id == "test-keyset-c")
+            .values(created_at=older_ts)
+        )
+
+    # When: Reading the first page with limit 2
+    first_page = await state_store.list_clips(limit=2)
+
+    # Then: Tie-break ordering is deterministic and cursor points to last row
+    assert [clip.clip_id for clip in first_page.clips] == ["test-keyset-b", "test-keyset-a"]
+    assert first_page.has_more is True
+    assert first_page.next_cursor is not None
+    assert first_page.next_cursor == ClipListCursor(created_at=tied_ts, clip_id="test-keyset-a")
+
+    # When: Reading the next page with returned cursor
+    second_page = await state_store.list_clips(limit=2, cursor=first_page.next_cursor)
+
+    # Then: Remaining rows are returned and pagination ends
+    assert [clip.clip_id for clip in second_page.clips] == ["test-keyset-c"]
+    assert second_page.has_more is False
+    assert second_page.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_count_alerts_since_counts_notification_sent_events(
+    state_store: PostgresStateStore,
+) -> None:
+    """count_alerts_since should count notification_sent events only."""
+    # Given: A stored clip and one notification_sent event
+    clip_id = "test-alert-count-001"
+    now = datetime.now(timezone.utc)
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status="analyzed",
+            local_path="/tmp/alert-count.mp4",
+        ),
+    )
+    event_store = state_store.create_event_store()
+    await event_store.append(
+        NotificationSentEvent(
+            clip_id=clip_id,
+            timestamp=now,
+            notifier_name="mqtt",
+            dedupe_key=clip_id,
+            attempt=1,
+        )
+    )
+
+    # When: Counting alerts over a past and future window
+    recent_count = await state_store.count_alerts_since(now - timedelta(minutes=1))
+    future_count = await state_store.count_alerts_since(now + timedelta(minutes=1))
+
+    # Then: The event is counted in the past window only
+    assert recent_count == 1
+    assert future_count == 0

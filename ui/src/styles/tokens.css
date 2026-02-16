@@ -1,0 +1,57 @@
+:root {
+  --font-sans: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', 'Consolas', monospace;
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --duration-fast: 130ms;
+  --duration-normal: 220ms;
+
+  --surface-0: #f3f5f8;
+  --surface-1: #ffffff;
+  --surface-2: #e8ecf3;
+  --surface-elevated: rgba(255, 255, 255, 0.78);
+  --text-primary: #0f1a2c;
+  --text-secondary: #4f617b;
+  --text-muted: #73839c;
+  --line: rgba(15, 26, 44, 0.12);
+  --accent: #0f7c93;
+  --accent-strong: #0b6174;
+  --accent-contrast: #ffffff;
+  --success: #157347;
+  --warning: #ac6b08;
+  --danger: #b42318;
+  --shadow: 0 14px 40px rgba(32, 53, 82, 0.14);
+  --gradient-start: #d5ecff;
+  --gradient-end: #f5f9ff;
+}
+
+:root[data-theme='dark'] {
+  --surface-0: #0c111a;
+  --surface-1: #141c28;
+  --surface-2: #1b2533;
+  --surface-elevated: rgba(20, 28, 40, 0.8);
+  --text-primary: #ebf3ff;
+  --text-secondary: #b6c6dc;
+  --text-muted: #8ea2be;
+  --line: rgba(198, 216, 242, 0.17);
+  --accent: #58cbf2;
+  --accent-strong: #43a9ca;
+  --accent-contrast: #001722;
+  --success: #36c48b;
+  --warning: #f0b34e;
+  --danger: #fd7068;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  --gradient-start: #10192a;
+  --gradient-end: #06090f;
+}

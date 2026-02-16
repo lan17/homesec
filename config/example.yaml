@@ -195,9 +195,3 @@ alert_policy:
 #   upload_workers: 4
 #   filter_workers: 4
 #   vlm_workers: 2
-
-# Health check server
-# health:
-#   host: "0.0.0.0"
-#   port: 8080
-#   mqtt_is_critical: false
