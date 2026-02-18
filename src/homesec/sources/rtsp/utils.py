@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 
 logger = logging.getLogger(__name__)
@@ -42,3 +43,18 @@ def _build_timeout_attempts(timeout_args: list[str]) -> list[tuple[str, list[str
 
 def _next_backoff(backoff_s: float, cap_s: float, *, factor: float = 1.6) -> float:
     return min(backoff_s * factor, cap_s)
+
+
+def _signal_process_group(pid: int, sig: int) -> bool:
+    """Best-effort process-group signal for spawned ffmpeg trees."""
+    if not hasattr(os, "killpg"):
+        return False
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        return False
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except OSError:
+        return False

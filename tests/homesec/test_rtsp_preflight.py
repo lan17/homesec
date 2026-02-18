@@ -455,6 +455,7 @@ def test_session_limit_validation_retries_without_timeout_flags(
     calls: list[list[str]] = []
 
     def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        assert _kwargs.get("start_new_session") is True
         calls.append(list(cmd))
         if "-rw_timeout" in cmd or "-stimeout" in cmd:
             return _FakeProc(returncode=1, stderr_text="Option rw_timeout not found")
@@ -514,6 +515,7 @@ def test_session_limit_validation_non_timeout_failure_does_not_retry_without_tim
     calls: list[list[str]] = []
 
     def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        assert _kwargs.get("start_new_session") is True
         calls.append(list(cmd))
         return _FakeProc(returncode=1, stderr_text="Connection refused")
 
@@ -570,6 +572,7 @@ def test_session_limit_validation_requires_clean_exit_after_overlap(
     calls: list[list[str]] = []
 
     def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        assert _kwargs.get("start_new_session") is True
         calls.append(list(cmd))
         return _FakeProc(final_exit=1, stderr_text="Session ended")
 

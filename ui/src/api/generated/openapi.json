@@ -1,0 +1,1345 @@
+{
+  "components": {
+    "schemas": {
+      "CameraCreate": {
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source_backend": {
+            "title": "Source Backend",
+            "type": "string"
+          },
+          "source_config": {
+            "additionalProperties": true,
+            "title": "Source Config",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "source_backend",
+          "source_config"
+        ],
+        "title": "CameraCreate",
+        "type": "object"
+      },
+      "CameraResponse": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "last_heartbeat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source_backend": {
+            "title": "Source Backend",
+            "type": "string"
+          },
+          "source_config": {
+            "additionalProperties": true,
+            "title": "Source Config",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "enabled",
+          "source_backend",
+          "healthy",
+          "last_heartbeat",
+          "source_config"
+        ],
+        "title": "CameraResponse",
+        "type": "object"
+      },
+      "CameraStatus": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "last_heartbeat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat"
+          }
+        },
+        "required": [
+          "healthy",
+          "enabled",
+          "last_heartbeat"
+        ],
+        "title": "CameraStatus",
+        "type": "object"
+      },
+      "CameraUpdate": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "source_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Config"
+          }
+        },
+        "title": "CameraUpdate",
+        "type": "object"
+      },
+      "ClipListResponse": {
+        "properties": {
+          "clips": {
+            "items": {
+              "$ref": "#/components/schemas/ClipResponse"
+            },
+            "title": "Clips",
+            "type": "array"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "clips",
+          "limit",
+          "next_cursor",
+          "has_more"
+        ],
+        "title": "ClipListResponse",
+        "type": "object"
+      },
+      "ClipMediaTokenResponse": {
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "media_url": {
+            "title": "Media Url",
+            "type": "string"
+          },
+          "tokenized": {
+            "title": "Tokenized",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "media_url",
+          "tokenized",
+          "expires_at"
+        ],
+        "title": "ClipMediaTokenResponse",
+        "type": "object"
+      },
+      "ClipResponse": {
+        "properties": {
+          "activity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Type"
+          },
+          "alerted": {
+            "default": false,
+            "title": "Alerted",
+            "type": "boolean"
+          },
+          "camera": {
+            "title": "Camera",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detected_objects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Detected Objects",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "risk_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Level"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "storage_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Uri"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "view_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View Url"
+          }
+        },
+        "required": [
+          "id",
+          "camera",
+          "status",
+          "created_at"
+        ],
+        "title": "ClipResponse",
+        "type": "object"
+      },
+      "ClipStatus": {
+        "description": "Clip processing status values.\n\nRepresents the high-level status of a clip in the processing pipeline.",
+        "enum": [
+          "queued_local",
+          "uploaded",
+          "analyzed",
+          "done",
+          "error",
+          "deleted"
+        ],
+        "title": "ClipStatus",
+        "type": "string"
+      },
+      "ComponentStatus": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ComponentStatus",
+        "type": "object"
+      },
+      "ConfigChangeResponse": {
+        "properties": {
+          "camera": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CameraResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restart_required": {
+            "default": true,
+            "title": "Restart Required",
+            "type": "boolean"
+          }
+        },
+        "title": "ConfigChangeResponse",
+        "type": "object"
+      },
+      "ConfigResponse": {
+        "description": "Returns the full config (secrets shown as env var names, not values).",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "ConfigResponse",
+        "type": "object"
+      },
+      "DiagnosticsResponse": {
+        "properties": {
+          "cameras": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CameraStatus"
+            },
+            "title": "Cameras",
+            "type": "object"
+          },
+          "postgres": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "uptime_seconds": {
+            "title": "Uptime Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "uptime_seconds",
+          "postgres",
+          "storage",
+          "cameras"
+        ],
+        "title": "DiagnosticsResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "cameras_online": {
+            "title": "Cameras Online",
+            "type": "integer"
+          },
+          "pipeline": {
+            "title": "Pipeline",
+            "type": "string"
+          },
+          "postgres": {
+            "title": "Postgres",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "pipeline",
+          "postgres",
+          "cameras_online"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "RuntimeReloadResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "target_generation": {
+            "title": "Target Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted",
+          "message",
+          "target_generation"
+        ],
+        "title": "RuntimeReloadResponse",
+        "type": "object"
+      },
+      "RuntimeState": {
+        "description": "Lifecycle state for the active runtime.",
+        "enum": [
+          "idle",
+          "reloading",
+          "failed"
+        ],
+        "title": "RuntimeState",
+        "type": "string"
+      },
+      "RuntimeStatusResponse": {
+        "properties": {
+          "active_config_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Config Version"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "last_reload_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reload At"
+          },
+          "last_reload_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reload Error"
+          },
+          "reload_in_progress": {
+            "title": "Reload In Progress",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RuntimeState"
+          }
+        },
+        "required": [
+          "state",
+          "generation",
+          "reload_in_progress",
+          "active_config_version",
+          "last_reload_at",
+          "last_reload_error"
+        ],
+        "title": "RuntimeStatusResponse",
+        "type": "object"
+      },
+      "StatsResponse": {
+        "properties": {
+          "alerts_today": {
+            "title": "Alerts Today",
+            "type": "integer"
+          },
+          "cameras_online": {
+            "title": "Cameras Online",
+            "type": "integer"
+          },
+          "cameras_total": {
+            "title": "Cameras Total",
+            "type": "integer"
+          },
+          "clips_today": {
+            "title": "Clips Today",
+            "type": "integer"
+          },
+          "uptime_seconds": {
+            "title": "Uptime Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "clips_today",
+          "alerts_today",
+          "cameras_total",
+          "cameras_online",
+          "uptime_seconds"
+        ],
+        "title": "StatsResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "HomeSec API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/cameras": {
+      "get": {
+        "description": "List all cameras.",
+        "operationId": "list_cameras_api_v1_cameras_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CameraResponse"
+                  },
+                  "title": "Response List Cameras Api V1 Cameras Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Cameras",
+        "tags": [
+          "cameras"
+        ]
+      },
+      "post": {
+        "description": "Create a new camera.",
+        "operationId": "create_camera_api_v1_cameras_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CameraCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigChangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Camera",
+        "tags": [
+          "cameras"
+        ]
+      }
+    },
+    "/api/v1/cameras/{name}": {
+      "delete": {
+        "description": "Delete a camera.",
+        "operationId": "delete_camera_api_v1_cameras__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigChangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Camera",
+        "tags": [
+          "cameras"
+        ]
+      },
+      "get": {
+        "description": "Get a single camera.",
+        "operationId": "get_camera_api_v1_cameras__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Camera",
+        "tags": [
+          "cameras"
+        ]
+      },
+      "put": {
+        "description": "Update a camera.",
+        "operationId": "update_camera_api_v1_cameras__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CameraUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigChangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Camera",
+        "tags": [
+          "cameras"
+        ]
+      }
+    },
+    "/api/v1/clips": {
+      "get": {
+        "description": "List clips with filtering and keyset pagination.",
+        "operationId": "list_clips_api_v1_clips_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "camera",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Camera"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ClipStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "alerted",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Alerted"
+            }
+          },
+          {
+            "in": "query",
+            "name": "detected",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Detected"
+            }
+          },
+          {
+            "in": "query",
+            "name": "risk_level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Risk Level"
+            }
+          },
+          {
+            "in": "query",
+            "name": "activity_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Activity Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Clips",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/v1/clips/{clip_id}": {
+      "delete": {
+        "description": "Delete a clip and its storage object.",
+        "operationId": "delete_clip_api_v1_clips__clip_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Clip",
+        "tags": [
+          "clips"
+        ]
+      },
+      "get": {
+        "description": "Get a single clip.",
+        "operationId": "get_clip_api_v1_clips__clip_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clip",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/v1/clips/{clip_id}/media": {
+      "get": {
+        "description": "Stream clip media through HomeSec for in-app playback.",
+        "operationId": "get_clip_media_api_v1_clips__clip_id__media_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clip Media",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/v1/clips/{clip_id}/media-token": {
+      "post": {
+        "description": "Create media playback URL.\n\nWhen auth is disabled, returns direct media URL with tokenized=False and expires_at=None.\nWhen auth is enabled, returns tokenized URL with tokenized=True and non-null expires_at.",
+        "operationId": "create_clip_media_token_api_v1_clips__clip_id__media_token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clip_id",
+            "required": true,
+            "schema": {
+              "title": "Clip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipMediaTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Clip Media Token",
+        "tags": [
+          "clips"
+        ]
+      }
+    },
+    "/api/v1/config": {
+      "get": {
+        "description": "Return full configuration.",
+        "operationId": "get_config_api_v1_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Config",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/diagnostics": {
+      "get": {
+        "description": "Detailed component diagnostics.",
+        "operationId": "get_diagnostics_api_v1_diagnostics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Diagnostics",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "description": "Versioned health check endpoint.",
+        "operationId": "get_health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/runtime/reload": {
+      "post": {
+        "description": "Trigger runtime reload and return async acceptance outcome.",
+        "operationId": "reload_runtime_api_v1_runtime_reload_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeReloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reload Runtime",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/v1/runtime/status": {
+      "get": {
+        "description": "Return runtime-manager status.",
+        "operationId": "get_runtime_status_api_v1_runtime_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Runtime Status",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "description": "Return system statistics.",
+        "operationId": "get_stats_api_v1_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Stats",
+        "tags": [
+          "stats"
+        ]
+      }
+    }
+  }
+}
