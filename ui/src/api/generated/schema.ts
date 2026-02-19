@@ -40,11 +40,7 @@ export interface paths {
          * @description Get a single camera.
          */
         get: operations["get_camera_api_v1_cameras__name__get"];
-        /**
-         * Update Camera
-         * @description Update a camera.
-         */
-        put: operations["update_camera_api_v1_cameras__name__put"];
+        put?: never;
         post?: never;
         /**
          * Delete Camera
@@ -53,7 +49,11 @@ export interface paths {
         delete: operations["delete_camera_api_v1_cameras__name__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Camera
+         * @description Partially update a camera.
+         */
+        patch: operations["update_camera_api_v1_cameras__name__patch"];
         trace?: never;
     };
     "/api/v1/clips": {
@@ -313,6 +313,8 @@ export interface components {
         CameraUpdate: {
             /** Enabled */
             enabled?: boolean | null;
+            /** Source Backend */
+            source_backend?: string | null;
             /** Source Config */
             source_config?: {
                 [key: string]: unknown;
@@ -582,7 +584,7 @@ export interface operations {
             };
         };
     };
-    update_camera_api_v1_cameras__name__put: {
+    delete_camera_api_v1_cameras__name__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -591,11 +593,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CameraUpdate"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -617,7 +615,7 @@ export interface operations {
             };
         };
     };
-    delete_camera_api_v1_cameras__name__delete: {
+    update_camera_api_v1_cameras__name__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -626,7 +624,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CameraUpdate"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

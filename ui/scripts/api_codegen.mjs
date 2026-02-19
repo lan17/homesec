@@ -190,7 +190,7 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
   })
   const cameraUpdateSchemaName = resolveRequestBodySchemaName(schema, {
     pathName: '/api/v1/cameras/{name}',
-    method: 'put',
+    method: 'patch',
     fallbackSchemaName: 'CameraUpdate',
   })
   const configChangeSchemaName = resolveResponseSchemaName(schema, {

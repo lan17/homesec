@@ -504,7 +504,7 @@ describe('HomeSecApiClient camera mutation methods', () => {
     expect(result.httpStatus).toBe(201)
   })
 
-  it('puts camera enabled toggle payload and parses config-change response', async () => {
+  it('patches camera enabled toggle payload and parses config-change response', async () => {
     // Given: A camera update endpoint with restart-required response
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
@@ -530,10 +530,10 @@ describe('HomeSecApiClient camera mutation methods', () => {
     // When: Updating camera enabled state
     const result = await client.updateCamera('garage', { enabled: false })
 
-    // Then: Client should issue PUT request and return parsed camera payload
+    // Then: Client should issue PATCH request and return parsed camera payload
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/cameras/garage')
-    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' })
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'PATCH' })
     expect(result.restart_required).toBe(true)
     expect(result.camera?.enabled).toBe(false)
   })

@@ -11,6 +11,12 @@ from pydantic import BaseModel
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import redact_config
+from homesec.config.errors import (
+    CameraAlreadyExistsError,
+    CameraConfigInvalidError,
+    CameraMutationError,
+    CameraNotFoundError,
+)
 from homesec.models.config import CameraConfig
 
 if TYPE_CHECKING:
@@ -28,6 +34,7 @@ class CameraCreate(BaseModel):
 
 class CameraUpdate(BaseModel):
     enabled: bool | None = None
+    source_backend: str | None = None
     source_config: dict[str, object] | None = None
 
 
@@ -75,22 +82,27 @@ def _camera_response(app: Application, camera: CameraConfig) -> CameraResponse:
     )
 
 
-def _map_camera_config_error(exc: ValueError) -> APIError:
-    detail = str(exc)
-    if detail.startswith("Camera not found:"):
+def _map_camera_config_error(exc: CameraMutationError) -> APIError:
+    if isinstance(exc, CameraNotFoundError):
         return APIError(
-            detail,
+            str(exc),
             status_code=status.HTTP_404_NOT_FOUND,
             error_code=APIErrorCode.CAMERA_NOT_FOUND,
         )
-    if detail.startswith("Camera already exists:"):
+    if isinstance(exc, CameraAlreadyExistsError):
         return APIError(
-            detail,
+            str(exc),
             status_code=status.HTTP_409_CONFLICT,
             error_code=APIErrorCode.CAMERA_ALREADY_EXISTS,
         )
+    if isinstance(exc, CameraConfigInvalidError):
+        return APIError(
+            str(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code=APIErrorCode.CAMERA_CONFIG_INVALID,
+        )
     return APIError(
-        detail,
+        str(exc),
         status_code=status.HTTP_400_BAD_REQUEST,
         error_code=APIErrorCode.CAMERA_CONFIG_INVALID,
     )
@@ -129,7 +141,7 @@ async def create_camera(
             source_backend=payload.source_backend,
             source_config=payload.source_config,
         )
-    except ValueError as exc:
+    except CameraMutationError as exc:
         raise _map_camera_config_error(exc) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
@@ -140,20 +152,21 @@ async def create_camera(
     )
 
 
-@router.put("/api/v1/cameras/{name}", response_model=ConfigChangeResponse)
+@router.patch("/api/v1/cameras/{name}", response_model=ConfigChangeResponse)
 async def update_camera(
     name: str,
     payload: CameraUpdate,
     app: Application = Depends(get_homesec_app),
 ) -> ConfigChangeResponse:
-    """Update a camera."""
+    """Partially update a camera."""
     try:
         result = await app.config_manager.update_camera(
             camera_name=name,
             enabled=payload.enabled,
+            source_backend=payload.source_backend,
             source_config=payload.source_config,
         )
-    except ValueError as exc:
+    except CameraMutationError as exc:
         raise _map_camera_config_error(exc) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
@@ -178,7 +191,7 @@ async def delete_camera(
     """Delete a camera."""
     try:
         result = await app.config_manager.remove_camera(camera_name=name)
-    except ValueError as exc:
+    except CameraMutationError as exc:
         raise _map_camera_config_error(exc) from exc
 
     return ConfigChangeResponse(restart_required=result.restart_required, camera=None)

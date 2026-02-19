@@ -9,6 +9,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from homesec.config.errors import (
+    CameraAlreadyExistsError,
+    CameraConfigInvalidError,
+    CameraConfigRedactedPlaceholderError,
+    CameraNotFoundError,
+)
 from homesec.config.loader import load_config_from_dict
 from homesec.config.manager import ConfigManager
 
@@ -55,6 +61,7 @@ async def test_config_manager_add_update_remove_camera(tmp_path: Path) -> None:
     await manager.update_camera(
         camera_name="front",
         enabled=False,
+        source_backend=None,
         source_config={"watch_dir": "/new"},
     )
 
@@ -89,7 +96,7 @@ async def test_config_manager_add_duplicate_raises(tmp_path: Path) -> None:
     )
 
     # When adding a duplicate camera
-    with pytest.raises(ValueError):
+    with pytest.raises(CameraAlreadyExistsError):
         await manager.add_camera(
             name="front",
             enabled=True,
@@ -108,8 +115,13 @@ async def test_config_manager_update_missing_raises(tmp_path: Path) -> None:
     manager = _write_config(config_path, cameras=[])
 
     # When updating a missing camera
-    with pytest.raises(ValueError):
-        await manager.update_camera(camera_name="missing", enabled=False, source_config=None)
+    with pytest.raises(CameraNotFoundError):
+        await manager.update_camera(
+            camera_name="missing",
+            enabled=False,
+            source_backend=None,
+            source_config=None,
+        )
 
     # Then it raises a validation error
 
@@ -122,7 +134,7 @@ async def test_config_manager_remove_missing_raises(tmp_path: Path) -> None:
     manager = _write_config(config_path, cameras=[])
 
     # When removing a missing camera
-    with pytest.raises(ValueError):
+    with pytest.raises(CameraNotFoundError):
         await manager.remove_camera(camera_name="missing")
 
     # Then it raises a validation error
@@ -145,10 +157,11 @@ async def test_config_manager_invalid_update_raises(tmp_path: Path) -> None:
     )
 
     # When updating with invalid source config
-    with pytest.raises(ValueError):
+    with pytest.raises(CameraConfigInvalidError):
         await manager.update_camera(
             camera_name="front",
             enabled=None,
+            source_backend=None,
             source_config={"poll_interval": -1.0},
         )
 
@@ -184,6 +197,156 @@ async def test_config_manager_add_camera_concurrent_updates_preserve_all_changes
     config = manager.get_config()
     names = {camera.name for camera in config.cameras}
     assert names == {"front", "back"}
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_camera_merges_source_config_and_preserves_existing_keys(
+    tmp_path: Path,
+) -> None:
+    """Camera updates should merge source_config patches instead of replacing full config."""
+    # Given a camera source config containing secret and non-secret fields
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(
+        config_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "rtsp",
+                    "config": {
+                        "rtsp_url": "rtsp://user:pass@camera.local/stream",
+                        "output_dir": "/tmp/front",
+                        "stream": {"connect_timeout_s": 2.0, "io_timeout_s": 2.0},
+                    },
+                },
+            }
+        ],
+    )
+
+    # When applying a partial patch for one nested config field
+    await manager.update_camera(
+        camera_name="front",
+        enabled=None,
+        source_backend=None,
+        source_config={"stream": {"connect_timeout_s": 5.0}},
+    )
+
+    # Then existing unrelated keys remain and only patched value changes
+    config = manager.get_config()
+    updated = next(camera for camera in config.cameras if camera.name == "front")
+    assert updated.source.config["rtsp_url"] == "rtsp://user:pass@camera.local/stream"
+    assert updated.source.config["output_dir"] == "/tmp/front"
+    assert updated.source.config["stream"]["connect_timeout_s"] == 5.0
+    assert updated.source.config["stream"]["io_timeout_s"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_camera_rejects_redacted_placeholder_values(
+    tmp_path: Path,
+) -> None:
+    """Camera update should reject redacted placeholders in source_config patches."""
+    # Given a camera with a persisted source config
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(
+        config_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "rtsp",
+                    "config": {"rtsp_url": "rtsp://user:pass@camera.local/stream"},
+                },
+            }
+        ],
+    )
+
+    # When applying a patch containing redacted placeholder marker
+    with pytest.raises(CameraConfigRedactedPlaceholderError):
+        await manager.update_camera(
+            camera_name="front",
+            enabled=None,
+            source_backend=None,
+            source_config={"rtsp_url": "rtsp://***redacted***@camera.local/stream"},
+        )
+
+    # Then persisted config remains unchanged
+    config = manager.get_config()
+    updated = next(camera for camera in config.cameras if camera.name == "front")
+    assert updated.source.config["rtsp_url"] == "rtsp://user:pass@camera.local/stream"
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_camera_supports_backend_switch_with_new_config(
+    tmp_path: Path,
+) -> None:
+    """Camera update should allow switching source backend when config patch is valid."""
+    # Given a local-folder camera
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(
+        config_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ],
+    )
+
+    # When switching backend to RTSP with an RTSP source_config patch
+    await manager.update_camera(
+        camera_name="front",
+        enabled=None,
+        source_backend="rtsp",
+        source_config={"rtsp_url": "rtsp://user:pass@camera.local/stream"},
+    )
+
+    # Then backend and source config are updated to the new source type
+    config = manager.get_config()
+    updated = next(camera for camera in config.cameras if camera.name == "front")
+    assert updated.source.backend == "rtsp"
+    assert updated.source.config["rtsp_url"] == "rtsp://user:pass@camera.local/stream"
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_camera_allows_null_clear_for_optional_source_fields(
+    tmp_path: Path,
+) -> None:
+    """Null values in source_config patch should clear optional fields."""
+    # Given an RTSP camera with optional detect stream URL configured
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(
+        config_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "rtsp",
+                    "config": {
+                        "rtsp_url": "rtsp://user:pass@camera.local/stream",
+                        "detect_rtsp_url": "rtsp://user:pass@camera.local/detect",
+                    },
+                },
+            }
+        ],
+    )
+
+    # When clearing optional detect_rtsp_url via null patch value
+    await manager.update_camera(
+        camera_name="front",
+        enabled=None,
+        source_backend=None,
+        source_config={"detect_rtsp_url": None},
+    )
+
+    # Then the optional field is removed while required fields remain
+    config = manager.get_config()
+    updated = next(camera for camera in config.cameras if camera.name == "front")
+    assert "detect_rtsp_url" not in updated.source.config
+    assert updated.source.config["rtsp_url"] == "rtsp://user:pass@camera.local/stream"
 
 
 @pytest.mark.asyncio

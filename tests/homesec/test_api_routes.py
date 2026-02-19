@@ -513,7 +513,7 @@ def test_delete_camera_missing_returns_404(tmp_path) -> None:
 
 
 def test_update_camera(tmp_path) -> None:
-    """PUT /cameras/{name} should update camera fields."""
+    """PATCH /cameras/{name} should update camera fields."""
     # Given a config with one camera
     manager = _write_config(
         tmp_path,
@@ -529,7 +529,7 @@ def test_update_camera(tmp_path) -> None:
     client = _client(app)
 
     # When updating the camera
-    response = client.put(
+    response = client.patch(
         "/api/v1/cameras/front",
         json={"enabled": False, "source_config": {"watch_dir": "/new"}},
     )
@@ -542,7 +542,7 @@ def test_update_camera(tmp_path) -> None:
 
 
 def test_update_camera_invalid_config_returns_400(tmp_path) -> None:
-    """PUT /cameras/{name} should return 400 for invalid config."""
+    """PATCH /cameras/{name} should return 400 for invalid config."""
     # Given a config with one camera
     manager = _write_config(
         tmp_path,
@@ -558,7 +558,7 @@ def test_update_camera_invalid_config_returns_400(tmp_path) -> None:
     client = _client(app)
 
     # When updating with an invalid source config
-    response = client.put(
+    response = client.patch(
         "/api/v1/cameras/front",
         json={"source_config": {"poll_interval": -1.0}},
     )
@@ -570,14 +570,14 @@ def test_update_camera_invalid_config_returns_400(tmp_path) -> None:
 
 
 def test_update_camera_missing_returns_404(tmp_path) -> None:
-    """PUT /cameras/{name} should return 404 when missing."""
+    """PATCH /cameras/{name} should return 404 when missing."""
     # Given a config with no cameras
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
     client = _client(app)
 
     # When updating a missing camera
-    response = client.put("/api/v1/cameras/missing", json={"enabled": False})
+    response = client.patch("/api/v1/cameras/missing", json={"enabled": False})
 
     # Then it returns 404 with canonical error code
     assert response.status_code == 404
@@ -586,7 +586,7 @@ def test_update_camera_missing_returns_404(tmp_path) -> None:
 
 
 def test_update_camera_returns_404_when_camera_removed_after_update(tmp_path, monkeypatch) -> None:
-    """PUT /cameras/{name} should return 404 when camera disappears after update."""
+    """PATCH /cameras/{name} should return 404 when camera disappears after update."""
     # Given a config manager whose update succeeds but subsequent read omits the camera
     manager = _write_config(
         tmp_path,
@@ -604,21 +604,126 @@ def test_update_camera_returns_404_when_camera_removed_after_update(tmp_path, mo
     async def _update_camera(
         camera_name: str,
         enabled: bool | None = None,
+        source_backend: str | None = None,
         source_config: dict[str, object] | None = None,
     ) -> SimpleNamespace:
-        _ = (camera_name, enabled, source_config)
+        _ = (camera_name, enabled, source_backend, source_config)
         return SimpleNamespace(restart_required=True)
 
     monkeypatch.setattr(app.config_manager, "update_camera", _update_camera)
     monkeypatch.setattr(app.config_manager, "get_config", lambda: SimpleNamespace(cameras=[]))
 
     # When updating an existing camera
-    response = client.put("/api/v1/cameras/front", json={"enabled": False})
+    response = client.patch("/api/v1/cameras/front", json={"enabled": False})
 
     # Then route returns canonical not-found because camera vanished post-update
     assert response.status_code == 404
     payload = response.json()
     assert payload["error_code"] == "CAMERA_NOT_FOUND"
+
+
+def test_update_camera_rejects_redacted_source_config_patch(tmp_path) -> None:
+    """PATCH /cameras/{name} should reject redacted placeholder source_config values."""
+    # Given a config with one RTSP camera
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "rtsp",
+                    "config": {"rtsp_url": "rtsp://user:pass@camera.local/stream"},
+                },
+            }
+        ],
+    )
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When patching source_config with the redacted URL placeholder
+    response = client.patch(
+        "/api/v1/cameras/front",
+        json={"source_config": {"rtsp_url": "rtsp://***redacted***@camera.local/stream"}},
+    )
+
+    # Then route rejects mutation with canonical config-invalid error
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_CONFIG_INVALID"
+
+
+def test_update_camera_supports_source_backend_switch(tmp_path) -> None:
+    """PATCH /cameras/{name} should support changing source_backend with valid config."""
+    # Given a local-folder camera
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ],
+    )
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When switching to RTSP backend with compatible source_config
+    response = client.patch(
+        "/api/v1/cameras/front",
+        json={
+            "source_backend": "rtsp",
+            "source_config": {"rtsp_url": "rtsp://user:pass@camera.local/stream"},
+        },
+    )
+
+    # Then the updated camera response reflects the new source backend
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["camera"]["source_backend"] == "rtsp"
+    assert (
+        payload["camera"]["source_config"]["rtsp_url"]
+        == "rtsp://***redacted***@camera.local/stream"
+    )
+
+
+def test_update_camera_null_patch_value_clears_optional_source_field(tmp_path) -> None:
+    """PATCH /cameras/{name} should clear optional source fields when null is provided."""
+    # Given an RTSP camera with optional detect stream URL configured
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "rtsp",
+                    "config": {
+                        "rtsp_url": "rtsp://user:pass@camera.local/stream",
+                        "detect_rtsp_url": "rtsp://user:pass@camera.local/detect",
+                    },
+                },
+            }
+        ],
+    )
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When patching optional detect_rtsp_url to null
+    response = client.patch(
+        "/api/v1/cameras/front",
+        json={"source_config": {"detect_rtsp_url": None}},
+    )
+
+    # Then the optional field is cleared from response while required field remains
+    assert response.status_code == 200
+    payload = response.json()
+    assert "detect_rtsp_url" not in payload["camera"]["source_config"]
+    assert (
+        payload["camera"]["source_config"]["rtsp_url"]
+        == "rtsp://***redacted***@camera.local/stream"
+    )
 
 
 def test_get_config_returns_full_config(tmp_path) -> None:

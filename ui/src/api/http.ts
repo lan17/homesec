@@ -8,7 +8,7 @@ type QueryValue = string | number | boolean | null | undefined
 export interface RequestJsonOptions extends ApiRequestOptions {
   allowStatuses?: number[]
   query?: Record<string, QueryValue>
-  method?: 'DELETE' | 'GET' | 'POST' | 'PUT'
+  method?: 'DELETE' | 'GET' | 'PATCH' | 'POST' | 'PUT'
   body?: unknown
 }
 
