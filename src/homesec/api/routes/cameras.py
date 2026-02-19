@@ -48,16 +48,16 @@ class CameraResponse(BaseModel):
     source_config: dict[str, object]
 
 
-class ConfigChangeResponse(BaseModel):
-    restart_required: bool = True
-    camera: CameraResponse | None = None
-    runtime_reload: RuntimeReloadResponse | None = None
-
-
 class RuntimeReloadResponse(BaseModel):
     accepted: bool
     message: str
     target_generation: int
+
+
+class ConfigChangeResponse(BaseModel):
+    restart_required: bool = True
+    camera: CameraResponse | None = None
+    runtime_reload: RuntimeReloadResponse | None = None
 
 
 def _source_config_to_dict(camera: CameraConfig) -> dict[str, object]:

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 
 import type { CameraCreate, CameraResponse } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
@@ -25,7 +25,10 @@ export function CameraSourceConfigEditor({
   applyChangesImmediately,
   onSubmitPatch,
 }: CameraSourceConfigEditorProps) {
-  const defaultPatchRaw = defaultSourceConfigPatchForCamera(camera.source_config)
+  const defaultPatchRaw = useMemo(
+    () => defaultSourceConfigPatchForCamera(camera.source_config),
+    [camera.source_config],
+  )
   const [isOpen, setIsOpen] = useState(false)
   const [patchRaw, setPatchRaw] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -51,7 +54,9 @@ export function CameraSourceConfigEditor({
       setIsOpen(false)
       setPatchRaw(null)
       setFormError(null)
+      return
     }
+    setFormError('Source config update failed. Review the page error details and retry.')
   }
 
   if (!isOpen) {

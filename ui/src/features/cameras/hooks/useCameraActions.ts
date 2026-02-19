@@ -73,7 +73,15 @@ export function useCameraActions({
     setPendingReloadMessage(null)
   }
 
-  function applyMutationOutcome({
+  function setMutationFailureFeedback(context: string, error: unknown): void {
+    if (error instanceof Error && error.message.trim().length > 0) {
+      setActionFeedback(`${context} failed: ${error.message}`)
+      return
+    }
+    setActionFeedback(`${context} failed.`)
+  }
+
+  function applyMutationOutcomeAndDetectReload({
     response,
     restartMessage,
     successMessage,
@@ -99,16 +107,17 @@ export function useCameraActions({
     setActionFeedback(null)
     try {
       const response = await createCameraMutation.mutateAsync({ payload, applyChanges })
-      const reloadRequested = applyMutationOutcome({
+      const didRequestReload = applyMutationOutcomeAndDetectReload({
         response,
         restartMessage: `Camera "${payload.name}" created. Runtime reload required.`,
         successMessage: `Camera "${payload.name}" created.`,
       })
-      if (reloadRequested) {
+      if (didRequestReload) {
         await onRuntimeStatusRefresh()
       }
       return true
-    } catch {
+    } catch (error: unknown) {
+      setMutationFailureFeedback(`Camera "${payload.name}" create`, error)
       return false
     }
   }
@@ -125,16 +134,17 @@ export function useCameraActions({
         applyChanges,
       })
 
-      const reloadRequested = applyMutationOutcome({
+      const didRequestReload = applyMutationOutcomeAndDetectReload({
         response,
         restartMessage: `Camera "${camera.name}" ${verb}. Runtime reload required.`,
         successMessage: `Camera "${camera.name}" ${verb}.`,
       })
-      if (reloadRequested) {
+      if (didRequestReload) {
         await onRuntimeStatusRefresh()
       }
       return true
-    } catch {
+    } catch (error: unknown) {
+      setMutationFailureFeedback(`Camera "${camera.name}" ${verb}`, error)
       return false
     }
   }
@@ -151,16 +161,17 @@ export function useCameraActions({
         payload: { source_config: sourceConfigPatch },
         applyChanges,
       })
-      const reloadRequested = applyMutationOutcome({
+      const didRequestReload = applyMutationOutcomeAndDetectReload({
         response,
         restartMessage: `Camera "${cameraName}" source config updated. Runtime reload required.`,
         successMessage: `Camera "${cameraName}" source config updated.`,
       })
-      if (reloadRequested) {
+      if (didRequestReload) {
         await onRuntimeStatusRefresh()
       }
       return true
-    } catch {
+    } catch (error: unknown) {
+      setMutationFailureFeedback(`Camera "${cameraName}" source config update`, error)
       return false
     }
   }
@@ -169,16 +180,17 @@ export function useCameraActions({
     setActionFeedback(null)
     try {
       const response = await deleteCameraMutation.mutateAsync({ name: cameraName, applyChanges })
-      const reloadRequested = applyMutationOutcome({
+      const didRequestReload = applyMutationOutcomeAndDetectReload({
         response,
         restartMessage: `Camera "${cameraName}" deleted. Runtime reload required.`,
         successMessage: `Camera "${cameraName}" deleted.`,
       })
-      if (reloadRequested) {
+      if (didRequestReload) {
         await onRuntimeStatusRefresh()
       }
       return true
-    } catch {
+    } catch (error: unknown) {
+      setMutationFailureFeedback(`Camera "${cameraName}" delete`, error)
       return false
     }
   }
@@ -191,7 +203,8 @@ export function useCameraActions({
       setActionFeedback(response.message)
       await onRuntimeStatusRefresh()
       return true
-    } catch {
+    } catch (error: unknown) {
+      setMutationFailureFeedback('Runtime reload', error)
       return false
     }
   }

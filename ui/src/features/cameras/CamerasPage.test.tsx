@@ -63,11 +63,13 @@ function setupPage({
   runtimeStatus = makeDefaultRuntimeStatus(),
   hasPendingReload = false,
   pendingReloadMessage = null,
+  patchSourceConfigSucceeds = true,
 }: {
   cameras?: CameraResponse[]
   runtimeStatus?: RuntimeStatusSnapshot | undefined
   hasPendingReload?: boolean
   pendingReloadMessage?: string | null
+  patchSourceConfigSucceeds?: boolean
 } = {}): CamerasPageHarness {
   const camerasRefetch = vi.fn().mockResolvedValue(undefined)
   const runtimeRefetch = vi.fn().mockResolvedValue(undefined)
@@ -90,7 +92,7 @@ function setupPage({
 
   const createCamera = vi.fn().mockResolvedValue(true)
   const toggleCameraEnabled = vi.fn().mockResolvedValue(true)
-  const patchCameraSourceConfig = vi.fn().mockResolvedValue(true)
+  const patchCameraSourceConfig = vi.fn().mockResolvedValue(patchSourceConfigSucceeds)
   const deleteCamera = vi.fn().mockResolvedValue(true)
   const applyRuntimeReload = vi.fn().mockResolvedValue(true)
 
@@ -263,6 +265,75 @@ describe('CamerasPage', () => {
       screen.getByText(
         'Source config patch cannot include redacted placeholders. Omit unchanged secret fields or provide replacement values.',
       ),
+    ).toBeTruthy()
+  })
+
+  it('restores default non-secret patch values when reset button is clicked', async () => {
+    // Given: A camera with non-secret source config fields visible in patch defaults
+    const camera = makeDefaultCamera('front')
+    camera.source_config = {
+      rtsp_url: 'rtsp://***redacted***@camera.local/stream',
+      output_dir: './recordings/front',
+      clip_seconds: 12,
+    }
+    setupPage({ cameras: [camera] })
+    const user = userEvent.setup()
+
+    // When: Operator edits patch text and clicks reset to current non-secret values
+    await user.click(screen.getByRole('button', { name: 'Edit source config' }))
+    const patchField = screen.getByLabelText('Source config patch (JSON)') as HTMLTextAreaElement
+    fireEvent.change(patchField, { target: { value: '{"output_dir":"./tmp/custom"}' } })
+    await user.click(screen.getByRole('button', { name: 'Load current non-secret values' }))
+
+    // Then: Patch textarea resets to default non-secret config values
+    expect(patchField.value).toContain('"output_dir": "./recordings/front"')
+    expect(patchField.value).toContain('"clip_seconds": 12')
+    expect(patchField.value).not.toContain('./tmp/custom')
+    expect(patchField.value).not.toContain('***redacted***')
+  })
+
+  it('cancel closes editor and discards unsaved patch edits', async () => {
+    // Given: A camera with stable non-secret patch defaults
+    const camera = makeDefaultCamera('front')
+    camera.source_config = {
+      rtsp_url: 'rtsp://***redacted***@camera.local/stream',
+      output_dir: './recordings/front',
+    }
+    setupPage({ cameras: [camera] })
+    const user = userEvent.setup()
+
+    // When: Operator edits patch text, cancels, and reopens the editor
+    await user.click(screen.getByRole('button', { name: 'Edit source config' }))
+    let patchField = screen.getByLabelText('Source config patch (JSON)') as HTMLTextAreaElement
+    fireEvent.change(patchField, { target: { value: '{"output_dir":"./tmp/edited"}' } })
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByLabelText('Source config patch (JSON)')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Edit source config' }))
+    patchField = screen.getByLabelText('Source config patch (JSON)') as HTMLTextAreaElement
+
+    // Then: Reopened editor shows default non-secret values, not discarded edits
+    expect(patchField.value).toContain('"output_dir": "./recordings/front"')
+    expect(patchField.value).not.toContain('./tmp/edited')
+  })
+
+  it('shows inline editor error when source-config patch mutation fails', async () => {
+    // Given: A camera patch action that fails in mutation layer
+    const camera = makeDefaultCamera('front')
+    const harness = setupPage({ cameras: [camera], patchSourceConfigSucceeds: false })
+    const user = userEvent.setup()
+
+    // When: Operator submits a valid patch payload
+    await user.click(screen.getByRole('button', { name: 'Edit source config' }))
+    fireEvent.change(screen.getByLabelText('Source config patch (JSON)'), {
+      target: { value: '{"output_dir":"./recordings/front"}' },
+    })
+    await user.click(screen.getByRole('button', { name: 'Apply source patch' }))
+
+    // Then: Editor remains open and surfaces local failure guidance
+    expect(harness.patchCameraSourceConfig).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByText('Source config update failed. Review the page error details and retry.'),
     ).toBeTruthy()
   })
 
