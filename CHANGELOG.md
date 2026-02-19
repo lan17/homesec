@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-02-19)
+
+### Features
+
+- FastAPI server, supervised runtime, and self-serve web UI
+  ([#24](https://github.com/lan17/homesec/pull/24),
+  [`b850b09`](https://github.com/lan17/homesec/commit/b850b09170129ba83b4ee0d75e907078104ece92))
+
+
 ## v1.3.0 (2026-02-12)
 
 ### Continuous Integration
