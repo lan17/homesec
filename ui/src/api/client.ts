@@ -1,4 +1,8 @@
-import type { ApiRequestOptions, GeneratedHomeSecClient } from './generated/client'
+import type {
+  ApiRequestOptions,
+  CameraMutationOptions,
+  GeneratedHomeSecClient,
+} from './generated/client'
 import type {
   CameraCreate,
   CameraListResponse,
@@ -77,10 +81,12 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
 
   async createCamera(
     payload: CameraCreate,
-    options: ApiRequestOptions = {},
+    options: CameraMutationOptions = {},
   ): Promise<ConfigChangeSnapshot> {
+    const { applyChanges = false, ...requestOptions } = options
     const response = await this.httpClient.requestJson('/api/v1/cameras', {
-      ...options,
+      ...requestOptions,
+      query: applyChanges ? { apply_changes: true } : undefined,
       method: 'POST',
       body: payload,
     })
@@ -100,10 +106,12 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
   async updateCamera(
     name: string,
     payload: CameraUpdate,
-    options: ApiRequestOptions = {},
+    options: CameraMutationOptions = {},
   ): Promise<ConfigChangeSnapshot> {
+    const { applyChanges = false, ...requestOptions } = options
     const response = await this.httpClient.requestJson(`/api/v1/cameras/${encodeURIComponent(name)}`, {
-      ...options,
+      ...requestOptions,
+      query: applyChanges ? { apply_changes: true } : undefined,
       method: 'PATCH',
       body: payload,
     })
@@ -120,9 +128,14 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     }
   }
 
-  async deleteCamera(name: string, options: ApiRequestOptions = {}): Promise<ConfigChangeSnapshot> {
+  async deleteCamera(
+    name: string,
+    options: CameraMutationOptions = {},
+  ): Promise<ConfigChangeSnapshot> {
+    const { applyChanges = false, ...requestOptions } = options
     const response = await this.httpClient.requestJson(`/api/v1/cameras/${encodeURIComponent(name)}`, {
-      ...options,
+      ...requestOptions,
+      query: applyChanges ? { apply_changes: true } : undefined,
       method: 'DELETE',
     })
 

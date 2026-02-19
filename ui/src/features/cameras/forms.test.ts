@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CAMERA_BACKEND_OPTIONS,
+  defaultSourceConfigPatchForCamera,
   defaultSourceConfigForBackend,
+  parseSourceConfigPatchJson,
   parseSourceConfigJson,
 } from './forms'
 
@@ -79,6 +81,65 @@ describe('parseSourceConfigJson', () => {
       value: {
         watch_dir: './recordings',
         poll_interval: 1,
+      },
+    })
+  })
+})
+
+describe('parseSourceConfigPatchJson', () => {
+  it('rejects patch payloads that include redacted placeholders', () => {
+    // Given: A source config patch payload containing UI redaction placeholder text
+    const raw = '{"rtsp_url":"rtsp://***redacted***@camera.local/stream"}'
+
+    // When: Parsing source config patch JSON
+    const parsed = parseSourceConfigPatchJson(raw)
+
+    // Then: Patch parser rejects placeholder values and prompts for replacement strategy
+    expect(parsed).toEqual({
+      ok: false,
+      message:
+        'Source config patch cannot include redacted placeholders. Omit unchanged secret fields or provide replacement values.',
+    })
+  })
+
+  it('accepts patch payloads with null clears and replacement values', () => {
+    // Given: A valid patch payload that clears one key and replaces another
+    const raw = '{"detect_rtsp_url":null,"rtsp_url":"rtsp://user:pass@camera.local/live"}'
+
+    // When: Parsing source config patch JSON
+    const parsed = parseSourceConfigPatchJson(raw)
+
+    // Then: Parser preserves patch semantics for null-clears and replacements
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        detect_rtsp_url: null,
+        rtsp_url: 'rtsp://user:pass@camera.local/live',
+      },
+    })
+  })
+})
+
+describe('defaultSourceConfigPatchForCamera', () => {
+  it('drops redacted values from camera source config defaults', () => {
+    // Given: A camera source_config object containing redacted and non-secret fields
+    const sourceConfig = {
+      rtsp_url: 'rtsp://***redacted***@camera.local/stream',
+      output_dir: './recordings',
+      nested: {
+        password: '***redacted***',
+        timeout_s: 10,
+      },
+    }
+
+    // When: Building default patch JSON for editor initialization
+    const result = defaultSourceConfigPatchForCamera(sourceConfig)
+
+    // Then: Returned template keeps non-secret values and omits redacted placeholders
+    expect(JSON.parse(result)).toEqual({
+      output_dir: './recordings',
+      nested: {
+        timeout_s: 10,
       },
     })
   })

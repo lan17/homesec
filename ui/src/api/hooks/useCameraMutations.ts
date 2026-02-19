@@ -4,13 +4,20 @@ import { apiClient } from '../client'
 import type { CameraCreate, CameraUpdate, ConfigChangeResponse } from '../generated/types'
 import { QUERY_KEYS } from './queryKeys'
 
+interface CreateCameraInput {
+  payload: CameraCreate
+  applyChanges?: boolean
+}
+
 interface UpdateCameraInput {
   name: string
   payload: CameraUpdate
+  applyChanges?: boolean
 }
 
 interface DeleteCameraInput {
   name: string
+  applyChanges?: boolean
 }
 
 function invalidateCameras(queryClient: ReturnType<typeof useQueryClient>): Promise<void> {
@@ -19,8 +26,9 @@ function invalidateCameras(queryClient: ReturnType<typeof useQueryClient>): Prom
 
 export function useCreateCameraMutation() {
   const queryClient = useQueryClient()
-  return useMutation<ConfigChangeResponse, Error, CameraCreate>({
-    mutationFn: (payload) => apiClient.createCamera(payload),
+  return useMutation<ConfigChangeResponse, Error, CreateCameraInput>({
+    mutationFn: ({ payload, applyChanges }) =>
+      apiClient.createCamera(payload, { applyChanges }),
     onSuccess: async () => {
       await invalidateCameras(queryClient)
     },
@@ -30,7 +38,8 @@ export function useCreateCameraMutation() {
 export function useUpdateCameraMutation() {
   const queryClient = useQueryClient()
   return useMutation<ConfigChangeResponse, Error, UpdateCameraInput>({
-    mutationFn: ({ name, payload }) => apiClient.updateCamera(name, payload),
+    mutationFn: ({ name, payload, applyChanges }) =>
+      apiClient.updateCamera(name, payload, { applyChanges }),
     onSuccess: async () => {
       await invalidateCameras(queryClient)
     },
@@ -40,7 +49,7 @@ export function useUpdateCameraMutation() {
 export function useDeleteCameraMutation() {
   const queryClient = useQueryClient()
   return useMutation<ConfigChangeResponse, Error, DeleteCameraInput>({
-    mutationFn: ({ name }) => apiClient.deleteCamera(name),
+    mutationFn: ({ name, applyChanges }) => apiClient.deleteCamera(name, { applyChanges }),
     onSuccess: async () => {
       await invalidateCameras(queryClient)
     },

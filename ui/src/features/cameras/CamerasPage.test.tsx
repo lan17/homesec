@@ -30,6 +30,7 @@ vi.mock('./hooks/useCameraActions', () => ({
 interface CamerasPageHarness {
   createCamera: ReturnType<typeof vi.fn>
   toggleCameraEnabled: ReturnType<typeof vi.fn>
+  patchCameraSourceConfig: ReturnType<typeof vi.fn>
   deleteCamera: ReturnType<typeof vi.fn>
   applyRuntimeReload: ReturnType<typeof vi.fn>
 }
@@ -89,12 +90,14 @@ function setupPage({
 
   const createCamera = vi.fn().mockResolvedValue(true)
   const toggleCameraEnabled = vi.fn().mockResolvedValue(true)
+  const patchCameraSourceConfig = vi.fn().mockResolvedValue(true)
   const deleteCamera = vi.fn().mockResolvedValue(true)
   const applyRuntimeReload = vi.fn().mockResolvedValue(true)
 
   useCameraActionsMock.mockReturnValue({
     createCamera,
     toggleCameraEnabled,
+    patchCameraSourceConfig,
     deleteCamera,
     applyRuntimeReload,
     hasPendingReload,
@@ -110,6 +113,7 @@ function setupPage({
   return {
     createCamera,
     toggleCameraEnabled,
+    patchCameraSourceConfig,
     deleteCamera,
     applyRuntimeReload,
   }
@@ -158,6 +162,25 @@ describe('CamerasPage', () => {
           rtsp_url: expect.any(String),
         }),
       }),
+      false,
+    )
+  })
+
+  it('passes applyChanges=true when immediate apply checkbox is enabled', async () => {
+    // Given: A ready page with the immediate-apply toggle enabled by user action
+    const harness = setupPage()
+    const user = userEvent.setup()
+
+    // When: Operator enables immediate apply and submits camera create
+    await user.click(screen.getByLabelText('Apply changes immediately (runtime reload)'))
+    await user.type(screen.getByLabelText('Camera name'), 'side_gate')
+    await user.click(screen.getByRole('button', { name: 'Create camera' }))
+
+    // Then: Create action requests applyChanges=true
+    expect(harness.createCamera).toHaveBeenCalledTimes(1)
+    expect(harness.createCamera).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'side_gate' }),
+      true,
     )
   })
 
@@ -194,9 +217,53 @@ describe('CamerasPage', () => {
 
     // Then: Toggle and delete mutations are called with the selected camera
     expect(harness.toggleCameraEnabled).toHaveBeenCalledTimes(1)
-    expect(harness.toggleCameraEnabled).toHaveBeenCalledWith(camera)
+    expect(harness.toggleCameraEnabled).toHaveBeenCalledWith(camera, false)
     expect(harness.deleteCamera).toHaveBeenCalledTimes(1)
-    expect(harness.deleteCamera).toHaveBeenCalledWith('front')
+    expect(harness.deleteCamera).toHaveBeenCalledWith('front', false)
+  })
+
+  it('submits source-config patch updates for an existing camera', async () => {
+    // Given: A page with one camera row and source-config editor available
+    const camera = makeDefaultCamera('front')
+    const harness = setupPage({ cameras: [camera] })
+    const user = userEvent.setup()
+
+    // When: Operator opens editor, enters valid patch JSON, and submits patch
+    await user.click(screen.getByRole('button', { name: 'Edit source config' }))
+    fireEvent.change(screen.getByLabelText('Source config patch (JSON)'), {
+      target: { value: '{"output_dir":"./recordings/front"}' },
+    })
+    await user.click(screen.getByRole('button', { name: 'Apply source patch' }))
+
+    // Then: Patch action receives typed source_config patch payload
+    expect(harness.patchCameraSourceConfig).toHaveBeenCalledTimes(1)
+    expect(harness.patchCameraSourceConfig).toHaveBeenCalledWith(
+      'front',
+      expect.objectContaining({ output_dir: './recordings/front' }),
+      false,
+    )
+  })
+
+  it('blocks source-config patch submission when redacted placeholder is present', async () => {
+    // Given: A page with one camera row and source-config editor
+    const camera = makeDefaultCamera('front')
+    const harness = setupPage({ cameras: [camera] })
+    const user = userEvent.setup()
+
+    // When: Operator attempts to submit patch payload with redacted placeholder value
+    await user.click(screen.getByRole('button', { name: 'Edit source config' }))
+    fireEvent.change(screen.getByLabelText('Source config patch (JSON)'), {
+      target: { value: '{"rtsp_url":"rtsp://***redacted***@camera.local/stream"}' },
+    })
+    await user.click(screen.getByRole('button', { name: 'Apply source patch' }))
+
+    // Then: UI blocks submit and surfaces the local validation error
+    expect(harness.patchCameraSourceConfig).not.toHaveBeenCalled()
+    expect(
+      screen.getByText(
+        'Source config patch cannot include redacted placeholders. Omit unchanged secret fields or provide replacement values.',
+      ),
+    ).toBeTruthy()
   })
 
   it('triggers runtime reload from pending-reload banner', async () => {

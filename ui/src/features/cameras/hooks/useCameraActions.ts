@@ -6,7 +6,11 @@ import {
   useUpdateCameraMutation,
 } from '../../../api/hooks/useCameraMutations'
 import { useRuntimeReloadMutation } from '../../../api/hooks/useRuntimeReloadMutation'
-import type { CameraCreate, CameraResponse } from '../../../api/generated/types'
+import type {
+  CameraCreate,
+  CameraResponse,
+  ConfigChangeResponse,
+} from '../../../api/generated/types'
 
 interface UseCameraActionsOptions {
   onRuntimeStatusRefresh: () => Promise<void>
@@ -36,9 +40,14 @@ interface CameraActionState {
 }
 
 interface UseCameraActionsResult extends CameraActionState {
-  createCamera: (payload: CameraCreate) => Promise<boolean>
-  toggleCameraEnabled: (camera: CameraResponse) => Promise<boolean>
-  deleteCamera: (cameraName: string) => Promise<boolean>
+  createCamera: (payload: CameraCreate, applyChanges: boolean) => Promise<boolean>
+  toggleCameraEnabled: (camera: CameraResponse, applyChanges: boolean) => Promise<boolean>
+  patchCameraSourceConfig: (
+    cameraName: string,
+    sourceConfigPatch: CameraCreate['source_config'],
+    applyChanges: boolean,
+  ) => Promise<boolean>
+  deleteCamera: (cameraName: string, applyChanges: boolean) => Promise<boolean>
   applyRuntimeReload: () => Promise<boolean>
 }
 
@@ -65,38 +74,46 @@ export function useCameraActions({
   }
 
   function applyMutationOutcome({
-    restartRequired,
+    response,
     restartMessage,
     successMessage,
   }: {
-    restartRequired: boolean
+    response: ConfigChangeResponse
     restartMessage: string
     successMessage: string
-  }): void {
-    if (restartRequired) {
+  }): boolean {
+    if (response.restart_required) {
       markPendingReload(restartMessage)
-      return
+      return false
     }
     clearPendingReload()
+    if (response.runtime_reload) {
+      setActionFeedback(`${successMessage} ${response.runtime_reload.message}.`)
+      return true
+    }
     setActionFeedback(successMessage)
+    return false
   }
 
-  async function createCamera(payload: CameraCreate): Promise<boolean> {
+  async function createCamera(payload: CameraCreate, applyChanges: boolean): Promise<boolean> {
     setActionFeedback(null)
     try {
-      const response = await createCameraMutation.mutateAsync(payload)
-      applyMutationOutcome({
-        restartRequired: response.restart_required,
+      const response = await createCameraMutation.mutateAsync({ payload, applyChanges })
+      const reloadRequested = applyMutationOutcome({
+        response,
         restartMessage: `Camera "${payload.name}" created. Runtime reload required.`,
         successMessage: `Camera "${payload.name}" created.`,
       })
+      if (reloadRequested) {
+        await onRuntimeStatusRefresh()
+      }
       return true
     } catch {
       return false
     }
   }
 
-  async function toggleCameraEnabled(camera: CameraResponse): Promise<boolean> {
+  async function toggleCameraEnabled(camera: CameraResponse, applyChanges: boolean): Promise<boolean> {
     setActionFeedback(null)
     const isEnabling = !camera.enabled
     const verb = isEnabling ? 'enabled' : 'disabled'
@@ -105,28 +122,61 @@ export function useCameraActions({
       const response = await updateCameraMutation.mutateAsync({
         name: camera.name,
         payload: { enabled: isEnabling },
+        applyChanges,
       })
 
-      applyMutationOutcome({
-        restartRequired: response.restart_required,
+      const reloadRequested = applyMutationOutcome({
+        response,
         restartMessage: `Camera "${camera.name}" ${verb}. Runtime reload required.`,
         successMessage: `Camera "${camera.name}" ${verb}.`,
       })
+      if (reloadRequested) {
+        await onRuntimeStatusRefresh()
+      }
       return true
     } catch {
       return false
     }
   }
 
-  async function deleteCamera(cameraName: string): Promise<boolean> {
+  async function patchCameraSourceConfig(
+    cameraName: string,
+    sourceConfigPatch: CameraCreate['source_config'],
+    applyChanges: boolean,
+  ): Promise<boolean> {
     setActionFeedback(null)
     try {
-      const response = await deleteCameraMutation.mutateAsync({ name: cameraName })
-      applyMutationOutcome({
-        restartRequired: response.restart_required,
+      const response = await updateCameraMutation.mutateAsync({
+        name: cameraName,
+        payload: { source_config: sourceConfigPatch },
+        applyChanges,
+      })
+      const reloadRequested = applyMutationOutcome({
+        response,
+        restartMessage: `Camera "${cameraName}" source config updated. Runtime reload required.`,
+        successMessage: `Camera "${cameraName}" source config updated.`,
+      })
+      if (reloadRequested) {
+        await onRuntimeStatusRefresh()
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function deleteCamera(cameraName: string, applyChanges: boolean): Promise<boolean> {
+    setActionFeedback(null)
+    try {
+      const response = await deleteCameraMutation.mutateAsync({ name: cameraName, applyChanges })
+      const reloadRequested = applyMutationOutcome({
+        response,
         restartMessage: `Camera "${cameraName}" deleted. Runtime reload required.`,
         successMessage: `Camera "${cameraName}" deleted.`,
       })
+      if (reloadRequested) {
+        await onRuntimeStatusRefresh()
+      }
       return true
     } catch {
       return false
@@ -163,6 +213,7 @@ export function useCameraActions({
   return {
     createCamera,
     toggleCameraEnabled,
+    patchCameraSourceConfig,
     deleteCamera,
     applyRuntimeReload,
     hasPendingReload,

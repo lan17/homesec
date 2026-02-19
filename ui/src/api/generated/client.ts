@@ -24,6 +24,10 @@ export interface ApiRequestOptions {
   apiKey?: string | null
 }
 
+export interface CameraMutationOptions extends ApiRequestOptions {
+  applyChanges?: boolean
+}
+
 export type ApiResponseWithStatus<TPayload extends object> = TPayload & { httpStatus: number }
 
 export interface GeneratedHomeSecClient {
@@ -31,16 +35,16 @@ export interface GeneratedHomeSecClient {
   getCamera(name: string, options?: ApiRequestOptions): Promise<CameraResponse>
   createCamera(
     payload: CameraCreate,
-    options?: ApiRequestOptions,
+    options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
   updateCamera(
     name: string,
     payload: CameraUpdate,
-    options?: ApiRequestOptions,
+    options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
   deleteCamera(
     name: string,
-    options?: ApiRequestOptions,
+    options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
   getHealth(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<HealthResponse>>
   getStats(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<StatsResponse>>

@@ -11,6 +11,7 @@ import {
   parseSourceConfigJson,
   type CameraBackend,
 } from './forms'
+import type { CameraCreate } from '../../api/generated/types'
 import { useCameraActions } from './hooks/useCameraActions'
 import { describeCameraError } from './presentation'
 import { CameraCreateForm } from './components/CameraCreateForm'
@@ -32,6 +33,7 @@ export function CamerasPage() {
   const [cameraBackend, setCameraBackend] = useState<CameraBackend>('rtsp')
   const [sourceConfigRaw, setSourceConfigRaw] = useState(defaultSourceConfigForBackend('rtsp'))
   const [createFormError, setCreateFormError] = useState<string | null>(null)
+  const [applyChangesImmediately, setApplyChangesImmediately] = useState(false)
 
   const cameras = useMemo(() => camerasQuery.data ?? [], [camerasQuery.data])
   const runtimeStatus = runtimeStatusQuery.data
@@ -85,7 +87,7 @@ export function CamerasPage() {
       enabled: cameraEnabled,
       source_backend: cameraBackend,
       source_config: parsedSourceConfig.value,
-    })
+    }, applyChangesImmediately)
     if (!created) {
       return
     }
@@ -93,7 +95,18 @@ export function CamerasPage() {
   }
 
   async function handleToggleEnabled(camera: (typeof cameras)[number]): Promise<void> {
-    await cameraActions.toggleCameraEnabled(camera)
+    await cameraActions.toggleCameraEnabled(camera, applyChangesImmediately)
+  }
+
+  async function handlePatchSourceConfig(
+    cameraName: string,
+    sourceConfigPatch: CameraCreate['source_config'],
+  ): Promise<boolean> {
+    return cameraActions.patchCameraSourceConfig(
+      cameraName,
+      sourceConfigPatch,
+      applyChangesImmediately,
+    )
   }
 
   async function handleDelete(camera: (typeof cameras)[number]): Promise<void> {
@@ -101,7 +114,7 @@ export function CamerasPage() {
     if (!shouldDelete) {
       return
     }
-    await cameraActions.deleteCamera(camera.name)
+    await cameraActions.deleteCamera(camera.name, applyChangesImmediately)
   }
 
   async function handleApplyRuntimeReload(): Promise<void> {
@@ -173,6 +186,7 @@ export function CamerasPage() {
         cameraBackend={cameraBackend}
         sourceConfigRaw={sourceConfigRaw}
         createFormError={createFormError}
+        applyChangesImmediately={applyChangesImmediately}
         isMutating={cameraActions.isMutating}
         createPending={cameraActions.pending.create}
         onSubmit={(event) => {
@@ -182,6 +196,7 @@ export function CamerasPage() {
         onCameraEnabledChange={setCameraEnabled}
         onCameraBackendChange={updateBackend}
         onSourceConfigChange={setSourceConfigRaw}
+        onApplyChangesImmediatelyChange={setApplyChangesImmediately}
         onResetTemplate={() => {
           setSourceConfigRaw(defaultSourceConfigForBackend(cameraBackend))
         }}
@@ -203,9 +218,12 @@ export function CamerasPage() {
         cameras={cameras}
         isPending={camerasQuery.isPending}
         isMutating={cameraActions.isMutating}
+        updatePending={cameraActions.pending.update}
+        applyChangesImmediately={applyChangesImmediately}
         onToggleEnabled={(camera) => {
           void handleToggleEnabled(camera)
         }}
+        onPatchSourceConfig={handlePatchSourceConfig}
         onDelete={(camera) => {
           void handleDelete(camera)
         }}

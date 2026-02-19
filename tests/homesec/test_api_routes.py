@@ -24,6 +24,8 @@ from homesec.models.config import CameraConfig, CameraSourceConfig, FastAPIServe
 from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
+from homesec.runtime.errors import RuntimeReloadConfigError
+from homesec.runtime.models import RuntimeReloadRequest
 
 
 class _StubRepository:
@@ -172,6 +174,8 @@ class _StubApp:
         sources_by_name: dict[str, _StubSource] | None = None,
         server_config: FastAPIServerConfig | None = None,
         pipeline_running: bool = True,
+        runtime_reload_request: RuntimeReloadRequest | None = None,
+        runtime_reload_error: Exception | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.repository = repository
@@ -193,6 +197,13 @@ class _StubApp:
             ],
         )
         self._pipeline_running = pipeline_running
+        self._runtime_reload_request = runtime_reload_request or RuntimeReloadRequest(
+            accepted=True,
+            message="Runtime reload started",
+            target_generation=2,
+        )
+        self._runtime_reload_error = runtime_reload_error
+        self.runtime_reload_calls = 0
         self.uptime_seconds = 0.0
 
     @property
@@ -205,6 +216,12 @@ class _StubApp:
 
     def get_source(self, camera_name: str) -> _StubSource | None:
         return self._sources_by_name.get(camera_name)
+
+    async def request_runtime_reload(self) -> RuntimeReloadRequest:
+        self.runtime_reload_calls += 1
+        if self._runtime_reload_error is not None:
+            raise self._runtime_reload_error
+        return self._runtime_reload_request
 
 
 def _write_config(tmp_path, cameras: list[dict]) -> ConfigManager:
@@ -297,6 +314,75 @@ def test_create_camera_duplicate_returns_409(tmp_path) -> None:
     assert response.status_code == 409
     payload = response.json()
     assert payload["error_code"] == "CAMERA_ALREADY_EXISTS"
+
+
+def test_create_camera_apply_changes_triggers_runtime_reload(tmp_path) -> None:
+    """POST /cameras should optionally apply runtime reload in the same request."""
+    # Given a config with no cameras and an app runtime that can accept reload
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_request=RuntimeReloadRequest(
+            accepted=True,
+            message="Runtime reload started",
+            target_generation=9,
+        ),
+    )
+    client = _client(app)
+
+    # When creating a camera with apply_changes enabled
+    response = client.post(
+        "/api/v1/cameras?apply_changes=true",
+        json={
+            "name": "front",
+            "enabled": True,
+            "source_backend": "local_folder",
+            "source_config": {"watch_dir": "/tmp"},
+        },
+    )
+
+    # Then runtime reload is requested and response carries reload acceptance
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["restart_required"] is False
+    assert payload["runtime_reload"]["accepted"] is True
+    assert payload["runtime_reload"]["target_generation"] == 9
+    assert app.runtime_reload_calls == 1
+
+
+def test_create_camera_apply_changes_does_not_request_reload_when_mutation_fails(tmp_path) -> None:
+    """POST /cameras should avoid runtime reload calls when mutation fails early."""
+    # Given a config with an existing camera that will trigger duplicate-name conflict
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+    )
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When create is attempted with apply_changes enabled
+    response = client.post(
+        "/api/v1/cameras?apply_changes=true",
+        json={
+            "name": "front",
+            "enabled": True,
+            "source_backend": "local_folder",
+            "source_config": {"watch_dir": "/tmp"},
+        },
+    )
+
+    # Then request fails before runtime reload is attempted
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "CAMERA_ALREADY_EXISTS"
+    assert app.runtime_reload_calls == 0
 
 
 def test_get_camera(tmp_path) -> None:
@@ -512,6 +598,60 @@ def test_delete_camera_missing_returns_404(tmp_path) -> None:
     assert payload["error_code"] == "CAMERA_NOT_FOUND"
 
 
+def test_delete_camera_apply_changes_triggers_runtime_reload(tmp_path) -> None:
+    """DELETE /cameras should optionally request runtime reload when apply_changes is true."""
+    # Given a config with one camera and runtime manager ready to accept reload
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+    )
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_request=RuntimeReloadRequest(
+            accepted=True,
+            message="Runtime reload started",
+            target_generation=13,
+        ),
+    )
+    client = _client(app)
+
+    # When deleting the camera with apply_changes enabled
+    response = client.delete("/api/v1/cameras/front?apply_changes=true")
+
+    # Then route returns reload acceptance metadata and skips restart-required banner
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["restart_required"] is False
+    assert payload["runtime_reload"]["accepted"] is True
+    assert payload["runtime_reload"]["target_generation"] == 13
+    assert app.runtime_reload_calls == 1
+
+
+def test_delete_camera_apply_changes_skips_reload_when_mutation_fails(tmp_path) -> None:
+    """DELETE /cameras should avoid runtime reload calls when camera deletion fails."""
+    # Given a config with no cameras
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When deleting a missing camera with apply_changes enabled
+    response = client.delete("/api/v1/cameras/missing?apply_changes=true")
+
+    # Then route fails before runtime reload is invoked
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["error_code"] == "CAMERA_NOT_FOUND"
+    assert app.runtime_reload_calls == 0
+
+
 def test_update_camera(tmp_path) -> None:
     """PATCH /cameras/{name} should update camera fields."""
     # Given a config with one camera
@@ -688,6 +828,45 @@ def test_update_camera_supports_source_backend_switch(tmp_path) -> None:
     )
 
 
+def test_update_camera_apply_changes_conflict_returns_409(tmp_path) -> None:
+    """PATCH /cameras should surface runtime-reload conflict when apply_changes is requested."""
+    # Given an existing camera and a runtime manager already reloading
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ],
+    )
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_request=RuntimeReloadRequest(
+            accepted=False,
+            message="Runtime reload already in progress",
+            target_generation=11,
+        ),
+    )
+    client = _client(app)
+
+    # When patching camera config with apply_changes enabled
+    response = client.patch(
+        "/api/v1/cameras/front?apply_changes=true",
+        json={"source_config": {"watch_dir": "/tmp/front-updated"}},
+    )
+
+    # Then route returns canonical reload-in-progress conflict details
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["error_code"] == "RELOAD_IN_PROGRESS"
+    assert payload["target_generation"] == 11
+    assert app.runtime_reload_calls == 1
+
+
 def test_update_camera_null_patch_value_clears_optional_source_field(tmp_path) -> None:
     """PATCH /cameras/{name} should clear optional source fields when null is provided."""
     # Given an RTSP camera with optional detect stream URL configured
@@ -724,6 +903,45 @@ def test_update_camera_null_patch_value_clears_optional_source_field(tmp_path) -
         payload["camera"]["source_config"]["rtsp_url"]
         == "rtsp://***redacted***@camera.local/stream"
     )
+
+
+def test_update_camera_apply_changes_propagates_runtime_config_error(tmp_path) -> None:
+    """PATCH /cameras should map runtime config errors when apply_changes reload fails."""
+    # Given an existing camera and runtime reload path that raises config error
+    manager = _write_config(
+        tmp_path,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ],
+    )
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_error=RuntimeReloadConfigError(
+            "Reload config invalid",
+            status_code=422,
+            error_code="CONFIG_VALIDATION_FAILED",
+        ),
+    )
+    client = _client(app)
+
+    # When patching camera with apply_changes enabled
+    response = client.patch(
+        "/api/v1/cameras/front?apply_changes=true",
+        json={"source_config": {"watch_dir": "/tmp/front-updated"}},
+    )
+
+    # Then route preserves status and canonical error code from runtime config error
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["error_code"] == "CONFIG_VALIDATION_FAILED"
+    assert payload["detail"] == "Reload config invalid"
+    assert app.runtime_reload_calls == 1
 
 
 def test_get_config_returns_full_config(tmp_path) -> None:

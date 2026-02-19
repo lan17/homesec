@@ -18,6 +18,7 @@ from homesec.config.errors import (
     CameraNotFoundError,
 )
 from homesec.models.config import CameraConfig
+from homesec.runtime.errors import RuntimeReloadConfigError
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -50,6 +51,13 @@ class CameraResponse(BaseModel):
 class ConfigChangeResponse(BaseModel):
     restart_required: bool = True
     camera: CameraResponse | None = None
+    runtime_reload: RuntimeReloadResponse | None = None
+
+
+class RuntimeReloadResponse(BaseModel):
+    accepted: bool
+    message: str
+    target_generation: int
 
 
 def _source_config_to_dict(camera: CameraConfig) -> dict[str, object]:
@@ -108,6 +116,38 @@ def _map_camera_config_error(exc: CameraMutationError) -> APIError:
     )
 
 
+async def _reload_runtime_if_requested(
+    *,
+    apply_changes: bool,
+    app: Application,
+) -> RuntimeReloadResponse | None:
+    if not apply_changes:
+        return None
+
+    try:
+        request = await app.request_runtime_reload()
+    except RuntimeReloadConfigError as exc:
+        raise APIError(
+            str(exc),
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+        ) from exc
+
+    if not request.accepted:
+        raise APIError(
+            request.message,
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.RELOAD_IN_PROGRESS,
+            extra={"target_generation": request.target_generation},
+        )
+
+    return RuntimeReloadResponse(
+        accepted=True,
+        message="Runtime reload accepted",
+        target_generation=request.target_generation,
+    )
+
+
 @router.get("/api/v1/cameras", response_model=list[CameraResponse])
 async def list_cameras(app: Application = Depends(get_homesec_app)) -> list[CameraResponse]:
     """List all cameras."""
@@ -131,7 +171,9 @@ async def get_camera(name: str, app: Application = Depends(get_homesec_app)) -> 
 
 @router.post("/api/v1/cameras", response_model=ConfigChangeResponse, status_code=201)
 async def create_camera(
-    payload: CameraCreate, app: Application = Depends(get_homesec_app)
+    payload: CameraCreate,
+    apply_changes: bool = False,
+    app: Application = Depends(get_homesec_app),
 ) -> ConfigChangeResponse:
     """Create a new camera."""
     try:
@@ -146,9 +188,11 @@ async def create_camera(
 
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == payload.name), None)
+    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
     return ConfigChangeResponse(
-        restart_required=result.restart_required,
+        restart_required=False if runtime_reload is not None else result.restart_required,
         camera=_camera_response(app, camera) if camera else None,
+        runtime_reload=runtime_reload,
     )
 
 
@@ -156,6 +200,7 @@ async def create_camera(
 async def update_camera(
     name: str,
     payload: CameraUpdate,
+    apply_changes: bool = False,
     app: Application = Depends(get_homesec_app),
 ) -> ConfigChangeResponse:
     """Partially update a camera."""
@@ -178,15 +223,19 @@ async def update_camera(
             error_code=APIErrorCode.CAMERA_NOT_FOUND,
         )
 
+    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
     return ConfigChangeResponse(
-        restart_required=result.restart_required,
+        restart_required=False if runtime_reload is not None else result.restart_required,
         camera=_camera_response(app, camera),
+        runtime_reload=runtime_reload,
     )
 
 
 @router.delete("/api/v1/cameras/{name}", response_model=ConfigChangeResponse)
 async def delete_camera(
-    name: str, app: Application = Depends(get_homesec_app)
+    name: str,
+    apply_changes: bool = False,
+    app: Application = Depends(get_homesec_app),
 ) -> ConfigChangeResponse:
     """Delete a camera."""
     try:
@@ -194,4 +243,9 @@ async def delete_camera(
     except CameraMutationError as exc:
         raise _map_camera_config_error(exc) from exc
 
-    return ConfigChangeResponse(restart_required=result.restart_required, camera=None)
+    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    return ConfigChangeResponse(
+        restart_required=False if runtime_reload is not None else result.restart_required,
+        camera=None,
+        runtime_reload=runtime_reload,
+    )
