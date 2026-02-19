@@ -622,44 +622,6 @@ def test_update_camera_returns_404_when_camera_removed_after_update(tmp_path, mo
     assert payload["error_code"] == "CAMERA_NOT_FOUND"
 
 
-def test_update_camera_put_alias_preserves_patch_semantics(tmp_path) -> None:
-    """PUT /cameras/{name} should remain as an alias for partial-update semantics."""
-    # Given a config with one camera
-    manager = _write_config(
-        tmp_path,
-        cameras=[
-            {
-                "name": "front",
-                "enabled": True,
-                "source": {
-                    "backend": "rtsp",
-                    "config": {
-                        "rtsp_url": "rtsp://user:pass@camera.local/stream",
-                        "output_dir": "/tmp/front",
-                    },
-                },
-            }
-        ],
-    )
-    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
-    client = _client(app)
-
-    # When applying partial source_config patch through PUT alias
-    response = client.put(
-        "/api/v1/cameras/front",
-        json={"source_config": {"output_dir": "/tmp/front-updated"}},
-    )
-
-    # Then existing fields remain and patched field changes
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["camera"]["source_config"]["output_dir"] == "/tmp/front-updated"
-    assert (
-        payload["camera"]["source_config"]["rtsp_url"]
-        == "rtsp://***redacted***@camera.local/stream"
-    )
-
-
 def test_update_camera_rejects_redacted_source_config_patch(tmp_path) -> None:
     """PATCH /cameras/{name} should reject redacted placeholder source_config values."""
     # Given a config with one RTSP camera

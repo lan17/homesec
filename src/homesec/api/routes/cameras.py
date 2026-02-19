@@ -153,7 +153,6 @@ async def create_camera(
 
 
 @router.patch("/api/v1/cameras/{name}", response_model=ConfigChangeResponse)
-@router.put("/api/v1/cameras/{name}", response_model=ConfigChangeResponse, include_in_schema=False)
 async def update_camera(
     name: str,
     payload: CameraUpdate,

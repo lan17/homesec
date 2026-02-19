@@ -188,20 +188,11 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
     method: 'post',
     fallbackSchemaName: 'CameraCreate',
   })
-  let cameraUpdateSchemaName
-  try {
-    cameraUpdateSchemaName = resolveRequestBodySchemaName(schema, {
-      pathName: '/api/v1/cameras/{name}',
-      method: 'patch',
-      fallbackSchemaName: 'CameraUpdate',
-    })
-  } catch {
-    cameraUpdateSchemaName = resolveRequestBodySchemaName(schema, {
-      pathName: '/api/v1/cameras/{name}',
-      method: 'put',
-      fallbackSchemaName: 'CameraUpdate',
-    })
-  }
+  const cameraUpdateSchemaName = resolveRequestBodySchemaName(schema, {
+    pathName: '/api/v1/cameras/{name}',
+    method: 'patch',
+    fallbackSchemaName: 'CameraUpdate',
+  })
   const configChangeSchemaName = resolveResponseSchemaName(schema, {
     pathName: '/api/v1/cameras',
     method: 'post',
