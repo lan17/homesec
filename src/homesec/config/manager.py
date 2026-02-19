@@ -6,14 +6,22 @@ import asyncio
 import os
 import shutil
 from pathlib import Path
+from typing import cast
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
+from homesec.config.errors import (
+    CameraAlreadyExistsError,
+    CameraConfigInvalidError,
+    CameraConfigRedactedPlaceholderError,
+    CameraNotFoundError,
+)
 from homesec.config.loader import ConfigError, load_config, load_config_from_dict
 from homesec.models.config import CameraConfig, CameraSourceConfig, Config
 
 _SENSITIVE_CONFIG_FILE_MODE = 0o600
+_REDACTED_PLACEHOLDER = "***redacted***"
 
 
 class ConfigUpdateResult(BaseModel):
@@ -48,6 +56,51 @@ class ConfigManager:
         """Get the current configuration."""
         return load_config(self._config_path)
 
+    @staticmethod
+    def _to_source_config_dict(config: dict[str, object] | BaseModel) -> dict[str, object]:
+        if isinstance(config, BaseModel):
+            payload = config.model_dump(mode="json")
+            return cast(dict[str, object], payload)
+        return dict(config)
+
+    @classmethod
+    def _contains_redacted_placeholder(cls, value: object) -> bool:
+        if isinstance(value, dict):
+            return any(cls._contains_redacted_placeholder(nested) for nested in value.values())
+        if isinstance(value, list):
+            return any(cls._contains_redacted_placeholder(item) for item in value)
+        if isinstance(value, str):
+            return _REDACTED_PLACEHOLDER in value
+        return False
+
+    @classmethod
+    def _merge_source_config(
+        cls,
+        existing: dict[str, object],
+        patch: dict[str, object],
+    ) -> dict[str, object]:
+        """Apply partial update semantics to source config.
+
+        - omitted key => unchanged
+        - value is null => clear key
+        - nested dict values => recursive merge
+        - all other values => replace
+        """
+        merged: dict[str, object] = dict(existing)
+        for key, patch_value in patch.items():
+            current_value = merged.get(key)
+            if patch_value is None:
+                merged.pop(key, None)
+                continue
+            if isinstance(current_value, dict) and isinstance(patch_value, dict):
+                merged[key] = cls._merge_source_config(
+                    cast(dict[str, object], current_value),
+                    cast(dict[str, object], patch_value),
+                )
+                continue
+            merged[key] = patch_value
+        return merged
+
     async def add_camera(
         self,
         name: str,
@@ -60,7 +113,7 @@ class ConfigManager:
             config = await asyncio.to_thread(self.get_config)
 
             if any(camera.name == name for camera in config.cameras):
-                raise ValueError(f"Camera already exists: {name}")
+                raise CameraAlreadyExistsError(f"Camera already exists: {name}")
 
             config.cameras.append(
                 CameraConfig(
@@ -78,6 +131,7 @@ class ConfigManager:
         self,
         camera_name: str,
         enabled: bool | None,
+        source_backend: str | None,
         source_config: dict[str, object] | None,
     ) -> ConfigUpdateResult:
         """Update an existing camera in the config."""
@@ -86,15 +140,44 @@ class ConfigManager:
 
             camera = next((cam for cam in config.cameras if cam.name == camera_name), None)
             if camera is None:
-                raise ValueError(f"Camera not found: {camera_name}")
+                raise CameraNotFoundError(f"Camera not found: {camera_name}")
 
             if enabled is not None:
                 camera.enabled = enabled
-            if source_config is not None:
-                camera.source = CameraSourceConfig(
-                    backend=camera.source.backend,
-                    config=source_config,
+
+            should_update_source = source_backend is not None or source_config is not None
+            if should_update_source:
+                if source_config is not None and self._contains_redacted_placeholder(source_config):
+                    raise CameraConfigRedactedPlaceholderError(
+                        "source_config patch contains redacted placeholders; "
+                        "omit unchanged fields or provide replacement values"
+                    )
+
+                current_source_config = self._to_source_config_dict(camera.source.config)
+                next_backend = (
+                    source_backend if source_backend is not None else camera.source.backend
                 )
+                base_source_config = (
+                    {}
+                    if source_backend is not None and source_backend != camera.source.backend
+                    else current_source_config
+                )
+                next_source_config = (
+                    self._merge_source_config(base_source_config, source_config)
+                    if source_config is not None
+                    else base_source_config
+                )
+
+                try:
+                    camera.source = CameraSourceConfig(
+                        backend=next_backend,
+                        config=next_source_config,
+                    )
+                except (ValidationError, ValueError, TypeError) as exc:
+                    raise CameraConfigInvalidError(
+                        f"Invalid source configuration for camera '{camera_name}'",
+                        cause=exc,
+                    ) from exc
 
             validated = await self._validate_config(config)
             await self._save_config(validated)
@@ -110,7 +193,7 @@ class ConfigManager:
 
             updated = [camera for camera in config.cameras if camera.name != camera_name]
             if len(updated) == len(config.cameras):
-                raise ValueError(f"Camera not found: {camera_name}")
+                raise CameraNotFoundError(f"Camera not found: {camera_name}")
 
             config.cameras = updated
 
@@ -124,7 +207,7 @@ class ConfigManager:
         try:
             return await asyncio.to_thread(load_config_from_dict, payload)
         except ConfigError as exc:
-            raise ValueError(str(exc)) from exc
+            raise CameraConfigInvalidError(str(exc), cause=exc) from exc
 
     async def _save_config(self, config: Config) -> None:
         """Save config to disk with backup."""

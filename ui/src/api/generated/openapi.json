@@ -119,6 +119,17 @@
             ],
             "title": "Enabled"
           },
+          "source_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Backend"
+          },
           "source_config": {
             "anyOf": [
               {
@@ -781,9 +792,9 @@
           "cameras"
         ]
       },
-      "put": {
-        "description": "Update a camera.",
-        "operationId": "update_camera_api_v1_cameras__name__put",
+      "patch": {
+        "description": "Partially update a camera.",
+        "operationId": "update_camera_api_v1_cameras__name__patch",
         "parameters": [
           {
             "in": "path",

@@ -104,7 +104,7 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
   ): Promise<ConfigChangeSnapshot> {
     const response = await this.httpClient.requestJson(`/api/v1/cameras/${encodeURIComponent(name)}`, {
       ...options,
-      method: 'PUT',
+      method: 'PATCH',
       body: payload,
     })
 
