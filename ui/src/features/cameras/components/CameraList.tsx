@@ -1,13 +1,20 @@
-import type { CameraResponse } from '../../../api/generated/types'
+import type { CameraCreate, CameraResponse } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
 import { Card } from '../../../components/ui/Card'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
+import { CameraSourceConfigEditor } from './CameraSourceConfigEditor'
 
 interface CameraListProps {
   cameras: CameraResponse[]
   isPending: boolean
   isMutating: boolean
+  updatePending: boolean
+  applyChangesImmediately: boolean
   onToggleEnabled: (camera: CameraResponse) => void
+  onPatchSourceConfig: (
+    cameraName: string,
+    sourceConfigPatch: CameraCreate['source_config'],
+  ) => Promise<boolean>
   onDelete: (camera: CameraResponse) => void
 }
 
@@ -29,7 +36,10 @@ export function CameraList({
   cameras,
   isPending,
   isMutating,
+  updatePending,
+  applyChangesImmediately,
   onToggleEnabled,
+  onPatchSourceConfig,
   onDelete,
 }: CameraListProps) {
   return (
@@ -68,6 +78,13 @@ export function CameraList({
               <pre className="camera-item__config">{JSON.stringify(camera.source_config, null, 2)}</pre>
 
               <div className="inline-form__actions">
+                <CameraSourceConfigEditor
+                  camera={camera}
+                  isMutating={isMutating}
+                  updatePending={updatePending}
+                  applyChangesImmediately={applyChangesImmediately}
+                  onSubmitPatch={onPatchSourceConfig}
+                />
                 <Button
                   onClick={() => {
                     onToggleEnabled(camera)

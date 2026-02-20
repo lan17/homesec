@@ -10,6 +10,7 @@ interface CameraCreateFormProps {
   cameraBackend: CameraBackend
   sourceConfigRaw: string
   createFormError: string | null
+  applyChangesImmediately: boolean
   isMutating: boolean
   createPending: boolean
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
@@ -17,6 +18,7 @@ interface CameraCreateFormProps {
   onCameraEnabledChange: (value: boolean) => void
   onCameraBackendChange: (value: CameraBackend) => void
   onSourceConfigChange: (value: string) => void
+  onApplyChangesImmediatelyChange: (value: boolean) => void
   onResetTemplate: () => void
 }
 
@@ -26,6 +28,7 @@ export function CameraCreateForm({
   cameraBackend,
   sourceConfigRaw,
   createFormError,
+  applyChangesImmediately,
   isMutating,
   createPending,
   onSubmit,
@@ -33,6 +36,7 @@ export function CameraCreateForm({
   onCameraEnabledChange,
   onCameraBackendChange,
   onSourceConfigChange,
+  onApplyChangesImmediatelyChange,
   onResetTemplate,
 }: CameraCreateFormProps) {
   return (
@@ -91,6 +95,20 @@ export function CameraCreateForm({
         </label>
 
         {createFormError ? <p className="error-text">{createFormError}</p> : null}
+
+        <label className="field-label camera-checkbox-field" htmlFor="camera-apply-changes-checkbox">
+          <input
+            id="camera-apply-changes-checkbox"
+            type="checkbox"
+            checked={applyChangesImmediately}
+            onChange={(event) => onApplyChangesImmediatelyChange(event.target.checked)}
+            disabled={isMutating}
+          />
+          Apply changes immediately (runtime reload)
+        </label>
+        <p className="subtle">
+          Applies to create, source-config patch, enable/disable, and delete actions.
+        </p>
 
         <div className="inline-form__actions">
           <Button type="submit" disabled={isMutating}>

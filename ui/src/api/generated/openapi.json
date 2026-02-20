@@ -375,6 +375,16 @@
             "default": true,
             "title": "Restart Required",
             "type": "boolean"
+          },
+          "runtime_reload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeReloadResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "ConfigChangeResponse",
@@ -671,6 +681,18 @@
       "post": {
         "description": "Create a new camera.",
         "operationId": "create_camera_api_v1_cameras_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "apply_changes",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Apply Changes",
+              "type": "boolean"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -721,6 +743,16 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "apply_changes",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Apply Changes",
+              "type": "boolean"
             }
           }
         ],
@@ -803,6 +835,16 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "apply_changes",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Apply Changes",
+              "type": "boolean"
             }
           }
         ],

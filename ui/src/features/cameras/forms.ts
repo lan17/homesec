@@ -3,6 +3,7 @@ import type { CameraCreate } from '../../api/generated/types'
 export const CAMERA_BACKEND_OPTIONS = ['rtsp', 'ftp', 'local_folder'] as const
 
 export type CameraBackend = (typeof CAMERA_BACKEND_OPTIONS)[number]
+export const REDACTED_PLACEHOLDER = '***redacted***'
 
 const CAMERA_SOURCE_CONFIG_TEMPLATES: Record<CameraBackend, CameraCreate['source_config']> = {
   rtsp: {
@@ -68,4 +69,64 @@ export function parseSourceConfigJson(rawValue: string): SourceConfigParseResult
     ok: true,
     value: parsed as CameraCreate['source_config'],
   }
+}
+
+function containsRedactedPlaceholder(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.includes(REDACTED_PLACEHOLDER)
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => containsRedactedPlaceholder(item))
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value).some((item) => containsRedactedPlaceholder(item))
+  }
+  return false
+}
+
+function stripRedactedPlaceholders(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.includes(REDACTED_PLACEHOLDER) ? undefined : value
+  }
+  if (Array.isArray(value)) {
+    const strippedItems = value
+      .map((item) => stripRedactedPlaceholders(item))
+      .filter((item): item is unknown => item !== undefined)
+    return strippedItems
+  }
+  if (value !== null && typeof value === 'object') {
+    const strippedEntries = Object.entries(value).flatMap(([key, nestedValue]) => {
+      const sanitizedValue = stripRedactedPlaceholders(nestedValue)
+      if (sanitizedValue === undefined) {
+        return []
+      }
+      return [[key, sanitizedValue] as const]
+    })
+    return Object.fromEntries(strippedEntries)
+  }
+  return value
+}
+
+export function parseSourceConfigPatchJson(rawValue: string): SourceConfigParseResult {
+  const parsed = parseSourceConfigJson(rawValue)
+  if (!parsed.ok) {
+    return parsed
+  }
+
+  if (containsRedactedPlaceholder(parsed.value)) {
+    return {
+      ok: false,
+      message:
+        'Source config patch cannot include redacted placeholders. Omit unchanged secret fields or provide replacement values.',
+    }
+  }
+
+  return parsed
+}
+
+export function defaultSourceConfigPatchForCamera(
+  sourceConfig: CameraCreate['source_config'],
+): string {
+  const sanitized = stripRedactedPlaceholders(sourceConfig)
+  return JSON.stringify(sanitized ?? {}, null, 2)
 }

@@ -464,6 +464,7 @@ describe('HomeSecApiClient camera mutation methods', () => {
               rtsp_url: '***',
             },
           },
+          runtime_reload: null,
         }),
         {
           status: 201,
@@ -504,6 +505,53 @@ describe('HomeSecApiClient camera mutation methods', () => {
     expect(result.httpStatus).toBe(201)
   })
 
+  it('passes apply_changes query parameter for create camera when requested', async () => {
+    // Given: A camera create endpoint with runtime-reload acceptance in payload
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: false,
+          camera: {
+            name: 'driveway',
+            enabled: true,
+            source_backend: 'rtsp',
+            healthy: false,
+            last_heartbeat: null,
+            source_config: {},
+          },
+          runtime_reload: {
+            accepted: true,
+            message: 'Runtime reload accepted',
+            target_generation: 12,
+          },
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Creating a camera and requesting immediate apply
+    const result = await client.createCamera(
+      {
+        name: 'driveway',
+        enabled: true,
+        source_backend: 'rtsp',
+        source_config: { rtsp_url: 'rtsp://example/stream' },
+      },
+      { applyChanges: true },
+    )
+
+    // Then: Request URL contains apply_changes and runtime reload payload is parsed
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/cameras?apply_changes=true')
+    expect(result.restart_required).toBe(false)
+    expect(result.runtime_reload?.accepted).toBe(true)
+    expect(result.runtime_reload?.target_generation).toBe(12)
+  })
+
   it('patches camera enabled toggle payload and parses config-change response', async () => {
     // Given: A camera update endpoint with restart-required response
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -518,6 +566,7 @@ describe('HomeSecApiClient camera mutation methods', () => {
             last_heartbeat: null,
             source_config: {},
           },
+          runtime_reload: null,
         }),
         {
           status: 200,
@@ -538,6 +587,50 @@ describe('HomeSecApiClient camera mutation methods', () => {
     expect(result.camera?.enabled).toBe(false)
   })
 
+  it('passes apply_changes query parameter for update camera when requested', async () => {
+    // Given: A camera update endpoint that accepts apply changes
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: false,
+          camera: {
+            name: 'garage',
+            enabled: true,
+            source_backend: 'rtsp',
+            healthy: false,
+            last_heartbeat: null,
+            source_config: {},
+          },
+          runtime_reload: {
+            accepted: true,
+            message: 'Runtime reload accepted',
+            target_generation: 6,
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Updating a camera with applyChanges enabled
+    const result = await client.updateCamera(
+      'garage',
+      { enabled: true },
+      { applyChanges: true },
+    )
+
+    // Then: Request URL contains apply_changes and parsed payload includes runtime reload metadata
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      'http://localhost:8081/api/v1/cameras/garage?apply_changes=true',
+    )
+    expect(result.restart_required).toBe(false)
+    expect(result.runtime_reload?.target_generation).toBe(6)
+  })
+
   it('deletes camera and handles null camera payloads', async () => {
     // Given: A camera delete endpoint returning null camera in response body
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -545,6 +638,7 @@ describe('HomeSecApiClient camera mutation methods', () => {
         JSON.stringify({
           restart_required: true,
           camera: null,
+          runtime_reload: null,
         }),
         {
           status: 200,
@@ -562,6 +656,39 @@ describe('HomeSecApiClient camera mutation methods', () => {
     expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'DELETE' })
     expect(result.restart_required).toBe(true)
     expect(result.camera).toBeNull()
+  })
+
+  it('passes apply_changes query parameter for delete camera when requested', async () => {
+    // Given: A camera delete endpoint with reload acceptance payload
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: false,
+          camera: null,
+          runtime_reload: {
+            accepted: true,
+            message: 'Runtime reload accepted',
+            target_generation: 7,
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Deleting a camera with applyChanges enabled
+    const result = await client.deleteCamera('garage', { applyChanges: true })
+
+    // Then: DELETE request includes apply_changes and parsed payload includes runtime reload metadata
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      'http://localhost:8081/api/v1/cameras/garage?apply_changes=true',
+    )
+    expect(result.restart_required).toBe(false)
+    expect(result.runtime_reload?.accepted).toBe(true)
   })
 })
 

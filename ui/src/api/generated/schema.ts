@@ -396,6 +396,7 @@ export interface components {
              * @default true
              */
             restart_required: boolean;
+            runtime_reload?: components["schemas"]["RuntimeReloadResponse"] | null;
         };
         /**
          * ConfigResponse
@@ -522,7 +523,9 @@ export interface operations {
     };
     create_camera_api_v1_cameras_post: {
         parameters: {
-            query?: never;
+            query?: {
+                apply_changes?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -586,7 +589,9 @@ export interface operations {
     };
     delete_camera_api_v1_cameras__name__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                apply_changes?: boolean;
+            };
             header?: never;
             path: {
                 name: string;
@@ -617,7 +622,9 @@ export interface operations {
     };
     update_camera_api_v1_cameras__name__patch: {
         parameters: {
-            query?: never;
+            query?: {
+                apply_changes?: boolean;
+            };
             header?: never;
             path: {
                 name: string;

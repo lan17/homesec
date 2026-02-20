@@ -115,9 +115,14 @@ export function parseConfigChangeResponse(payload: unknown): ConfigChangeRespons
   }
 
   const camera = payload.camera
+  const runtimeReload = payload.runtime_reload
   return {
     restart_required: expectBoolean(payload.restart_required, 'restart_required'),
     camera: camera === null || camera === undefined ? null : parseCameraResponse(payload.camera),
+    runtime_reload:
+      runtimeReload === null || runtimeReload === undefined
+        ? null
+        : parseRuntimeReloadResponse(runtimeReload),
   }
 }
 
