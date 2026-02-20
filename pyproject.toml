@@ -1,6 +1,6 @@
 [project]
 name = "homesec"
-version = "1.4.0"
+version = "1.5.0"
 description = "Pluggable async home security camera pipeline with detection, VLM analysis, and alerts."
 readme = "README.md"
 authors = [

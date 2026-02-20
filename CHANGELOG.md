@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.5.0 (2026-02-20)
+
+### Features
+
+- Camera apply-changes flow + secret-safe source_config patch UX
+  ([#27](https://github.com/lan17/homesec/pull/27),
+  [`93323ca`](https://github.com/lan17/homesec/commit/93323cab0b13ab8efbca01a067305c23e0a71ba4))
+
+### Testing
+
+- Add API bootstrap dependency matrix ([#25](https://github.com/lan17/homesec/pull/25),
+  [`06d659c`](https://github.com/lan17/homesec/commit/06d659cf8fd463498a735635cddc8ccd27bfd7ec))
+
+- **ui**: Add behavioral coverage for cameras management flows
+  ([#26](https://github.com/lan17/homesec/pull/26),
+  [`9279134`](https://github.com/lan17/homesec/commit/9279134e40bafc10363825f877c0476bc906fca5))
+
+
 ## v1.4.0 (2026-02-19)
 
 ### Features
