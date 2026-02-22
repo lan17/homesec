@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from homesec.onvif.cli import OnvifCLI
+from homesec.onvif.cli import OnvifCLI, _parse_host_port
 from homesec.onvif.client import OnvifDeviceInfo, OnvifMediaProfile, OnvifStreamUri
 from homesec.onvif.discovery import DiscoveredCamera
 
@@ -140,3 +140,29 @@ def test_onvif_cli_streams_exits_with_error_when_client_fails(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "invalid credentials" in captured.err
+
+
+def test_parse_host_port_supports_bare_ipv6_literal() -> None:
+    """_parse_host_port should not misinterpret bare IPv6 literals as host:port."""
+    # Given: A bare IPv6 literal and default port
+    addr = "fe80::1"
+
+    # When: Parsing address
+    host, port = _parse_host_port(addr, 80)
+
+    # Then: Host remains the full IPv6 literal and default port is preserved
+    assert host == "fe80::1"
+    assert port == 80
+
+
+def test_parse_host_port_supports_bracketed_ipv6_with_port() -> None:
+    """_parse_host_port should parse bracketed IPv6 literals with explicit port."""
+    # Given: A bracketed IPv6 host with explicit port
+    addr = "[fe80::1]:8899"
+
+    # When: Parsing address
+    host, port = _parse_host_port(addr, 80)
+
+    # Then: Brackets are removed and port override is applied
+    assert host == "fe80::1"
+    assert port == 8899

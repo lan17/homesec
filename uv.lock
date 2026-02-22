@@ -1234,6 +1234,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fire" },
     { name = "greenlet" },
+    { name = "onvif-zeep-async" },
     { name = "opencv-python" },
     { name = "paho-mqtt" },
     { name = "pydantic" },
@@ -1243,11 +1244,6 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "ultralytics" },
     { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-onvif = [
-    { name = "onvif-zeep-async" },
     { name = "wsdiscovery" },
 ]
 
@@ -1275,7 +1271,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "fire", specifier = ">=0.7.1" },
     { name = "greenlet", specifier = ">=3.3.0" },
-    { name = "onvif-zeep-async", marker = "extra == 'onvif'", specifier = ">=4.0.0" },
+    { name = "onvif-zeep-async", specifier = ">=4.0.0" },
     { name = "opencv-python", specifier = ">=4.12.0.88" },
     { name = "paho-mqtt", specifier = ">=2.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -1285,9 +1281,8 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "ultralytics", specifier = ">=8.3.226" },
     { name = "uvicorn", specifier = ">=0.30.0" },
-    { name = "wsdiscovery", marker = "extra == 'onvif'", specifier = ">=2.1.2" },
+    { name = "wsdiscovery", specifier = ">=2.1.2" },
 ]
-provides-extras = ["onvif"]
 
 [package.metadata.requires-dev]
 dev = [

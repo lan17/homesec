@@ -147,14 +147,32 @@ class OnvifCLI:
 
 
 def _parse_host_port(addr: str, default_port: int) -> tuple[str, int]:
-    """Parse 'host' or 'host:port' into (host, port)."""
-    if ":" in addr:
-        host, port_str = addr.rsplit(":", 1)
+    """Parse 'host' or 'host:port' into (host, port), including IPv6 literals."""
+    normalized_addr = addr.strip()
+    if normalized_addr.startswith("["):
+        closing_idx = normalized_addr.find("]")
+        if closing_idx != -1:
+            host = normalized_addr[1:closing_idx]
+            remainder = normalized_addr[closing_idx + 1 :]
+            if remainder == "":
+                return host, default_port
+            if remainder.startswith(":"):
+                port_str = remainder[1:]
+                try:
+                    return host, int(port_str)
+                except ValueError:
+                    return normalized_addr, default_port
+            return normalized_addr, default_port
+
+    # Treat values with more than one colon as bare IPv6 literals unless
+    # bracketed (handled above).
+    if normalized_addr.count(":") == 1:
+        host, port_str = normalized_addr.rsplit(":", 1)
         try:
             return host, int(port_str)
         except ValueError:
-            pass
-    return addr, default_port
+            return normalized_addr, default_port
+    return normalized_addr, default_port
 
 
 def _exit_with_error(message: str) -> None:

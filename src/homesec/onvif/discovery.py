@@ -186,13 +186,21 @@ def _extract_ip(xaddr: str) -> str | None:
 @contextmanager
 def _suppress_wsdiscovery_interface_warnings() -> Any:
     """Suppress noisy WSDiscovery interface warnings for non-multicast interfaces."""
+
+    class _InterfaceWarningFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "does not support multicast flags or is not UP" not in record.getMessage()
+
+    warning_filter = _InterfaceWarningFilter()
     wsdiscovery_logger = logging.getLogger("wsdiscovery")
-    original_level = wsdiscovery_logger.level
-    wsdiscovery_logger.setLevel(logging.ERROR)
+    threaded_logger = logging.getLogger("threading")
+    wsdiscovery_logger.addFilter(warning_filter)
+    threaded_logger.addFilter(warning_filter)
     try:
         yield
     finally:
-        wsdiscovery_logger.setLevel(original_level)
+        wsdiscovery_logger.removeFilter(warning_filter)
+        threaded_logger.removeFilter(warning_filter)
 
 
 __all__ = ["DiscoveredCamera", "discover_cameras"]

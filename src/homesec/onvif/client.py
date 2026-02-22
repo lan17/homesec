@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 try:
-    import onvif as _onvif_pkg  # type: ignore[import-not-found]
-    from onvif import ONVIFCamera as _ONVIFCamera  # type: ignore[import-not-found]
+    import onvif as _onvif_pkg  # type: ignore[import-untyped]
+    from onvif import ONVIFCamera as _ONVIFCamera
 except Exception:  # pragma: no cover - exercised via dependency guard tests
     _onvif_pkg = None
     _ONVIFCamera = None
