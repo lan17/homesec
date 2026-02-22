@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import sys
 
 import fire  # type: ignore[import-untyped]
@@ -35,7 +36,7 @@ class OnvifCLI:
                 "- Ensure HomeSec host and camera are on the same L2 subnet (multicast required)."
             )
             print("- Retry with a longer scan: --timeout_s 15 --attempts 3")
-            print("- If camera IP is known, probe directly with: info <ip> -u <user> -p <pass>")
+            print("- If camera IP is known, probe directly with: info <ip> -u <user>")
             return
 
         print("Discovered ONVIF cameras:")
@@ -50,14 +51,15 @@ class OnvifCLI:
         self,
         ip: str,
         u: str,
-        p: str,
+        p: str | None = None,
         port: int = 80,
         wsdl_dir: str | None = None,
     ) -> None:
         """Show device information and media profile metadata."""
+        password = p if p is not None else getpass.getpass("ONVIF password: ")
 
         async def _run() -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile]]:
-            client = OnvifCameraClient(ip, u, p, port=port, wsdl_dir=wsdl_dir)
+            client = OnvifCameraClient(ip, u, password, port=port, wsdl_dir=wsdl_dir)
             return await client.get_device_info(), await client.get_media_profiles()
 
         try:
@@ -93,14 +95,15 @@ class OnvifCLI:
         self,
         ip: str,
         u: str,
-        p: str,
+        p: str | None = None,
         port: int = 80,
         wsdl_dir: str | None = None,
     ) -> None:
         """Show RTSP stream URIs for each ONVIF media profile."""
+        password = p if p is not None else getpass.getpass("ONVIF password: ")
 
         async def _run() -> list[OnvifStreamUri]:
-            client = OnvifCameraClient(ip, u, p, port=port, wsdl_dir=wsdl_dir)
+            client = OnvifCameraClient(ip, u, password, port=port, wsdl_dir=wsdl_dir)
             return await client.get_stream_uris()
 
         try:
