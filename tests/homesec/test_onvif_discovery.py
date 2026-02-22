@@ -28,10 +28,10 @@ def test_discover_cameras_rejects_invalid_attempt_count() -> None:
         discover_cameras(attempts=0)
 
 
-def test_discover_cameras_parses_and_deduplicates_results(
+def test_discover_cameras_probes_each_type_separately_and_deduplicates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """discover_cameras should parse service metadata and dedupe repeated XAddr records."""
+    """discover_cameras should probe Device and NVT types separately and merge results."""
 
     class _FakeService:
         def __init__(self, xaddrs: list[str], scopes: list[str], types: list[str]) -> None:
@@ -55,6 +55,7 @@ def test_discover_cameras_parses_and_deduplicates_results(
             self.init_kwargs = kwargs
             self.started = False
             self.stopped = False
+            self.search_calls: list[dict[str, Any]] = []
             self.__class__.instances.append(self)
 
         def start(self) -> None:
@@ -64,6 +65,8 @@ def test_discover_cameras_parses_and_deduplicates_results(
             self.stopped = True
 
         def searchServices(self, **kwargs: Any) -> list[_FakeService]:
+            self.search_calls.append(kwargs)
+            # Return overlapping results to exercise dedup across probes.
             return [
                 _FakeService(
                     xaddrs=["http://192.168.1.10/onvif/device_service"],
@@ -80,14 +83,14 @@ def test_discover_cameras_parses_and_deduplicates_results(
                 ),
             ]
 
-    # Given: WS-Discovery returns duplicated XAddr entries for one host
+    # Given: WS-Discovery returns duplicated XAddr entries across multiple probes
     _FakeDiscovery.instances = []
     monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FakeDiscovery)
 
-    # When: Running discovery
-    cameras = discover_cameras()
+    # When: Running discovery with 1 attempt
+    cameras = discover_cameras(attempts=1)
 
-    # Then: Results are deduplicated and normalized to unique IP + XAddr pairs
+    # Then: Results are deduplicated across both type probes
     assert cameras == [
         DiscoveredCamera(
             ip="192.168.1.10",
@@ -102,13 +105,50 @@ def test_discover_cameras_parses_and_deduplicates_results(
             types=("dn:NetworkVideoTransmitter",),
         ),
     ]
-    assert len(_FakeDiscovery.instances) == 1
-    assert _FakeDiscovery.instances[0].started is True
-    assert _FakeDiscovery.instances[0].stopped is True
+
+    inst = _FakeDiscovery.instances[0]
+    assert inst.started is True
+    assert inst.stopped is True
 
     # Constructor should receive relates_to and ttl
-    assert _FakeDiscovery.instances[0].init_kwargs["relates_to"] is True
-    assert _FakeDiscovery.instances[0].init_kwargs["ttl"] == 4
+    assert inst.init_kwargs["relates_to"] is True
+    assert inst.init_kwargs["ttl"] == 4
+
+    # searchServices should be called twice (once per ONVIF type) even with
+    # attempts=1, because each type requires its own probe.
+    assert len(inst.search_calls) == 2
+
+
+def test_discover_cameras_runs_all_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """discover_cameras should run every attempt round, not stop early."""
+
+    class _FakeDiscovery:
+        instances: list[Any] = []
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.search_count = 0
+            self.__class__.instances.append(self)
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def searchServices(self, **kwargs: Any) -> list[Any]:
+            self.search_count += 1
+            return []
+
+    _FakeDiscovery.instances = []
+    monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FakeDiscovery)
+
+    # When: Running with 3 attempts
+    discover_cameras(attempts=3)
+
+    # Then: All 3 rounds run, each probing 2 types = 6 total calls
+    assert _FakeDiscovery.instances[0].search_count == 6
 
 
 def test_discover_cameras_stops_discovery_when_search_fails(

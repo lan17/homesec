@@ -20,8 +20,10 @@ except Exception:  # pragma: no cover - exercised via dependency guard tests
     _ThreadedWSDiscovery = None
     QName = None
 
-# Standard ONVIF WS-Discovery type qualifiers.  Probing with both catches
-# cameras that only advertise one of the two (common with budget cameras).
+# Standard ONVIF WS-Discovery type qualifiers.
+# WS-Discovery Probe type matching is AND — a single probe with both types
+# only returns devices advertising *both*.  We probe each type separately
+# and merge results so we find devices advertising *either*.
 _ONVIF_DEVICE_TYPE = ("http://www.onvif.org/ver10/device/wsdl", "Device")
 _ONVIF_NVT_TYPE = ("http://www.onvif.org/ver10/network/wsdl", "NetworkVideoTransmitter")
 
@@ -46,7 +48,9 @@ def discover_cameras(
 
     Args:
         timeout_s: Seconds to wait per probe for camera responses.
-        attempts: Number of probe rounds (results are deduplicated).
+        attempts: Number of probe rounds.  All rounds always run so that
+                  slow-responding cameras are not missed; results are
+                  deduplicated.
         ttl: UDP multicast time-to-live.  Values >1 allow discovery across
              VLANs / routed subnets.
     """
@@ -54,7 +58,7 @@ def discover_cameras(
         raise ValueError("attempts must be >= 1")
 
     discovery_class = _require_wsdiscovery_class()
-    onvif_types = _build_onvif_types()
+    onvif_type_sets = _build_onvif_type_sets()
 
     with _suppress_wsdiscovery_interface_warnings():
         # relates_to=True: accept probe responses that reuse the probe's
@@ -67,13 +71,15 @@ def discover_cameras(
         try:
             services: list[Any] = []
             for attempt in range(attempts):
-                services.extend(
-                    _search_services(discovery, timeout_s=timeout_s, types=onvif_types)
-                )
-                if _parse_discovery_services(services):
-                    break
+                # Probe each ONVIF type separately because WS-Discovery
+                # uses AND matching — a single probe with [Device, NVT]
+                # would miss cameras that only advertise one of the two.
+                for type_set in onvif_type_sets:
+                    services.extend(
+                        _search_services(discovery, timeout_s=timeout_s, types=type_set)
+                    )
                 if attempt < (attempts - 1):
-                    time.sleep(0.2)
+                    time.sleep(0.5)
             return _parse_discovery_services(services)
         finally:
             try:
@@ -90,11 +96,19 @@ def _require_wsdiscovery_class() -> type[Any]:
     return cast(type[Any], _ThreadedWSDiscovery)
 
 
-def _build_onvif_types() -> list[Any] | None:
-    """Build ONVIF QName type filters, or None if QName is unavailable."""
+def _build_onvif_type_sets() -> list[list[Any]]:
+    """Return per-type probe lists for separate WS-Discovery probes.
+
+    Each inner list is passed to a separate ``searchServices`` call so that
+    the union of both device types is discovered (WS-Discovery uses AND
+    matching within a single probe).
+    """
     if QName is None:
-        return None
-    return [QName(*_ONVIF_DEVICE_TYPE), QName(*_ONVIF_NVT_TYPE)]
+        return [[]]  # single unfiltered probe as fallback
+    return [
+        [QName(*_ONVIF_DEVICE_TYPE)],
+        [QName(*_ONVIF_NVT_TYPE)],
+    ]
 
 
 def _search_services(
