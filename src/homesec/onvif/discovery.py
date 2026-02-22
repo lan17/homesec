@@ -143,7 +143,7 @@ def _extract_ip(xaddr: str) -> str | None:
 @contextmanager
 def _suppress_wsdiscovery_interface_warnings() -> Any:
     """Suppress noisy WSDiscovery interface warnings for non-multicast interfaces."""
-    wsdiscovery_logger = logging.getLogger("threading")
+    wsdiscovery_logger = logging.getLogger("wsdiscovery")
     original_level = wsdiscovery_logger.level
     wsdiscovery_logger.setLevel(logging.ERROR)
     try:

@@ -73,7 +73,7 @@ def test_onvif_cli_info_prints_device_and_profiles(
         port: int
         wsdl_dir: str | None
 
-        def get_device_info(self) -> OnvifDeviceInfo:
+        async def get_device_info(self) -> OnvifDeviceInfo:
             return OnvifDeviceInfo(
                 manufacturer="Acme",
                 model="ModelX",
@@ -82,7 +82,7 @@ def test_onvif_cli_info_prints_device_and_profiles(
                 hardware_id="HW1",
             )
 
-        def get_media_profiles(self) -> list[OnvifMediaProfile]:
+        async def get_media_profiles(self) -> list[OnvifMediaProfile]:
             return [
                 OnvifMediaProfile(
                     token="main",
@@ -120,7 +120,7 @@ def test_onvif_cli_streams_exits_with_error_when_client_fails(
             _ = args
             _ = kwargs
 
-        def get_stream_uris(self) -> list[OnvifStreamUri]:
+        async def get_stream_uris(self) -> list[OnvifStreamUri]:
             raise RuntimeError("invalid credentials")
 
     # Given: ONVIF client fails to fetch streams

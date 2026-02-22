@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import fire  # type: ignore[import-untyped]
 
-from homesec.onvif.client import OnvifCameraClient
+from homesec.onvif.client import (
+    OnvifCameraClient,
+    OnvifDeviceInfo,
+    OnvifMediaProfile,
+    OnvifStreamUri,
+)
 from homesec.onvif.discovery import discover_cameras
 
 
@@ -49,10 +55,13 @@ class OnvifCLI:
         wsdl_dir: str | None = None,
     ) -> None:
         """Show device information and media profile metadata."""
-        try:
+
+        async def _run() -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile]]:
             client = OnvifCameraClient(ip, u, p, port=port, wsdl_dir=wsdl_dir)
-            info = client.get_device_info()
-            profiles = client.get_media_profiles()
+            return await client.get_device_info(), await client.get_media_profiles()
+
+        try:
+            info, profiles = asyncio.run(_run())
         except Exception as exc:
             _exit_with_error(str(exc))
             return
@@ -89,9 +98,13 @@ class OnvifCLI:
         wsdl_dir: str | None = None,
     ) -> None:
         """Show RTSP stream URIs for each ONVIF media profile."""
-        try:
+
+        async def _run() -> list[OnvifStreamUri]:
             client = OnvifCameraClient(ip, u, p, port=port, wsdl_dir=wsdl_dir)
-            streams = client.get_stream_uris()
+            return await client.get_stream_uris()
+
+        try:
+            streams = asyncio.run(_run())
         except Exception as exc:
             _exit_with_error(str(exc))
             return

@@ -11,22 +11,22 @@ from homesec.onvif.client import OnvifCameraClient
 
 
 def test_onvif_camera_client_requires_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OnvifCameraClient should fail with actionable message when onvif-zeep is unavailable."""
-    # Given: onvif-zeep is unavailable in runtime
+    """OnvifCameraClient should fail with actionable message when onvif-zeep-async is unavailable."""
+    # Given: onvif-zeep-async is unavailable in runtime
     monkeypatch.setattr("homesec.onvif.client._ONVIFCamera", None)
 
     # When/Then: Instantiating client raises dependency guidance
-    with pytest.raises(RuntimeError, match="Missing dependency: onvif-zeep"):
+    with pytest.raises(RuntimeError, match="Missing dependency: onvif-zeep-async"):
         OnvifCameraClient("192.168.1.8", "admin", "password")
 
 
-def test_onvif_camera_client_reads_info_profiles_and_streams(
+async def test_onvif_camera_client_reads_info_profiles_and_streams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """OnvifCameraClient should expose device info, media profiles, and stream URIs."""
 
     class _FakeDeviceService:
-        def GetDeviceInformation(self) -> SimpleNamespace:
+        async def GetDeviceInformation(self) -> SimpleNamespace:
             return SimpleNamespace(
                 Manufacturer="Acme",
                 Model="CamPro",
@@ -39,7 +39,7 @@ def test_onvif_camera_client_reads_info_profiles_and_streams(
         def __init__(self) -> None:
             self.requests: list[dict[str, Any]] = []
 
-        def GetProfiles(self) -> list[Any]:
+        async def GetProfiles(self) -> list[Any]:
             return [
                 SimpleNamespace(
                     token="main-token",
@@ -63,7 +63,7 @@ def test_onvif_camera_client_reads_info_profiles_and_streams(
                 ),
             ]
 
-        def GetStreamUri(self, request: dict[str, Any]) -> Any:
+        async def GetStreamUri(self, request: dict[str, Any]) -> Any:
             self.requests.append(request)
             if request["ProfileToken"] == "sub-token":
                 raise RuntimeError("stream lookup failed")
@@ -78,6 +78,9 @@ def test_onvif_camera_client_reads_info_profiles_and_streams(
             self.media_service = _FakeMediaService()
             self.__class__.instances.append(self)
 
+        async def update_xaddrs(self) -> None:
+            pass
+
         def create_devicemgmt_service(self) -> _FakeDeviceService:
             return self.device_service
 
@@ -85,6 +88,7 @@ def test_onvif_camera_client_reads_info_profiles_and_streams(
             return self.media_service
 
     # Given: A fake ONVIF camera implementation with deterministic responses
+    _FakeOnvifCamera.instances = []
     monkeypatch.setattr("homesec.onvif.client._ONVIFCamera", _FakeOnvifCamera)
 
     # When: Querying device info, profiles, and stream URIs
@@ -95,9 +99,9 @@ def test_onvif_camera_client_reads_info_profiles_and_streams(
         port=8080,
         wsdl_dir="/opt/wsdl",
     )
-    device_info = client.get_device_info()
-    profiles = client.get_media_profiles()
-    streams = client.get_stream_uris()
+    device_info = await client.get_device_info()
+    profiles = await client.get_media_profiles()
+    streams = await client.get_stream_uris()
 
     # Then: ONVIF metadata is translated into stable wrapper models
     assert _FakeOnvifCamera.instances[0].args == (
