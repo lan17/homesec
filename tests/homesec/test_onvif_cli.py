@@ -19,7 +19,7 @@ def test_onvif_cli_discover_prints_results(
     # Given: Discovery returns one ONVIF endpoint
     monkeypatch.setattr(
         "homesec.onvif.cli.discover_cameras",
-        lambda timeout_s, attempts: [
+        lambda timeout_s, attempts, ttl: [
             DiscoveredCamera(
                 ip="192.168.1.20",
                 xaddr="http://192.168.1.20/onvif/device_service",
@@ -46,7 +46,7 @@ def test_onvif_cli_discover_prints_debug_tips_when_no_cameras_found(
 ) -> None:
     """OnvifCLI.discover should provide operator guidance when nothing is discovered."""
     # Given: Discovery returns no endpoints
-    monkeypatch.setattr("homesec.onvif.cli.discover_cameras", lambda timeout_s, attempts: [])
+    monkeypatch.setattr("homesec.onvif.cli.discover_cameras", lambda timeout_s, attempts, ttl: [])
 
     # When: Running discover command
     cli = OnvifCLI()

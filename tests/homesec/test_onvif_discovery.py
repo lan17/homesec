@@ -51,7 +51,8 @@ def test_discover_cameras_parses_and_deduplicates_results(
     class _FakeDiscovery:
         instances: list[Any] = []
 
-        def __init__(self) -> None:
+        def __init__(self, **kwargs: Any) -> None:
+            self.init_kwargs = kwargs
             self.started = False
             self.stopped = False
             self.__class__.instances.append(self)
@@ -62,7 +63,7 @@ def test_discover_cameras_parses_and_deduplicates_results(
         def stop(self) -> None:
             self.stopped = True
 
-        def searchServices(self) -> list[_FakeService]:
+        def searchServices(self, **kwargs: Any) -> list[_FakeService]:
             return [
                 _FakeService(
                     xaddrs=["http://192.168.1.10/onvif/device_service"],
@@ -80,6 +81,7 @@ def test_discover_cameras_parses_and_deduplicates_results(
             ]
 
     # Given: WS-Discovery returns duplicated XAddr entries for one host
+    _FakeDiscovery.instances = []
     monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FakeDiscovery)
 
     # When: Running discovery
@@ -104,6 +106,10 @@ def test_discover_cameras_parses_and_deduplicates_results(
     assert _FakeDiscovery.instances[0].started is True
     assert _FakeDiscovery.instances[0].stopped is True
 
+    # Constructor should receive relates_to and ttl
+    assert _FakeDiscovery.instances[0].init_kwargs["relates_to"] is True
+    assert _FakeDiscovery.instances[0].init_kwargs["ttl"] == 4
+
 
 def test_discover_cameras_stops_discovery_when_search_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -113,7 +119,7 @@ def test_discover_cameras_stops_discovery_when_search_fails(
     class _FailingDiscovery:
         instances: list[Any] = []
 
-        def __init__(self) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             self.stopped = False
             self.__class__.instances.append(self)
 
@@ -123,10 +129,11 @@ def test_discover_cameras_stops_discovery_when_search_fails(
         def stop(self) -> None:
             self.stopped = True
 
-        def searchServices(self) -> list[Any]:
+        def searchServices(self, **kwargs: Any) -> list[Any]:
             raise RuntimeError("network error")
 
     # Given: WS-Discovery search fails during scan
+    _FailingDiscovery.instances = []
     monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FailingDiscovery)
 
     # When/Then: Discovery raises and still invokes stop() for cleanup

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 import time
 from contextlib import contextmanager
@@ -13,11 +12,18 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 try:
+    from wsdiscovery import QName  # type: ignore[import-untyped]
     from wsdiscovery.discovery import (  # type: ignore[import-untyped]
         ThreadedWSDiscovery as _ThreadedWSDiscovery,
     )
 except Exception:  # pragma: no cover - exercised via dependency guard tests
     _ThreadedWSDiscovery = None
+    QName = None
+
+# Standard ONVIF WS-Discovery type qualifiers.  Probing with both catches
+# cameras that only advertise one of the two (common with budget cameras).
+_ONVIF_DEVICE_TYPE = ("http://www.onvif.org/ver10/device/wsdl", "Device")
+_ONVIF_NVT_TYPE = ("http://www.onvif.org/ver10/network/wsdl", "NetworkVideoTransmitter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,20 +36,40 @@ class DiscoveredCamera:
     types: tuple[str, ...]
 
 
-def discover_cameras(timeout_s: float = 8.0, *, attempts: int = 2) -> list[DiscoveredCamera]:
-    """Run WS-Discovery and return discovered ONVIF cameras."""
+def discover_cameras(
+    timeout_s: float = 8.0,
+    *,
+    attempts: int = 2,
+    ttl: int = 4,
+) -> list[DiscoveredCamera]:
+    """Run WS-Discovery and return discovered ONVIF cameras.
+
+    Args:
+        timeout_s: Seconds to wait per probe for camera responses.
+        attempts: Number of probe rounds (results are deduplicated).
+        ttl: UDP multicast time-to-live.  Values >1 allow discovery across
+             VLANs / routed subnets.
+    """
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
 
     discovery_class = _require_wsdiscovery_class()
+    onvif_types = _build_onvif_types()
+
     with _suppress_wsdiscovery_interface_warnings():
-        discovery = discovery_class()
+        # relates_to=True: accept probe responses that reuse the probe's
+        # MessageID — many cameras (TP-Link, Hikvision, budget Chinese
+        # models) do this, and without the flag their replies are silently
+        # dropped as duplicate messages.
+        discovery = discovery_class(ttl=ttl, relates_to=True)
         discovery.start()
 
         try:
             services: list[Any] = []
             for attempt in range(attempts):
-                services.extend(_search_services(discovery, timeout_s=timeout_s))
+                services.extend(
+                    _search_services(discovery, timeout_s=timeout_s, types=onvif_types)
+                )
                 if _parse_discovery_services(services):
                     break
                 if attempt < (attempts - 1):
@@ -64,21 +90,24 @@ def _require_wsdiscovery_class() -> type[Any]:
     return cast(type[Any], _ThreadedWSDiscovery)
 
 
-def _search_services(discovery: Any, *, timeout_s: float) -> list[Any]:
-    search_services = discovery.searchServices
+def _build_onvif_types() -> list[Any] | None:
+    """Build ONVIF QName type filters, or None if QName is unavailable."""
+    if QName is None:
+        return None
+    return [QName(*_ONVIF_DEVICE_TYPE), QName(*_ONVIF_NVT_TYPE)]
 
+
+def _search_services(
+    discovery: Any, *, timeout_s: float, types: list[Any] | None
+) -> list[Any]:
     try:
-        signature = inspect.signature(search_services)
-    except (TypeError, ValueError):
-        signature = None
-
-    if signature is not None:
-        if "timeout_s" in signature.parameters:
-            return list(search_services(timeout_s=timeout_s))
-        if "timeout" in signature.parameters:
-            return list(search_services(timeout=timeout_s))
-
-    return list(search_services())
+        return list(discovery.searchServices(types=types, timeout=timeout_s))
+    except TypeError:
+        # Fallback for older WSDiscovery versions with different signatures.
+        try:
+            return list(discovery.searchServices(timeout=timeout_s))
+        except TypeError:
+            return list(discovery.searchServices())
 
 
 def _parse_discovery_services(services: list[Any]) -> list[DiscoveredCamera]:

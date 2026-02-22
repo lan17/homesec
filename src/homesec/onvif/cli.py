@@ -19,10 +19,10 @@ from homesec.onvif.discovery import discover_cameras
 class OnvifCLI:
     """Standalone ONVIF utilities."""
 
-    def discover(self, timeout_s: float = 8.0, attempts: int = 2) -> None:
+    def discover(self, timeout_s: float = 8.0, attempts: int = 2, ttl: int = 4) -> None:
         """Discover ONVIF devices on the local network."""
         try:
-            cameras = discover_cameras(timeout_s=timeout_s, attempts=attempts)
+            cameras = discover_cameras(timeout_s=timeout_s, attempts=attempts, ttl=ttl)
         except Exception as exc:
             _exit_with_error(str(exc))
             return
