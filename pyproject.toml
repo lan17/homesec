@@ -41,6 +41,8 @@ dependencies = [
     "pyyaml>=6.0.3",
     "aiohttp>=3.13.2",
     "anyio>=4.0.0",
+    "onvif-zeep-async>=4.0.0",
+    "WSDiscovery>=2.1.2",
     "greenlet>=3.3.0",
     "pyftpdlib>=2.1.0",
 ]
