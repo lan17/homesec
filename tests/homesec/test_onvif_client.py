@@ -81,10 +81,10 @@ async def test_onvif_camera_client_reads_info_profiles_and_streams(
         async def update_xaddrs(self) -> None:
             pass
 
-        def create_devicemgmt_service(self) -> _FakeDeviceService:
+        async def create_devicemgmt_service(self) -> _FakeDeviceService:
             return self.device_service
 
-        def create_media_service(self) -> _FakeMediaService:
+        async def create_media_service(self) -> _FakeMediaService:
             return self.media_service
 
     # Given: A fake ONVIF camera implementation with deterministic responses

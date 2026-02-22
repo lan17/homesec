@@ -161,13 +161,13 @@ class OnvifCameraClient:
     async def _device(self) -> Any:
         await self._ensure_initialized()
         if self._device_service is None:
-            self._device_service = self._camera.create_devicemgmt_service()
+            self._device_service = await self._camera.create_devicemgmt_service()
         return self._device_service
 
     async def _media(self) -> Any:
         await self._ensure_initialized()
         if self._media_service is None:
-            self._media_service = self._camera.create_media_service()
+            self._media_service = await self._camera.create_media_service()
         return self._media_service
 
 
