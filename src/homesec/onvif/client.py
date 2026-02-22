@@ -68,12 +68,10 @@ class OnvifCameraClient:
         self._media_service: Any | None = None
 
     async def close(self) -> None:
-        """Close the underlying transport session."""
-        transport = getattr(self._camera, "transport", None)
-        if transport is not None:
-            session = getattr(transport, "session", None)
-            if session is not None and hasattr(session, "close"):
-                await session.close()
+        """Close the underlying ONVIFCamera and its transport sessions."""
+        close = getattr(self._camera, "close", None)
+        if close is not None:
+            await close()
 
     async def _ensure_initialized(self) -> None:
         if not self._initialized:

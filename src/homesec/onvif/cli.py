@@ -55,11 +55,17 @@ class OnvifCLI:
         port: int = 80,
         wsdl_dir: str | None = None,
     ) -> None:
-        """Show device information and media profile metadata."""
+        """Show device information and media profile metadata.
+
+        The ip argument accepts 'host' or 'host:port' (overrides --port).
+        """
+        host, resolved_port = _parse_host_port(ip, port)
         password = p if p is not None else getpass.getpass("ONVIF password: ")
 
         async def _run() -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile]]:
-            client = OnvifCameraClient(ip, u, password, port=port, wsdl_dir=wsdl_dir)
+            client = OnvifCameraClient(
+                host, u, password, port=resolved_port, wsdl_dir=wsdl_dir
+            )
             try:
                 return await client.get_device_info(), await client.get_media_profiles()
             finally:
@@ -71,7 +77,7 @@ class OnvifCLI:
             _exit_with_error(str(exc))
             return
 
-        print(f"ONVIF device at {ip}:{port}")
+        print(f"ONVIF device at {host}:{resolved_port}")
         print(f"  manufacturer: {info.manufacturer}")
         print(f"  model: {info.model}")
         print(f"  firmware_version: {info.firmware_version}")
@@ -102,11 +108,17 @@ class OnvifCLI:
         port: int = 80,
         wsdl_dir: str | None = None,
     ) -> None:
-        """Show RTSP stream URIs for each ONVIF media profile."""
+        """Show RTSP stream URIs for each ONVIF media profile.
+
+        The ip argument accepts 'host' or 'host:port' (overrides --port).
+        """
+        host, resolved_port = _parse_host_port(ip, port)
         password = p if p is not None else getpass.getpass("ONVIF password: ")
 
         async def _run() -> list[OnvifStreamUri]:
-            client = OnvifCameraClient(ip, u, password, port=port, wsdl_dir=wsdl_dir)
+            client = OnvifCameraClient(
+                host, u, password, port=resolved_port, wsdl_dir=wsdl_dir
+            )
             try:
                 return await client.get_stream_uris()
             finally:
@@ -122,7 +134,7 @@ class OnvifCLI:
             print("No media profiles found.")
             return
 
-        print(f"RTSP streams for ONVIF device {ip}:{port}:")
+        print(f"RTSP streams for ONVIF device {host}:{resolved_port}:")
         for stream in streams:
             if stream.uri:
                 print(f"- token={stream.profile_token} name={stream.profile_name} uri={stream.uri}")
@@ -132,6 +144,17 @@ class OnvifCLI:
                 f" token={stream.profile_token} name={stream.profile_name}"
                 f" error={stream.error or 'unknown'}"
             )
+
+
+def _parse_host_port(addr: str, default_port: int) -> tuple[str, int]:
+    """Parse 'host' or 'host:port' into (host, port)."""
+    if ":" in addr:
+        host, port_str = addr.rsplit(":", 1)
+        try:
+            return host, int(port_str)
+        except ValueError:
+            pass
+    return addr, default_port
 
 
 def _exit_with_error(message: str) -> None:
