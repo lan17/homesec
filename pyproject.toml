@@ -48,6 +48,12 @@ dependencies = [
 [project.scripts]
 homesec = "homesec.cli:main"
 
+[project.optional-dependencies]
+onvif = [
+    "onvif-zeep>=0.2.12",
+    "WSDiscovery>=2.1.2",
+]
+
 [project.urls]
 Homepage = "https://github.com/lan17/homesec"
 Source = "https://github.com/lan17/homesec"
