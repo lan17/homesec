@@ -95,6 +95,9 @@ def test_onvif_cli_info_prints_device_and_profiles(
                 )
             ]
 
+        async def close(self) -> None:
+            pass
+
     # Given: ONVIF client wrapper returns deterministic metadata
     monkeypatch.setattr("homesec.onvif.cli.OnvifCameraClient", _FakeClient)
 
@@ -122,6 +125,9 @@ def test_onvif_cli_streams_exits_with_error_when_client_fails(
 
         async def get_stream_uris(self) -> list[OnvifStreamUri]:
             raise RuntimeError("invalid credentials")
+
+        async def close(self) -> None:
+            pass
 
     # Given: ONVIF client fails to fetch streams
     monkeypatch.setattr("homesec.onvif.cli.OnvifCameraClient", _FailingClient)

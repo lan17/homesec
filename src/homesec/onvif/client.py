@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, cast
 
 try:
+    import onvif as _onvif_pkg  # type: ignore[import-not-found]
     from onvif import ONVIFCamera as _ONVIFCamera  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover - exercised via dependency guard tests
+    _onvif_pkg = None
     _ONVIFCamera = None
 
 
@@ -58,13 +61,19 @@ class OnvifCameraClient:
         wsdl_dir: str | None = None,
     ) -> None:
         camera_class = _require_onvif_camera_class()
-        if wsdl_dir is None:
-            self._camera = camera_class(host, port, username, password)
-        else:
-            self._camera = camera_class(host, port, username, password, wsdl_dir)
+        resolved_wsdl = wsdl_dir if wsdl_dir is not None else _default_wsdl_dir()
+        self._camera = camera_class(host, port, username, password, resolved_wsdl)
         self._initialized = False
         self._device_service: Any | None = None
         self._media_service: Any | None = None
+
+    async def close(self) -> None:
+        """Close the underlying transport session."""
+        transport = getattr(self._camera, "transport", None)
+        if transport is not None:
+            session = getattr(transport, "session", None)
+            if session is not None and hasattr(session, "close"):
+                await session.close()
 
     async def _ensure_initialized(self) -> None:
         if not self._initialized:
@@ -170,6 +179,26 @@ def _require_onvif_camera_class() -> type[Any]:
             "Missing dependency: onvif-zeep-async. Install with: uv pip install onvif-zeep-async"
         )
     return cast(type[Any], _ONVIFCamera)
+
+
+def _default_wsdl_dir() -> str:
+    """Resolve the WSDL directory bundled with onvif-zeep-async.
+
+    The library's own default (``site-packages/wsdl/``) relies on
+    ``data_files`` placement which is unreliable across installers and
+    platforms.  We look inside the ``onvif`` package directory first,
+    which is always present in the wheel.
+    """
+    if _onvif_pkg is None:
+        return ""
+    pkg_dir = os.path.dirname(_onvif_pkg.__file__)
+    # Preferred: wsdl/ inside the onvif package itself.
+    inside_pkg = os.path.join(pkg_dir, "wsdl")
+    if os.path.isdir(inside_pkg):
+        return inside_pkg
+    # Fallback: library default (site-packages/wsdl/).
+    site_packages = os.path.dirname(pkg_dir)
+    return os.path.join(site_packages, "wsdl")
 
 
 def _profile_token(profile: Any, *, index: int) -> str:

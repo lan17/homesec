@@ -60,7 +60,10 @@ class OnvifCLI:
 
         async def _run() -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile]]:
             client = OnvifCameraClient(ip, u, password, port=port, wsdl_dir=wsdl_dir)
-            return await client.get_device_info(), await client.get_media_profiles()
+            try:
+                return await client.get_device_info(), await client.get_media_profiles()
+            finally:
+                await client.close()
 
         try:
             info, profiles = asyncio.run(_run())
@@ -104,7 +107,10 @@ class OnvifCLI:
 
         async def _run() -> list[OnvifStreamUri]:
             client = OnvifCameraClient(ip, u, password, port=port, wsdl_dir=wsdl_dir)
-            return await client.get_stream_uris()
+            try:
+                return await client.get_stream_uris()
+            finally:
+                await client.close()
 
         try:
             streams = asyncio.run(_run())
