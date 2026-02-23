@@ -94,9 +94,7 @@ def _build_onvif_type_sets() -> list[list[Any]]:
     ]
 
 
-def _search_services(
-    discovery: Any, *, timeout_s: float, types: list[Any] | None
-) -> list[Any]:
+def _search_services(discovery: Any, *, timeout_s: float, types: list[Any] | None) -> list[Any]:
     try:
         return list(discovery.searchServices(types=types, timeout=timeout_s))
     except TypeError:

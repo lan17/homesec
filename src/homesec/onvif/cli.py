@@ -63,9 +63,7 @@ class OnvifCLI:
         password = p if p is not None else getpass.getpass("ONVIF password: ")
 
         async def _run() -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile]]:
-            client = OnvifCameraClient(
-                host, u, password, port=resolved_port, wsdl_dir=wsdl_dir
-            )
+            client = OnvifCameraClient(host, u, password, port=resolved_port, wsdl_dir=wsdl_dir)
             try:
                 return await client.get_device_info(), await client.get_media_profiles()
             finally:
@@ -116,9 +114,7 @@ class OnvifCLI:
         password = p if p is not None else getpass.getpass("ONVIF password: ")
 
         async def _run() -> list[OnvifStreamUri]:
-            client = OnvifCameraClient(
-                host, u, password, port=resolved_port, wsdl_dir=wsdl_dir
-            )
+            client = OnvifCameraClient(host, u, password, port=resolved_port, wsdl_dir=wsdl_dir)
             try:
                 return await client.get_stream_uris()
             finally:

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { isAPIError } from '../../../api/client'
 import type {
@@ -13,13 +13,16 @@ import { deriveOnvifCameraName, injectCredentialsIntoRtspUri } from '../presenta
 import { OnvifDiscoverStep } from './OnvifDiscoverStep'
 import { OnvifProbeStep, type OnvifProbeCredentials } from './OnvifProbeStep'
 import { OnvifStreamSelectStep } from './OnvifStreamSelectStep'
+import type { CameraCreateActionResult } from '../hooks/useCameraActions'
 
 interface OnvifDiscoveryWizardProps {
   applyChangesImmediately: boolean
-  createErrorContext: unknown
   createPending: boolean
   isMutating: boolean
-  onCreateCamera: (payload: CameraCreate, applyChanges: boolean) => Promise<boolean>
+  onCreateCamera: (
+    payload: CameraCreate,
+    applyChanges: boolean,
+  ) => Promise<CameraCreateActionResult>
   onClose: () => void
 }
 
@@ -33,7 +36,6 @@ const DEFAULT_PROBE_CREDENTIALS: OnvifProbeCredentials = {
 
 export function OnvifDiscoveryWizard({
   applyChangesImmediately,
-  createErrorContext,
   createPending,
   isMutating,
   onCreateCamera,
@@ -148,23 +150,15 @@ export function OnvifDiscoveryWizard({
     return probeResult.profiles.find((profile) => profile.token === selectedProfileToken) ?? null
   }, [probeResult, selectedProfileToken])
 
-  useEffect(() => {
-    if (createErrorContext === null || createErrorContext === undefined) {
-      return
+  function describeCreateError(error: unknown): string {
+    if (isAPIError(error) && error.errorCode === 'CAMERA_ALREADY_EXISTS') {
+      return 'Camera name already exists. Choose a different name and retry.'
     }
-
-    if (isAPIError(createErrorContext) && createErrorContext.errorCode === 'CAMERA_ALREADY_EXISTS') {
-      setCreateError('Camera name already exists. Choose a different name and retry.')
-      return
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return `Create camera failed: ${error.message}`
     }
-
-    if (createErrorContext instanceof Error && createErrorContext.message.trim().length > 0) {
-      setCreateError(`Create camera failed: ${createErrorContext.message}`)
-      return
-    }
-
-    setCreateError('Create camera failed. Review the page error details and retry.')
-  }, [createErrorContext])
+    return 'Create camera failed. Review the page error details and retry.'
+  }
 
   async function handleCreateCamera(): Promise<void> {
     if (!selectedProfile?.stream_uri) {
@@ -183,7 +177,7 @@ export function OnvifDiscoveryWizard({
       username: probeCredentials.username,
       password: probeCredentials.password,
     })
-    const created = await onCreateCamera(
+    const createResult = await onCreateCamera(
       {
         name: trimmedName,
         enabled: true,
@@ -194,11 +188,11 @@ export function OnvifDiscoveryWizard({
       },
       applyChangesImmediately,
     )
-    if (created) {
+    if (createResult.ok) {
       closeWizard()
       return
     }
-    setCreateError('Create camera failed. Review the page error details and retry.')
+    setCreateError(describeCreateError(createResult.error))
   }
 
   return (

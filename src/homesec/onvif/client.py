@@ -101,9 +101,7 @@ class OnvifCameraClient:
                     width=_as_optional_int(getattr(resolution, "Width", None)),
                     height=_as_optional_int(getattr(resolution, "Height", None)),
                     frame_rate_limit=_as_optional_int(getattr(video_cfg, "FrameRateLimit", None)),
-                    bitrate_limit_kbps=_as_optional_int(
-                        getattr(video_cfg, "BitrateLimit", None)
-                    ),
+                    bitrate_limit_kbps=_as_optional_int(getattr(video_cfg, "BitrateLimit", None)),
                 )
             )
         return profiles

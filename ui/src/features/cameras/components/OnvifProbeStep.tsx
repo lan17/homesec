@@ -92,9 +92,12 @@ export function OnvifProbeStep({
             max={65535}
             onChange={(event) => {
               const parsed = Number.parseInt(event.target.value, 10)
+              if (Number.isNaN(parsed)) {
+                return
+              }
               onCredentialsChange({
                 ...credentials,
-                port: Number.isNaN(parsed) ? 80 : parsed,
+                port: parsed,
               })
             }}
             disabled={isProbing}

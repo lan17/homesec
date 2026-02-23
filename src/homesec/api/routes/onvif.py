@@ -78,12 +78,26 @@ async def discover_onvif_cameras(
 ) -> list[DiscoveredCameraResponse]:
     """Trigger WS-Discovery scan and return discovered ONVIF cameras."""
     req = payload or DiscoverRequest()
-    cameras = await asyncio.to_thread(
-        discover_cameras,
-        req.timeout_s,
-        attempts=req.attempts,
-        ttl=req.ttl,
-    )
+    try:
+        cameras = await asyncio.to_thread(
+            discover_cameras,
+            req.timeout_s,
+            attempts=req.attempts,
+            ttl=req.ttl,
+        )
+    except Exception as exc:
+        logger.warning(
+            "ONVIF discovery failed (timeout_s=%.2f attempts=%d ttl=%d): %s",
+            req.timeout_s,
+            req.attempts,
+            req.ttl,
+            exc,
+        )
+        raise APIError(
+            f"ONVIF discovery failed: {exc}",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            error_code=APIErrorCode.ONVIF_DISCOVER_FAILED,
+        ) from exc
     return [
         DiscoveredCameraResponse(
             ip=cam.ip,

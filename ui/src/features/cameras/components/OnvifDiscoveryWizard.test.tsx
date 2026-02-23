@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { APIError } from '../../../api/errors'
@@ -35,13 +35,12 @@ describe('OnvifDiscoveryWizard', () => {
         types: ['dn:NetworkVideoTransmitter'],
       },
     ])
-    const onCreateCamera = vi.fn().mockResolvedValue(true)
+    const onCreateCamera = vi.fn().mockResolvedValue({ ok: true })
     const onClose = vi.fn()
     const user = userEvent.setup()
     render(
       <OnvifDiscoveryWizard
         applyChangesImmediately={false}
-        createErrorContext={null}
         createPending={false}
         isMutating={false}
         onCreateCamera={onCreateCamera}
@@ -89,13 +88,12 @@ describe('OnvifDiscoveryWizard', () => {
         },
       ],
     })
-    const onCreateCamera = vi.fn().mockResolvedValue(true)
+    const onCreateCamera = vi.fn().mockResolvedValue({ ok: true })
     const onClose = vi.fn()
     const user = userEvent.setup()
     render(
       <OnvifDiscoveryWizard
         applyChangesImmediately={true}
-        createErrorContext={null}
         createPending={false}
         isMutating={false}
         onCreateCamera={onCreateCamera}
@@ -156,13 +154,12 @@ describe('OnvifDiscoveryWizard', () => {
         },
       ],
     })
-    const onCreateCamera = vi.fn().mockResolvedValue(true)
+    const onCreateCamera = vi.fn().mockResolvedValue({ ok: true })
     const onClose = vi.fn()
     const user = userEvent.setup()
     render(
       <OnvifDiscoveryWizard
         applyChangesImmediately={false}
-        createErrorContext={null}
         createPending={false}
         isMutating={false}
         onCreateCamera={onCreateCamera}
@@ -189,14 +186,66 @@ describe('OnvifDiscoveryWizard', () => {
     expect(onCreateCamera).not.toHaveBeenCalled()
   })
 
+  it('keeps the last valid ONVIF port when probe port input is cleared', async () => {
+    // Given: Discovery returns one camera and probe endpoint succeeds
+    discoverOnvifCamerasMock.mockResolvedValue([
+      {
+        ip: '192.168.1.24',
+        xaddr: 'http://192.168.1.24/onvif/device_service',
+        scopes: [],
+        types: [],
+      },
+    ])
+    probeOnvifCameraMock.mockResolvedValue({
+      device: {
+        manufacturer: 'Acme',
+        model: 'CamPro',
+        firmware_version: '1.0.0',
+        serial_number: 'SN123',
+        hardware_id: 'HW456',
+      },
+      profiles: [],
+    })
+    const onCreateCamera = vi.fn().mockResolvedValue({ ok: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <OnvifDiscoveryWizard
+        applyChangesImmediately={false}
+        createPending={false}
+        isMutating={false}
+        onCreateCamera={onCreateCamera}
+        onClose={onClose}
+      />,
+    )
+
+    // When: Operator sets a valid port, then clears the port field, then probes
+    await user.click(screen.getByRole('button', { name: 'Run discovery scan' }))
+    await user.click(await screen.findByRole('button', { name: /192.168.1.24/ }))
+    const portInput = screen.getByLabelText('ONVIF port')
+    fireEvent.change(portInput, { target: { value: '554' } })
+    fireEvent.change(portInput, { target: { value: '' } })
+    await user.type(screen.getByLabelText('ONVIF username'), 'admin')
+    await user.type(screen.getByLabelText('ONVIF password'), 'secret')
+    await user.click(screen.getByRole('button', { name: 'Probe camera' }))
+
+    // Then: Probe request uses the last valid port instead of silently resetting to 80
+    expect(probeOnvifCameraMock).toHaveBeenCalledTimes(1)
+    expect(probeOnvifCameraMock.mock.calls[0]?.[0]).toMatchObject({
+      host: '192.168.1.24',
+      port: 554,
+      username: 'admin',
+      password: 'secret',
+    })
+  })
+
   it('does not show discover empty-state copy before first scan request', () => {
     // Given: Wizard opened at initial discovery step
-    const onCreateCamera = vi.fn().mockResolvedValue(true)
+    const onCreateCamera = vi.fn().mockResolvedValue({ ok: true })
     const onClose = vi.fn()
     render(
       <OnvifDiscoveryWizard
         applyChangesImmediately={false}
-        createErrorContext={null}
         createPending={false}
         isMutating={false}
         onCreateCamera={onCreateCamera}
@@ -214,7 +263,7 @@ describe('OnvifDiscoveryWizard', () => {
   })
 
   it('shows name-focused conflict guidance when camera create returns CAMERA_ALREADY_EXISTS', async () => {
-    // Given: Create call fails and parent passes camera-already-exists API error context
+    // Given: Create call fails with camera-already-exists API error
     discoverOnvifCamerasMock.mockResolvedValue([
       {
         ip: '192.168.1.23',
@@ -245,19 +294,18 @@ describe('OnvifDiscoveryWizard', () => {
         },
       ],
     })
-    const onCreateCamera = vi.fn().mockResolvedValue(false)
-    const onClose = vi.fn()
-    const user = userEvent.setup()
     const duplicateNameError = new APIError(
       'Camera already exists: acme-campro-192-168-1-23',
       409,
       { detail: 'Camera already exists', error_code: 'CAMERA_ALREADY_EXISTS' },
       'CAMERA_ALREADY_EXISTS',
     )
-    const { rerender } = render(
+    const onCreateCamera = vi.fn().mockResolvedValue({ ok: false, error: duplicateNameError })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
       <OnvifDiscoveryWizard
         applyChangesImmediately={false}
-        createErrorContext={null}
         createPending={false}
         isMutating={false}
         onCreateCamera={onCreateCamera}
@@ -272,17 +320,6 @@ describe('OnvifDiscoveryWizard', () => {
     await user.type(screen.getByLabelText('ONVIF password'), 'secret')
     await user.click(screen.getByRole('button', { name: 'Probe camera' }))
     await user.click(await screen.findByRole('button', { name: 'Create camera' }))
-    rerender(
-      <OnvifDiscoveryWizard
-        applyChangesImmediately={false}
-        createErrorContext={duplicateNameError}
-        createPending={false}
-        isMutating={false}
-        onCreateCamera={onCreateCamera}
-        onClose={onClose}
-      />,
-    )
-
     // Then: UI should guide operator to rename camera instead of generic failure text
     expect(
       await screen.findByText('Camera name already exists. Choose a different name and retry.'),

@@ -90,7 +90,7 @@ function setupPage({
     refetch: runtimeRefetch,
   } as unknown as ReturnType<typeof useRuntimeStatusQuery>)
 
-  const createCamera = vi.fn().mockResolvedValue(true)
+  const createCamera = vi.fn().mockResolvedValue({ ok: true })
   const toggleCameraEnabled = vi.fn().mockResolvedValue(true)
   const patchCameraSourceConfig = vi.fn().mockResolvedValue(patchSourceConfigSucceeds)
   const deleteCamera = vi.fn().mockResolvedValue(true)

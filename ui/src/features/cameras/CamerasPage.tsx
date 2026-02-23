@@ -84,13 +84,13 @@ export function CamerasPage() {
     }
 
     setCreateFormError(null)
-    const created = await cameraActions.createCamera({
+    const createResult = await cameraActions.createCamera({
       name: normalizedName,
       enabled: cameraEnabled,
       source_backend: cameraBackend,
       source_config: parsedSourceConfig.value,
     }, applyChangesImmediately)
-    if (!created) {
+    if (!createResult.ok) {
       return
     }
     setCameraName('')
@@ -208,7 +208,6 @@ export function CamerasPage() {
         showOnvifWizard ? (
           <OnvifDiscoveryWizard
             applyChangesImmediately={applyChangesImmediately}
-            createErrorContext={cameraActions.errors.create}
             createPending={cameraActions.pending.create}
             isMutating={cameraActions.isMutating}
             onCreateCamera={cameraActions.createCamera}

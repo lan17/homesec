@@ -66,6 +66,7 @@ def _client() -> TestClient:
 
 def test_discover_returns_found_cameras(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /onvif/discover should return discovered cameras."""
+    # Given: Discovery returns multiple ONVIF cameras
     fake_cameras = [
         DiscoveredCamera(
             ip="192.168.1.10",
@@ -86,9 +87,11 @@ def test_discover_returns_found_cameras(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr("homesec.api.routes.onvif.discover_cameras", mock_discover)
 
+    # When: Calling discover endpoint with explicit scan parameters
     client = _client()
     response = client.post("/api/v1/onvif/discover", json={"timeout_s": 5.0, "attempts": 1})
 
+    # Then: API returns discovered camera metadata
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -102,16 +105,41 @@ def test_discover_returns_found_cameras(monkeypatch: pytest.MonkeyPatch) -> None
 def test_discover_returns_empty_list_when_none_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /onvif/discover should return empty list when no cameras found."""
 
+    # Given: Discovery returns no cameras
     def mock_discover(timeout_s: float = 8.0, *, attempts: int = 2, ttl: int = 4):
         return []
 
     monkeypatch.setattr("homesec.api.routes.onvif.discover_cameras", mock_discover)
 
+    # When: Calling discover endpoint with default payload
     client = _client()
     response = client.post("/api/v1/onvif/discover", json={})
 
+    # Then: API returns an empty discovered-camera list
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_discover_maps_runtime_failures_to_canonical_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /onvif/discover should map discovery runtime failures to ONVIF_DISCOVER_FAILED."""
+
+    # Given: Discovery runtime fails due underlying WS-Discovery error
+    def failing_discover(timeout_s: float = 8.0, *, attempts: int = 2, ttl: int = 4):
+        raise RuntimeError("wsd failed")
+
+    monkeypatch.setattr("homesec.api.routes.onvif.discover_cameras", failing_discover)
+
+    # When: Calling discover endpoint
+    client = _client()
+    response = client.post("/api/v1/onvif/discover", json={})
+
+    # Then: API responds with canonical ONVIF discovery failure
+    assert response.status_code == 502
+    data = response.json()
+    assert data["error_code"] == "ONVIF_DISCOVER_FAILED"
+    assert "wsd failed" in data["detail"]
 
 
 def test_discover_validates_attempt_bounds() -> None:
@@ -180,7 +208,7 @@ class _FakeMediaService:
 
 
 class _FakeOnvifCamera:
-    instances: list["_FakeOnvifCamera"] = []
+    instances: list[_FakeOnvifCamera] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.device_service = _FakeDeviceService()
@@ -249,6 +277,7 @@ def test_probe_returns_device_info_and_profiles(monkeypatch: pytest.MonkeyPatch)
 def test_probe_returns_error_on_connection_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /onvif/probe should return ONVIF_PROBE_FAILED when camera is unreachable."""
 
+    # Given: ONVIF connection fails while probing device metadata
     class _FailingOnvifCamera:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
@@ -261,6 +290,7 @@ def test_probe_returns_error_on_connection_failure(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("homesec.onvif.client.ONVIFCamera", _FailingOnvifCamera)
 
+    # When: Calling probe endpoint with unreachable host
     client = _client()
     response = client.post(
         "/api/v1/onvif/probe",
@@ -272,6 +302,7 @@ def test_probe_returns_error_on_connection_failure(monkeypatch: pytest.MonkeyPat
         },
     )
 
+    # Then: API maps failure to ONVIF probe error envelope
     assert response.status_code == 502
     data = response.json()
     assert data["error_code"] == "ONVIF_PROBE_FAILED"
