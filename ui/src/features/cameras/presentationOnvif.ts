@@ -1,4 +1,5 @@
 import type { DeviceInfoResponse, DiscoveredCameraResponse } from '../../api/generated/types'
+import { ONVIF_DEFAULT_PORT } from './onvifDefaults'
 
 function slugPart(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -73,7 +74,7 @@ export function injectCredentialsIntoRtspUri({
 }
 
 export function deriveOnvifProbePortFromXaddr(xaddr: string): number {
-  const fallbackPort = 80
+  const fallbackPort = ONVIF_DEFAULT_PORT
 
   const parsed = parseXaddrUrl(xaddr)
   if (parsed === null) {

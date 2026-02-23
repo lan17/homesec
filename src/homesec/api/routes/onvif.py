@@ -2,25 +2,42 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field, field_validator
 
 from homesec.api.errors import APIError, APIErrorCode
-from homesec.onvif.client import (
-    OnvifCameraClient,
-    OnvifDeviceInfo,
-    OnvifMediaProfile,
-    OnvifStreamUri,
-)
+from homesec.onvif.client import OnvifCameraClient
 from homesec.onvif.discovery import discover_cameras
+from homesec.onvif.service import (
+    DEFAULT_CLIENT_CLOSE_TIMEOUT_S,
+    DEFAULT_DISCOVER_ATTEMPTS,
+    DEFAULT_DISCOVER_TIMEOUT_S,
+    DEFAULT_DISCOVER_TTL,
+    DEFAULT_ONVIF_PORT,
+    DEFAULT_PROBE_TIMEOUT_S,
+    OnvifDiscoverError,
+    OnvifDiscoverOptions,
+    OnvifProbeError,
+    OnvifProbeOptions,
+    OnvifProbeTimeoutError,
+    OnvifService,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["onvif"])
-_ONVIF_CLIENT_CLOSE_TIMEOUT_S = 2.0
+_ONVIF_CLIENT_CLOSE_TIMEOUT_S = DEFAULT_CLIENT_CLOSE_TIMEOUT_S
+
+
+def _build_onvif_service() -> OnvifService:
+    return OnvifService(
+        discover_fn=discover_cameras,
+        client_factory=OnvifCameraClient,
+        close_timeout_s=_ONVIF_CLIENT_CLOSE_TIMEOUT_S,
+        service_logger=logger,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -29,9 +46,9 @@ _ONVIF_CLIENT_CLOSE_TIMEOUT_S = 2.0
 
 
 class DiscoverRequest(BaseModel):
-    timeout_s: float = Field(default=8.0, gt=0.0, le=30.0)
-    attempts: int = Field(default=2, ge=1, le=5)
-    ttl: int = Field(default=4, ge=1, le=255)
+    timeout_s: float = Field(default=DEFAULT_DISCOVER_TIMEOUT_S, gt=0.0, le=30.0)
+    attempts: int = Field(default=DEFAULT_DISCOVER_ATTEMPTS, ge=1, le=5)
+    ttl: int = Field(default=DEFAULT_DISCOVER_TTL, ge=1, le=255)
 
 
 class DiscoveredCameraResponse(BaseModel):
@@ -43,8 +60,8 @@ class DiscoveredCameraResponse(BaseModel):
 
 class ProbeRequest(BaseModel):
     host: str = Field(min_length=1)
-    port: int = Field(default=80, ge=1, le=65535)
-    timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)
+    port: int = Field(default=DEFAULT_ONVIF_PORT, ge=1, le=65535)
+    timeout_s: float = Field(default=DEFAULT_PROBE_TIMEOUT_S, gt=0.0, le=120.0)
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
 
@@ -92,14 +109,16 @@ async def discover_onvif_cameras(
 ) -> list[DiscoveredCameraResponse]:
     """Trigger WS-Discovery scan and return discovered ONVIF cameras."""
     req = payload or DiscoverRequest()
+    onvif_service = _build_onvif_service()
     try:
-        cameras = await asyncio.to_thread(
-            discover_cameras,
-            req.timeout_s,
-            attempts=req.attempts,
-            ttl=req.ttl,
+        cameras = await onvif_service.discover(
+            OnvifDiscoverOptions(
+                timeout_s=req.timeout_s,
+                attempts=req.attempts,
+                ttl=req.ttl,
+            )
         )
-    except Exception as exc:
+    except OnvifDiscoverError as exc:
         logger.warning(
             "ONVIF discovery failed (timeout_s=%.2f attempts=%d ttl=%d): %s",
             req.timeout_s,
@@ -127,19 +146,18 @@ async def discover_onvif_cameras(
 @router.post("/api/v1/onvif/probe", response_model=ProbeResponse)
 async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
     """Probe an ONVIF camera for device info, profiles, and stream URIs."""
-    client: OnvifCameraClient | None = None
+    onvif_service = _build_onvif_service()
     try:
-        client = OnvifCameraClient(
-            payload.host,
-            payload.username,
-            payload.password,
-            port=payload.port,
+        probe_result = await onvif_service.probe(
+            OnvifProbeOptions(
+                host=payload.host,
+                username=payload.username,
+                password=payload.password,
+                port=payload.port,
+                timeout_s=payload.timeout_s,
+            )
         )
-        device_info, profiles, streams = await asyncio.wait_for(
-            _run_onvif_probe(client),
-            timeout=payload.timeout_s,
-        )
-    except TimeoutError as exc:
+    except OnvifProbeTimeoutError as exc:
         logger.warning(
             "ONVIF probe timed out after %.2fs for %s:%d",
             payload.timeout_s,
@@ -152,7 +170,7 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             error_code=APIErrorCode.ONVIF_PROBE_TIMEOUT,
         ) from exc
-    except Exception as exc:
+    except OnvifProbeError as exc:
         logger.warning(
             "ONVIF probe failed for %s:%d: %s",
             payload.host,
@@ -165,64 +183,36 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
             status_code=status.HTTP_502_BAD_GATEWAY,
             error_code=APIErrorCode.ONVIF_PROBE_FAILED,
         ) from exc
-    finally:
-        if client is not None:
-            await _close_onvif_client(client, host=payload.host, port=payload.port)
 
     # Index stream results by profile token for merging.
-    stream_by_token = {s.profile_token: s for s in streams}
+    stream_by_token = {stream.profile_token: stream for stream in probe_result.streams}
 
     merged_profiles = [
         MediaProfileResponse(
-            token=p.token,
-            name=p.name,
-            video_encoding=p.video_encoding,
-            width=p.width,
-            height=p.height,
-            frame_rate_limit=p.frame_rate_limit,
-            bitrate_limit_kbps=p.bitrate_limit_kbps,
-            stream_uri=stream_by_token[p.token].uri if p.token in stream_by_token else None,
-            stream_error=stream_by_token[p.token].error if p.token in stream_by_token else None,
+            token=profile.token,
+            name=profile.name,
+            video_encoding=profile.video_encoding,
+            width=profile.width,
+            height=profile.height,
+            frame_rate_limit=profile.frame_rate_limit,
+            bitrate_limit_kbps=profile.bitrate_limit_kbps,
+            stream_uri=(
+                stream_by_token[profile.token].uri if profile.token in stream_by_token else None
+            ),
+            stream_error=(
+                stream_by_token[profile.token].error if profile.token in stream_by_token else None
+            ),
         )
-        for p in profiles
+        for profile in probe_result.profiles
     ]
 
     return ProbeResponse(
         device=DeviceInfoResponse(
-            manufacturer=device_info.manufacturer,
-            model=device_info.model,
-            firmware_version=device_info.firmware_version,
-            serial_number=device_info.serial_number,
-            hardware_id=device_info.hardware_id,
+            manufacturer=probe_result.device_info.manufacturer,
+            model=probe_result.device_info.model,
+            firmware_version=probe_result.device_info.firmware_version,
+            serial_number=probe_result.device_info.serial_number,
+            hardware_id=probe_result.device_info.hardware_id,
         ),
         profiles=merged_profiles,
     )
-
-
-async def _run_onvif_probe(
-    client: OnvifCameraClient,
-) -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile], list[OnvifStreamUri]]:
-    device_info = await client.get_device_info()
-    profiles = await client.get_media_profiles()
-    streams = await client.get_stream_uris(profiles)
-    return device_info, profiles, streams
-
-
-async def _close_onvif_client(client: OnvifCameraClient, *, host: str, port: int) -> None:
-    try:
-        await asyncio.wait_for(client.close(), timeout=_ONVIF_CLIENT_CLOSE_TIMEOUT_S)
-    except TimeoutError:
-        logger.warning(
-            "ONVIF probe client close timed out after %.2fs for %s:%d",
-            _ONVIF_CLIENT_CLOSE_TIMEOUT_S,
-            host,
-            port,
-            exc_info=True,
-        )
-    except Exception:
-        logger.warning(
-            "ONVIF probe client close failed for %s:%d",
-            host,
-            port,
-            exc_info=True,
-        )

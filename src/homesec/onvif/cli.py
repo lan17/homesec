@@ -9,26 +9,46 @@ import sys
 
 import fire  # type: ignore[import-untyped]
 
-from homesec.onvif.client import (
-    OnvifCameraClient,
-    OnvifDeviceInfo,
-    OnvifMediaProfile,
-    OnvifStreamUri,
-)
+from homesec.onvif.client import OnvifCameraClient
 from homesec.onvif.discovery import discover_cameras
+from homesec.onvif.service import (
+    DEFAULT_CLIENT_CLOSE_TIMEOUT_S,
+    OnvifDiscoverError,
+    OnvifDiscoverOptions,
+    OnvifProbeError,
+    OnvifProbeOptions,
+    OnvifProbeTimeoutError,
+    OnvifService,
+)
 
 logger = logging.getLogger(__name__)
-_ONVIF_CLIENT_CLOSE_TIMEOUT_S = 2.0
+_ONVIF_CLIENT_CLOSE_TIMEOUT_S = DEFAULT_CLIENT_CLOSE_TIMEOUT_S
+
+
+def _build_default_onvif_service() -> OnvifService:
+    return OnvifService(
+        discover_fn=discover_cameras,
+        client_factory=OnvifCameraClient,
+        close_timeout_s=_ONVIF_CLIENT_CLOSE_TIMEOUT_S,
+        service_logger=logger,
+    )
 
 
 class OnvifCLI:
     """Standalone ONVIF utilities."""
 
+    def __init__(self, service: OnvifService | None = None) -> None:
+        self._service = service or _build_default_onvif_service()
+
     def discover(self, timeout_s: float = 8.0, attempts: int = 2, ttl: int = 4) -> None:
         """Discover ONVIF devices on the local network."""
         try:
-            cameras = discover_cameras(timeout_s=timeout_s, attempts=attempts, ttl=ttl)
-        except Exception as exc:
+            cameras = asyncio.run(
+                self._service.discover(
+                    OnvifDiscoverOptions(timeout_s=timeout_s, attempts=attempts, ttl=ttl)
+                )
+            )
+        except OnvifDiscoverError as exc:
             _exit_with_error(str(exc))
             return
 
@@ -66,16 +86,20 @@ class OnvifCLI:
         host, resolved_port = _parse_host_port(ip, port)
         password = p if p is not None else getpass.getpass("ONVIF password: ")
 
-        async def _run() -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile]]:
-            client = OnvifCameraClient(host, u, password, port=resolved_port, wsdl_dir=wsdl_dir)
-            try:
-                return await client.get_device_info(), await client.get_media_profiles()
-            finally:
-                await _close_onvif_client_best_effort(client)
-
         try:
-            info, profiles = asyncio.run(_run())
-        except Exception as exc:
+            info, profiles = asyncio.run(
+                self._service.fetch_device_and_profiles(
+                    OnvifProbeOptions(
+                        host=host,
+                        username=u,
+                        password=password,
+                        port=resolved_port,
+                        timeout_s=None,
+                        wsdl_dir=wsdl_dir,
+                    )
+                )
+            )
+        except (OnvifProbeError, OnvifProbeTimeoutError) as exc:
             _exit_with_error(str(exc))
             return
 
@@ -117,16 +141,20 @@ class OnvifCLI:
         host, resolved_port = _parse_host_port(ip, port)
         password = p if p is not None else getpass.getpass("ONVIF password: ")
 
-        async def _run() -> list[OnvifStreamUri]:
-            client = OnvifCameraClient(host, u, password, port=resolved_port, wsdl_dir=wsdl_dir)
-            try:
-                return await client.get_stream_uris()
-            finally:
-                await _close_onvif_client_best_effort(client)
-
         try:
-            streams = asyncio.run(_run())
-        except Exception as exc:
+            streams = asyncio.run(
+                self._service.fetch_stream_uris(
+                    OnvifProbeOptions(
+                        host=host,
+                        username=u,
+                        password=password,
+                        port=resolved_port,
+                        timeout_s=None,
+                        wsdl_dir=wsdl_dir,
+                    )
+                )
+            )
+        except (OnvifProbeError, OnvifProbeTimeoutError) as exc:
             _exit_with_error(str(exc))
             return
 
@@ -178,19 +206,6 @@ def _parse_host_port(addr: str, default_port: int) -> tuple[str, int]:
 def _exit_with_error(message: str) -> None:
     print(f"✗ {message}", file=sys.stderr)
     raise SystemExit(1)
-
-
-async def _close_onvif_client_best_effort(client: OnvifCameraClient) -> None:
-    try:
-        await asyncio.wait_for(client.close(), timeout=_ONVIF_CLIENT_CLOSE_TIMEOUT_S)
-    except TimeoutError:
-        logger.warning(
-            "ONVIF CLI client close timed out after %.2fs",
-            _ONVIF_CLIENT_CLOSE_TIMEOUT_S,
-            exc_info=True,
-        )
-    except Exception:
-        logger.warning("ONVIF CLI client close failed", exc_info=True)
 
 
 def main() -> None:

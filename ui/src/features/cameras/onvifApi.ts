@@ -5,9 +5,10 @@ import type {
   ProbeRequest,
   ProbeResponse,
 } from '../../api/generated/types'
+import { ONVIF_DEFAULT_DISCOVER_REQUEST } from './onvifDefaults'
 
 export async function discoverOnvifCameras(
-  payload: DiscoverRequest = { timeout_s: 8.0, attempts: 2, ttl: 4 },
+  payload: DiscoverRequest = ONVIF_DEFAULT_DISCOVER_REQUEST,
 ): Promise<DiscoveredCameraResponse[]> {
   return apiClient.discoverOnvifCameras(payload)
 }
