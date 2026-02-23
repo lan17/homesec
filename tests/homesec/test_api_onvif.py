@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -440,3 +441,163 @@ def test_probe_times_out_with_canonical_timeout_error(monkeypatch: pytest.Monkey
     assert data["error_code"] == "ONVIF_PROBE_TIMEOUT"
     assert "timed out" in data["detail"]
     assert _SlowOnvifClient.instances[0].closed is True
+
+
+def test_probe_trims_credentials_before_client_initialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /onvif/probe should normalize credential whitespace before ONVIF client init."""
+
+    class _CapturingOnvifClient:
+        instances: list[_CapturingOnvifClient] = []
+
+        def __init__(self, host: str, username: str, password: str, *, port: int) -> None:
+            self.host = host
+            self.username = username
+            self.password = password
+            self.port = port
+            self.__class__.instances.append(self)
+
+        async def get_device_info(self) -> Any:
+            return SimpleNamespace(
+                manufacturer="Acme",
+                model="TrimCam",
+                firmware_version="1.0.0",
+                serial_number="SN-TRIM",
+                hardware_id="HW-TRIM",
+            )
+
+        async def get_media_profiles(self) -> list[Any]:
+            return []
+
+        async def get_stream_uris(self, profiles: list[Any] | None = None) -> list[Any]:
+            _ = profiles
+            return []
+
+        async def close(self) -> None:
+            return None
+
+    # Given: A probe payload with padded credentials
+    _CapturingOnvifClient.instances = []
+    monkeypatch.setattr("homesec.api.routes.onvif.OnvifCameraClient", _CapturingOnvifClient)
+    client = _client()
+
+    # When: Calling probe endpoint with whitespace around credentials
+    response = client.post(
+        "/api/v1/onvif/probe",
+        json={
+            "host": "192.168.1.30",
+            "port": 80,
+            "username": "  admin  ",
+            "password": "  secret  ",
+        },
+    )
+
+    # Then: ONVIF client receives normalized credential values
+    assert response.status_code == 200
+    assert _CapturingOnvifClient.instances[0].username == "admin"
+    assert _CapturingOnvifClient.instances[0].password == "secret"
+
+
+def test_probe_close_timeout_does_not_extend_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /onvif/probe should bound client close time and preserve timeout behavior."""
+
+    class _SlowCloseOnvifClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            _ = kwargs
+
+        async def get_device_info(self) -> Any:
+            await asyncio.sleep(0.05)
+            return SimpleNamespace(
+                manufacturer="Acme",
+                model="SlowCloseCam",
+                firmware_version="1.0.0",
+                serial_number="SN-SLOW-CLOSE",
+                hardware_id="HW-SLOW-CLOSE",
+            )
+
+        async def get_media_profiles(self) -> list[Any]:
+            return []
+
+        async def get_stream_uris(self, profiles: list[Any] | None = None) -> list[Any]:
+            _ = profiles
+            return []
+
+        async def close(self) -> None:
+            await asyncio.sleep(1.0)
+
+    # Given: A probe that times out and a close routine that hangs longer than close timeout
+    monkeypatch.setattr("homesec.api.routes.onvif.OnvifCameraClient", _SlowCloseOnvifClient)
+    monkeypatch.setattr("homesec.api.routes.onvif._ONVIF_CLIENT_CLOSE_TIMEOUT_S", 0.01)
+    client = _client()
+
+    # When: Calling probe endpoint and measuring request duration
+    started = time.perf_counter()
+    response = client.post(
+        "/api/v1/onvif/probe",
+        json={
+            "host": "192.168.1.50",
+            "port": 80,
+            "timeout_s": 0.01,
+            "username": "admin",
+            "password": "secret",
+        },
+    )
+    elapsed_s = time.perf_counter() - started
+
+    # Then: API returns canonical timeout quickly despite slow close cleanup
+    assert response.status_code == 504
+    data = response.json()
+    assert data["error_code"] == "ONVIF_PROBE_TIMEOUT"
+    assert elapsed_s < 0.5
+
+
+def test_probe_close_failure_does_not_mask_primary_probe_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /onvif/probe should preserve probe failure even when close fails."""
+
+    class _FailingProbeAndCloseClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            _ = kwargs
+
+        async def get_device_info(self) -> Any:
+            raise ConnectionError("Camera unreachable")
+
+        async def get_media_profiles(self) -> list[Any]:
+            return []
+
+        async def get_stream_uris(self, profiles: list[Any] | None = None) -> list[Any]:
+            _ = profiles
+            return []
+
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    # Given: Probe fails and cleanup also raises
+    monkeypatch.setattr(
+        "homesec.api.routes.onvif.OnvifCameraClient",
+        _FailingProbeAndCloseClient,
+    )
+    client = _client()
+
+    # When: Calling probe endpoint
+    response = client.post(
+        "/api/v1/onvif/probe",
+        json={
+            "host": "192.168.1.99",
+            "port": 80,
+            "username": "admin",
+            "password": "wrong",
+        },
+    )
+
+    # Then: API surfaces canonical probe failure, not cleanup failure
+    assert response.status_code == 502
+    data = response.json()
+    assert data["error_code"] == "ONVIF_PROBE_FAILED"
+    assert "Camera unreachable" in data["detail"]

@@ -20,6 +20,7 @@ from homesec.onvif.discovery import discover_cameras
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["onvif"])
+_ONVIF_CLIENT_CLOSE_TIMEOUT_S = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +120,12 @@ async def discover_onvif_cameras(
 @router.post("/api/v1/onvif/probe", response_model=ProbeResponse)
 async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
     """Probe an ONVIF camera for device info, profiles, and stream URIs."""
+    username = payload.username.strip()
+    password = payload.password.strip()
     client = OnvifCameraClient(
         payload.host,
-        payload.username,
-        payload.password,
+        username,
+        password,
         port=payload.port,
     )
     try:
@@ -157,7 +160,7 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
             error_code=APIErrorCode.ONVIF_PROBE_FAILED,
         ) from exc
     finally:
-        await client.close()
+        await _close_onvif_client(client, host=payload.host, port=payload.port)
 
     # Index stream results by profile token for merging.
     stream_by_token = {s.profile_token: s for s in streams}
@@ -196,3 +199,23 @@ async def _run_onvif_probe(
     profiles = await client.get_media_profiles()
     streams = await client.get_stream_uris(profiles)
     return device_info, profiles, streams
+
+
+async def _close_onvif_client(client: OnvifCameraClient, *, host: str, port: int) -> None:
+    try:
+        await asyncio.wait_for(client.close(), timeout=_ONVIF_CLIENT_CLOSE_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning(
+            "ONVIF probe client close timed out after %.2fs for %s:%d",
+            _ONVIF_CLIENT_CLOSE_TIMEOUT_S,
+            host,
+            port,
+            exc_info=True,
+        )
+    except Exception:
+        logger.warning(
+            "ONVIF probe client close failed for %s:%d",
+            host,
+            port,
+            exc_info=True,
+        )
