@@ -114,6 +114,21 @@ def test_discover_returns_empty_list_when_none_found(monkeypatch: pytest.MonkeyP
     assert response.json() == []
 
 
+def test_discover_validates_attempt_bounds() -> None:
+    """POST /onvif/discover should reject invalid attempt bounds via request validation."""
+    # Given: An ONVIF discover request with an invalid attempt count
+    client = _client()
+
+    # When: Calling discover endpoint with attempts less than 1
+    response = client.post("/api/v1/onvif/discover", json={"attempts": 0})
+
+    # Then: API should return canonical validation error envelope
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert data["detail"] == "Request validation failed"
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/onvif/probe
 # ---------------------------------------------------------------------------
@@ -131,7 +146,11 @@ class _FakeDeviceService:
 
 
 class _FakeMediaService:
+    def __init__(self) -> None:
+        self.profile_calls = 0
+
     async def GetProfiles(self) -> list[Any]:
+        self.profile_calls += 1
         return [
             SimpleNamespace(
                 token="main",
@@ -161,9 +180,12 @@ class _FakeMediaService:
 
 
 class _FakeOnvifCamera:
+    instances: list["_FakeOnvifCamera"] = []
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.device_service = _FakeDeviceService()
         self.media_service = _FakeMediaService()
+        self.__class__.instances.append(self)
 
     async def update_xaddrs(self) -> None:
         pass
@@ -180,8 +202,11 @@ class _FakeOnvifCamera:
 
 def test_probe_returns_device_info_and_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /onvif/probe should return device info and merged profiles with stream URIs."""
+    # Given: A probe request against a camera with deterministic ONVIF responses
+    _FakeOnvifCamera.instances = []
     monkeypatch.setattr("homesec.onvif.client.ONVIFCamera", _FakeOnvifCamera)
 
+    # When: Probing camera metadata and stream profiles
     client = _client()
     response = client.post(
         "/api/v1/onvif/probe",
@@ -193,6 +218,7 @@ def test_probe_returns_device_info_and_profiles(monkeypatch: pytest.MonkeyPatch)
         },
     )
 
+    # Then: Endpoint returns merged profile info and resolves profiles once
     assert response.status_code == 200
     data = response.json()
 
@@ -217,6 +243,7 @@ def test_probe_returns_device_info_and_profiles(monkeypatch: pytest.MonkeyPatch)
 
     assert profiles[1]["token"] == "sub"
     assert profiles[1]["stream_uri"] == "rtsp://192.168.1.10/sub"
+    assert _FakeOnvifCamera.instances[0].media_service.profile_calls == 1
 
 
 def test_probe_returns_error_on_connection_failure(monkeypatch: pytest.MonkeyPatch) -> None:

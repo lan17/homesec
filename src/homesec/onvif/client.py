@@ -108,11 +108,19 @@ class OnvifCameraClient:
             )
         return profiles
 
-    async def get_stream_uris(self) -> list[OnvifStreamUri]:
-        """Return RTSP URI lookup results for each media profile."""
+    async def get_stream_uris(
+        self,
+        profiles: list[OnvifMediaProfile] | None = None,
+    ) -> list[OnvifStreamUri]:
+        """Return RTSP URI lookup results for each media profile.
+
+        When ``profiles`` is provided, profile metadata is reused to avoid an
+        additional GetProfiles roundtrip.
+        """
         media = await self._media()
         stream_results: list[OnvifStreamUri] = []
-        for profile in await self.get_media_profiles():
+        stream_profiles = profiles if profiles is not None else await self.get_media_profiles()
+        for profile in stream_profiles:
             request = {
                 "StreamSetup": {
                     "Stream": "RTP-Unicast",

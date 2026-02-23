@@ -208,6 +208,7 @@ export function CamerasPage() {
         showOnvifWizard ? (
           <OnvifDiscoveryWizard
             applyChangesImmediately={applyChangesImmediately}
+            createErrorContext={cameraActions.errors.create}
             createPending={cameraActions.pending.create}
             isMutating={cameraActions.isMutating}
             onCreateCamera={cameraActions.createCamera}

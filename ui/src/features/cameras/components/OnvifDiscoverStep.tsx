@@ -4,6 +4,7 @@ import { summarizeOnvifScopes } from '../presentationOnvif'
 
 interface OnvifDiscoverStepProps {
   cameras: DiscoveredCameraResponse[]
+  hasScanned: boolean
   isScanning: boolean
   error: string | null
   onScan: () => void
@@ -13,6 +14,7 @@ interface OnvifDiscoverStepProps {
 
 export function OnvifDiscoverStep({
   cameras,
+  hasScanned,
   isScanning,
   error,
   onScan,
@@ -36,7 +38,7 @@ export function OnvifDiscoverStep({
 
       {error ? <p className="error-text">{error}</p> : null}
 
-      {!isScanning && cameras.length === 0 ? (
+      {hasScanned && !isScanning && cameras.length === 0 ? (
         <p className="muted">No cameras found. Make sure cameras are on the same subnet.</p>
       ) : null}
 

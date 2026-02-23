@@ -476,16 +476,22 @@
         "properties": {
           "attempts": {
             "default": 2,
+            "maximum": 5.0,
+            "minimum": 1.0,
             "title": "Attempts",
             "type": "integer"
           },
           "timeout_s": {
             "default": 8.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 30.0,
             "title": "Timeout S",
             "type": "number"
           },
           "ttl": {
             "default": 4,
+            "maximum": 255.0,
+            "minimum": 1.0,
             "title": "Ttl",
             "type": "integer"
           }
@@ -682,6 +688,8 @@
           },
           "port": {
             "default": 80,
+            "maximum": 65535.0,
+            "minimum": 1.0,
             "title": "Port",
             "type": "integer"
           },

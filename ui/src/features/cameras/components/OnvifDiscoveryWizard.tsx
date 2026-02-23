@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
+import { isAPIError } from '../../../api/client'
 import type {
   CameraCreate,
   DiscoveredCameraResponse,
@@ -15,6 +16,7 @@ import { OnvifStreamSelectStep } from './OnvifStreamSelectStep'
 
 interface OnvifDiscoveryWizardProps {
   applyChangesImmediately: boolean
+  createErrorContext: unknown
   createPending: boolean
   isMutating: boolean
   onCreateCamera: (payload: CameraCreate, applyChanges: boolean) => Promise<boolean>
@@ -31,6 +33,7 @@ const DEFAULT_PROBE_CREDENTIALS: OnvifProbeCredentials = {
 
 export function OnvifDiscoveryWizard({
   applyChangesImmediately,
+  createErrorContext,
   createPending,
   isMutating,
   onCreateCamera,
@@ -45,6 +48,7 @@ export function OnvifDiscoveryWizard({
   )
   const [selectedProfileToken, setSelectedProfileToken] = useState<string | null>(null)
   const [cameraName, setCameraName] = useState('')
+  const [hasScanned, setHasScanned] = useState(false)
 
   const [discoverPending, setDiscoverPending] = useState(false)
   const [probePending, setProbePending] = useState(false)
@@ -60,6 +64,7 @@ export function OnvifDiscoveryWizard({
     setProbeCredentials(DEFAULT_PROBE_CREDENTIALS)
     setSelectedProfileToken(null)
     setCameraName('')
+    setHasScanned(false)
     setDiscoverPending(false)
     setProbePending(false)
     setDiscoverError(null)
@@ -75,6 +80,7 @@ export function OnvifDiscoveryWizard({
   async function handleDiscover(): Promise<void> {
     setDiscoverPending(true)
     setDiscoverError(null)
+    setHasScanned(true)
     try {
       const cameras = await discoverOnvifCameras()
       setDiscoveredCameras(cameras)
@@ -142,6 +148,24 @@ export function OnvifDiscoveryWizard({
     return probeResult.profiles.find((profile) => profile.token === selectedProfileToken) ?? null
   }, [probeResult, selectedProfileToken])
 
+  useEffect(() => {
+    if (createErrorContext === null || createErrorContext === undefined) {
+      return
+    }
+
+    if (isAPIError(createErrorContext) && createErrorContext.errorCode === 'CAMERA_ALREADY_EXISTS') {
+      setCreateError('Camera name already exists. Choose a different name and retry.')
+      return
+    }
+
+    if (createErrorContext instanceof Error && createErrorContext.message.trim().length > 0) {
+      setCreateError(`Create camera failed: ${createErrorContext.message}`)
+      return
+    }
+
+    setCreateError('Create camera failed. Review the page error details and retry.')
+  }, [createErrorContext])
+
   async function handleCreateCamera(): Promise<void> {
     if (!selectedProfile?.stream_uri) {
       setCreateError('Select a stream profile with a valid RTSP URI.')
@@ -186,6 +210,7 @@ export function OnvifDiscoveryWizard({
         {step === 'discover' ? (
           <OnvifDiscoverStep
             cameras={discoveredCameras}
+            hasScanned={hasScanned}
             isScanning={discoverPending}
             error={discoverError}
             onScan={() => {

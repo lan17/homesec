@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.onvif.client import OnvifCameraClient
@@ -23,9 +23,9 @@ router = APIRouter(tags=["onvif"])
 
 
 class DiscoverRequest(BaseModel):
-    timeout_s: float = 8.0
-    attempts: int = 2
-    ttl: int = 4
+    timeout_s: float = Field(default=8.0, gt=0.0, le=30.0)
+    attempts: int = Field(default=2, ge=1, le=5)
+    ttl: int = Field(default=4, ge=1, le=255)
 
 
 class DiscoveredCameraResponse(BaseModel):
@@ -37,7 +37,7 @@ class DiscoveredCameraResponse(BaseModel):
 
 class ProbeRequest(BaseModel):
     host: str
-    port: int = 80
+    port: int = Field(default=80, ge=1, le=65535)
     username: str
     password: str
 
@@ -107,7 +107,7 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
     try:
         device_info = await client.get_device_info()
         profiles = await client.get_media_profiles()
-        streams = await client.get_stream_uris()
+        streams = await client.get_stream_uris(profiles)
     except Exception as exc:
         logger.warning("ONVIF probe failed for %s:%d: %s", payload.host, payload.port, exc)
         raise APIError(
