@@ -12,8 +12,12 @@ import type {
   ClipResponse,
   ConfigChangeResponse,
   DiagnosticsResponse,
+  DiscoverRequest,
+  DiscoveredCameraResponse,
   HealthResponse,
   ListClipsQuery,
+  ProbeRequest,
+  ProbeResponse,
   RuntimeReloadResponse,
   RuntimeStatusResponse,
   StatsResponse,
@@ -53,6 +57,11 @@ export interface GeneratedHomeSecClient {
   getRuntimeStatus(
     options?: ApiRequestOptions,
   ): Promise<ApiResponseWithStatus<RuntimeStatusResponse>>
+  discoverOnvifCameras(
+    payload?: DiscoverRequest,
+    options?: ApiRequestOptions,
+  ): Promise<DiscoveredCameraResponse[]>
+  probeOnvifCamera(payload: ProbeRequest, options?: ApiRequestOptions): Promise<ProbeResponse>
   getClips(
     query?: ListClipsQuery,
     options?: ApiRequestOptions,

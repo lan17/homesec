@@ -69,12 +69,18 @@ function buildTypesFile({
   clipListSchemaName,
   clipSchemaName,
   clipStatusSchemaName,
+  discoverRequestSchemaName,
+  discoveredCameraSchemaName,
+  probeRequestSchemaName,
+  probeResponseSchemaName,
+  mediaProfileSchemaName,
+  deviceInfoSchemaName,
 }) {
-  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type CameraResponse = components["schemas"]["${cameraSchemaName}"]\nexport type CameraListResponse = CameraResponse[]\nexport type CameraCreate = components["schemas"]["${cameraCreateSchemaName}"]\nexport type CameraUpdate = components["schemas"]["${cameraUpdateSchemaName}"]\nexport type ConfigChangeResponse = components["schemas"]["${configChangeSchemaName}"]\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\nexport type RuntimeReloadResponse = components["schemas"]["${runtimeReloadSchemaName}"]\nexport type RuntimeState = components["schemas"]["${runtimeStateSchemaName}"]\nexport type RuntimeStatusResponse = components["schemas"]["${runtimeStatusSchemaName}"]\nexport type ClipListResponse = components["schemas"]["${clipListSchemaName}"]\nexport type ClipResponse = components["schemas"]["${clipSchemaName}"]\nexport type ClipStatus = components["schemas"]["${clipStatusSchemaName}"]\nexport type ListClipsQuery = NonNullable<paths["/api/v1/clips"]["get"]["parameters"]["query"]>\n`
+  return `${GENERATED_HEADER}\nimport type { components, paths } from './schema'\n\nexport type OpenAPIComponents = components\nexport type OpenAPIPaths = paths\nexport type CameraResponse = components["schemas"]["${cameraSchemaName}"]\nexport type CameraListResponse = CameraResponse[]\nexport type CameraCreate = components["schemas"]["${cameraCreateSchemaName}"]\nexport type CameraUpdate = components["schemas"]["${cameraUpdateSchemaName}"]\nexport type ConfigChangeResponse = components["schemas"]["${configChangeSchemaName}"]\nexport type HealthResponse = components["schemas"]["${healthSchemaName}"]\nexport type StatsResponse = components["schemas"]["${statsSchemaName}"]\nexport type DiagnosticsResponse = components["schemas"]["${diagnosticsSchemaName}"]\nexport type RuntimeReloadResponse = components["schemas"]["${runtimeReloadSchemaName}"]\nexport type RuntimeState = components["schemas"]["${runtimeStateSchemaName}"]\nexport type RuntimeStatusResponse = components["schemas"]["${runtimeStatusSchemaName}"]\nexport type ClipListResponse = components["schemas"]["${clipListSchemaName}"]\nexport type ClipResponse = components["schemas"]["${clipSchemaName}"]\nexport type ClipStatus = components["schemas"]["${clipStatusSchemaName}"]\nexport type DiscoverRequest = components["schemas"]["${discoverRequestSchemaName}"]\nexport type DiscoveredCameraResponse = components["schemas"]["${discoveredCameraSchemaName}"]\nexport type ProbeRequest = components["schemas"]["${probeRequestSchemaName}"]\nexport type ProbeResponse = components["schemas"]["${probeResponseSchemaName}"]\nexport type MediaProfileResponse = components["schemas"]["${mediaProfileSchemaName}"]\nexport type DeviceInfoResponse = components["schemas"]["${deviceInfoSchemaName}"]\nexport type ListClipsQuery = NonNullable<paths["/api/v1/clips"]["get"]["parameters"]["query"]>\n`
 }
 
 function buildClientFile() {
-  return `${GENERATED_HEADER}\nimport type {\n  CameraCreate,\n  CameraListResponse,\n  CameraResponse,\n  CameraUpdate,\n  ClipListResponse,\n  ClipResponse,\n  ConfigChangeResponse,\n  DiagnosticsResponse,\n  HealthResponse,\n  ListClipsQuery,\n  RuntimeReloadResponse,\n  RuntimeStatusResponse,\n  StatsResponse,\n} from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface CameraMutationOptions extends ApiRequestOptions {\n  applyChanges?: boolean\n}\n\nexport type ApiResponseWithStatus<TPayload extends object> = TPayload & { httpStatus: number }\n\nexport interface GeneratedHomeSecClient {\n  getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>\n  getCamera(name: string, options?: ApiRequestOptions): Promise<CameraResponse>\n  createCamera(\n    payload: CameraCreate,\n    options?: CameraMutationOptions,\n  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>\n  updateCamera(\n    name: string,\n    payload: CameraUpdate,\n    options?: CameraMutationOptions,\n  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>\n  deleteCamera(\n    name: string,\n    options?: CameraMutationOptions,\n  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>\n  getHealth(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<HealthResponse>>\n  getStats(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<StatsResponse>>\n  getDiagnostics(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<DiagnosticsResponse>>\n  reloadRuntime(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<RuntimeReloadResponse>>\n  getRuntimeStatus(\n    options?: ApiRequestOptions,\n  ): Promise<ApiResponseWithStatus<RuntimeStatusResponse>>\n  getClips(\n    query?: ListClipsQuery,\n    options?: ApiRequestOptions,\n  ): Promise<ApiResponseWithStatus<ClipListResponse>>\n  getClip(clipId: string, options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ClipResponse>>\n}\n`
+  return `${GENERATED_HEADER}\nimport type {\n  CameraCreate,\n  CameraListResponse,\n  CameraResponse,\n  CameraUpdate,\n  ClipListResponse,\n  ClipResponse,\n  ConfigChangeResponse,\n  DiagnosticsResponse,\n  DiscoverRequest,\n  DiscoveredCameraResponse,\n  HealthResponse,\n  ListClipsQuery,\n  ProbeRequest,\n  ProbeResponse,\n  RuntimeReloadResponse,\n  RuntimeStatusResponse,\n  StatsResponse,\n} from './types'\n\nexport interface ApiRequestOptions {\n  signal?: AbortSignal\n  apiKey?: string | null\n}\n\nexport interface CameraMutationOptions extends ApiRequestOptions {\n  applyChanges?: boolean\n}\n\nexport type ApiResponseWithStatus<TPayload extends object> = TPayload & { httpStatus: number }\n\nexport interface GeneratedHomeSecClient {\n  getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>\n  getCamera(name: string, options?: ApiRequestOptions): Promise<CameraResponse>\n  createCamera(\n    payload: CameraCreate,\n    options?: CameraMutationOptions,\n  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>\n  updateCamera(\n    name: string,\n    payload: CameraUpdate,\n    options?: CameraMutationOptions,\n  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>\n  deleteCamera(\n    name: string,\n    options?: CameraMutationOptions,\n  ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>\n  getHealth(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<HealthResponse>>\n  getStats(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<StatsResponse>>\n  getDiagnostics(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<DiagnosticsResponse>>\n  reloadRuntime(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<RuntimeReloadResponse>>\n  getRuntimeStatus(\n    options?: ApiRequestOptions,\n  ): Promise<ApiResponseWithStatus<RuntimeStatusResponse>>\n  discoverOnvifCameras(\n    payload?: DiscoverRequest,\n    options?: ApiRequestOptions,\n  ): Promise<DiscoveredCameraResponse[]>\n  probeOnvifCamera(payload: ProbeRequest, options?: ApiRequestOptions): Promise<ProbeResponse>\n  getClips(\n    query?: ListClipsQuery,\n    options?: ApiRequestOptions,\n  ): Promise<ApiResponseWithStatus<ClipListResponse>>\n  getClip(clipId: string, options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ClipResponse>>\n}\n`
 }
 
 function resolveResponseSchemaName(openapiSchema, { pathName, method, statuses, fallbackSchemaName }) {
@@ -103,6 +109,47 @@ function resolveResponseSchemaName(openapiSchema, { pathName, method, statuses, 
   throw new Error(
     `Unable to derive schema type for ${method.toUpperCase()} ${pathName} from OpenAPI schema`,
   )
+}
+
+function resolveArrayItemResponseSchemaName(
+  openapiSchema,
+  { pathName, method, statuses, fallbackSchemaName },
+) {
+  const route = openapiSchema.paths?.[pathName]?.[method]
+  if (!route || typeof route !== 'object') {
+    throw new Error(`Missing ${method.toUpperCase()} ${pathName} route in exported OpenAPI schema`)
+  }
+
+  for (const statusCode of statuses) {
+    const schema = route.responses?.[statusCode]?.content?.['application/json']?.schema
+    if (schema?.type === 'array') {
+      const itemRef = schema.items?.$ref
+      if (typeof itemRef === 'string') {
+        const prefix = '#/components/schemas/'
+        if (itemRef.startsWith(prefix)) {
+          return itemRef.slice(prefix.length)
+        }
+      }
+    }
+  }
+
+  if (
+    typeof fallbackSchemaName === 'string'
+    && openapiSchema.components?.schemas?.[fallbackSchemaName]
+  ) {
+    return fallbackSchemaName
+  }
+
+  throw new Error(
+    `Unable to derive array response item schema for ${method.toUpperCase()} ${pathName} from OpenAPI schema`,
+  )
+}
+
+function resolveComponentSchemaName(openapiSchema, schemaName) {
+  if (openapiSchema.components?.schemas?.[schemaName]) {
+    return schemaName
+  }
+  throw new Error(`Missing component schema ${schemaName} in exported OpenAPI spec`)
 }
 
 function resolveRequestBodySchemaName(openapiSchema, { pathName, method, fallbackSchemaName }) {
@@ -246,6 +293,26 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
     statuses: ['200', 'default'],
     fallbackSchemaName: 'ClipResponse',
   })
+  const discoveredCameraSchemaName = resolveArrayItemResponseSchemaName(schema, {
+    pathName: '/api/v1/onvif/discover',
+    method: 'post',
+    statuses: ['200', 'default'],
+    fallbackSchemaName: 'DiscoveredCameraResponse',
+  })
+  const probeRequestSchemaName = resolveRequestBodySchemaName(schema, {
+    pathName: '/api/v1/onvif/probe',
+    method: 'post',
+    fallbackSchemaName: 'ProbeRequest',
+  })
+  const probeResponseSchemaName = resolveResponseSchemaName(schema, {
+    pathName: '/api/v1/onvif/probe',
+    method: 'post',
+    statuses: ['200', 'default'],
+    fallbackSchemaName: 'ProbeResponse',
+  })
+  const discoverRequestSchemaName = resolveComponentSchemaName(schema, 'DiscoverRequest')
+  const mediaProfileSchemaName = resolveComponentSchemaName(schema, 'MediaProfileResponse')
+  const deviceInfoSchemaName = resolveComponentSchemaName(schema, 'DeviceInfoResponse')
   if (!schema.components?.schemas?.ClipStatus) {
     throw new Error('Missing ClipStatus schema in exported OpenAPI spec')
   }
@@ -265,6 +332,12 @@ function generateOpenApiArtifacts(tempGeneratedDir) {
       clipListSchemaName,
       clipSchemaName,
       clipStatusSchemaName: 'ClipStatus',
+      discoverRequestSchemaName,
+      discoveredCameraSchemaName,
+      probeRequestSchemaName,
+      probeResponseSchemaName,
+      mediaProfileSchemaName,
+      deviceInfoSchemaName,
     }),
     'utf-8',
   )

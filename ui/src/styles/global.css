@@ -508,6 +508,113 @@ a:hover {
   padding: 0.65rem 0.7rem;
 }
 
+.onvif-wizard {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.onvif-wizard__step {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.onvif-step-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.onvif-step-title {
+  margin: 0;
+  font-size: 1.02rem;
+}
+
+.onvif-camera-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.onvif-camera-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+  color: var(--text-primary);
+  padding: var(--space-3);
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.onvif-camera-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.onvif-camera-card__title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.onvif-camera-card__line {
+  margin: 0;
+  word-break: break-word;
+}
+
+.onvif-profile-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.onvif-profile-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+  color: var(--text-primary);
+  padding: var(--space-3);
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.onvif-profile-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.onvif-profile-card--selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.onvif-profile-card--disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.onvif-profile-card__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.onvif-profile-card__line {
+  margin: 0;
+  word-break: break-word;
+}
+
+.onvif-device-info {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.onvif-device-info p {
+  margin: 0;
+}
+
 .clip-detail-actions {
   display: flex;
   flex-wrap: wrap;
@@ -724,6 +831,10 @@ a:hover {
   }
 
   .cameras-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .onvif-camera-grid {
     grid-template-columns: 1fr;
   }
 

@@ -17,6 +17,7 @@ import { describeCameraError } from './presentation'
 import { CameraCreateForm } from './components/CameraCreateForm'
 import { RuntimeReloadBanner } from './components/RuntimeReloadBanner'
 import { CameraList } from './components/CameraList'
+import { OnvifDiscoveryWizard } from './components/OnvifDiscoveryWizard'
 
 export function CamerasPage() {
   const camerasQuery = useCamerasQuery()
@@ -34,6 +35,7 @@ export function CamerasPage() {
   const [sourceConfigRaw, setSourceConfigRaw] = useState(defaultSourceConfigForBackend('rtsp'))
   const [createFormError, setCreateFormError] = useState<string | null>(null)
   const [applyChangesImmediately, setApplyChangesImmediately] = useState(false)
+  const [showOnvifWizard, setShowOnvifWizard] = useState(false)
 
   const cameras = useMemo(() => camerasQuery.data ?? [], [camerasQuery.data])
   const runtimeStatus = runtimeStatusQuery.data
@@ -82,13 +84,13 @@ export function CamerasPage() {
     }
 
     setCreateFormError(null)
-    const created = await cameraActions.createCamera({
+    const createResult = await cameraActions.createCamera({
       name: normalizedName,
       enabled: cameraEnabled,
       source_backend: cameraBackend,
       source_config: parsedSourceConfig.value,
     }, applyChangesImmediately)
-    if (!created) {
+    if (!createResult.ok) {
       return
     }
     setCameraName('')
@@ -201,6 +203,33 @@ export function CamerasPage() {
           setSourceConfigRaw(defaultSourceConfigForBackend(cameraBackend))
         }}
       />
+
+      {!unauthorized ? (
+        showOnvifWizard ? (
+          <OnvifDiscoveryWizard
+            applyChangesImmediately={applyChangesImmediately}
+            createPending={cameraActions.pending.create}
+            isMutating={cameraActions.isMutating}
+            onCreateCamera={cameraActions.createCamera}
+            onClose={() => {
+              setShowOnvifWizard(false)
+            }}
+          />
+        ) : (
+          <Card title="Discover Camera (ONVIF)" subtitle="Auto-discover and probe ONVIF cameras">
+            <div className="inline-form__actions">
+              <Button
+                onClick={() => {
+                  setShowOnvifWizard(true)
+                }}
+                disabled={cameraActions.isMutating}
+              >
+                Discover cameras
+              </Button>
+            </div>
+          </Card>
+        )
+      ) : null}
 
       <RuntimeReloadBanner
         hasPendingReload={cameraActions.hasPendingReload}

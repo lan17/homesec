@@ -39,8 +39,12 @@ interface CameraActionState {
   errors: CameraActionErrors
 }
 
+export type CameraCreateActionResult =
+  | { ok: true }
+  | { ok: false; error: unknown }
+
 interface UseCameraActionsResult extends CameraActionState {
-  createCamera: (payload: CameraCreate, applyChanges: boolean) => Promise<boolean>
+  createCamera: (payload: CameraCreate, applyChanges: boolean) => Promise<CameraCreateActionResult>
   toggleCameraEnabled: (camera: CameraResponse, applyChanges: boolean) => Promise<boolean>
   patchCameraSourceConfig: (
     cameraName: string,
@@ -103,7 +107,10 @@ export function useCameraActions({
     return false
   }
 
-  async function createCamera(payload: CameraCreate, applyChanges: boolean): Promise<boolean> {
+  async function createCamera(
+    payload: CameraCreate,
+    applyChanges: boolean,
+  ): Promise<CameraCreateActionResult> {
     setActionFeedback(null)
     try {
       const response = await createCameraMutation.mutateAsync({ payload, applyChanges })
@@ -115,10 +122,10 @@ export function useCameraActions({
       if (didRequestReload) {
         await onRuntimeStatusRefresh()
       }
-      return true
+      return { ok: true }
     } catch (error: unknown) {
       setMutationFailureFeedback(`Camera "${payload.name}" create`, error)
-      return false
+      return { ok: false, error }
     }
   }
 
