@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from homesec.onvif import discovery as discovery_module
 from homesec.onvif.discovery import DiscoveredCamera, discover_cameras
 
 
@@ -170,3 +171,97 @@ def test_discover_cameras_stops_discovery_when_search_fails(
     with pytest.raises(RuntimeError, match="network error"):
         discover_cameras()
     assert _FailingDiscovery.instances[0].stopped is True
+
+
+def test_search_services_falls_back_to_legacy_wsdiscovery_signatures() -> None:
+    """_search_services should retry with older WSDiscovery call signatures."""
+
+    class _LegacyDiscovery:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def searchServices(self, **kwargs: Any) -> list[str]:
+            self.calls.append(kwargs)
+            if len(self.calls) < 3:
+                raise TypeError("unsupported signature")
+            return ["service-a"]
+
+    # Given: A WSDiscovery implementation that only supports no-arg searchServices
+    discovery = _LegacyDiscovery()
+
+    # When: Calling the compatibility helper
+    results = discovery_module._search_services(  # noqa: SLF001
+        discovery,
+        timeout_s=2.0,
+        types=["nvt-type"],
+    )
+
+    # Then: Helper should fall back through signature variants and return results
+    assert results == ["service-a"]
+    assert discovery.calls == [
+        {"types": ["nvt-type"], "timeout": 2.0},
+        {"timeout": 2.0},
+        {},
+    ]
+
+
+def test_discover_cameras_logs_warning_when_stop_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """discover_cameras should tolerate stop() failures and emit cleanup warning."""
+
+    class _StopFailDiscovery:
+        def __init__(self, **kwargs: Any) -> None:
+            _ = kwargs
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            raise RuntimeError("stop failure")
+
+        def searchServices(self, **kwargs: Any) -> list[Any]:
+            _ = kwargs
+            return []
+
+    # Given: Discovery search succeeds but stop() raises during cleanup
+    monkeypatch.setattr("homesec.onvif.discovery.ThreadedWSDiscovery", _StopFailDiscovery)
+    caplog.set_level("WARNING", logger="homesec.onvif.discovery")
+
+    # When: Running discovery
+    cameras = discover_cameras()
+
+    # Then: Results still return and cleanup warning is logged
+    assert cameras == []
+    assert any("WS-Discovery stop() failed" in record.message for record in caplog.records)
+
+
+def test_parse_discovery_services_tolerates_missing_methods_and_invalid_xaddr(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """_parse_discovery_services should safely ignore malformed WS-Discovery payloads."""
+
+    class _BrokenService:
+        def getXAddrs(self) -> list[str]:
+            return ["http:///onvif/device_service"]
+
+        def getScopes(self) -> list[str]:
+            raise RuntimeError("bad scopes")
+
+    # Given: A malformed WS-Discovery service entry with invalid XAddr and failing getters
+    caplog.set_level("DEBUG", logger="homesec.onvif.discovery")
+
+    # When: Parsing discovery services
+    discovered = discovery_module._parse_discovery_services([_BrokenService()])  # noqa: SLF001
+
+    # Then: Parser should skip invalid camera data without raising
+    assert discovered == []
+    assert any(
+        "WS-Discovery method failed: getScopes" in record.message for record in caplog.records
+    )
+    assert any(
+        "Could not extract host from WS-Discovery XAddr" in record.message
+        for record in caplog.records
+    )
