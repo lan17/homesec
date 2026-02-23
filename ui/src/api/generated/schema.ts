@@ -203,6 +203,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/onvif/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Onvif Cameras
+         * @description Trigger WS-Discovery scan and return discovered ONVIF cameras.
+         */
+        post: operations["discover_onvif_cameras_api_v1_onvif_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onvif/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe Onvif Camera
+         * @description Probe an ONVIF camera for device info, profiles, and stream URIs.
+         */
+        post: operations["probe_onvif_camera_api_v1_onvif_probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runtime/reload": {
         parameters: {
             query?: never;
@@ -408,6 +448,19 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DeviceInfoResponse */
+        DeviceInfoResponse: {
+            /** Firmware Version */
+            firmware_version: string;
+            /** Hardware Id */
+            hardware_id: string;
+            /** Manufacturer */
+            manufacturer: string;
+            /** Model */
+            model: string;
+            /** Serial Number */
+            serial_number: string;
+        };
         /** DiagnosticsResponse */
         DiagnosticsResponse: {
             /** Cameras */
@@ -420,6 +473,35 @@ export interface components {
             storage: components["schemas"]["ComponentStatus"];
             /** Uptime Seconds */
             uptime_seconds: number;
+        };
+        /** DiscoverRequest */
+        DiscoverRequest: {
+            /**
+             * Attempts
+             * @default 2
+             */
+            attempts: number;
+            /**
+             * Timeout S
+             * @default 8
+             */
+            timeout_s: number;
+            /**
+             * Ttl
+             * @default 4
+             */
+            ttl: number;
+        };
+        /** DiscoveredCameraResponse */
+        DiscoveredCameraResponse: {
+            /** Ip */
+            ip: string;
+            /** Scopes */
+            scopes: string[];
+            /** Types */
+            types: string[];
+            /** Xaddr */
+            xaddr: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -436,6 +518,47 @@ export interface components {
             postgres: string;
             /** Status */
             status: string;
+        };
+        /** MediaProfileResponse */
+        MediaProfileResponse: {
+            /** Bitrate Limit Kbps */
+            bitrate_limit_kbps: number | null;
+            /** Frame Rate Limit */
+            frame_rate_limit: number | null;
+            /** Height */
+            height: number | null;
+            /** Name */
+            name: string;
+            /** Stream Error */
+            stream_error: string | null;
+            /** Stream Uri */
+            stream_uri: string | null;
+            /** Token */
+            token: string;
+            /** Video Encoding */
+            video_encoding: string | null;
+            /** Width */
+            width: number | null;
+        };
+        /** ProbeRequest */
+        ProbeRequest: {
+            /** Host */
+            host: string;
+            /** Password */
+            password: string;
+            /**
+             * Port
+             * @default 80
+             */
+            port: number;
+            /** Username */
+            username: string;
+        };
+        /** ProbeResponse */
+        ProbeResponse: {
+            device: components["schemas"]["DeviceInfoResponse"];
+            /** Profiles */
+            profiles: components["schemas"]["MediaProfileResponse"][];
         };
         /** RuntimeReloadResponse */
         RuntimeReloadResponse: {
@@ -879,6 +1002,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    discover_onvif_cameras_api_v1_onvif_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DiscoverRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveredCameraResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_onvif_camera_api_v1_onvif_probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -405,6 +405,39 @@
         "title": "ConfigResponse",
         "type": "object"
       },
+      "DeviceInfoResponse": {
+        "properties": {
+          "firmware_version": {
+            "title": "Firmware Version",
+            "type": "string"
+          },
+          "hardware_id": {
+            "title": "Hardware Id",
+            "type": "string"
+          },
+          "manufacturer": {
+            "title": "Manufacturer",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "serial_number": {
+            "title": "Serial Number",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manufacturer",
+          "model",
+          "firmware_version",
+          "serial_number",
+          "hardware_id"
+        ],
+        "title": "DeviceInfoResponse",
+        "type": "object"
+      },
       "DiagnosticsResponse": {
         "properties": {
           "cameras": {
@@ -437,6 +470,61 @@
           "cameras"
         ],
         "title": "DiagnosticsResponse",
+        "type": "object"
+      },
+      "DiscoverRequest": {
+        "properties": {
+          "attempts": {
+            "default": 2,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "timeout_s": {
+            "default": 8.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
+          "ttl": {
+            "default": 4,
+            "title": "Ttl",
+            "type": "integer"
+          }
+        },
+        "title": "DiscoverRequest",
+        "type": "object"
+      },
+      "DiscoveredCameraResponse": {
+        "properties": {
+          "ip": {
+            "title": "Ip",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Types",
+            "type": "array"
+          },
+          "xaddr": {
+            "title": "Xaddr",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ip",
+          "xaddr",
+          "scopes",
+          "types"
+        ],
+        "title": "DiscoveredCameraResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -478,6 +566,156 @@
           "cameras_online"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "MediaProfileResponse": {
+        "properties": {
+          "bitrate_limit_kbps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bitrate Limit Kbps"
+          },
+          "frame_rate_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Rate Limit"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "stream_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream Error"
+          },
+          "stream_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream Uri"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "video_encoding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Encoding"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "token",
+          "name",
+          "video_encoding",
+          "width",
+          "height",
+          "frame_rate_limit",
+          "bitrate_limit_kbps",
+          "stream_uri",
+          "stream_error"
+        ],
+        "title": "MediaProfileResponse",
+        "type": "object"
+      },
+      "ProbeRequest": {
+        "properties": {
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "port": {
+            "default": 80,
+            "title": "Port",
+            "type": "integer"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "username",
+          "password"
+        ],
+        "title": "ProbeRequest",
+        "type": "object"
+      },
+      "ProbeResponse": {
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DeviceInfoResponse"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/MediaProfileResponse"
+            },
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "device",
+          "profiles"
+        ],
+        "title": "ProbeResponse",
         "type": "object"
       },
       "RuntimeReloadResponse": {
@@ -1325,6 +1563,101 @@
         "summary": "Get Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/onvif/discover": {
+      "post": {
+        "description": "Trigger WS-Discovery scan and return discovered ONVIF cameras.",
+        "operationId": "discover_onvif_cameras_api_v1_onvif_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DiscoverRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DiscoveredCameraResponse"
+                  },
+                  "title": "Response Discover Onvif Cameras Api V1 Onvif Discover Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discover Onvif Cameras",
+        "tags": [
+          "onvif"
+        ]
+      }
+    },
+    "/api/v1/onvif/probe": {
+      "post": {
+        "description": "Probe an ONVIF camera for device info, profiles, and stream URIs.",
+        "operationId": "probe_onvif_camera_api_v1_onvif_probe_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Probe Onvif Camera",
+        "tags": [
+          "onvif"
         ]
       }
     },

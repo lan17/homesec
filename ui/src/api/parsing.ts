@@ -4,8 +4,12 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  DeviceInfoResponse,
+  DiscoveredCameraResponse,
   DiagnosticsResponse,
   HealthResponse,
+  MediaProfileResponse,
+  ProbeResponse,
   RuntimeReloadResponse,
   RuntimeState,
   RuntimeStatusResponse,
@@ -107,6 +111,87 @@ export function parseCameraListResponse(payload: unknown): CameraListResponse {
       throw new Error(`cameras[${index}] invalid: ${(error as Error).message}`)
     }
   })
+}
+
+export function parseDiscoveredCameraResponse(payload: unknown): DiscoveredCameraResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Discovered camera response is not a JSON object')
+  }
+
+  return {
+    ip: expectString(payload.ip, 'ip'),
+    xaddr: expectString(payload.xaddr, 'xaddr'),
+    scopes: expectStringArray(payload.scopes, 'scopes'),
+    types: expectStringArray(payload.types, 'types'),
+  }
+}
+
+export function parseOnvifDiscoverResponse(payload: unknown): DiscoveredCameraResponse[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('ONVIF discover response must be an array')
+  }
+
+  return payload.map((camera, index) => {
+    try {
+      return parseDiscoveredCameraResponse(camera)
+    } catch (error) {
+      throw new Error(`discovered_cameras[${index}] invalid: ${(error as Error).message}`)
+    }
+  })
+}
+
+function parseOnvifMediaProfileResponse(payload: unknown): MediaProfileResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Media profile response is not a JSON object')
+  }
+
+  return {
+    token: expectString(payload.token, 'token'),
+    name: expectString(payload.name, 'name'),
+    video_encoding: expectNullableString(payload.video_encoding, 'video_encoding'),
+    width: expectNullableNumber(payload.width, 'width'),
+    height: expectNullableNumber(payload.height, 'height'),
+    frame_rate_limit: expectNullableNumber(payload.frame_rate_limit, 'frame_rate_limit'),
+    bitrate_limit_kbps: expectNullableNumber(payload.bitrate_limit_kbps, 'bitrate_limit_kbps'),
+    stream_uri: expectNullableString(payload.stream_uri, 'stream_uri'),
+    stream_error: expectNullableString(payload.stream_error, 'stream_error'),
+  }
+}
+
+function parseOnvifDeviceInfoResponse(payload: unknown): DeviceInfoResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Device info response is not a JSON object')
+  }
+
+  return {
+    manufacturer: expectString(payload.manufacturer, 'manufacturer'),
+    model: expectString(payload.model, 'model'),
+    firmware_version: expectString(payload.firmware_version, 'firmware_version'),
+    serial_number: expectString(payload.serial_number, 'serial_number'),
+    hardware_id: expectString(payload.hardware_id, 'hardware_id'),
+  }
+}
+
+export function parseOnvifProbeResponse(payload: unknown): ProbeResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('ONVIF probe response is not a JSON object')
+  }
+
+  const rawProfiles = payload.profiles
+  if (!Array.isArray(rawProfiles)) {
+    throw new Error('profiles must be an array')
+  }
+
+  return {
+    device: parseOnvifDeviceInfoResponse(payload.device),
+    profiles: rawProfiles.map((profile, index) => {
+      try {
+        return parseOnvifMediaProfileResponse(profile)
+      } catch (error) {
+        throw new Error(`profiles[${index}] invalid: ${(error as Error).message}`)
+      }
+    }),
+  }
 }
 
 export function parseConfigChangeResponse(payload: unknown): ConfigChangeResponse {

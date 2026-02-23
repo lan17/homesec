@@ -780,3 +780,154 @@ describe('HomeSecApiClient runtime methods', () => {
     await expect(client.getRuntimeStatus()).rejects.toBeInstanceOf(APIError)
   })
 })
+
+describe('HomeSecApiClient ONVIF methods', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('posts discover request payload and parses discovered camera list', async () => {
+    // Given: ONVIF discover endpoint returning discovered camera entries
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            ip: '192.168.1.20',
+            xaddr: 'http://192.168.1.20/onvif/device_service',
+            scopes: ['onvif://scope/location/garage'],
+            types: ['dn:NetworkVideoTransmitter'],
+          },
+        ]),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Triggering ONVIF discovery with explicit scan options
+    const result = await client.discoverOnvifCameras({ timeout_s: 10, attempts: 3, ttl: 4 })
+
+    // Then: Client should issue POST request and return parsed camera list
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/onvif/discover')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ timeout_s: 10, attempts: 3, ttl: 4 }),
+    })
+    expect(result).toEqual([
+      {
+        ip: '192.168.1.20',
+        xaddr: 'http://192.168.1.20/onvif/device_service',
+        scopes: ['onvif://scope/location/garage'],
+        types: ['dn:NetworkVideoTransmitter'],
+      },
+    ])
+  })
+
+  it('throws APIError when discover payload is malformed', async () => {
+    // Given: ONVIF discover endpoint returns malformed payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          cameras: [],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client should fail fast on malformed discover payload
+    await expect(client.discoverOnvifCameras()).rejects.toBeInstanceOf(APIError)
+  })
+
+  it('posts probe request and parses device and profile data', async () => {
+    // Given: ONVIF probe endpoint returning device + profile metadata
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          device: {
+            manufacturer: 'Acme',
+            model: 'CamPro',
+            firmware_version: '1.0.0',
+            serial_number: 'SN123',
+            hardware_id: 'HW456',
+          },
+          profiles: [
+            {
+              token: 'main',
+              name: 'Main stream',
+              video_encoding: 'H264',
+              width: 1920,
+              height: 1080,
+              frame_rate_limit: 15,
+              bitrate_limit_kbps: 4096,
+              stream_uri: 'rtsp://camera/stream1',
+              stream_error: null,
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Probing a discovered camera with credentials
+    const result = await client.probeOnvifCamera({
+      host: '192.168.1.20',
+      port: 80,
+      username: 'admin',
+      password: 'secret',
+    })
+
+    // Then: Client should POST probe payload and return parsed probe result
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/onvif/probe')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({
+        host: '192.168.1.20',
+        port: 80,
+        username: 'admin',
+        password: 'secret',
+      }),
+    })
+    expect(result.device.manufacturer).toBe('Acme')
+    expect(result.profiles[0]?.token).toBe('main')
+    expect(result.profiles[0]?.stream_uri).toBe('rtsp://camera/stream1')
+  })
+
+  it('throws APIError when probe payload is malformed', async () => {
+    // Given: ONVIF probe endpoint returns malformed payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          device: null,
+          profiles: [],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client should reject malformed probe payload
+    await expect(
+      client.probeOnvifCamera({
+        host: '192.168.1.20',
+        port: 80,
+        username: 'admin',
+        password: 'secret',
+      }),
+    ).rejects.toBeInstanceOf(APIError)
+  })
+})

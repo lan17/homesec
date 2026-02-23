@@ -11,9 +11,13 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  DiscoverRequest,
+  DiscoveredCameraResponse,
   DiagnosticsResponse,
   HealthResponse,
   ListClipsQuery,
+  ProbeRequest,
+  ProbeResponse,
   RuntimeReloadResponse,
   RuntimeStatusResponse,
   StatsResponse,
@@ -28,6 +32,8 @@ import {
   parseClipMediaTokenResponse,
   parseClipResponse,
   parseConfigChangeResponse,
+  parseOnvifDiscoverResponse,
+  parseOnvifProbeResponse,
   parseDiagnosticsResponse,
   parseHealthResponse,
   parseRuntimeReloadResponse,
@@ -214,6 +220,45 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
         response.payload,
         null,
       )
+    }
+  }
+
+  async discoverOnvifCameras(
+    payload: DiscoverRequest = { timeout_s: 8.0, attempts: 2, ttl: 4 },
+    options: ApiRequestOptions = {},
+  ): Promise<DiscoveredCameraResponse[]> {
+    const response = await this.httpClient.requestJson('/api/v1/onvif/discover', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return parseOnvifDiscoverResponse(response.payload)
+    } catch {
+      throw new APIError(
+        'Invalid ONVIF discover response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async probeOnvifCamera(
+    payload: ProbeRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<ProbeResponse> {
+    const response = await this.httpClient.requestJson('/api/v1/onvif/probe', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return parseOnvifProbeResponse(response.payload)
+    } catch {
+      throw new APIError('Invalid ONVIF probe response payload', response.status, response.payload, null)
     }
   }
 
