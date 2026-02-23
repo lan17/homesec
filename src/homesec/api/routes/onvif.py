@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.onvif.client import (
@@ -42,11 +42,18 @@ class DiscoveredCameraResponse(BaseModel):
 
 
 class ProbeRequest(BaseModel):
-    host: str
+    host: str = Field(min_length=1)
     port: int = Field(default=80, ge=1, le=65535)
     timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)
-    username: str = Field(min_length=1, pattern=r".*\S.*")
-    password: str = Field(min_length=1, pattern=r".*\S.*")
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+    @field_validator("host", "username", "password", mode="before")
+    @classmethod
+    def _normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class MediaProfileResponse(BaseModel):
@@ -120,15 +127,14 @@ async def discover_onvif_cameras(
 @router.post("/api/v1/onvif/probe", response_model=ProbeResponse)
 async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
     """Probe an ONVIF camera for device info, profiles, and stream URIs."""
-    username = payload.username.strip()
-    password = payload.password.strip()
-    client = OnvifCameraClient(
-        payload.host,
-        username,
-        password,
-        port=payload.port,
-    )
+    client: OnvifCameraClient | None = None
     try:
+        client = OnvifCameraClient(
+            payload.host,
+            payload.username,
+            payload.password,
+            port=payload.port,
+        )
         device_info, profiles, streams = await asyncio.wait_for(
             _run_onvif_probe(client),
             timeout=payload.timeout_s,
@@ -160,7 +166,8 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
             error_code=APIErrorCode.ONVIF_PROBE_FAILED,
         ) from exc
     finally:
-        await _close_onvif_client(client, host=payload.host, port=payload.port)
+        if client is not None:
+            await _close_onvif_client(client, host=payload.host, port=payload.port)
 
     # Index stream results by profile token for merging.
     stream_by_token = {s.profile_token: s for s in streams}

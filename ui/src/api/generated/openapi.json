@@ -679,12 +679,12 @@
       "ProbeRequest": {
         "properties": {
           "host": {
+            "minLength": 1,
             "title": "Host",
             "type": "string"
           },
           "password": {
             "minLength": 1,
-            "pattern": ".*\\S.*",
             "title": "Password",
             "type": "string"
           },
@@ -704,7 +704,6 @@
           },
           "username": {
             "minLength": 1,
-            "pattern": ".*\\S.*",
             "title": "Username",
             "type": "string"
           }

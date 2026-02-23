@@ -365,6 +365,42 @@ def test_probe_returns_error_on_connection_failure(monkeypatch: pytest.MonkeyPat
     assert "Camera unreachable" in data["detail"]
 
 
+def test_probe_maps_client_constructor_failure_to_canonical_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /onvif/probe should map client constructor failures to ONVIF_PROBE_FAILED."""
+
+    class _InvalidConstructorOnvifClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            _ = kwargs
+            raise RuntimeError("invalid ONVIF host")
+
+    # Given: ONVIF client constructor fails before probe execution
+    monkeypatch.setattr(
+        "homesec.api.routes.onvif.OnvifCameraClient",
+        _InvalidConstructorOnvifClient,
+    )
+    client = _client()
+
+    # When: Calling probe endpoint
+    response = client.post(
+        "/api/v1/onvif/probe",
+        json={
+            "host": "camera.local",
+            "port": 80,
+            "username": "admin",
+            "password": "secret",
+        },
+    )
+
+    # Then: API returns canonical ONVIF probe failure response
+    assert response.status_code == 502
+    data = response.json()
+    assert data["error_code"] == "ONVIF_PROBE_FAILED"
+    assert "invalid ONVIF host" in data["detail"]
+
+
 def test_probe_rejects_blank_credentials() -> None:
     """POST /onvif/probe should reject blank credential fields during request validation."""
     # Given: A probe payload with blank credentials
@@ -374,6 +410,27 @@ def test_probe_rejects_blank_credentials() -> None:
         "port": 80,
         "username": "   ",
         "password": "",
+    }
+
+    # When: Calling probe endpoint
+    response = client.post("/api/v1/onvif/probe", json=payload)
+
+    # Then: API responds with canonical validation error envelope
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert data["detail"] == "Request validation failed"
+
+
+def test_probe_rejects_blank_host() -> None:
+    """POST /onvif/probe should reject blank host values during request validation."""
+    # Given: A probe payload with a blank host
+    client = _client()
+    payload = {
+        "host": "   ",
+        "port": 80,
+        "username": "admin",
+        "password": "secret",
     }
 
     # When: Calling probe endpoint

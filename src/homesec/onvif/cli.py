@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import logging
 import sys
 
 import fire  # type: ignore[import-untyped]
@@ -15,6 +16,9 @@ from homesec.onvif.client import (
     OnvifStreamUri,
 )
 from homesec.onvif.discovery import discover_cameras
+
+logger = logging.getLogger(__name__)
+_ONVIF_CLIENT_CLOSE_TIMEOUT_S = 2.0
 
 
 class OnvifCLI:
@@ -67,7 +71,7 @@ class OnvifCLI:
             try:
                 return await client.get_device_info(), await client.get_media_profiles()
             finally:
-                await client.close()
+                await _close_onvif_client_best_effort(client)
 
         try:
             info, profiles = asyncio.run(_run())
@@ -118,7 +122,7 @@ class OnvifCLI:
             try:
                 return await client.get_stream_uris()
             finally:
-                await client.close()
+                await _close_onvif_client_best_effort(client)
 
         try:
             streams = asyncio.run(_run())
@@ -174,6 +178,19 @@ def _parse_host_port(addr: str, default_port: int) -> tuple[str, int]:
 def _exit_with_error(message: str) -> None:
     print(f"✗ {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+async def _close_onvif_client_best_effort(client: OnvifCameraClient) -> None:
+    try:
+        await asyncio.wait_for(client.close(), timeout=_ONVIF_CLIENT_CLOSE_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning(
+            "ONVIF CLI client close timed out after %.2fs",
+            _ONVIF_CLIENT_CLOSE_TIMEOUT_S,
+            exc_info=True,
+        )
+    except Exception:
+        logger.warning("ONVIF CLI client close failed", exc_info=True)
 
 
 def main() -> None:

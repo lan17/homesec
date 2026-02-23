@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -112,6 +114,48 @@ def test_onvif_cli_info_prints_device_and_profiles(
     assert "token=main name=Main" in captured.out
 
 
+def test_onvif_cli_info_preserves_success_when_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """OnvifCLI.info should preserve successful output when close fails."""
+
+    @dataclass
+    class _CloseFailClient:
+        ip: str
+        username: str
+        password: str
+        port: int
+        wsdl_dir: str | None
+
+        async def get_device_info(self) -> OnvifDeviceInfo:
+            return OnvifDeviceInfo(
+                manufacturer="Acme",
+                model="ModelY",
+                firmware_version="2.0.0",
+                serial_number="SERIAL",
+                hardware_id="HW2",
+            )
+
+        async def get_media_profiles(self) -> list[OnvifMediaProfile]:
+            return []
+
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    # Given: ONVIF info succeeds but close raises
+    monkeypatch.setattr("homesec.onvif.cli.OnvifCameraClient", _CloseFailClient)
+
+    # When: Running info command
+    cli = OnvifCLI()
+    cli.info("192.168.1.30", "admin", "secret")
+
+    # Then: CLI still reports successful probe output
+    captured = capsys.readouterr()
+    assert "ONVIF device at 192.168.1.30:80" in captured.out
+    assert "manufacturer: Acme" in captured.out
+
+
 def test_onvif_cli_streams_exits_with_error_when_client_fails(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -140,6 +184,81 @@ def test_onvif_cli_streams_exits_with_error_when_client_fails(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "invalid credentials" in captured.err
+
+
+def test_onvif_cli_streams_preserves_primary_error_when_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """OnvifCLI.streams should preserve stream failure when close also fails."""
+
+    class _FailingStreamsAndCloseClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _ = args
+            _ = kwargs
+
+        async def get_stream_uris(self) -> list[OnvifStreamUri]:
+            raise RuntimeError("invalid credentials")
+
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    # Given: Stream lookup and close both fail
+    monkeypatch.setattr("homesec.onvif.cli.OnvifCameraClient", _FailingStreamsAndCloseClient)
+
+    # When/Then: CLI still exits with primary stream error
+    cli = OnvifCLI()
+    with pytest.raises(SystemExit) as exc_info:
+        cli.streams("192.168.1.40", "admin", "bad-password")
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "invalid credentials" in captured.err
+
+
+def test_onvif_cli_info_bounds_close_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """OnvifCLI.info should not block on close longer than configured timeout."""
+
+    @dataclass
+    class _SlowCloseClient:
+        ip: str
+        username: str
+        password: str
+        port: int
+        wsdl_dir: str | None
+
+        async def get_device_info(self) -> OnvifDeviceInfo:
+            return OnvifDeviceInfo(
+                manufacturer="Acme",
+                model="ModelZ",
+                firmware_version="3.0.0",
+                serial_number="SERIAL-Z",
+                hardware_id="HW3",
+            )
+
+        async def get_media_profiles(self) -> list[OnvifMediaProfile]:
+            return []
+
+        async def close(self) -> None:
+            await asyncio.sleep(1.0)
+
+    # Given: Slow close and a short configured close timeout
+    monkeypatch.setattr("homesec.onvif.cli.OnvifCameraClient", _SlowCloseClient)
+    monkeypatch.setattr("homesec.onvif.cli._ONVIF_CLIENT_CLOSE_TIMEOUT_S", 0.01)
+    cli = OnvifCLI()
+
+    # When: Running info command and measuring completion time
+    started = time.perf_counter()
+    cli.info("192.168.1.30", "admin", "secret")
+    elapsed_s = time.perf_counter() - started
+
+    # Then: Command completes without waiting for full close delay
+    assert elapsed_s < 0.5
+    captured = capsys.readouterr()
+    assert "ONVIF device at 192.168.1.30:80" in captured.out
 
 
 def test_parse_host_port_supports_bare_ipv6_literal() -> None:
