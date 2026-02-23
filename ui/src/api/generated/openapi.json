@@ -683,6 +683,8 @@
             "type": "string"
           },
           "password": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
             "title": "Password",
             "type": "string"
           },
@@ -693,7 +695,16 @@
             "title": "Port",
             "type": "integer"
           },
+          "timeout_s": {
+            "default": 15.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 120.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
           "username": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
             "title": "Username",
             "type": "string"
           }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -30,12 +31,12 @@ class _StubStorage:
 
 
 class _StubApp:
-    def __init__(self) -> None:
+    def __init__(self, *, server_config: FastAPIServerConfig | None = None) -> None:
         self.repository = _StubRepository()
         self.storage = _StubStorage()
         self.sources: list[Any] = []
         self._config = SimpleNamespace(
-            server=FastAPIServerConfig(),
+            server=server_config or FastAPIServerConfig(),
             cameras=[],
         )
         self.uptime_seconds = 0.0
@@ -55,8 +56,8 @@ class _StubApp:
         return RuntimeReloadRequest(accepted=True, message="ok", target_generation=1)
 
 
-def _client() -> TestClient:
-    return TestClient(create_app(_StubApp()))
+def _client(*, server_config: FastAPIServerConfig | None = None) -> TestClient:
+    return TestClient(create_app(_StubApp(server_config=server_config)))
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,60 @@ def test_discover_validates_attempt_bounds() -> None:
     data = response.json()
     assert data["error_code"] == "REQUEST_VALIDATION_FAILED"
     assert data["detail"] == "Request validation failed"
+
+
+def test_onvif_routes_require_api_key_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ONVIF endpoints should require API key auth when server auth is enabled."""
+    # Given: Auth-enabled server config and deterministic ONVIF dependencies
+    monkeypatch.setenv("HOMESEC_TEST_API_KEY", "homesec-test-key")
+    server_config = FastAPIServerConfig(
+        auth_enabled=True,
+        api_key_env="HOMESEC_TEST_API_KEY",
+    )
+    monkeypatch.setattr("homesec.api.routes.onvif.discover_cameras", lambda *args, **kwargs: [])
+    monkeypatch.setattr("homesec.onvif.client.ONVIFCamera", _FakeOnvifCamera)
+    client = _client(server_config=server_config)
+    payload = {
+        "host": "192.168.1.10",
+        "port": 80,
+        "username": "admin",
+        "password": "secret",
+    }
+
+    # When: Calling ONVIF endpoints without a valid bearer token
+    discover_missing_auth = client.post("/api/v1/onvif/discover", json={})
+    discover_wrong_auth = client.post(
+        "/api/v1/onvif/discover",
+        json={},
+        headers={"Authorization": "Bearer wrong-key"},
+    )
+    probe_missing_auth = client.post("/api/v1/onvif/probe", json=payload)
+    probe_wrong_auth = client.post(
+        "/api/v1/onvif/probe",
+        json=payload,
+        headers={"Authorization": "Bearer wrong-key"},
+    )
+
+    # Then: API rejects unauthorized ONVIF requests with canonical UNAUTHORIZED envelope
+    for response in (
+        discover_missing_auth,
+        discover_wrong_auth,
+        probe_missing_auth,
+        probe_wrong_auth,
+    ):
+        assert response.status_code == 401
+        assert response.json()["error_code"] == "UNAUTHORIZED"
+
+    # When: Calling ONVIF endpoints with the configured bearer token
+    headers = {"Authorization": "Bearer homesec-test-key"}
+    discover_ok = client.post("/api/v1/onvif/discover", json={}, headers=headers)
+    probe_ok = client.post("/api/v1/onvif/probe", json=payload, headers=headers)
+
+    # Then: API allows ONVIF requests for the configured API key
+    assert discover_ok.status_code == 200
+    assert probe_ok.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -307,3 +362,81 @@ def test_probe_returns_error_on_connection_failure(monkeypatch: pytest.MonkeyPat
     data = response.json()
     assert data["error_code"] == "ONVIF_PROBE_FAILED"
     assert "Camera unreachable" in data["detail"]
+
+
+def test_probe_rejects_blank_credentials() -> None:
+    """POST /onvif/probe should reject blank credential fields during request validation."""
+    # Given: A probe payload with blank credentials
+    client = _client()
+    payload = {
+        "host": "192.168.1.50",
+        "port": 80,
+        "username": "   ",
+        "password": "",
+    }
+
+    # When: Calling probe endpoint
+    response = client.post("/api/v1/onvif/probe", json=payload)
+
+    # Then: API responds with canonical validation error envelope
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert data["detail"] == "Request validation failed"
+
+
+def test_probe_times_out_with_canonical_timeout_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /onvif/probe should return ONVIF_PROBE_TIMEOUT when probe exceeds timeout."""
+
+    class _SlowOnvifClient:
+        instances: list[_SlowOnvifClient] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            _ = kwargs
+            self.closed = False
+            self.__class__.instances.append(self)
+
+        async def get_device_info(self) -> Any:
+            await asyncio.sleep(0.05)
+            return SimpleNamespace(
+                manufacturer="Acme",
+                model="SlowCam",
+                firmware_version="1.0.0",
+                serial_number="SN-TIMEOUT",
+                hardware_id="HW-TIMEOUT",
+            )
+
+        async def get_media_profiles(self) -> list[Any]:
+            return []
+
+        async def get_stream_uris(self, profiles: list[Any] | None = None) -> list[Any]:
+            _ = profiles
+            return []
+
+        async def close(self) -> None:
+            self.closed = True
+
+    # Given: ONVIF probe client exceeds the request timeout
+    _SlowOnvifClient.instances = []
+    monkeypatch.setattr("homesec.api.routes.onvif.OnvifCameraClient", _SlowOnvifClient)
+    client = _client()
+
+    # When: Calling probe endpoint with a short timeout
+    response = client.post(
+        "/api/v1/onvif/probe",
+        json={
+            "host": "192.168.1.50",
+            "port": 80,
+            "timeout_s": 0.01,
+            "username": "admin",
+            "password": "secret",
+        },
+    )
+
+    # Then: API maps timeout to canonical ONVIF timeout error and closes client
+    assert response.status_code == 504
+    data = response.json()
+    assert data["error_code"] == "ONVIF_PROBE_TIMEOUT"
+    assert "timed out" in data["detail"]
+    assert _SlowOnvifClient.instances[0].closed is True

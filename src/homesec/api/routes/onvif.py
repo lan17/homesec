@@ -9,7 +9,12 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
 from homesec.api.errors import APIError, APIErrorCode
-from homesec.onvif.client import OnvifCameraClient
+from homesec.onvif.client import (
+    OnvifCameraClient,
+    OnvifDeviceInfo,
+    OnvifMediaProfile,
+    OnvifStreamUri,
+)
 from homesec.onvif.discovery import discover_cameras
 
 logger = logging.getLogger(__name__)
@@ -38,8 +43,9 @@ class DiscoveredCameraResponse(BaseModel):
 class ProbeRequest(BaseModel):
     host: str
     port: int = Field(default=80, ge=1, le=65535)
-    username: str
-    password: str
+    timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)
+    username: str = Field(min_length=1, pattern=r".*\S.*")
+    password: str = Field(min_length=1, pattern=r".*\S.*")
 
 
 class MediaProfileResponse(BaseModel):
@@ -92,6 +98,7 @@ async def discover_onvif_cameras(
             req.attempts,
             req.ttl,
             exc,
+            exc_info=True,
         )
         raise APIError(
             f"ONVIF discovery failed: {exc}",
@@ -119,11 +126,31 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
         port=payload.port,
     )
     try:
-        device_info = await client.get_device_info()
-        profiles = await client.get_media_profiles()
-        streams = await client.get_stream_uris(profiles)
+        device_info, profiles, streams = await asyncio.wait_for(
+            _run_onvif_probe(client),
+            timeout=payload.timeout_s,
+        )
+    except TimeoutError as exc:
+        logger.warning(
+            "ONVIF probe timed out after %.2fs for %s:%d",
+            payload.timeout_s,
+            payload.host,
+            payload.port,
+            exc_info=True,
+        )
+        raise APIError(
+            f"ONVIF probe timed out after {payload.timeout_s:.2f}s",
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            error_code=APIErrorCode.ONVIF_PROBE_TIMEOUT,
+        ) from exc
     except Exception as exc:
-        logger.warning("ONVIF probe failed for %s:%d: %s", payload.host, payload.port, exc)
+        logger.warning(
+            "ONVIF probe failed for %s:%d: %s",
+            payload.host,
+            payload.port,
+            exc,
+            exc_info=True,
+        )
         raise APIError(
             f"ONVIF probe failed: {exc}",
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -160,3 +187,12 @@ async def probe_onvif_camera(payload: ProbeRequest) -> ProbeResponse:
         ),
         profiles=merged_profiles,
     )
+
+
+async def _run_onvif_probe(
+    client: OnvifCameraClient,
+) -> tuple[OnvifDeviceInfo, list[OnvifMediaProfile], list[OnvifStreamUri]]:
+    device_info = await client.get_device_info()
+    profiles = await client.get_media_profiles()
+    streams = await client.get_stream_uris(profiles)
+    return device_info, profiles, streams

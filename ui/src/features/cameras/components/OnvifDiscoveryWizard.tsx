@@ -31,6 +31,7 @@ interface OnvifDiscoveryWizardProps {
 }
 
 type WizardStep = 'discover' | 'probe' | 'select-stream'
+const DEFAULT_PROBE_TIMEOUT_S = 15
 
 const DEFAULT_PROBE_CREDENTIALS: OnvifProbeCredentials = {
   username: '',
@@ -133,6 +134,7 @@ export function OnvifDiscoveryWizard({
       const result = await probeOnvifCamera({
         host: selectedCamera.ip,
         port: probeCredentials.port,
+        timeout_s: DEFAULT_PROBE_TIMEOUT_S,
         username: probeCredentials.username,
         password: probeCredentials.password,
       })

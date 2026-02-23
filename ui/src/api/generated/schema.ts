@@ -551,6 +551,11 @@ export interface components {
              * @default 80
              */
             port: number;
+            /**
+             * Timeout S
+             * @default 15
+             */
+            timeout_s: number;
             /** Username */
             username: string;
         };

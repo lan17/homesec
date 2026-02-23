@@ -883,6 +883,7 @@ describe('HomeSecApiClient ONVIF methods', () => {
     const result = await client.probeOnvifCamera({
       host: '192.168.1.20',
       port: 80,
+      timeout_s: 15,
       username: 'admin',
       password: 'secret',
     })
@@ -895,6 +896,7 @@ describe('HomeSecApiClient ONVIF methods', () => {
       body: JSON.stringify({
         host: '192.168.1.20',
         port: 80,
+        timeout_s: 15,
         username: 'admin',
         password: 'secret',
       }),
@@ -925,6 +927,7 @@ describe('HomeSecApiClient ONVIF methods', () => {
       client.probeOnvifCamera({
         host: '192.168.1.20',
         port: 80,
+        timeout_s: 15,
         username: 'admin',
         password: 'secret',
       }),
