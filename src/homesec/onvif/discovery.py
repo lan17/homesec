@@ -6,19 +6,13 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+from wsdiscovery import QName  # type: ignore[import-untyped]
+from wsdiscovery.discovery import ThreadedWSDiscovery  # type: ignore[import-untyped]
 
-try:
-    from wsdiscovery import QName  # type: ignore[import-untyped]
-    from wsdiscovery.discovery import (  # type: ignore[import-untyped]
-        ThreadedWSDiscovery as _ThreadedWSDiscovery,
-    )
-except Exception:  # pragma: no cover - exercised via dependency guard tests
-    _ThreadedWSDiscovery = None
-    QName = None
+logger = logging.getLogger(__name__)
 
 # Standard ONVIF WS-Discovery type qualifiers.
 # WS-Discovery Probe type matching is AND — a single probe with both types
@@ -57,7 +51,6 @@ def discover_cameras(
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
 
-    discovery_class = _require_wsdiscovery_class()
     onvif_type_sets = _build_onvif_type_sets()
 
     with _suppress_wsdiscovery_interface_warnings():
@@ -65,7 +58,7 @@ def discover_cameras(
         # MessageID — many cameras (TP-Link, Hikvision, budget Chinese
         # models) do this, and without the flag their replies are silently
         # dropped as duplicate messages.
-        discovery = discovery_class(ttl=ttl, relates_to=True)
+        discovery = ThreadedWSDiscovery(ttl=ttl, relates_to=True)
         discovery.start()
 
         try:
@@ -88,14 +81,6 @@ def discover_cameras(
                 logger.warning("WS-Discovery stop() failed", exc_info=True)
 
 
-def _require_wsdiscovery_class() -> type[Any]:
-    if _ThreadedWSDiscovery is None:
-        raise RuntimeError(
-            "Missing dependency: WSDiscovery. Install with: uv pip install WSDiscovery"
-        )
-    return cast(type[Any], _ThreadedWSDiscovery)
-
-
 def _build_onvif_type_sets() -> list[list[Any]]:
     """Return per-type probe lists for separate WS-Discovery probes.
 
@@ -103,8 +88,6 @@ def _build_onvif_type_sets() -> list[list[Any]]:
     the union of both device types is discovered (WS-Discovery uses AND
     matching within a single probe).
     """
-    if QName is None:
-        return [[]]  # single unfiltered probe as fallback
     return [
         [QName(*_ONVIF_DEVICE_TYPE)],
         [QName(*_ONVIF_NVT_TYPE)],

@@ -10,16 +10,6 @@ import pytest
 from homesec.onvif.client import OnvifCameraClient
 
 
-def test_onvif_camera_client_requires_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OnvifCameraClient should fail with actionable message when onvif-zeep-async is unavailable."""
-    # Given: onvif-zeep-async is unavailable in runtime
-    monkeypatch.setattr("homesec.onvif.client._ONVIFCamera", None)
-
-    # When/Then: Instantiating client raises dependency guidance
-    with pytest.raises(RuntimeError, match="Missing dependency: onvif-zeep-async"):
-        OnvifCameraClient("192.168.1.8", "admin", "password")
-
-
 async def test_onvif_camera_client_reads_info_profiles_and_streams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -89,7 +79,7 @@ async def test_onvif_camera_client_reads_info_profiles_and_streams(
 
     # Given: A fake ONVIF camera implementation with deterministic responses
     _FakeOnvifCamera.instances = []
-    monkeypatch.setattr("homesec.onvif.client._ONVIFCamera", _FakeOnvifCamera)
+    monkeypatch.setattr("homesec.onvif.client.ONVIFCamera", _FakeOnvifCamera)
 
     # When: Querying device info, profiles, and stream URIs
     client = OnvifCameraClient(

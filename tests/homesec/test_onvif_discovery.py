@@ -9,16 +9,6 @@ import pytest
 from homesec.onvif.discovery import DiscoveredCamera, discover_cameras
 
 
-def test_discover_cameras_requires_wsdiscovery_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
-    """discover_cameras should fail with actionable message when WSDiscovery is unavailable."""
-    # Given: WSDiscovery is unavailable in the runtime environment
-    monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", None)
-
-    # When/Then: Running discovery raises a dependency error
-    with pytest.raises(RuntimeError, match="Missing dependency: WSDiscovery"):
-        discover_cameras()
-
-
 def test_discover_cameras_rejects_invalid_attempt_count() -> None:
     """discover_cameras should validate attempt count for deterministic behavior."""
     # Given: Invalid attempt count
@@ -85,7 +75,7 @@ def test_discover_cameras_probes_each_type_separately_and_deduplicates(
 
     # Given: WS-Discovery returns duplicated XAddr entries across multiple probes
     _FakeDiscovery.instances = []
-    monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FakeDiscovery)
+    monkeypatch.setattr("homesec.onvif.discovery.ThreadedWSDiscovery", _FakeDiscovery)
 
     # When: Running discovery with 1 attempt
     cameras = discover_cameras(attempts=1)
@@ -142,7 +132,7 @@ def test_discover_cameras_runs_all_attempts(
             return []
 
     _FakeDiscovery.instances = []
-    monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FakeDiscovery)
+    monkeypatch.setattr("homesec.onvif.discovery.ThreadedWSDiscovery", _FakeDiscovery)
 
     # When: Running with 3 attempts
     discover_cameras(attempts=3)
@@ -174,7 +164,7 @@ def test_discover_cameras_stops_discovery_when_search_fails(
 
     # Given: WS-Discovery search fails during scan
     _FailingDiscovery.instances = []
-    monkeypatch.setattr("homesec.onvif.discovery._ThreadedWSDiscovery", _FailingDiscovery)
+    monkeypatch.setattr("homesec.onvif.discovery.ThreadedWSDiscovery", _FailingDiscovery)
 
     # When/Then: Discovery raises and still invokes stop() for cleanup
     with pytest.raises(RuntimeError, match="network error"):

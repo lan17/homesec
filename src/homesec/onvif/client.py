@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
-try:
-    import onvif as _onvif_pkg  # type: ignore[import-untyped]
-    from onvif import ONVIFCamera as _ONVIFCamera
-except Exception:  # pragma: no cover - exercised via dependency guard tests
-    _onvif_pkg = None
-    _ONVIFCamera = None
+import onvif as _onvif_pkg  # type: ignore[import-untyped]
+from onvif import ONVIFCamera
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,9 +56,8 @@ class OnvifCameraClient:
         port: int = 80,
         wsdl_dir: str | None = None,
     ) -> None:
-        camera_class = _require_onvif_camera_class()
         resolved_wsdl = wsdl_dir if wsdl_dir is not None else _default_wsdl_dir()
-        self._camera = camera_class(host, port, username, password, resolved_wsdl)
+        self._camera = ONVIFCamera(host, port, username, password, resolved_wsdl)
         self._initialized = False
         self._device_service: Any | None = None
         self._media_service: Any | None = None
@@ -171,14 +166,6 @@ class OnvifCameraClient:
         return self._media_service
 
 
-def _require_onvif_camera_class() -> type[Any]:
-    if _ONVIFCamera is None:
-        raise RuntimeError(
-            "Missing dependency: onvif-zeep-async. Install with: uv pip install onvif-zeep-async"
-        )
-    return cast(type[Any], _ONVIFCamera)
-
-
 def _default_wsdl_dir() -> str:
     """Resolve the WSDL directory bundled with onvif-zeep-async.
 
@@ -187,8 +174,6 @@ def _default_wsdl_dir() -> str:
     platforms.  We look inside the ``onvif`` package directory first,
     which is always present in the wheel.
     """
-    if _onvif_pkg is None:
-        return ""
     pkg_dir = os.path.dirname(_onvif_pkg.__file__)
     # Preferred: wsdl/ inside the onvif package itself.
     inside_pkg = os.path.join(pkg_dir, "wsdl")
