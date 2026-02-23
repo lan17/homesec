@@ -9,7 +9,11 @@ import type {
 import { Card } from '../../../components/ui/Card'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { discoverOnvifCameras, probeOnvifCamera } from '../onvifApi'
-import { deriveOnvifCameraName, injectCredentialsIntoRtspUri } from '../presentationOnvif'
+import {
+  deriveOnvifCameraName,
+  deriveOnvifProbePortFromXaddr,
+  injectCredentialsIntoRtspUri,
+} from '../presentationOnvif'
 import { OnvifDiscoverStep } from './OnvifDiscoverStep'
 import { OnvifProbeStep, type OnvifProbeCredentials } from './OnvifProbeStep'
 import { OnvifStreamSelectStep } from './OnvifStreamSelectStep'
@@ -95,9 +99,15 @@ export function OnvifDiscoveryWizard({
   }
 
   function handleSelectCamera(camera: DiscoveredCameraResponse): void {
+    const inferredPort = deriveOnvifProbePortFromXaddr(camera.xaddr)
     setSelectedCamera(camera)
     setStep('probe')
     setProbeResult(null)
+    setProbeCredentials({
+      username: '',
+      password: '',
+      port: inferredPort,
+    })
     setSelectedProfileToken(null)
     setCreateError(null)
   }

@@ -71,3 +71,43 @@ export function injectCredentialsIntoRtspUri({
     return streamUri
   }
 }
+
+export function deriveOnvifProbePortFromXaddr(xaddr: string): number {
+  const fallbackPort = 80
+
+  const parsed = parseXaddrUrl(xaddr)
+  if (parsed === null) {
+    return fallbackPort
+  }
+
+  if (parsed.port) {
+    const parsedPort = Number.parseInt(parsed.port, 10)
+    if (!Number.isNaN(parsedPort) && parsedPort >= 1 && parsedPort <= 65535) {
+      return parsedPort
+    }
+  }
+
+  if (parsed.protocol === 'https:') {
+    return 443
+  }
+  if (parsed.protocol === 'http:') {
+    return 80
+  }
+  return fallbackPort
+}
+
+function parseXaddrUrl(xaddr: string): URL | null {
+  try {
+    return new URL(xaddr)
+  } catch {
+    if (xaddr.includes('://')) {
+      return null
+    }
+  }
+
+  try {
+    return new URL(`http://${xaddr}`)
+  } catch {
+    return null
+  }
+}

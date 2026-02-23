@@ -30,7 +30,7 @@ describe('OnvifDiscoveryWizard', () => {
     discoverOnvifCamerasMock.mockResolvedValue([
       {
         ip: '192.168.1.20',
-        xaddr: 'http://192.168.1.20/onvif/device_service',
+        xaddr: 'http://192.168.1.20:8899/onvif/device_service',
         scopes: ['onvif://scope/location/garage'],
         types: ['dn:NetworkVideoTransmitter'],
       },
@@ -52,8 +52,9 @@ describe('OnvifDiscoveryWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Run discovery scan' }))
     await user.click(await screen.findByRole('button', { name: /192.168.1.20/ }))
 
-    // Then: Wizard should advance to credential/probe step
+    // Then: Wizard should advance to credential/probe step and prefill discovered ONVIF port
     expect(screen.getByText('Step 2: Authenticate and probe')).toBeTruthy()
+    expect((screen.getByLabelText('ONVIF port') as HTMLInputElement).value).toBe('8899')
   })
 
   it('creates camera with injected RTSP credentials and applyChanges forwarding', async () => {
