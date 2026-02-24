@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ValidationError
 
-from homesec.config.loader import ConfigError
+from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.models.config import Config
 from homesec.plugins.registry import PluginType, validate_plugin
 
@@ -38,7 +38,10 @@ def validate_camera_references(config: Config, camera_names: list[str] | None = 
             errors.append(f"alert_policy.overrides references unknown camera: {camera}")
 
     if errors:
-        raise ConfigError("Invalid camera references:\n  " + "\n  ".join(errors))
+        raise ConfigError(
+            "Invalid camera references:\n  " + "\n  ".join(errors),
+            code=ConfigErrorCode.CAMERA_REFERENCES_INVALID,
+        )
 
 
 def validate_plugin_names(
@@ -113,7 +116,10 @@ def validate_plugin_names(
                 )
 
     if errors:
-        raise ConfigError("Invalid plugin configuration:\n  " + "\n  ".join(errors))
+        raise ConfigError(
+            "Invalid plugin configuration:\n  " + "\n  ".join(errors),
+            code=ConfigErrorCode.PLUGIN_NAMES_INVALID,
+        )
 
 
 def validate_plugin_configs(config: Config) -> None:
@@ -189,7 +195,10 @@ def validate_plugin_configs(config: Config) -> None:
             _add_error(f"source[{camera.name}:{camera.source.backend}]", exc)
 
     if errors:
-        raise ConfigError("Invalid plugin config:\n  " + "\n  ".join(errors))
+        raise ConfigError(
+            "Invalid plugin config:\n  " + "\n  ".join(errors),
+            code=ConfigErrorCode.PLUGIN_CONFIG_INVALID,
+        )
 
 
 def validate_config(config: Config, camera_names: list[str] | None = None) -> None:

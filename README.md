@@ -270,7 +270,7 @@ Extending HomeSec is designed to be easy. You can write custom sources, filters,
 
 ## Observability
 
-- Health endpoint: `GET /health` (configurable via `health.host`/`health.port` in config)
+- Health endpoint: `GET /health` (served by FastAPI on `server.host`/`server.port`)
 - Telemetry logs to Postgres when `DB_DSN` is set
 
 ## Development

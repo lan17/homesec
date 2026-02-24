@@ -16,6 +16,7 @@ from homesec.config import (
     validate_config,
     validate_plugin_names,
 )
+from homesec.config.loader import ConfigErrorCode
 from homesec.models.config import Config
 from homesec.plugins.registry import PluginType, plugin
 
@@ -126,6 +127,7 @@ def test_load_config_from_dict_missing_required_field() -> None:
 
     # Then a validation error is raised
     assert "validation failed" in str(exc_info.value).lower()
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
 
 
 def test_load_config_from_dict_invalid_risk_level() -> None:
@@ -142,6 +144,7 @@ def test_load_config_from_dict_invalid_risk_level() -> None:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
     # Then a validation error references the field
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_CONFIG_INVALID
     assert "min_risk_level" in str(exc_info.value)
 
 
@@ -204,6 +207,130 @@ alert_policy:
         path.unlink()
 
 
+def test_load_config_warns_when_permissions_are_too_open(caplog: pytest.LogCaptureFixture) -> None:
+    """Loading config should warn when file permissions expose secrets."""
+    if os.name != "posix":
+        pytest.skip("Permission warnings are POSIX-specific")
+
+    # Given a valid config file with permissive mode
+    yaml_content = """
+cameras:
+  - name: front_door
+    source:
+      backend: local_folder
+      config:
+        watch_dir: recordings
+        poll_interval: 1.0
+
+storage:
+  backend: dropbox
+  config:
+    root: /homecam
+
+state_store:
+  dsn: postgresql://user:pass@localhost/db
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: localhost
+
+filter:
+  backend: yolo
+  config: {}
+
+vlm:
+  backend: openai
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+
+alert_policy:
+  backend: default
+  config:
+    min_risk_level: low
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        path = Path(f.name)
+    os.chmod(path, 0o644)
+
+    try:
+        # When loading the config
+        with caplog.at_level("WARNING"):
+            config = load_config(path)
+
+        # Then loading succeeds and a permissions warning is emitted
+        assert config.cameras[0].name == "front_door"
+        assert any("permissions are too permissive" in rec.message for rec in caplog.records)
+    finally:
+        path.unlink()
+
+
+def test_load_config_does_not_warn_when_permissions_are_restrictive(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Loading config should not warn when file permissions are already restrictive."""
+    if os.name != "posix":
+        pytest.skip("Permission warnings are POSIX-specific")
+
+    # Given a valid config file with restrictive mode
+    yaml_content = """
+cameras:
+  - name: front_door
+    source:
+      backend: local_folder
+      config:
+        watch_dir: recordings
+        poll_interval: 1.0
+
+storage:
+  backend: dropbox
+  config:
+    root: /homecam
+
+state_store:
+  dsn: postgresql://user:pass@localhost/db
+
+notifiers:
+  - backend: mqtt
+    config:
+      host: localhost
+
+filter:
+  backend: yolo
+  config: {}
+
+vlm:
+  backend: openai
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+
+alert_policy:
+  backend: default
+  config:
+    min_risk_level: low
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        path = Path(f.name)
+    os.chmod(path, 0o600)
+
+    try:
+        # When loading the config
+        with caplog.at_level("WARNING"):
+            config = load_config(path)
+
+        # Then loading succeeds without a permissions warning
+        assert config.cameras[0].name == "front_door"
+        assert all("permissions are too permissive" not in rec.message for rec in caplog.records)
+    finally:
+        path.unlink()
+
+
 def test_load_config_file_not_found() -> None:
     """Test that missing file raises ConfigError."""
     # Given a nonexistent path
@@ -213,6 +340,7 @@ def test_load_config_file_not_found() -> None:
 
     # Then a not found error is raised
     assert "not found" in str(exc_info.value).lower()
+    assert exc_info.value.code is ConfigErrorCode.FILE_NOT_FOUND
 
 
 def test_load_config_invalid_yaml() -> None:
@@ -229,6 +357,7 @@ def test_load_config_invalid_yaml() -> None:
             load_config(path)
         # Then an invalid YAML error is raised
         assert "invalid yaml" in str(exc_info.value).lower()
+        assert exc_info.value.code is ConfigErrorCode.YAML_INVALID
     finally:
         path.unlink()
 
@@ -247,8 +376,27 @@ def test_load_config_empty_file() -> None:
             load_config(path)
         # Then an empty file error is raised
         assert "empty" in str(exc_info.value).lower()
+        assert exc_info.value.code is ConfigErrorCode.EMPTY_FILE
     finally:
         path.unlink()
+
+
+def test_load_config_rejects_legacy_health_block() -> None:
+    """Config loading should fail fast when legacy health block is provided."""
+    # Given a config payload still using retired health server settings
+    data = minimal_config()
+    data["health"] = {
+        "host": "0.0.0.0",
+        "port": 8080,
+    }
+
+    # When loading the config
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)  # type: ignore[arg-type]
+
+    # Then validation fails and surfaces the unknown key
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
+    assert "health" in str(exc_info.value)
 
 
 def test_per_camera_override_merge() -> None:
@@ -293,6 +441,7 @@ def test_resolve_env_var_missing_required() -> None:
 
     # Then a ConfigError is raised
     assert "not set" in str(exc_info.value).lower()
+    assert exc_info.value.code is ConfigErrorCode.ENV_VAR_MISSING
 
 
 def test_resolve_env_var_missing_optional() -> None:
@@ -327,6 +476,8 @@ def test_validate_camera_references_invalid() -> None:
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
+    # Then the camera reference validation code is surfaced
+    assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
     assert "unknown_camera" in str(exc_info.value)
 
 
@@ -346,6 +497,7 @@ def test_validate_config_rejects_unknown_camera_override() -> None:
         validate_config(config)
 
     # Then: unknown camera is reported
+    assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
     assert "unknown_camera" in str(exc_info.value)
 
 
@@ -365,6 +517,7 @@ def test_validate_config_rejects_unknown_plugin_backend() -> None:
         validate_config(config)
 
     # Then: unknown backend is reported
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_CONFIG_INVALID
     assert "missing_filter" in str(exc_info.value)
 
 
@@ -403,6 +556,7 @@ def test_validate_plugin_names_invalid() -> None:
         )
 
     # Then the missing backend is reported
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_NAMES_INVALID
     assert "mqtt" in str(exc_info.value)
 
 
@@ -504,3 +658,37 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
     assert config.vlm.config["custom_api_key"] == "secret123"
     assert config.vlm.config["custom_model"] == "custom-model-v1"
     assert config.vlm.config["custom_setting"] is True
+
+
+def test_server_ui_env_defaults_apply_when_fields_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Server UI env defaults should apply when config does not set values."""
+    # Given HomeSec server UI env defaults and config without explicit server block
+    monkeypatch.setenv("HOMESEC_SERVER_SERVE_UI", "true")
+    monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
+    data = minimal_config()
+
+    # When loading config
+    config = load_config_from_dict(data)
+
+    # Then server UI values come from environment defaults
+    assert config.server.serve_ui is True
+    assert config.server.ui_dist_dir == "/app/ui/dist"
+
+
+def test_server_ui_config_values_override_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit server UI config should win over env defaults."""
+    # Given env defaults and explicit server config values
+    monkeypatch.setenv("HOMESEC_SERVER_SERVE_UI", "true")
+    monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
+    data = minimal_config()
+    data["server"] = {
+        "serve_ui": False,
+        "ui_dist_dir": "./custom-ui-dist",
+    }
+
+    # When loading config
+    config = load_config_from_dict(data)
+
+    # Then explicit config values are preserved
+    assert config.server.serve_ui is False
+    assert config.server.ui_dist_dir == "./custom-ui-dist"

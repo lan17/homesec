@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish ui-%
 
 help:
 	@echo "Targets:"
@@ -19,7 +19,7 @@ help:
 	@echo "    make coverage      Run tests and generate HTML coverage report"
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
-	@echo "    make check         Run lint + typecheck + test"
+	@echo "    make check         Run lint + typecheck + test + ui-check"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make db-migrate    Run migrations"
@@ -27,6 +27,9 @@ help:
 	@echo ""
 	@echo "  Release:"
 	@echo "    make publish       Build and upload to PyPI"
+	@echo ""
+	@echo "  UI proxy:"
+	@echo "    make ui-<target>   Run make target in ui/ (example: make ui-api-generate)"
 
 # Config
 HOMESEC_CONFIG ?= config/config.yaml
@@ -82,7 +85,7 @@ lint-fix:
 	uv run ruff check --fix src tests
 	uv run ruff format src tests
 
-check: lint typecheck test
+check: lint typecheck test ui-check
 
 # Database
 db-migrate:
@@ -101,3 +104,7 @@ publish: check
 	uv run --with build python -m build
 	uv run --with twine python -m twine check dist/*
 	uv run --with twine python -m twine upload dist/*
+
+# Proxy any ui-* target to the UI Makefile (e.g., ui-api-generate -> make -C ui api-generate).
+ui-%:
+	@$(MAKE) -C ui $*

@@ -133,6 +133,17 @@ class AsyncPostgresJsonLogHandler(logging.Handler):
     def close(self) -> None:
         try:
             self._stop.set()
+            if (
+                self._started
+                and threading.current_thread() is not self._thread
+                and self._thread.is_alive()
+            ):
+                join_timeout_s = max(1.0, float(self.config.db_log_flush_s) * 2.0)
+                self._thread.join(timeout=join_timeout_s)
+                if self._thread.is_alive():
+                    sys.stderr.write(
+                        "[db-log] close timed out waiting for writer thread shutdown\n"
+                    )
         finally:
             super().close()
 
