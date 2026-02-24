@@ -29,6 +29,7 @@ class MockStateStore:
         self.simulate_failure = simulate_failure
         self.delay_s = delay_s
         self.states: dict[str, ClipStateData] = {}  # clip_id -> state
+        self.created_at: dict[str, datetime] = {}  # clip_id -> first seen timestamp
         self.upsert_count = 0
         self.get_count = 0
 
@@ -42,6 +43,7 @@ class MockStateStore:
         if self.simulate_failure:
             raise RuntimeError("Simulated state store upsert failure")
 
+        self.created_at.setdefault(clip_id, datetime.now())
         self.states[clip_id] = data
 
     async def get(self, clip_id: str) -> ClipStateData | None:
@@ -55,6 +57,22 @@ class MockStateStore:
             raise RuntimeError("Simulated state store get failure")
 
         return self.states.get(clip_id)
+
+    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
+        """Retrieve clip state and created_at (mock implementation)."""
+        self.get_count += 1
+
+        if self.delay_s > 0:
+            await asyncio.sleep(self.delay_s)
+
+        if self.simulate_failure:
+            raise RuntimeError("Simulated state store get failure")
+
+        state = self.states.get(clip_id)
+        if state is None:
+            return None
+        created_at = self.created_at.get(clip_id, datetime.now())
+        return state, created_at
 
     async def list_candidate_clips_for_cleanup(
         self,

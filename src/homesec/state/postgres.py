@@ -237,6 +237,33 @@ class PostgresStateStore(StateStore):
             )
             return None
 
+    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
+        """Retrieve clip state and created_at timestamp."""
+        if self._engine is None:
+            logger.warning("StateStore not initialized, returning None for %s", clip_id)
+            return None
+
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(
+                    select(ClipState.data, ClipState.created_at).where(ClipState.clip_id == clip_id)
+                )
+                row = result.one_or_none()
+            if row is None:
+                return None
+
+            raw, created_at = row
+            data_dict = self._parse_state_data(raw)
+            return ClipStateData.model_validate(data_dict), created_at
+        except Exception as e:
+            logger.error(
+                "Failed to get clip state with created_at for %s: %s",
+                clip_id,
+                e,
+                exc_info=True,
+            )
+            return None
+
     async def list_candidate_clips_for_cleanup(
         self,
         *,
@@ -502,6 +529,9 @@ class NoopStateStore(StateStore):
         return
 
     async def get(self, clip_id: str) -> ClipStateData | None:
+        return None
+
+    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
         return None
 
     async def list_candidate_clips_for_cleanup(

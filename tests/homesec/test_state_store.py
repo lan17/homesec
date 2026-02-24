@@ -115,6 +115,25 @@ async def test_upsert_and_get_roundtrip(state_store: PostgresStateStore) -> None
 
 
 @pytest.mark.asyncio
+async def test_get_with_created_at_roundtrip(state_store: PostgresStateStore) -> None:
+    """Test that get_with_created_at returns state and timestamp."""
+    # Given: A persisted clip state
+    clip_id = "test_roundtrip_created_at_001"
+    state = sample_state(clip_id)
+    await state_store.upsert(clip_id, state)
+
+    # When: Retrieving clip state with created timestamp
+    result = await state_store.get_with_created_at(clip_id)
+
+    # Then: State and created_at are both returned
+    assert result is not None
+    retrieved, created_at = result
+    assert retrieved.camera_name == "front_door"
+    assert retrieved.status == "queued_local"
+    assert created_at.tzinfo is not None
+
+
+@pytest.mark.asyncio
 async def test_upsert_updates_existing(state_store: PostgresStateStore) -> None:
     """Test that upsert updates existing records."""
     # Given an existing clip state
