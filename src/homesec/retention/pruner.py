@@ -312,9 +312,19 @@ class LocalRetentionPruner:
 
             for pattern in patterns:
                 for candidate in root.rglob(pattern):
-                    if not candidate.is_file():
+                    try:
+                        is_file = candidate.is_file()
+                    except OSError:
+                        # Don't fail discovery on stat errors; sizing stage records measurement
+                        # failures and marks the summary as incomplete.
+                        is_file = True
+                    if not is_file:
                         continue
-                    resolved = candidate.resolve()
+                    try:
+                        resolved = candidate.resolve()
+                    except OSError:
+                        # Keep unresolved path so later stat/delete stages can account for errors.
+                        resolved = candidate
                     if resolved in seen:
                         continue
                     seen.add(resolved)
