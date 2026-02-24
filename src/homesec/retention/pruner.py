@@ -22,8 +22,11 @@ class RetentionPruneSummary:
     reason: str
     max_local_size_bytes: int
     discovered_local_files: int
-    total_local_bytes: int
+    measured_local_files: int
+    unmeasured_local_files: int
+    measured_local_bytes: int
     non_eligible_local_bytes: int
+    measurement_incomplete: bool
     blocked_over_limit: bool
     eligible_candidates: int
     eligible_bytes_before: int
@@ -103,7 +106,8 @@ class LocalRetentionPruner:
         local_file_sizes = self._collect_local_file_sizes(
             local_files=local_files, counters=counters
         )
-        total_local_bytes = sum(local_file_sizes.values())
+        measured_local_bytes = sum(local_file_sizes.values())
+        unmeasured_local_files = len(local_files) - len(local_file_sizes)
         candidates = await self._build_candidates(
             local_files=local_files,
             local_file_sizes=local_file_sizes,
@@ -116,7 +120,9 @@ class LocalRetentionPruner:
             summary = self._build_summary(
                 reason=reason,
                 discovered_local_files=len(local_files),
-                total_local_bytes=total_local_bytes,
+                measured_local_files=len(local_file_sizes),
+                unmeasured_local_files=unmeasured_local_files,
+                measured_local_bytes=measured_local_bytes,
                 eligible_candidates=len(candidates),
                 eligible_bytes_before=eligible_before,
                 eligible_bytes_after=eligible_before,
@@ -157,7 +163,9 @@ class LocalRetentionPruner:
         summary = self._build_summary(
             reason=reason,
             discovered_local_files=len(local_files),
-            total_local_bytes=total_local_bytes,
+            measured_local_files=len(local_file_sizes),
+            unmeasured_local_files=unmeasured_local_files,
+            measured_local_bytes=measured_local_bytes,
             eligible_candidates=len(candidates),
             eligible_bytes_before=eligible_before,
             eligible_bytes_after=remaining_bytes,
@@ -246,22 +254,27 @@ class LocalRetentionPruner:
         *,
         reason: str,
         discovered_local_files: int,
-        total_local_bytes: int,
+        measured_local_files: int,
+        unmeasured_local_files: int,
+        measured_local_bytes: int,
         eligible_candidates: int,
         eligible_bytes_before: int,
         eligible_bytes_after: int,
         deleted_files: int,
         counters: _PruneCounters,
     ) -> RetentionPruneSummary:
-        non_eligible_local_bytes = max(0, total_local_bytes - eligible_bytes_before)
-        total_local_bytes_after = non_eligible_local_bytes + eligible_bytes_after
+        non_eligible_local_bytes = max(0, measured_local_bytes - eligible_bytes_before)
+        measured_local_bytes_after = non_eligible_local_bytes + eligible_bytes_after
         return RetentionPruneSummary(
             reason=reason,
             max_local_size_bytes=self._max_local_size_bytes,
             discovered_local_files=discovered_local_files,
-            total_local_bytes=total_local_bytes,
+            measured_local_files=measured_local_files,
+            unmeasured_local_files=unmeasured_local_files,
+            measured_local_bytes=measured_local_bytes,
             non_eligible_local_bytes=non_eligible_local_bytes,
-            blocked_over_limit=total_local_bytes_after > self._max_local_size_bytes,
+            measurement_incomplete=unmeasured_local_files > 0,
+            blocked_over_limit=measured_local_bytes_after > self._max_local_size_bytes,
             eligible_candidates=eligible_candidates,
             eligible_bytes_before=eligible_bytes_before,
             eligible_bytes_after=eligible_bytes_after,

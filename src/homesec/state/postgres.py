@@ -53,6 +53,7 @@ from homesec.models.events import (
 )
 
 logger = logging.getLogger(__name__)
+_BATCH_STATE_LOOKUP_SIZE = 1000
 
 # Map EventType enum to event model classes
 # Using enum values ensures consistency with event models
@@ -237,33 +238,6 @@ class PostgresStateStore(StateStore):
             )
             return None
 
-    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
-        """Retrieve clip state and created_at timestamp."""
-        if self._engine is None:
-            logger.warning("StateStore not initialized, returning None for %s", clip_id)
-            return None
-
-        try:
-            async with self._engine.connect() as conn:
-                result = await conn.execute(
-                    select(ClipState.data, ClipState.created_at).where(ClipState.clip_id == clip_id)
-                )
-                row = result.one_or_none()
-            if row is None:
-                return None
-
-            raw, created_at = row
-            data_dict = self._parse_state_data(raw)
-            return ClipStateData.model_validate(data_dict), created_at
-        except Exception as e:
-            logger.error(
-                "Failed to get clip state with created_at for %s: %s",
-                clip_id,
-                e,
-                exc_info=True,
-            )
-            return None
-
     async def get_many_with_created_at(
         self, clip_ids: list[str]
     ) -> dict[str, tuple[ClipStateData, datetime]]:
@@ -275,13 +249,29 @@ class PostgresStateStore(StateStore):
             return {}
 
         unique_ids = sorted(set(clip_ids))
+        items: dict[str, tuple[ClipStateData, datetime]] = {}
         try:
-            query = select(ClipState.clip_id, ClipState.data, ClipState.created_at).where(
-                ClipState.clip_id.in_(unique_ids)
-            )
             async with self._engine.connect() as conn:
-                result = await conn.execute(query)
-                rows = result.all()
+                for offset in range(0, len(unique_ids), _BATCH_STATE_LOOKUP_SIZE):
+                    batch_ids = unique_ids[offset : offset + _BATCH_STATE_LOOKUP_SIZE]
+                    query = select(ClipState.clip_id, ClipState.data, ClipState.created_at).where(
+                        ClipState.clip_id.in_(batch_ids)
+                    )
+                    result = await conn.execute(query)
+                    rows = result.all()
+                    for clip_id, raw, created_at in rows:
+                        try:
+                            data_dict = self._parse_state_data(raw)
+                            state = ClipStateData.model_validate(data_dict)
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed parsing clip state in batch load: %s error=%s",
+                                clip_id,
+                                exc,
+                                exc_info=True,
+                            )
+                            continue
+                        items[clip_id] = (state, created_at)
         except Exception as e:
             logger.error(
                 "Failed to batch load clip states with created_at: %s",
@@ -289,21 +279,6 @@ class PostgresStateStore(StateStore):
                 exc_info=True,
             )
             return {}
-
-        items: dict[str, tuple[ClipStateData, datetime]] = {}
-        for clip_id, raw, created_at in rows:
-            try:
-                data_dict = self._parse_state_data(raw)
-                state = ClipStateData.model_validate(data_dict)
-            except Exception as exc:
-                logger.warning(
-                    "Failed parsing clip state in batch load: %s error=%s",
-                    clip_id,
-                    exc,
-                    exc_info=True,
-                )
-                continue
-            items[clip_id] = (state, created_at)
 
         return items
 
@@ -572,9 +547,6 @@ class NoopStateStore(StateStore):
         return
 
     async def get(self, clip_id: str) -> ClipStateData | None:
-        return None
-
-    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
         return None
 
     async def get_many_with_created_at(

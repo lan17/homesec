@@ -134,11 +134,6 @@ class StateStore(Shutdownable, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
-        """Retrieve clip state with created_at timestamp. Returns None if not found."""
-        raise NotImplementedError
-
-    @abstractmethod
     async def get_many_with_created_at(
         self, clip_ids: list[str]
     ) -> dict[str, tuple[ClipStateData, datetime]]:

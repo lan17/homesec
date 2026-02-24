@@ -83,8 +83,11 @@ async def test_prune_deletes_oldest_until_under_limit(tmp_path: Path) -> None:
     assert clip_mid.exists()
     assert clip_new.exists()
     assert summary.deleted_files == 1
-    assert summary.total_local_bytes == 150
+    assert summary.measured_local_files == 3
+    assert summary.unmeasured_local_files == 0
+    assert summary.measured_local_bytes == 150
     assert summary.non_eligible_local_bytes == 0
+    assert summary.measurement_incomplete is False
     assert summary.blocked_over_limit is False
     assert summary.eligible_bytes_before == 150
     assert summary.eligible_bytes_after == 90
@@ -148,8 +151,11 @@ async def test_prune_respects_upload_and_inflight_gates(tmp_path: Path) -> None:
     assert summary.deleted_files == 1
     assert summary.skipped_in_flight == 1
     assert summary.skipped_not_uploaded == 1
-    assert summary.total_local_bytes == 90
+    assert summary.measured_local_files == 3
+    assert summary.unmeasured_local_files == 0
+    assert summary.measured_local_bytes == 90
     assert summary.non_eligible_local_bytes == 70
+    assert summary.measurement_incomplete is False
     assert summary.blocked_over_limit is True
     assert state_store.upsert_count == before_upsert
     assert event_store.append_count == before_event_append
@@ -195,8 +201,11 @@ async def test_prune_uses_local_files_as_source_of_candidates(tmp_path: Path) ->
     # Then: Only discovered local files are considered and path mismatches are skipped
     assert discovered.exists()
     assert summary.discovered_local_files == 1
-    assert summary.total_local_bytes == 10
+    assert summary.measured_local_files == 1
+    assert summary.unmeasured_local_files == 0
+    assert summary.measured_local_bytes == 10
     assert summary.non_eligible_local_bytes == 10
+    assert summary.measurement_incomplete is False
     assert summary.blocked_over_limit is True
     assert summary.eligible_candidates == 0
     assert summary.skipped_path_mismatch == 1
@@ -243,5 +252,60 @@ async def test_prune_tie_breaks_by_clip_id_for_equal_created_at(tmp_path: Path) 
     assert not clip_a.exists()
     assert clip_b.exists()
     assert summary.deleted_files == 1
-    assert summary.total_local_bytes == 80
+    assert summary.measured_local_bytes == 80
     assert summary.eligible_bytes_after == 40
+
+
+@pytest.mark.asyncio
+async def test_prune_reports_incomplete_measurement_on_stat_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: Two local files where stat fails for one file during size collection
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    clip_ok = clips_dir / "clip-ok.mp4"
+    clip_broken = clips_dir / "clip-broken.mp4"
+    clip_ok.write_bytes(b"a" * 50)
+    clip_broken.write_bytes(b"b" * 60)
+
+    state_store = MockStateStore()
+    repository = ClipRepository(state_store, MockEventStore())
+    now = datetime.now()
+    await _seed_state(
+        state_store=state_store,
+        clip_id="clip-ok",
+        local_path=clip_ok,
+        created_at=now - timedelta(minutes=1),
+        storage_uri="mock://clip-ok",
+    )
+    await _seed_state(
+        state_store=state_store,
+        clip_id="clip-broken",
+        local_path=clip_broken,
+        created_at=now,
+        storage_uri="mock://clip-broken",
+    )
+
+    original_stat = Path.stat
+
+    def _patched_stat(path_obj: Path, *args: object, **kwargs: object) -> object:
+        if path_obj == clip_broken:
+            raise OSError("simulated stat failure")
+        return original_stat(path_obj, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _patched_stat)
+    pruner = LocalRetentionPruner(
+        repository=repository,
+        local_clip_dirs=[clips_dir],
+        max_local_size_bytes=0,
+    )
+
+    # When: A prune pass runs
+    summary = await pruner.prune_once(reason="test")
+
+    # Then: Summary marks measurement as incomplete and counts unmeasured files
+    assert summary.discovered_local_files == 2
+    assert summary.measured_local_files == 1
+    assert summary.unmeasured_local_files == 1
+    assert summary.measurement_incomplete is True
+    assert summary.skipped_stat_error == 1

@@ -59,22 +59,6 @@ class MockStateStore:
 
         return self.states.get(clip_id)
 
-    async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
-        """Retrieve clip state and created_at (mock implementation)."""
-        self.get_count += 1
-
-        if self.delay_s > 0:
-            await asyncio.sleep(self.delay_s)
-
-        if self.simulate_failure:
-            raise RuntimeError("Simulated state store get failure")
-
-        state = self.states.get(clip_id)
-        if state is None:
-            return None
-        created_at = self.created_at.get(clip_id, datetime.now())
-        return state, created_at
-
     async def get_many_with_created_at(
         self, clip_ids: list[str]
     ) -> dict[str, tuple[ClipStateData, datetime]]:
