@@ -264,6 +264,49 @@ class PostgresStateStore(StateStore):
             )
             return None
 
+    async def get_many_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        """Retrieve state and created_at for a set of clip ids."""
+        if self._engine is None:
+            logger.warning("StateStore not initialized, returning empty state map")
+            return {}
+        if not clip_ids:
+            return {}
+
+        unique_ids = sorted(set(clip_ids))
+        try:
+            query = select(ClipState.clip_id, ClipState.data, ClipState.created_at).where(
+                ClipState.clip_id.in_(unique_ids)
+            )
+            async with self._engine.connect() as conn:
+                result = await conn.execute(query)
+                rows = result.all()
+        except Exception as e:
+            logger.error(
+                "Failed to batch load clip states with created_at: %s",
+                e,
+                exc_info=True,
+            )
+            return {}
+
+        items: dict[str, tuple[ClipStateData, datetime]] = {}
+        for clip_id, raw, created_at in rows:
+            try:
+                data_dict = self._parse_state_data(raw)
+                state = ClipStateData.model_validate(data_dict)
+            except Exception as exc:
+                logger.warning(
+                    "Failed parsing clip state in batch load: %s error=%s",
+                    clip_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            items[clip_id] = (state, created_at)
+
+        return items
+
     async def list_candidate_clips_for_cleanup(
         self,
         *,
@@ -533,6 +576,12 @@ class NoopStateStore(StateStore):
 
     async def get_with_created_at(self, clip_id: str) -> tuple[ClipStateData, datetime] | None:
         return None
+
+    async def get_many_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        _ = clip_ids
+        return {}
 
     async def list_candidate_clips_for_cleanup(
         self,

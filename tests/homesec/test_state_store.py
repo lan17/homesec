@@ -134,6 +134,28 @@ async def test_get_with_created_at_roundtrip(state_store: PostgresStateStore) ->
 
 
 @pytest.mark.asyncio
+async def test_get_many_with_created_at_roundtrip(state_store: PostgresStateStore) -> None:
+    """Test that get_many_with_created_at returns a mapping for existing ids."""
+    # Given: Two persisted clip states and one missing id
+    clip_a = "test_many_created_at_a"
+    clip_b = "test_many_created_at_b"
+    await state_store.upsert(clip_a, sample_state(clip_a))
+    await state_store.upsert(clip_b, sample_state(clip_b))
+
+    # When: Batch retrieving by clip ids
+    results = await state_store.get_many_with_created_at([clip_a, clip_b, "test_many_missing"])
+
+    # Then: Existing ids are returned with state and created_at values
+    assert set(results.keys()) == {clip_a, clip_b}
+    state_a, created_at_a = results[clip_a]
+    state_b, created_at_b = results[clip_b]
+    assert state_a.camera_name == "front_door"
+    assert state_b.camera_name == "front_door"
+    assert created_at_a.tzinfo is not None
+    assert created_at_b.tzinfo is not None
+
+
+@pytest.mark.asyncio
 async def test_upsert_updates_existing(state_store: PostgresStateStore) -> None:
     """Test that upsert updates existing records."""
     # Given an existing clip state

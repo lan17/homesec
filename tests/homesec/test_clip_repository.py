@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from homesec.models.clip import Clip
+from homesec.models.clip import Clip, ClipStateData
 from homesec.models.enums import RiskLevel
 from homesec.models.events import ClipRecheckedEvent
 from homesec.models.filter import FilterResult
@@ -17,6 +17,7 @@ from homesec.models.vlm import (
 )
 from homesec.repository import ClipRepository
 from homesec.state.postgres import PostgresEventStore, PostgresStateStore
+from tests.homesec.mocks import MockEventStore, MockStateStore
 
 
 @pytest.mark.asyncio
@@ -303,3 +304,39 @@ async def test_record_notification_sent(
 
     # Cleanup
     await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_get_clip_states_with_created_at_uses_batch_lookup() -> None:
+    # Given: A repository with in-memory mock state and two uploaded clips
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_a = "test-batch-a"
+    clip_b = "test-batch-b"
+    await state_store.upsert(
+        clip_a,
+        ClipStateData(
+            camera_name="front_door",
+            status="done",
+            local_path="/tmp/a.mp4",
+            storage_uri="mock://a",
+        ),
+    )
+    await state_store.upsert(
+        clip_b,
+        ClipStateData(
+            camera_name="front_door",
+            status="done",
+            local_path="/tmp/b.mp4",
+            storage_uri="mock://b",
+        ),
+    )
+
+    # When: Reading many clip states in one repository call
+    states = await repository.get_clip_states_with_created_at([clip_a, clip_b, "missing"])
+
+    # Then: Existing clip ids are returned and batch store API is used once
+    assert set(states.keys()) == {clip_a, clip_b}
+    assert state_store.get_many_count == 1
+    assert state_store.get_count == 0

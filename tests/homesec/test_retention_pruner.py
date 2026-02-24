@@ -83,9 +83,14 @@ async def test_prune_deletes_oldest_until_under_limit(tmp_path: Path) -> None:
     assert clip_mid.exists()
     assert clip_new.exists()
     assert summary.deleted_files == 1
+    assert summary.total_local_bytes == 150
+    assert summary.non_eligible_local_bytes == 0
+    assert summary.blocked_over_limit is False
     assert summary.eligible_bytes_before == 150
     assert summary.eligible_bytes_after == 90
     assert summary.reclaimed_bytes == 60
+    assert state_store.get_many_count == 1
+    assert state_store.get_count == 0
 
 
 @pytest.mark.asyncio
@@ -143,6 +148,9 @@ async def test_prune_respects_upload_and_inflight_gates(tmp_path: Path) -> None:
     assert summary.deleted_files == 1
     assert summary.skipped_in_flight == 1
     assert summary.skipped_not_uploaded == 1
+    assert summary.total_local_bytes == 90
+    assert summary.non_eligible_local_bytes == 70
+    assert summary.blocked_over_limit is True
     assert state_store.upsert_count == before_upsert
     assert event_store.append_count == before_event_append
 
@@ -187,6 +195,9 @@ async def test_prune_uses_local_files_as_source_of_candidates(tmp_path: Path) ->
     # Then: Only discovered local files are considered and path mismatches are skipped
     assert discovered.exists()
     assert summary.discovered_local_files == 1
+    assert summary.total_local_bytes == 10
+    assert summary.non_eligible_local_bytes == 10
+    assert summary.blocked_over_limit is True
     assert summary.eligible_candidates == 0
     assert summary.skipped_path_mismatch == 1
     assert summary.skipped_no_state == 0
@@ -232,4 +243,5 @@ async def test_prune_tie_breaks_by_clip_id_for_equal_created_at(tmp_path: Path) 
     assert not clip_a.exists()
     assert clip_b.exists()
     assert summary.deleted_files == 1
+    assert summary.total_local_bytes == 80
     assert summary.eligible_bytes_after == 40

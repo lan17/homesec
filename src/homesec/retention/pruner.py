@@ -22,6 +22,9 @@ class RetentionPruneSummary:
     reason: str
     max_local_size_bytes: int
     discovered_local_files: int
+    total_local_bytes: int
+    non_eligible_local_bytes: int
+    blocked_over_limit: bool
     eligible_candidates: int
     eligible_bytes_before: int
     eligible_bytes_after: int
@@ -45,7 +48,7 @@ class _Candidate:
 
 
 @dataclass
-class _SkipCounters:
+class _PruneCounters:
     skipped_in_flight: int = 0
     skipped_no_state: int = 0
     skipped_not_uploaded: int = 0
@@ -61,6 +64,7 @@ class LocalRetentionPruner:
     This pruner is intentionally local-only:
     - It never deletes from remote storage.
     - It never mutates DB state or events.
+    - TODO(#71): Wire prune_once into upload-complete + startup backstop flows.
     """
 
     def __init__(
@@ -93,30 +97,34 @@ class LocalRetentionPruner:
     ) -> RetentionPruneSummary:
         """Run one local retention prune pass."""
         in_flight = in_flight_clip_ids or set()
-        skips = _SkipCounters()
+        counters = _PruneCounters()
 
         local_files = self._discover_local_files()
-        candidates = await self._build_candidates(local_files=local_files, in_flight=in_flight, skips=skips)
+        local_file_sizes = self._collect_local_file_sizes(
+            local_files=local_files, counters=counters
+        )
+        total_local_bytes = sum(local_file_sizes.values())
+        candidates = await self._build_candidates(
+            local_files=local_files,
+            local_file_sizes=local_file_sizes,
+            in_flight=in_flight,
+            counters=counters,
+        )
         eligible_before = sum(candidate.size_bytes for candidate in candidates)
 
         if eligible_before <= self._max_local_size_bytes:
-            return RetentionPruneSummary(
+            summary = self._build_summary(
                 reason=reason,
-                max_local_size_bytes=self._max_local_size_bytes,
                 discovered_local_files=len(local_files),
+                total_local_bytes=total_local_bytes,
                 eligible_candidates=len(candidates),
                 eligible_bytes_before=eligible_before,
                 eligible_bytes_after=eligible_before,
-                reclaimed_bytes=0,
                 deleted_files=0,
-                skipped_in_flight=skips.skipped_in_flight,
-                skipped_no_state=skips.skipped_no_state,
-                skipped_not_uploaded=skips.skipped_not_uploaded,
-                skipped_path_mismatch=skips.skipped_path_mismatch,
-                skipped_stat_error=skips.skipped_stat_error,
-                skipped_missing_race=skips.skipped_missing_race,
-                delete_errors=skips.delete_errors,
+                counters=counters,
             )
+            logger.info("Retention prune summary: %s", summary)
+            return summary
 
         remaining_bytes = eligible_before
         deleted_files = 0
@@ -129,7 +137,7 @@ class LocalRetentionPruner:
                 deleted_files += 1
                 remaining_bytes = max(0, remaining_bytes - candidate.size_bytes)
             except FileNotFoundError:
-                skips.skipped_missing_race += 1
+                counters.skipped_missing_race += 1
                 remaining_bytes = max(0, remaining_bytes - candidate.size_bytes)
                 logger.info(
                     "Retention skip: file disappeared before delete: clip=%s path=%s",
@@ -137,7 +145,7 @@ class LocalRetentionPruner:
                     candidate.local_path,
                 )
             except OSError as exc:
-                skips.delete_errors += 1
+                counters.delete_errors += 1
                 logger.warning(
                     "Retention delete failed: clip=%s path=%s error=%s",
                     candidate.clip_id,
@@ -146,22 +154,15 @@ class LocalRetentionPruner:
                     exc_info=exc,
                 )
 
-        summary = RetentionPruneSummary(
+        summary = self._build_summary(
             reason=reason,
-            max_local_size_bytes=self._max_local_size_bytes,
             discovered_local_files=len(local_files),
+            total_local_bytes=total_local_bytes,
             eligible_candidates=len(candidates),
             eligible_bytes_before=eligible_before,
             eligible_bytes_after=remaining_bytes,
-            reclaimed_bytes=max(0, eligible_before - remaining_bytes),
             deleted_files=deleted_files,
-            skipped_in_flight=skips.skipped_in_flight,
-            skipped_no_state=skips.skipped_no_state,
-            skipped_not_uploaded=skips.skipped_not_uploaded,
-            skipped_path_mismatch=skips.skipped_path_mismatch,
-            skipped_stat_error=skips.skipped_stat_error,
-            skipped_missing_race=skips.skipped_missing_race,
-            delete_errors=skips.delete_errors,
+            counters=counters,
         )
         logger.info("Retention prune summary: %s", summary)
         return summary
@@ -170,42 +171,43 @@ class LocalRetentionPruner:
         self,
         *,
         local_files: list[Path],
+        local_file_sizes: dict[Path, int],
         in_flight: set[str],
-        skips: _SkipCounters,
+        counters: _PruneCounters,
     ) -> list[_Candidate]:
         candidates: list[_Candidate] = []
-
+        non_in_flight: list[tuple[str, Path]] = []
+        lookup_clip_ids: set[str] = set()
         for local_path in local_files:
             clip_id = local_path.stem
             if clip_id in in_flight:
-                skips.skipped_in_flight += 1
+                counters.skipped_in_flight += 1
                 continue
+            non_in_flight.append((clip_id, local_path))
+            lookup_clip_ids.add(clip_id)
 
-            state_with_created = await self._repository.get_clip_state_with_created_at(clip_id)
+        state_by_clip_id = await self._repository.get_clip_states_with_created_at(
+            sorted(lookup_clip_ids)
+        )
+
+        for clip_id, local_path in non_in_flight:
+            state_with_created = state_by_clip_id.get(clip_id)
             if state_with_created is None:
-                skips.skipped_no_state += 1
+                counters.skipped_no_state += 1
                 continue
 
             state, created_at = state_with_created
             if state.storage_uri is None:
-                skips.skipped_not_uploaded += 1
+                counters.skipped_not_uploaded += 1
                 continue
 
             if not _paths_match(state.local_path, local_path):
-                skips.skipped_path_mismatch += 1
+                counters.skipped_path_mismatch += 1
                 continue
 
-            try:
-                size_bytes = local_path.stat().st_size
-            except OSError as exc:
-                skips.skipped_stat_error += 1
-                logger.warning(
-                    "Retention stat failed: clip=%s path=%s error=%s",
-                    clip_id,
-                    local_path,
-                    exc,
-                    exc_info=exc,
-                )
+            size_bytes = local_file_sizes.get(local_path)
+            if size_bytes is None:
+                # Stat failures are counted in _collect_local_file_sizes.
                 continue
 
             candidates.append(
@@ -218,6 +220,61 @@ class LocalRetentionPruner:
             )
 
         return candidates
+
+    def _collect_local_file_sizes(
+        self,
+        *,
+        local_files: list[Path],
+        counters: _PruneCounters,
+    ) -> dict[Path, int]:
+        local_file_sizes: dict[Path, int] = {}
+        for local_path in local_files:
+            try:
+                local_file_sizes[local_path] = local_path.stat().st_size
+            except OSError as exc:
+                counters.skipped_stat_error += 1
+                logger.warning(
+                    "Retention stat failed: path=%s error=%s",
+                    local_path,
+                    exc,
+                    exc_info=exc,
+                )
+        return local_file_sizes
+
+    def _build_summary(
+        self,
+        *,
+        reason: str,
+        discovered_local_files: int,
+        total_local_bytes: int,
+        eligible_candidates: int,
+        eligible_bytes_before: int,
+        eligible_bytes_after: int,
+        deleted_files: int,
+        counters: _PruneCounters,
+    ) -> RetentionPruneSummary:
+        non_eligible_local_bytes = max(0, total_local_bytes - eligible_bytes_before)
+        total_local_bytes_after = non_eligible_local_bytes + eligible_bytes_after
+        return RetentionPruneSummary(
+            reason=reason,
+            max_local_size_bytes=self._max_local_size_bytes,
+            discovered_local_files=discovered_local_files,
+            total_local_bytes=total_local_bytes,
+            non_eligible_local_bytes=non_eligible_local_bytes,
+            blocked_over_limit=total_local_bytes_after > self._max_local_size_bytes,
+            eligible_candidates=eligible_candidates,
+            eligible_bytes_before=eligible_bytes_before,
+            eligible_bytes_after=eligible_bytes_after,
+            reclaimed_bytes=max(0, eligible_bytes_before - eligible_bytes_after),
+            deleted_files=deleted_files,
+            skipped_in_flight=counters.skipped_in_flight,
+            skipped_no_state=counters.skipped_no_state,
+            skipped_not_uploaded=counters.skipped_not_uploaded,
+            skipped_path_mismatch=counters.skipped_path_mismatch,
+            skipped_stat_error=counters.skipped_stat_error,
+            skipped_missing_race=counters.skipped_missing_race,
+            delete_errors=counters.delete_errors,
+        )
 
     def _discover_local_files(self) -> list[Path]:
         discovered: list[Path] = []
@@ -263,7 +320,6 @@ def _paths_match(state_local_path: str, discovered_path: Path) -> bool:
     """Match state local_path to discovered file path after normalization."""
     try:
         state_path = Path(state_local_path).expanduser().resolve()
-        actual_path = discovered_path.expanduser().resolve()
     except OSError:
         return False
-    return state_path == actual_path
+    return state_path == discovered_path
