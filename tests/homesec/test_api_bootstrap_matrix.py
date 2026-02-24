@@ -105,7 +105,7 @@ def _build_client(tmp_path: Path, case: _MatrixCase) -> tuple[TestClient, _StubR
 def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]):
     if case.method == "GET":
         return client.get(case.path, headers=headers)
-    return client.post(case.path, headers=headers)
+    return client.post(case.path, headers=headers, json={})
 
 
 @pytest.mark.parametrize(
@@ -182,6 +182,30 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             name="setup_status_remains_available_in_bootstrap_mode",
             method="GET",
             path="/api/v1/setup/status",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
+            name="setup_finalize_requires_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/finalize",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=409,
+            expected_error_code="CONFLICT",
+        ),
+        _MatrixCase(
+            name="setup_finalize_is_available_in_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/finalize",
             auth_enabled=False,
             db_ok=False,
             pipeline_running=False,

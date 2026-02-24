@@ -45,6 +45,11 @@ class ConfigManager:
             self._lock = asyncio.Lock()
         return self._lock
 
+    @property
+    def config_path(self) -> Path:
+        """Path to the managed config file."""
+        return self._config_path
+
     @staticmethod
     def _enforce_sensitive_file_mode(path: Path) -> None:
         """Enforce restrictive config file mode on POSIX platforms."""
@@ -198,6 +203,14 @@ class ConfigManager:
             config.cameras = updated
 
             validated = await self._validate_config(config)
+            await self._save_config(validated)
+            return ConfigUpdateResult()
+
+    async def replace_config(self, config: Config) -> ConfigUpdateResult:
+        """Replace full config atomically after validation."""
+        async with self._mutation_lock():
+            payload = config.model_dump(mode="json")
+            validated = await asyncio.to_thread(load_config_from_dict, payload)
             await self._save_config(validated)
             return ConfigUpdateResult()
 

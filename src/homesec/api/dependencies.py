@@ -153,6 +153,17 @@ async def require_normal_mode(app: Application = Depends(get_homesec_app)) -> No
     )
 
 
+async def require_bootstrap_mode(app: Application = Depends(get_homesec_app)) -> None:
+    """Ensure setup-finalize route is only available during bootstrap mode."""
+    if _is_bootstrap_mode(app):
+        return
+    raise APIError(
+        "Setup finalize is only available while running in setup mode.",
+        status_code=status.HTTP_409_CONFLICT,
+        error_code=APIErrorCode.CONFLICT,
+    )
+
+
 def _get_server_config(app: Application) -> FastAPIServerConfig:
     server_config = cast(FastAPIServerConfig | None, getattr(app, "server_config", None))
     if server_config is not None:

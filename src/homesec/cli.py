@@ -49,6 +49,8 @@ class HomeSec:
 
         try:
             asyncio.run(app.run())
+            if app.restart_requested:
+                sys.exit(app.restart_exit_code)
         except ConfigError as e:
             print(f"✗ Config invalid: {e}", file=sys.stderr)
             sys.exit(1)

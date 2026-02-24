@@ -415,3 +415,51 @@ async def test_config_manager_first_save_creates_restrictive_mode_file(tmp_path:
     assert config_path.exists()
     config_mode = config_path.stat().st_mode & 0o777
     assert config_mode == 0o600
+
+
+@pytest.mark.asyncio
+async def test_config_manager_replace_config_replaces_full_document(tmp_path: Path) -> None:
+    """replace_config should atomically replace the full config after validation."""
+    # Given a manager with an existing config file and a new validated config document
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(
+        config_path,
+        cameras=[
+            {
+                "name": "old",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/old"}},
+            }
+        ],
+    )
+    new_config = load_config_from_dict(
+        {
+            "version": 1,
+            "cameras": [
+                {
+                    "name": "new",
+                    "enabled": True,
+                    "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/new"}},
+                }
+            ],
+            "storage": {"backend": "local", "config": {"root": "./storage"}},
+            "state_store": {"dsn_env": "DB_DSN"},
+            "notifiers": [{"backend": "mqtt", "config": {"host": "localhost", "port": 1883}}],
+            "filter": {"backend": "yolo", "config": {"classes": ["person"]}},
+            "vlm": {
+                "backend": "openai",
+                "run_mode": "never",
+                "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+            },
+            "alert_policy": {"backend": "default", "config": {"min_risk_level": "high"}},
+            "server": {"enabled": True, "host": "0.0.0.0", "port": 8081},
+        }
+    )
+
+    # When replacing the full config document
+    await manager.replace_config(new_config)
+
+    # Then persisted config exactly reflects the replacement document
+    persisted = manager.get_config()
+    assert [camera.name for camera in persisted.cameras] == ["new"]
+    assert persisted.storage.backend == "local"

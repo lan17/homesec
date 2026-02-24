@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from homesec.api.server import create_app
+from homesec.config.manager import ConfigManager
 from homesec.models.config import FastAPIServerConfig
-from homesec.models.setup import PreflightCheckResponse, PreflightResponse, SetupStatusResponse
+from homesec.models.setup import (
+    FinalizeResponse,
+    PreflightCheckResponse,
+    PreflightResponse,
+    SetupStatusResponse,
+)
 
 
 class _StubSetupRepository:
@@ -28,10 +35,12 @@ class _StubSetupApp:
         *,
         bootstrap_mode: bool,
         server_config: FastAPIServerConfig,
+        config_manager: ConfigManager | None = None,
     ) -> None:
         self.bootstrap_mode = bootstrap_mode
         self.repository = _StubSetupRepository()
         self.storage = _StubSetupStorage()
+        self.config_manager = config_manager or ConfigManager(Path("config/config.yaml"))
         self.sources: list[object] = []
         self.pipeline_running = False
         self.uptime_seconds = 0.0
@@ -52,6 +61,9 @@ class _StubSetupApp:
 
     def get_source(self, camera_name: str) -> None:
         _ = camera_name
+        return None
+
+    def request_restart(self) -> None:
         return None
 
 
@@ -162,4 +174,57 @@ def test_setup_status_route_delegates_to_service(monkeypatch: pytest.MonkeyPatch
         "has_cameras": True,
         "pipeline_running": False,
         "auth_configured": True,
+    }
+
+
+def test_setup_finalize_requires_bootstrap_mode() -> None:
+    """Finalize route should reject requests when app is not in bootstrap mode."""
+    # Given: A non-bootstrap app
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    # When: Calling setup finalize
+    response = client.post("/api/v1/setup/finalize", json={})
+
+    # Then: Route rejects finalize outside setup mode
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["error_code"] == "CONFLICT"
+
+
+def test_setup_finalize_delegates_to_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Finalize route should delegate orchestration to setup service."""
+    # Given: A bootstrap app and deterministic finalize response
+    app = _StubSetupApp(
+        bootstrap_mode=True,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_finalize_setup(_: object, __: object) -> FinalizeResponse:
+        return FinalizeResponse(
+            success=True,
+            config_path="/tmp/config.yaml",
+            restart_requested=True,
+            defaults_applied=["storage"],
+            errors=[],
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.finalize_setup", _fake_finalize_setup)
+
+    # When: Calling setup finalize
+    response = client.post("/api/v1/setup/finalize", json={})
+
+    # Then: Route returns service payload
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "success": True,
+        "config_path": "/tmp/config.yaml",
+        "restart_requested": True,
+        "defaults_applied": ["storage"],
+        "errors": [],
     }

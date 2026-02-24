@@ -6,8 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from homesec.config.manager import ConfigManager
 from homesec.models.config import FastAPIServerConfig
+from homesec.models.setup import FinalizeRequest
 from homesec.services import setup as setup_service
 
 
@@ -29,11 +32,14 @@ class _StubApp:
         repository: _StubRepository | None,
         server_config: FastAPIServerConfig,
         clips_dir: str = "clips",
+        config_manager: ConfigManager | None = None,
     ) -> None:
         self.bootstrap_mode = bootstrap_mode
         self.pipeline_running = pipeline_running
         self._repository = repository
         self._server_config = server_config
+        self.config_manager = config_manager or ConfigManager(Path("config/config.yaml"))
+        self.restart_requested = False
         if has_cameras:
             cameras = [SimpleNamespace(name="front")]
         else:
@@ -59,6 +65,35 @@ class _StubApp:
     @property
     def server_config(self) -> FastAPIServerConfig:
         return self._server_config
+
+    def request_restart(self) -> None:
+        self.restart_requested = True
+
+
+def _write_existing_config(path: Path) -> ConfigManager:
+    payload = {
+        "version": 1,
+        "cameras": [
+            {
+                "name": "existing",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/existing"}},
+            }
+        ],
+        "storage": {"backend": "local", "config": {"root": "./storage"}},
+        "state_store": {"dsn_env": "DB_DSN"},
+        "notifiers": [{"backend": "mqtt", "config": {"host": "localhost", "port": 1883}}],
+        "filter": {"backend": "yolo", "config": {"classes": ["person"], "min_confidence": 0.5}},
+        "vlm": {
+            "backend": "openai",
+            "run_mode": "never",
+            "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+        },
+        "alert_policy": {"backend": "default", "config": {"min_risk_level": "high"}},
+        "server": {"enabled": True, "host": "0.0.0.0", "port": 8081},
+    }
+    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    return ConfigManager(path)
 
 
 def _server_config(
@@ -238,3 +273,113 @@ def test_disk_probe_path_walks_up_to_existing_parent(tmp_path: Path) -> None:
 
     # Then: Service falls back to nearest existing ancestor
     assert path == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
+    tmp_path: Path,
+) -> None:
+    """Finalize should persist merged config and request restart in bootstrap mode."""
+    # Given: A bootstrap app without existing config and a finalize payload with camera only
+    config_path = tmp_path / "config.yaml"
+    manager = ConfigManager(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+    request = FinalizeRequest(
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ]
+    )
+
+    # When: Finalizing setup
+    response = await setup_service.finalize_setup(request, app)
+
+    # Then: Config is written, defaults are applied for omitted sections, and restart is requested
+    assert response.success is True
+    assert response.restart_requested is True
+    assert app.restart_requested is True
+    assert "storage" in response.defaults_applied
+    assert "vlm" in response.defaults_applied
+    persisted = manager.get_config()
+    assert persisted.cameras[0].name == "front"
+    assert persisted.storage.backend == "local"
+    assert persisted.state_store.dsn_env == "DB_DSN"
+    assert persisted.vlm.run_mode == "never"
+
+
+@pytest.mark.asyncio
+async def test_finalize_setup_returns_validation_error_without_writing_config(
+    tmp_path: Path,
+) -> None:
+    """Finalize should surface config validation errors without writing config."""
+    # Given: A bootstrap app and an invalid camera source payload
+    config_path = tmp_path / "config.yaml"
+    manager = ConfigManager(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+    request = FinalizeRequest(
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {
+                    "backend": "unknown_source",
+                    "config": {},
+                },
+            }
+        ]
+    )
+
+    # When: Finalizing setup
+    response = await setup_service.finalize_setup(request, app)
+
+    # Then: Validation fails, no config is written, and restart is not requested
+    assert response.success is False
+    assert response.restart_requested is False
+    assert app.restart_requested is False
+    assert response.errors
+    assert config_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_finalize_setup_reuses_existing_sections_when_payload_omits_them(
+    tmp_path: Path,
+) -> None:
+    """Finalize should preserve existing config sections when request leaves them unset."""
+    # Given: A bootstrap app with an existing config file and an empty finalize payload
+    config_path = tmp_path / "config.yaml"
+    manager = _write_existing_config(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+    request = FinalizeRequest()
+
+    # When: Finalizing setup
+    response = await setup_service.finalize_setup(request, app)
+
+    # Then: Existing config is preserved and no default sections are reported
+    assert response.success is True
+    assert response.defaults_applied == []
+    persisted = manager.get_config()
+    assert persisted.cameras[0].name == "existing"

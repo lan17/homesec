@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from homesec.models.config import Config
 
 logger = logging.getLogger(__name__)
+RESTART_EXIT_CODE = 42
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +102,7 @@ class Application:
         # Shutdown state
         self._shutdown_event = asyncio.Event()
         self._shutdown_started = False
+        self._restart_requested = False
 
     async def run(self) -> None:
         """Run the application.
@@ -361,6 +363,15 @@ class Application:
         self._shutdown_started = True
         self._shutdown_event.set()
 
+    def request_restart(self) -> None:
+        """Request graceful shutdown so an external supervisor can restart the process."""
+        if self._restart_requested:
+            return
+        logger.info("Restart requested by setup finalize endpoint")
+        self._restart_requested = True
+        self._shutdown_started = True
+        self._shutdown_event.set()
+
     async def shutdown(self) -> None:
         """Graceful shutdown of all components."""
         logger.info("Shutting down application...")
@@ -437,6 +448,14 @@ class Application:
         if self._start_time is None:
             return 0.0
         return time.time() - self._start_time
+
+    @property
+    def restart_requested(self) -> bool:
+        return self._restart_requested
+
+    @property
+    def restart_exit_code(self) -> int:
+        return RESTART_EXIT_CODE
 
     def get_source(self, camera_name: str) -> _CameraSourceSnapshot | None:
         status = self._camera_statuses().get(camera_name)

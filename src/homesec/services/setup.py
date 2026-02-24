@@ -6,21 +6,35 @@ import asyncio
 import socket
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
-from homesec.models.config import Config, FastAPIServerConfig
+from homesec.config.loader import ConfigError, ConfigErrorCode
+from homesec.models.config import (
+    AlertPolicyConfig,
+    Config,
+    FastAPIServerConfig,
+    NotifierConfig,
+    StateStoreConfig,
+    StorageConfig,
+)
+from homesec.models.enums import VLMRunMode
+from homesec.models.filter import FilterConfig
 from homesec.models.setup import (
+    FinalizeRequest,
+    FinalizeResponse,
     PreflightCheckResponse,
     PreflightResponse,
     SetupState,
     SetupStatusResponse,
 )
+from homesec.models.vlm import VLMConfig
 
 if TYPE_CHECKING:
     from homesec.app import Application
     from homesec.repository.clip_repository import ClipRepository
 
 _MIN_FREE_BYTES = 1_000_000_000
+SectionT = TypeVar("SectionT")
 
 
 async def get_setup_status(app: Application) -> SetupStatusResponse:
@@ -58,12 +72,181 @@ async def run_preflight(app: Application) -> PreflightResponse:
     )
 
 
+async def finalize_setup(request: FinalizeRequest, app: Application) -> FinalizeResponse:
+    """Persist finalized setup config and request graceful restart."""
+    merged_config, defaults_applied = await _build_finalize_config(request=request, app=app)
+
+    config_path = app.config_manager.config_path
+    try:
+        await app.config_manager.replace_config(merged_config)
+    except ConfigError as exc:
+        return FinalizeResponse(
+            success=False,
+            config_path=str(config_path),
+            restart_requested=False,
+            defaults_applied=defaults_applied,
+            errors=[str(exc)],
+        )
+
+    app.request_restart()
+    return FinalizeResponse(
+        success=True,
+        config_path=str(config_path),
+        restart_requested=True,
+        defaults_applied=defaults_applied,
+        errors=[],
+    )
+
+
 def _resolve_state(*, has_config: bool, has_cameras: bool, pipeline_running: bool) -> SetupState:
     if not has_config and not has_cameras and not pipeline_running:
         return "fresh"
     if has_cameras and pipeline_running:
         return "complete"
     return "partial"
+
+
+async def _build_finalize_config(
+    *,
+    request: FinalizeRequest,
+    app: Application,
+) -> tuple[Config, list[str]]:
+    existing = await _existing_config_or_none(app)
+    defaults_applied: list[str] = []
+
+    cameras = _pick_section(
+        requested=request.cameras,
+        existing=existing.cameras if existing is not None else None,
+        default=[],
+        key="cameras",
+        defaults_applied=defaults_applied,
+    )
+    storage = _pick_section(
+        requested=request.storage,
+        existing=existing.storage if existing is not None else None,
+        default=_default_storage(),
+        key="storage",
+        defaults_applied=defaults_applied,
+    )
+    state_store = _pick_section(
+        requested=request.state_store,
+        existing=existing.state_store if existing is not None else None,
+        default=_default_state_store(),
+        key="state_store",
+        defaults_applied=defaults_applied,
+    )
+    notifiers = _pick_section(
+        requested=request.notifiers,
+        existing=existing.notifiers if existing is not None else None,
+        default=[_default_notifier()],
+        key="notifiers",
+        defaults_applied=defaults_applied,
+    )
+    filter_config = _pick_section(
+        requested=request.filter,
+        existing=existing.filter if existing is not None else None,
+        default=_default_filter(),
+        key="filter",
+        defaults_applied=defaults_applied,
+    )
+    vlm = _pick_section(
+        requested=request.vlm,
+        existing=existing.vlm if existing is not None else None,
+        default=_default_vlm(),
+        key="vlm",
+        defaults_applied=defaults_applied,
+    )
+    alert_policy = _pick_section(
+        requested=request.alert_policy,
+        existing=existing.alert_policy if existing is not None else None,
+        default=_default_alert_policy(),
+        key="alert_policy",
+        defaults_applied=defaults_applied,
+    )
+    server = _pick_section(
+        requested=request.server,
+        existing=existing.server if existing is not None else None,
+        default=_server_config(app),
+        key="server",
+        defaults_applied=defaults_applied,
+    )
+
+    version = existing.version if existing is not None else 1
+    return Config(
+        version=version,
+        cameras=cameras,
+        storage=storage,
+        state_store=state_store,
+        notifiers=notifiers,
+        filter=filter_config,
+        vlm=vlm,
+        alert_policy=alert_policy,
+        server=server,
+    ), defaults_applied
+
+
+async def _existing_config_or_none(app: Application) -> Config | None:
+    try:
+        return await asyncio.to_thread(app.config_manager.get_config)
+    except ConfigError as exc:
+        if exc.code == ConfigErrorCode.FILE_NOT_FOUND:
+            return None
+        raise
+
+
+def _pick_section(
+    *,
+    requested: SectionT | None,
+    existing: SectionT | None,
+    default: SectionT,
+    key: str,
+    defaults_applied: list[str],
+) -> SectionT:
+    if requested is not None:
+        return requested
+    if existing is not None:
+        return existing
+    defaults_applied.append(key)
+    return default
+
+
+def _default_storage() -> StorageConfig:
+    return StorageConfig(backend="local", config={"root": "./storage"})
+
+
+def _default_state_store() -> StateStoreConfig:
+    return StateStoreConfig(dsn_env="DB_DSN")
+
+
+def _default_notifier() -> NotifierConfig:
+    return NotifierConfig(backend="mqtt", enabled=True, config={"host": "localhost", "port": 1883})
+
+
+def _default_filter() -> FilterConfig:
+    return FilterConfig(
+        backend="yolo",
+        config={
+            "classes": ["person", "car", "dog", "cat"],
+            "min_confidence": 0.5,
+        },
+    )
+
+
+def _default_vlm() -> VLMConfig:
+    return VLMConfig(
+        backend="openai",
+        run_mode=VLMRunMode.NEVER,
+        trigger_classes=["person"],
+        config={"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+    )
+
+
+def _default_alert_policy() -> AlertPolicyConfig:
+    return AlertPolicyConfig(
+        backend="default",
+        enabled=True,
+        config={"min_risk_level": "high"},
+    )
 
 
 def _server_config(app: Application) -> FastAPIServerConfig:

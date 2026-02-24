@@ -206,6 +206,7 @@ class _StubApp:
         )
         self._runtime_reload_error = runtime_reload_error
         self.runtime_reload_calls = 0
+        self.restart_requested = False
         self.uptime_seconds = 0.0
 
     @property
@@ -232,6 +233,9 @@ class _StubApp:
         if self._runtime_reload_error is not None:
             raise self._runtime_reload_error
         return self._runtime_reload_request
+
+    def request_restart(self) -> None:
+        self.restart_requested = True
 
 
 def _write_config(tmp_path, cameras: list[dict]) -> ConfigManager:
