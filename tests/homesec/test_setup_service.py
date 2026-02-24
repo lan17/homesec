@@ -49,6 +49,7 @@ class _StubApp:
             cameras=cameras,
             server=server_config,
             storage=SimpleNamespace(paths=SimpleNamespace(clips_dir=clips_dir)),
+            state_store=SimpleNamespace(dsn_env="DB_DSN", dsn=None),
         )
 
     @property
@@ -195,6 +196,7 @@ async def test_run_preflight_returns_all_passed_when_checks_succeed(
 ) -> None:
     """Preflight should report all_passed when every check succeeds."""
     # Given: A configured app and deterministic successful probe helpers
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     app = _StubApp(
         bootstrap_mode=False,
         pipeline_running=False,
@@ -220,6 +222,7 @@ async def test_run_preflight_returns_all_passed_when_checks_succeed(
     assert by_name["ffmpeg"].passed is True
     assert by_name["disk_space"].passed is True
     assert by_name["network"].passed is True
+    assert by_name["config_env"].passed is True
 
 
 @pytest.mark.asyncio
@@ -228,6 +231,7 @@ async def test_run_preflight_reports_postgres_not_configured_in_bootstrap(
 ) -> None:
     """Preflight should fail postgres check when repository is not initialized."""
     # Given: A bootstrap app without repository and deterministic non-postgres probe success
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     app = _StubApp(
         bootstrap_mode=True,
         pipeline_running=False,
@@ -253,6 +257,7 @@ async def test_run_preflight_reports_postgres_not_configured_in_bootstrap(
     assert by_name["ffmpeg"].passed is True
     assert by_name["disk_space"].passed is True
     assert by_name["network"].passed is True
+    assert by_name["config_env"].passed is True
     assert response.all_passed is False
 
 
@@ -262,6 +267,7 @@ async def test_run_preflight_marks_check_failed_when_timeout_expires(
 ) -> None:
     """Preflight should fail checks that exceed timeout budget."""
     # Given: A preflight run where postgres check exceeds configured timeout budget
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     app = _StubApp(
         bootstrap_mode=False,
         pipeline_running=False,
@@ -296,6 +302,38 @@ async def test_run_preflight_marks_check_failed_when_timeout_expires(
     by_name = {check.name: check for check in response.checks}
     assert by_name["postgres"].passed is False
     assert "timed out" in by_name["postgres"].message.lower()
+    assert response.all_passed is False
+
+
+@pytest.mark.asyncio
+async def test_run_preflight_reports_missing_state_store_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should fail config_env check when default state-store env is missing."""
+    # Given: A bootstrap app with no DB_DSN env value configured
+    monkeypatch.delenv("DB_DSN", raising=False)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+    )
+    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        setup_service,
+        "shutil_disk_usage",
+        lambda path: (10_000_000_000, 2_000_000_000, 8_000_000_000),
+    )
+    monkeypatch.setattr(setup_service, "_network_probe", lambda: (True, "DNS resolution succeeded"))
+
+    # When: Running setup preflight
+    response = await setup_service.run_preflight(app)
+
+    # Then: config_env check fails with actionable missing-env message
+    by_name = {check.name: check for check in response.checks}
+    assert by_name["config_env"].passed is False
+    assert "DB_DSN" in by_name["config_env"].message
     assert response.all_passed is False
 
 
@@ -350,10 +388,11 @@ def test_network_probe_returns_config_error_for_invalid_port_env(
 
 @pytest.mark.asyncio
 async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Finalize should persist merged config and request restart in bootstrap mode."""
     # Given: A bootstrap app without existing config and a finalize payload with camera only
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     config_path = tmp_path / "config.yaml"
     manager = ConfigManager(config_path)
     app = _StubApp(
@@ -392,10 +431,11 @@ async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
 
 @pytest.mark.asyncio
 async def test_finalize_setup_returns_validation_error_without_writing_config(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Finalize should surface config validation errors without writing config."""
     # Given: A bootstrap app and an invalid camera source payload
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     config_path = tmp_path / "config.yaml"
     manager = ConfigManager(config_path)
     app = _StubApp(
@@ -432,10 +472,11 @@ async def test_finalize_setup_returns_validation_error_without_writing_config(
 
 @pytest.mark.asyncio
 async def test_finalize_setup_reuses_existing_sections_when_payload_omits_them(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Finalize should preserve existing config sections when request leaves them unset."""
     # Given: A bootstrap app with an existing config file and an empty finalize payload
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     config_path = tmp_path / "config.yaml"
     manager = _write_existing_config(config_path)
     app = _StubApp(
@@ -456,3 +497,72 @@ async def test_finalize_setup_reuses_existing_sections_when_payload_omits_them(
     assert response.defaults_applied == []
     persisted = manager.get_config()
     assert persisted.cameras[0].name == "existing"
+
+
+@pytest.mark.asyncio
+async def test_finalize_setup_rejects_empty_camera_set_on_fresh_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize should reject requests that would persist zero cameras."""
+    # Given: A fresh bootstrap app and finalize payload with no camera section
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
+    config_path = tmp_path / "config.yaml"
+    manager = ConfigManager(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+
+    # When: Finalizing setup with empty payload
+    response = await setup_service.finalize_setup(FinalizeRequest(), app)
+
+    # Then: Finalize fails before writing config and reports missing-camera requirement
+    assert response.success is False
+    assert response.restart_requested is False
+    assert app.restart_requested is False
+    assert "At least one camera" in response.errors[0]
+    assert config_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_finalize_setup_rejects_missing_state_store_env_when_defaults_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize should reject when default state-store dsn_env is unset."""
+    # Given: A bootstrap app with camera payload but missing DB_DSN environment variable
+    monkeypatch.delenv("DB_DSN", raising=False)
+    config_path = tmp_path / "config.yaml"
+    manager = ConfigManager(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+    request = FinalizeRequest(
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ]
+    )
+
+    # When: Finalizing setup with default state-store config
+    response = await setup_service.finalize_setup(request, app)
+
+    # Then: Finalize fails with explicit missing-env error and no config write
+    assert response.success is False
+    assert response.restart_requested is False
+    assert app.restart_requested is False
+    assert any("DB_DSN" in error for error in response.errors)
+    assert config_path.exists() is False

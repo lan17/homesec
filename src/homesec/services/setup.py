@@ -72,6 +72,7 @@ async def run_preflight(app: Application) -> PreflightResponse:
         _run_preflight_check(name="ffmpeg", check=_ffmpeg_check()),
         _run_preflight_check(name="disk_space", check=_disk_space_check(app)),
         _run_preflight_check(name="network", check=_network_check()),
+        _run_preflight_check(name="config_env", check=_config_env_check(app)),
     )
     return PreflightResponse(
         checks=list(checks),
@@ -110,6 +111,15 @@ async def _run_preflight_check(
 async def finalize_setup(request: FinalizeRequest, app: Application) -> FinalizeResponse:
     """Persist finalized setup config and request graceful restart."""
     merged_config, defaults_applied = await _build_finalize_config(request=request, app=app)
+    validation_errors = _finalize_validation_errors(merged_config)
+    if validation_errors:
+        return FinalizeResponse(
+            success=False,
+            config_path=str(app.config_manager.config_path),
+            restart_requested=False,
+            defaults_applied=defaults_applied,
+            errors=validation_errors,
+        )
 
     config_path = app.config_manager.config_path
     try:
@@ -303,6 +313,25 @@ def _auth_configured(server_config: FastAPIServerConfig) -> bool:
     return bool(server_config.get_api_key())
 
 
+def _state_store_dsn_env_requirement(config: Config) -> str | None:
+    if config.state_store.dsn is not None:
+        return None
+    return config.state_store.dsn_env
+
+
+def _finalize_validation_errors(config: Config) -> list[str]:
+    errors: list[str] = []
+    if not config.cameras:
+        errors.append("At least one camera must be configured before finalizing setup.")
+
+    dsn_env = _state_store_dsn_env_requirement(config)
+    if dsn_env and not os.environ.get(dsn_env):
+        errors.append(
+            f"Required environment variable {dsn_env!r} is not set for state_store.dsn_env."
+        )
+    return errors
+
+
 async def _postgres_check(app: Application) -> PreflightCheckResponse:
     repository = _repository_or_none(app)
     if repository is None:
@@ -425,6 +454,37 @@ async def _network_check() -> PreflightCheckResponse:
         name="network",
         passed=ok,
         message=message,
+        latency_ms=(time.perf_counter() - start) * 1000.0,
+    )
+
+
+async def _config_env_check(app: Application) -> PreflightCheckResponse:
+    """Check environment-backed config readiness for state store connectivity."""
+    start = time.perf_counter()
+    active_config = _active_config(app)
+    if active_config is not None:
+        dsn_env = _state_store_dsn_env_requirement(active_config)
+    else:
+        dsn_env = _default_state_store().dsn_env
+
+    if not dsn_env:
+        return PreflightCheckResponse(
+            name="config_env",
+            passed=True,
+            message="State store DSN configured inline; no environment variable required",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
+        )
+    if os.environ.get(dsn_env):
+        return PreflightCheckResponse(
+            name="config_env",
+            passed=True,
+            message=f"Required state store environment variable {dsn_env!r} is set",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
+        )
+    return PreflightCheckResponse(
+        name="config_env",
+        passed=False,
+        message=f"Required state store environment variable {dsn_env!r} is not set",
         latency_ms=(time.perf_counter() - start) * 1000.0,
     )
 
