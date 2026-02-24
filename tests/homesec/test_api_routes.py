@@ -211,6 +211,8 @@ class _StubApp:
 
     @property
     def config(self):  # type: ignore[override]
+        if self._bootstrap_mode:
+            raise RuntimeError("Config not loaded")
         return self._config
 
     @property

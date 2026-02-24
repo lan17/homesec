@@ -71,8 +71,10 @@ def _client(app: _StubSetupApp) -> TestClient:
     return TestClient(create_app(app))
 
 
-def test_setup_status_route_is_public_when_auth_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Setup status route should remain public even when API key auth is enabled."""
+def test_setup_status_route_requires_api_key_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup status route should require API key when auth is enabled."""
     # Given: Auth-enabled server config and setup status service response stub
     monkeypatch.setenv("HOMESEC_TEST_API_KEY", "secret")
     app = _StubSetupApp(
@@ -84,7 +86,28 @@ def test_setup_status_route_is_public_when_auth_enabled(monkeypatch: pytest.Monk
     # When: Calling setup status without Authorization header
     response = client.get("/api/v1/setup/status")
 
-    # Then: Endpoint is accessible without auth and returns setup payload
+    # Then: Endpoint is rejected by API-key auth dependency
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["error_code"] == "UNAUTHORIZED"
+
+
+def test_setup_status_route_accepts_api_key_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup status route should allow requests with valid API key."""
+    # Given: Auth-enabled server config and valid API key header
+    monkeypatch.setenv("HOMESEC_TEST_API_KEY", "secret")
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_TEST_API_KEY"),
+    )
+    client = _client(app)
+
+    # When: Calling setup status with Authorization header
+    response = client.get("/api/v1/setup/status", headers={"Authorization": "Bearer secret"})
+
+    # Then: Endpoint remains available with auth
     assert response.status_code == 200
     payload = response.json()
     assert payload["state"] in {"fresh", "partial", "complete"}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -252,6 +253,49 @@ async def test_run_preflight_reports_postgres_not_configured_in_bootstrap(
     assert by_name["ffmpeg"].passed is True
     assert by_name["disk_space"].passed is True
     assert by_name["network"].passed is True
+    assert response.all_passed is False
+
+
+@pytest.mark.asyncio
+async def test_run_preflight_marks_check_failed_when_timeout_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should fail checks that exceed timeout budget."""
+    # Given: A preflight run where postgres check exceeds configured timeout budget
+    app = _StubApp(
+        bootstrap_mode=False,
+        pipeline_running=False,
+        has_cameras=True,
+        repository=_StubRepository(ok=True),
+        server_config=_server_config(auth_enabled=False),
+    )
+
+    async def _slow_postgres(_: object) -> setup_service.PreflightCheckResponse:
+        await asyncio.sleep(0.02)
+        return setup_service.PreflightCheckResponse(
+            name="postgres",
+            passed=True,
+            message="Database reachable",
+            latency_ms=1.0,
+        )
+
+    monkeypatch.setattr(setup_service, "_PREFLIGHT_CHECK_TIMEOUT_S", 0.005)
+    monkeypatch.setattr(setup_service, "_postgres_check", _slow_postgres)
+    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        setup_service,
+        "shutil_disk_usage",
+        lambda path: (10_000_000_000, 2_000_000_000, 8_000_000_000),
+    )
+    monkeypatch.setattr(setup_service, "_network_probe", lambda: (True, "DNS resolution succeeded"))
+
+    # When: Running setup preflight
+    response = await setup_service.run_preflight(app)
+
+    # Then: Timed-out check is marked failed with timeout message
+    by_name = {check.name: check for check in response.checks}
+    assert by_name["postgres"].passed is False
+    assert "timed out" in by_name["postgres"].message.lower()
     assert response.all_passed is False
 
 

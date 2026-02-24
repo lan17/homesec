@@ -29,6 +29,7 @@ class _StubRuntimeApp:
         self._reload_request = reload_request
         self._reload_error = reload_error
         self.wait_calls = 0
+        self._bootstrap_mode = False
         self._config = SimpleNamespace(
             server=FastAPIServerConfig(),
             cameras=[],
@@ -37,6 +38,14 @@ class _StubRuntimeApp:
     @property
     def config(self):
         return self._config
+
+    @property
+    def server_config(self) -> FastAPIServerConfig:
+        return self._config.server
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return self._bootstrap_mode
 
     def get_runtime_status(self) -> RuntimeStatusSnapshot:
         return self._status

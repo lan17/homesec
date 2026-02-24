@@ -16,9 +16,15 @@ from homesec.api.routes import cameras, clips, config, health, media, onvif, run
 def register_routes(app: FastAPI) -> None:
     """Register all API routers."""
     app.include_router(health.router)
-    app.include_router(setup.router)
-    app.include_router(config.router, dependencies=[Depends(verify_api_key)])
-    app.include_router(cameras.router, dependencies=[Depends(verify_api_key)])
+    app.include_router(setup.router, dependencies=[Depends(verify_api_key)])
+    app.include_router(
+        config.router,
+        dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
+    )
+    app.include_router(
+        cameras.router,
+        dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
+    )
     app.include_router(
         clips.router,
         dependencies=[

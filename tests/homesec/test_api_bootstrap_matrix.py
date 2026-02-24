@@ -14,6 +14,7 @@ from homesec.models.clip import ClipStateData
 from homesec.models.config import FastAPIServerConfig
 from homesec.models.enums import ClipStatus
 from homesec.runtime.models import RuntimeState, RuntimeStatusSnapshot
+from homesec.services import setup as setup_service
 from tests.homesec.test_api_routes import (
     _client,
     _StubApp,
@@ -168,7 +169,7 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             bootstrap_mode=True,
         ),
         _MatrixCase(
-            name="setup_status_is_public_even_when_auth_enabled",
+            name="setup_status_requires_api_key_when_auth_enabled",
             method="GET",
             path="/api/v1/setup/status",
             auth_enabled=True,
@@ -176,12 +177,37 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             pipeline_running=False,
             auth_header=None,
             include_clip=False,
-            expected_status=200,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="setup_preflight_requires_api_key_when_auth_enabled",
+            method="POST",
+            path="/api/v1/setup/preflight",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
         ),
         _MatrixCase(
             name="setup_status_remains_available_in_bootstrap_mode",
             method="GET",
             path="/api/v1/setup/status",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
+            name="setup_preflight_remains_available_in_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/preflight",
             auth_enabled=False,
             db_ok=False,
             pipeline_running=False,
@@ -238,7 +264,7 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_status=200,
         ),
         _MatrixCase(
-            name="config_route_remains_available_in_bootstrap_mode",
+            name="config_route_is_blocked_in_bootstrap_mode",
             method="GET",
             path="/api/v1/config",
             auth_enabled=False,
@@ -246,8 +272,9 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             pipeline_running=False,
             auth_header=None,
             include_clip=False,
-            expected_status=200,
+            expected_status=503,
             bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
             name="cameras_requires_api_key_when_auth_enabled",
@@ -273,7 +300,7 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_status=200,
         ),
         _MatrixCase(
-            name="cameras_route_remains_available_in_bootstrap_mode",
+            name="cameras_route_is_blocked_in_bootstrap_mode",
             method="GET",
             path="/api/v1/cameras",
             auth_enabled=False,
@@ -281,8 +308,9 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             pipeline_running=False,
             auth_header=None,
             include_clip=False,
-            expected_status=200,
+            expected_status=503,
             bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
             name="runtime_status_requires_api_key_when_auth_enabled",
@@ -512,6 +540,7 @@ def test_api_bootstrap_dependency_matrix(
     """API groups should enforce consistent auth/DB bootstrap behavior."""
     # Given: A configured app with matrix-controlled auth, DB, and runtime bootstrap state
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    monkeypatch.setattr(setup_service, "_network_probe", lambda: (True, "DNS resolution succeeded"))
     client, repository = _build_client(tmp_path, case)
     headers: dict[str, str] = {}
     if case.auth_header is not None:
@@ -528,3 +557,32 @@ def test_api_bootstrap_dependency_matrix(
     # Then: DB-backed failures perform at least one reachability probe
     if case.expected_error_code == "DB_UNAVAILABLE":
         assert repository.ping_calls >= 1
+
+
+def test_onvif_discover_is_available_in_bootstrap_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ONVIF discover route should stay available in bootstrap mode for onboarding."""
+    # Given: A bootstrap-mode app and a deterministic ONVIF discovery stub
+    case = _MatrixCase(
+        name="onvif_discover_available_in_bootstrap_mode",
+        method="POST",
+        path="/api/v1/onvif/discover",
+        auth_enabled=False,
+        db_ok=False,
+        pipeline_running=False,
+        auth_header=None,
+        include_clip=False,
+        expected_status=200,
+        bootstrap_mode=True,
+    )
+    monkeypatch.setattr("homesec.api.routes.onvif.discover_cameras", lambda *_args, **_kwargs: [])
+    client, _ = _build_client(tmp_path, case)
+
+    # When: Calling ONVIF discover endpoint without API key in bootstrap mode
+    response = client.post(case.path, json={})
+
+    # Then: Endpoint responds successfully for setup-camera discovery flow
+    assert response.status_code == 200
+    assert response.json() == []

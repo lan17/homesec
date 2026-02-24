@@ -148,7 +148,14 @@ class Application:
         # Keep plugin metadata routes available during onboarding.
         from homesec.plugins import discover_all_plugins
 
-        discover_all_plugins()
+        try:
+            discover_all_plugins()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Plugin discovery failed in bootstrap mode; continuing with setup APIs only: %s",
+                exc,
+                exc_info=True,
+            )
 
         server_cfg = self.server_config
         self._api_server = APIServer(
@@ -158,17 +165,19 @@ class Application:
         )
 
         self._setup_signal_handlers()
-        await self._api_server.start()
+        try:
+            await self._api_server.start()
 
-        self._start_time = time.time()
-        logger.info(
-            "Bootstrap mode active at http://%s:%d",
-            server_cfg.host,
-            server_cfg.port,
-        )
+            self._start_time = time.time()
+            logger.info(
+                "Bootstrap mode active at http://%s:%d",
+                server_cfg.host,
+                server_cfg.port,
+            )
 
-        await self._shutdown_event.wait()
-        await self.shutdown()
+            await self._shutdown_event.wait()
+        finally:
+            await self.shutdown()
 
     async def _create_components(self) -> None:
         """Create all components based on config."""
@@ -365,6 +374,8 @@ class Application:
 
     def request_restart(self) -> None:
         """Request graceful shutdown so an external supervisor can restart the process."""
+        if self._shutdown_started:
+            return
         if self._restart_requested:
             return
         logger.info("Restart requested by setup finalize endpoint")

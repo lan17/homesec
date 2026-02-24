@@ -6,6 +6,7 @@ import asyncio
 import os
 import socket
 import time
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -39,6 +40,7 @@ _NETWORK_PROBE_HOST_ENV = "HOMESEC_SETUP_NETWORK_PROBE_HOST"
 _NETWORK_PROBE_PORT_ENV = "HOMESEC_SETUP_NETWORK_PROBE_PORT"
 _NETWORK_PROBE_DEFAULT_HOST = "example.com"
 _NETWORK_PROBE_DEFAULT_PORT = 443
+_PREFLIGHT_CHECK_TIMEOUT_S = 10.0
 SectionT = TypeVar("SectionT")
 
 
@@ -66,15 +68,43 @@ async def get_setup_status(app: Application) -> SetupStatusResponse:
 async def run_preflight(app: Application) -> PreflightResponse:
     """Run setup preflight checks in parallel."""
     checks = await asyncio.gather(
-        _postgres_check(app),
-        _ffmpeg_check(),
-        _disk_space_check(app),
-        _network_check(),
+        _run_preflight_check(name="postgres", check=_postgres_check(app)),
+        _run_preflight_check(name="ffmpeg", check=_ffmpeg_check()),
+        _run_preflight_check(name="disk_space", check=_disk_space_check(app)),
+        _run_preflight_check(name="network", check=_network_check()),
     )
     return PreflightResponse(
         checks=list(checks),
         all_passed=all(check.passed for check in checks),
     )
+
+
+async def _run_preflight_check(
+    *,
+    name: str,
+    check: Awaitable[PreflightCheckResponse],
+) -> PreflightCheckResponse:
+    """Run a preflight check with timeout protection."""
+    start = time.perf_counter()
+    try:
+        return await asyncio.wait_for(check, timeout=_PREFLIGHT_CHECK_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return PreflightCheckResponse(
+            name=name,
+            passed=False,
+            message=(
+                f"Check timed out after {_PREFLIGHT_CHECK_TIMEOUT_S:.1f}s. "
+                "Verify service availability and network connectivity."
+            ),
+            latency_ms=(time.perf_counter() - start) * 1000.0,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        return PreflightCheckResponse(
+            name=name,
+            passed=False,
+            message=f"Check failed unexpectedly: {exc}",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
+        )
 
 
 async def finalize_setup(request: FinalizeRequest, app: Application) -> FinalizeResponse:
@@ -424,7 +454,9 @@ def _network_probe_target() -> tuple[str, int]:
     try:
         port = int(port_value)
     except ValueError:
-        raise ValueError(f"{_NETWORK_PROBE_PORT_ENV} must be an integer, got {port_value!r}") from None
+        raise ValueError(
+            f"{_NETWORK_PROBE_PORT_ENV} must be an integer, got {port_value!r}"
+        ) from None
     if port < 1 or port > 65535:
         raise ValueError(f"{_NETWORK_PROBE_PORT_ENV} must be in range 1..65535, got {port}")
     return host, port
