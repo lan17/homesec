@@ -45,7 +45,13 @@ def create_app(app_instance: Application) -> FastAPI:
     app = create_contract_app()
     app.state.homesec = app_instance
 
-    server_config = app_instance.config.server
+    server_config = cast(
+        FastAPIServerConfig | None,
+        getattr(app_instance, "server_config", None),
+    )
+    if server_config is None:
+        server_config = app_instance.config.server
+
     allow_credentials = "*" not in server_config.cors_origins
     app.add_middleware(
         CORSMiddleware,

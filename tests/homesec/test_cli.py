@@ -10,6 +10,7 @@ import yaml
 
 from homesec.cli import HomeSec, main, setup_logging
 from homesec.config import ConfigError
+from homesec.models.config import Config
 
 
 def _minimal_config() -> dict[str, object]:
@@ -106,6 +107,10 @@ class TestHomeSecValidate:
 
         # Mock discover_all_plugins (imported inside function) and validation functions
         with (
+            patch(
+                "homesec.cli.load_config",
+                return_value=Config.model_validate(_minimal_config()),
+            ),
             patch("homesec.plugins.discover_all_plugins"),
             patch("homesec.cli.validate_plugin_names"),
             patch("homesec.cli.validate_config"),
@@ -223,6 +228,25 @@ class TestHomeSecRun:
 
         # Then: setup_logging called with DEBUG
         mock_setup.assert_called_once_with("DEBUG")
+
+    def test_run_passes_setup_port_to_application(self, tmp_path: Path) -> None:
+        """run should forward setup_port so bootstrap API can bind custom port."""
+        # Given: A config path and an application stub
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump(_minimal_config()))
+        mock_app = MagicMock()
+        mock_app.run = AsyncMock(side_effect=KeyboardInterrupt())
+
+        with (
+            patch("homesec.cli.setup_logging"),
+            patch("homesec.cli.Application", return_value=mock_app) as mock_application,
+        ):
+            # When: Running with an explicit setup port override
+            cli = HomeSec()
+            cli.run(str(config_path), setup_port=9090)
+
+        # Then: Application is created with bootstrap port override
+        mock_application.assert_called_once_with(Path(config_path), bootstrap_port=9090)
 
 
 class TestHomeSecCleanup:

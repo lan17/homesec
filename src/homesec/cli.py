@@ -28,18 +28,24 @@ def setup_logging(level: str = "INFO") -> None:
 class HomeSec:
     """HomeSec CLI - Home Security Camera Pipeline."""
 
-    def run(self, config: str, log_level: str = "INFO") -> None:
+    def run(
+        self,
+        config: str = "config/config.yaml",
+        log_level: str = "INFO",
+        setup_port: int = 8081,
+    ) -> None:
         """Run the HomeSec pipeline.
 
         Args:
             config: Path to YAML config file
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+            setup_port: API server port when booting without a config file
         """
         setup_logging(log_level)
 
         config_path = Path(config)
 
-        app = Application(config_path)
+        app = Application(config_path, bootstrap_port=setup_port)
 
         try:
             asyncio.run(app.run())

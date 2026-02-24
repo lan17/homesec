@@ -13,6 +13,7 @@ from fastapi import Depends, Query, Request, status
 
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.media_tokens import MediaTokenError, validate_clip_media_token
+from homesec.models.config import FastAPIServerConfig
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -50,7 +51,7 @@ async def get_homesec_app(request: Request) -> Application:
 
 async def verify_api_key(request: Request, app: Application = Depends(get_homesec_app)) -> None:
     """Verify API key if authentication is enabled."""
-    server_config = app.config.server
+    server_config = _get_server_config(app)
     if not server_config.auth_enabled:
         return
 
@@ -79,7 +80,7 @@ async def verify_media_access(
     app: Application = Depends(get_homesec_app),
 ) -> None:
     """Authorize media playback requests with API key or short-lived media token."""
-    server_config = app.config.server
+    server_config = _get_server_config(app)
     if not server_config.auth_enabled:
         return
 
@@ -116,6 +117,13 @@ async def verify_media_access(
 
 async def require_database(app: Application = Depends(get_homesec_app)) -> None:
     """Ensure the database is reachable for data endpoints."""
+    if _is_bootstrap_mode(app):
+        raise APIError(
+            "System is in setup mode. Complete the setup wizard first.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code=APIErrorCode.SETUP_REQUIRED,
+        )
+
     cache = _get_database_probe_cache(app)
     now = time.monotonic()
 
@@ -134,8 +142,30 @@ async def require_database(app: Application = Depends(get_homesec_app)) -> None:
         )
 
 
+async def require_normal_mode(app: Application = Depends(get_homesec_app)) -> None:
+    """Ensure runtime-dependent routes are unavailable in bootstrap mode."""
+    if not _is_bootstrap_mode(app):
+        return
+    raise APIError(
+        "System is in setup mode. Complete the setup wizard first.",
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        error_code=APIErrorCode.SETUP_REQUIRED,
+    )
+
+
+def _get_server_config(app: Application) -> FastAPIServerConfig:
+    server_config = cast(FastAPIServerConfig | None, getattr(app, "server_config", None))
+    if server_config is not None:
+        return server_config
+    return app.config.server
+
+
+def _is_bootstrap_mode(app: Application) -> bool:
+    return bool(getattr(app, "bootstrap_mode", False))
+
+
 def _require_api_key_value(app: Application) -> str:
-    api_key = app.config.server.get_api_key()
+    api_key = _get_server_config(app).get_api_key()
     if not api_key:
         raise APIError(
             "API key not configured",

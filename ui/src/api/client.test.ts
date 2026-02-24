@@ -55,6 +55,7 @@ describe('HomeSecApiClient.getHealth', () => {
           pipeline: 'running',
           postgres: 'connected',
           cameras_online: 2,
+          bootstrap_mode: false,
         }),
         {
           status: 200,
@@ -73,6 +74,7 @@ describe('HomeSecApiClient.getHealth', () => {
       pipeline: 'running',
       postgres: 'connected',
       cameras_online: 2,
+      bootstrap_mode: false,
       httpStatus: 200,
     })
   })
@@ -86,6 +88,7 @@ describe('HomeSecApiClient.getHealth', () => {
           pipeline: 'stopped',
           postgres: 'connected',
           cameras_online: 0,
+          bootstrap_mode: false,
         }),
         {
           status: 503,

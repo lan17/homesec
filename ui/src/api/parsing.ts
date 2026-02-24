@@ -221,6 +221,7 @@ export function parseHealthResponse(payload: unknown): HealthResponse {
     pipeline: expectString(payload.pipeline, 'pipeline'),
     postgres: expectString(payload.postgres, 'postgres'),
     cameras_online: expectNumber(payload.cameras_online, 'cameras_online'),
+    bootstrap_mode: expectBoolean(payload.bootstrap_mode, 'bootstrap_mode'),
   }
 }
 

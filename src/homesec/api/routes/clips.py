@@ -176,10 +176,13 @@ async def create_clip_media_token(
         )
 
     media_path = _build_media_path(clip_id)
-    if not app.config.server.auth_enabled:
+    server_config = getattr(app, "server_config", None)
+    if server_config is None:
+        server_config = app.config.server
+    if not server_config.auth_enabled:
         return ClipMediaTokenResponse(media_url=media_path, tokenized=False, expires_at=None)
 
-    api_key = app.config.server.get_api_key()
+    api_key = server_config.get_api_key()
     if api_key is None:
         raise APIError(
             "API key not configured",

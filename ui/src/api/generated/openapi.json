@@ -548,6 +548,11 @@
       },
       "HealthResponse": {
         "properties": {
+          "bootstrap_mode": {
+            "default": false,
+            "title": "Bootstrap Mode",
+            "type": "boolean"
+          },
           "cameras_online": {
             "title": "Cameras Online",
             "type": "integer"

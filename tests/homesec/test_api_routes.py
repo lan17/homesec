@@ -174,6 +174,7 @@ class _StubApp:
         sources_by_name: dict[str, _StubSource] | None = None,
         server_config: FastAPIServerConfig | None = None,
         pipeline_running: bool = True,
+        bootstrap_mode: bool = False,
         runtime_reload_request: RuntimeReloadRequest | None = None,
         runtime_reload_error: Exception | None = None,
     ) -> None:
@@ -197,6 +198,7 @@ class _StubApp:
             ],
         )
         self._pipeline_running = pipeline_running
+        self._bootstrap_mode = bootstrap_mode
         self._runtime_reload_request = runtime_reload_request or RuntimeReloadRequest(
             accepted=True,
             message="Runtime reload started",
@@ -209,6 +211,14 @@ class _StubApp:
     @property
     def config(self):  # type: ignore[override]
         return self._config
+
+    @property
+    def server_config(self) -> FastAPIServerConfig:
+        return self._config.server
+
+    @property
+    def bootstrap_mode(self) -> bool:
+        return self._bootstrap_mode
 
     @property
     def pipeline_running(self) -> bool:
@@ -2388,6 +2398,35 @@ def test_health_endpoints_return_503_when_pipeline_stopped(tmp_path) -> None:
     assert root_response.json()["status"] == "unhealthy"
     assert root_response.json()["pipeline"] == "stopped"
     assert root_response.json() == versioned_response.json()
+
+
+def test_health_endpoints_report_setup_required_in_bootstrap_mode(tmp_path) -> None:
+    """Health endpoints should stay available and report setup mode during bootstrap."""
+    # Given a bootstrap-mode app with no running pipeline
+    manager = _write_config(tmp_path, cameras=[])
+    repository = _StubRepository(ok=True)
+    app = _StubApp(
+        config_manager=manager,
+        repository=repository,
+        storage=_StubStorage(),
+        pipeline_running=False,
+        bootstrap_mode=True,
+    )
+    client = _client(app)
+
+    # When requesting health endpoints
+    root_response = client.get("/health")
+    versioned_response = client.get("/api/v1/health")
+
+    # Then both return setup-required payload without DB probes
+    assert root_response.status_code == 200
+    assert versioned_response.status_code == 200
+    assert root_response.json()["status"] == "setup_required"
+    assert root_response.json()["pipeline"] == "not_configured"
+    assert root_response.json()["postgres"] == "not_configured"
+    assert root_response.json()["bootstrap_mode"] is True
+    assert root_response.json() == versioned_response.json()
+    assert repository.ping_calls == 0
 
 
 def test_diagnostics_reports_degraded_when_storage_ping_raises(tmp_path) -> None:

@@ -510,6 +510,11 @@ export interface components {
         };
         /** HealthResponse */
         HealthResponse: {
+            /**
+             * Bootstrap Mode
+             * @default false
+             */
+            bootstrap_mode: boolean;
             /** Cameras Online */
             cameras_online: number;
             /** Pipeline */
