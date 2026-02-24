@@ -5,6 +5,7 @@ import os
 import pytest
 from sqlalchemy import delete
 
+import homesec.state.postgres as state_postgres
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterResult
 from homesec.state import PostgresStateStore
@@ -134,6 +135,28 @@ async def test_get_many_with_created_at_roundtrip(state_store: PostgresStateStor
     assert state_b.camera_name == "front_door"
     assert created_at_a.tzinfo is not None
     assert created_at_b.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_get_many_with_created_at_chunks_large_id_sets(
+    state_store: PostgresStateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that get_many_with_created_at works correctly across multiple chunks."""
+    # Given: More clip ids than the configured batch size
+    monkeypatch.setattr(state_postgres, "_BATCH_STATE_LOOKUP_SIZE", 2)
+    clip_ids = [f"test_many_chunk_{idx}" for idx in range(5)]
+    for clip_id in clip_ids:
+        await state_store.upsert(clip_id, sample_state(clip_id))
+
+    # When: Batch retrieving all ids at once
+    results = await state_store.get_many_with_created_at(clip_ids)
+
+    # Then: All ids are returned even when query execution is chunked
+    assert set(results.keys()) == set(clip_ids)
+    for clip_id in clip_ids:
+        state, created_at = results[clip_id]
+        assert state.camera_name == "front_door"
+        assert created_at.tzinfo is not None
 
 
 @pytest.mark.asyncio

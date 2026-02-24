@@ -297,7 +297,7 @@ async def test_prune_reports_incomplete_measurement_on_stat_error(
     pruner = LocalRetentionPruner(
         repository=repository,
         local_clip_dirs=[clips_dir],
-        max_local_size_bytes=0,
+        max_local_size_bytes=1_000,
     )
 
     # When: A prune pass runs
@@ -308,4 +308,6 @@ async def test_prune_reports_incomplete_measurement_on_stat_error(
     assert summary.measured_local_files == 1
     assert summary.unmeasured_local_files == 1
     assert summary.measurement_incomplete is True
+    assert summary.blocked_over_limit is True
+    assert summary.deleted_files == 0
     assert summary.skipped_stat_error == 1

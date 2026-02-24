@@ -265,6 +265,7 @@ class LocalRetentionPruner:
     ) -> RetentionPruneSummary:
         non_eligible_local_bytes = max(0, measured_local_bytes - eligible_bytes_before)
         measured_local_bytes_after = non_eligible_local_bytes + eligible_bytes_after
+        measurement_incomplete = unmeasured_local_files > 0
         return RetentionPruneSummary(
             reason=reason,
             max_local_size_bytes=self._max_local_size_bytes,
@@ -273,8 +274,11 @@ class LocalRetentionPruner:
             unmeasured_local_files=unmeasured_local_files,
             measured_local_bytes=measured_local_bytes,
             non_eligible_local_bytes=non_eligible_local_bytes,
-            measurement_incomplete=unmeasured_local_files > 0,
-            blocked_over_limit=measured_local_bytes_after > self._max_local_size_bytes,
+            measurement_incomplete=measurement_incomplete,
+            # Conservative: if any local files were unmeasured, we cannot safely claim
+            # that disk usage is below the retention cap.
+            blocked_over_limit=measurement_incomplete
+            or measured_local_bytes_after > self._max_local_size_bytes,
             eligible_candidates=eligible_candidates,
             eligible_bytes_before=eligible_bytes_before,
             eligible_bytes_after=eligible_bytes_after,
