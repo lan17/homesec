@@ -681,6 +681,63 @@
         "title": "MediaProfileResponse",
         "type": "object"
       },
+      "PreflightCheckResponse": {
+        "description": "Single preflight check outcome.",
+        "properties": {
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "passed",
+          "message"
+        ],
+        "title": "PreflightCheckResponse",
+        "type": "object"
+      },
+      "PreflightResponse": {
+        "description": "Aggregated preflight response.",
+        "properties": {
+          "all_passed": {
+            "title": "All Passed",
+            "type": "boolean"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PreflightCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "checks",
+          "all_passed"
+        ],
+        "title": "PreflightResponse",
+        "type": "object"
+      },
       "ProbeRequest": {
         "properties": {
           "host": {
@@ -831,6 +888,40 @@
           "last_reload_error"
         ],
         "title": "RuntimeStatusResponse",
+        "type": "object"
+      },
+      "SetupStatusResponse": {
+        "description": "Current setup completion state used by onboarding flows.",
+        "properties": {
+          "auth_configured": {
+            "title": "Auth Configured",
+            "type": "boolean"
+          },
+          "has_cameras": {
+            "title": "Has Cameras",
+            "type": "boolean"
+          },
+          "pipeline_running": {
+            "title": "Pipeline Running",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "fresh",
+              "partial",
+              "complete"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "has_cameras",
+          "pipeline_running",
+          "auth_configured"
+        ],
+        "title": "SetupStatusResponse",
         "type": "object"
       },
       "StatsResponse": {
@@ -1725,6 +1816,50 @@
         "summary": "Get Runtime Status",
         "tags": [
           "runtime"
+        ]
+      }
+    },
+    "/api/v1/setup/preflight": {
+      "post": {
+        "description": "Run setup preflight checks for onboarding UX.",
+        "operationId": "run_setup_preflight_endpoint_api_v1_setup_preflight_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Setup Preflight Endpoint",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/v1/setup/status": {
+      "get": {
+        "description": "Return setup completion status for onboarding UX.",
+        "operationId": "get_setup_status_endpoint_api_v1_setup_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Setup Status Endpoint",
+        "tags": [
+          "setup"
         ]
       }
     },

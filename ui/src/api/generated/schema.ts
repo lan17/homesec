@@ -283,6 +283,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/setup/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Setup Preflight Endpoint
+         * @description Run setup preflight checks for onboarding UX.
+         */
+        post: operations["run_setup_preflight_endpoint_api_v1_setup_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup Status Endpoint
+         * @description Return setup completion status for onboarding UX.
+         */
+        get: operations["get_setup_status_endpoint_api_v1_setup_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stats": {
         parameters: {
             query?: never;
@@ -545,6 +585,30 @@ export interface components {
             /** Width */
             width: number | null;
         };
+        /**
+         * PreflightCheckResponse
+         * @description Single preflight check outcome.
+         */
+        PreflightCheckResponse: {
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Message */
+            message: string;
+            /** Name */
+            name: string;
+            /** Passed */
+            passed: boolean;
+        };
+        /**
+         * PreflightResponse
+         * @description Aggregated preflight response.
+         */
+        PreflightResponse: {
+            /** All Passed */
+            all_passed: boolean;
+            /** Checks */
+            checks: components["schemas"]["PreflightCheckResponse"][];
+        };
         /** ProbeRequest */
         ProbeRequest: {
             /** Host */
@@ -598,6 +662,23 @@ export interface components {
             /** Reload In Progress */
             reload_in_progress: boolean;
             state: components["schemas"]["RuntimeState"];
+        };
+        /**
+         * SetupStatusResponse
+         * @description Current setup completion state used by onboarding flows.
+         */
+        SetupStatusResponse: {
+            /** Auth Configured */
+            auth_configured: boolean;
+            /** Has Cameras */
+            has_cameras: boolean;
+            /** Pipeline Running */
+            pipeline_running: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "fresh" | "partial" | "complete";
         };
         /** StatsResponse */
         StatsResponse: {
@@ -1118,6 +1199,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimeStatusResponse"];
+                };
+            };
+        };
+    };
+    run_setup_preflight_endpoint_api_v1_setup_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreflightResponse"];
+                };
+            };
+        };
+    };
+    get_setup_status_endpoint_api_v1_setup_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatusResponse"];
                 };
             };
         };
