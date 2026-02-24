@@ -77,7 +77,8 @@ class MockStateStore:
             if state is None:
                 continue
             created_at = self.created_at.get(clip_id, datetime.now())
-            items[clip_id] = (state, created_at)
+            hydrated = state.model_copy(update={"clip_id": clip_id, "created_at": created_at})
+            items[clip_id] = (hydrated, created_at)
         return items
 
     async def list_candidate_clips_for_cleanup(

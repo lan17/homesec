@@ -364,5 +364,11 @@ async def test_get_clip_states_with_created_at_uses_batch_lookup() -> None:
 
     # Then: Existing clip ids are returned and batch store API is used once
     assert set(states.keys()) == {clip_a, clip_b}
+    state_a, created_at_a = states[clip_a]
+    state_b, created_at_b = states[clip_b]
+    assert state_a.clip_id == clip_a
+    assert state_b.clip_id == clip_b
+    assert state_a.created_at == created_at_a
+    assert state_b.created_at == created_at_b
     assert state_store.get_many_count == 1
     assert state_store.get_count == 0

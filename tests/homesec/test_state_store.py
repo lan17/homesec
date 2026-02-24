@@ -138,6 +138,10 @@ async def test_get_many_with_created_at_roundtrip(state_store: PostgresStateStor
     state_b, created_at_b = results[clip_b]
     assert state_a.camera_name == "front_door"
     assert state_b.camera_name == "front_door"
+    assert state_a.clip_id == clip_a
+    assert state_b.clip_id == clip_b
+    assert state_a.created_at == created_at_a
+    assert state_b.created_at == created_at_b
     assert created_at_a.tzinfo is not None
     assert created_at_b.tzinfo is not None
 
@@ -161,6 +165,8 @@ async def test_get_many_with_created_at_chunks_large_id_sets(
     for clip_id in clip_ids:
         state, created_at = results[clip_id]
         assert state.camera_name == "front_door"
+        assert state.clip_id == clip_id
+        assert state.created_at == created_at
         assert created_at.tzinfo is not None
 
 
