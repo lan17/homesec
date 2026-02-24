@@ -275,6 +275,35 @@ def test_disk_probe_path_walks_up_to_existing_parent(tmp_path: Path) -> None:
     assert path == tmp_path
 
 
+def test_network_probe_target_uses_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Network probe target should honor explicit host/port env overrides."""
+    # Given: Environment overrides for setup network probe host and port
+    monkeypatch.setenv("HOMESEC_SETUP_NETWORK_PROBE_HOST", "router.local")
+    monkeypatch.setenv("HOMESEC_SETUP_NETWORK_PROBE_PORT", "5353")
+
+    # When: Resolving network probe target
+    host, port = setup_service._network_probe_target()
+
+    # Then: Target uses configured host and port values
+    assert host == "router.local"
+    assert port == 5353
+
+
+def test_network_probe_returns_config_error_for_invalid_port_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Network probe should fail fast when configured port value is invalid."""
+    # Given: Invalid setup network probe port environment value
+    monkeypatch.setenv("HOMESEC_SETUP_NETWORK_PROBE_PORT", "not-an-int")
+
+    # When: Executing DNS probe with invalid config
+    ok, message = setup_service._network_probe()
+
+    # Then: Probe fails with explicit configuration error message
+    assert ok is False
+    assert "HOMESEC_SETUP_NETWORK_PROBE_PORT must be an integer" in message
+
+
 @pytest.mark.asyncio
 async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
     tmp_path: Path,

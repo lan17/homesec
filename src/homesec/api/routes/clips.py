@@ -176,9 +176,7 @@ async def create_clip_media_token(
         )
 
     media_path = _build_media_path(clip_id)
-    server_config = getattr(app, "server_config", None)
-    if server_config is None:
-        server_config = app.config.server
+    server_config = app.server_config
     if not server_config.auth_enabled:
         return ClipMediaTokenResponse(media_url=media_path, tokenized=False, expires_at=None)
 

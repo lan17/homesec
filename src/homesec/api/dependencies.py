@@ -117,6 +117,8 @@ async def verify_media_access(
 
 async def require_database(app: Application = Depends(get_homesec_app)) -> None:
     """Ensure the database is reachable for data endpoints."""
+    # Defense in depth: most DB-backed routes are also guarded by require_normal_mode,
+    # but this keeps DB-only routes safe if they are ever added without that dependency.
     if _is_bootstrap_mode(app):
         raise APIError(
             "System is in setup mode. Complete the setup wizard first.",
@@ -165,14 +167,11 @@ async def require_bootstrap_mode(app: Application = Depends(get_homesec_app)) ->
 
 
 def _get_server_config(app: Application) -> FastAPIServerConfig:
-    server_config = cast(FastAPIServerConfig | None, getattr(app, "server_config", None))
-    if server_config is not None:
-        return server_config
-    return app.config.server
+    return app.server_config
 
 
 def _is_bootstrap_mode(app: Application) -> bool:
-    return bool(getattr(app, "bootstrap_mode", False))
+    return bool(app.bootstrap_mode)
 
 
 def _require_api_key_value(app: Application) -> str:

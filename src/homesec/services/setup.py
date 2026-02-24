@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.models.config import (
@@ -34,6 +35,10 @@ if TYPE_CHECKING:
     from homesec.repository.clip_repository import ClipRepository
 
 _MIN_FREE_BYTES = 1_000_000_000
+_NETWORK_PROBE_HOST_ENV = "HOMESEC_SETUP_NETWORK_PROBE_HOST"
+_NETWORK_PROBE_PORT_ENV = "HOMESEC_SETUP_NETWORK_PROBE_PORT"
+_NETWORK_PROBE_DEFAULT_HOST = "example.com"
+_NETWORK_PROBE_DEFAULT_PORT = 443
 SectionT = TypeVar("SectionT")
 
 
@@ -42,7 +47,7 @@ async def get_setup_status(app: Application) -> SetupStatusResponse:
     config = _active_config(app)
     has_config = config is not None
     has_cameras = bool(config.cameras) if config is not None else False
-    pipeline_running = bool(getattr(app, "pipeline_running", False))
+    pipeline_running = app.pipeline_running
     auth_configured = _auth_configured(_server_config(app))
 
     state = _resolve_state(
@@ -250,14 +255,11 @@ def _default_alert_policy() -> AlertPolicyConfig:
 
 
 def _server_config(app: Application) -> FastAPIServerConfig:
-    server_config = cast(FastAPIServerConfig | None, getattr(app, "server_config", None))
-    if server_config is not None:
-        return server_config
-    return app.config.server
+    return app.server_config
 
 
 def _active_config(app: Application) -> Config | None:
-    if bool(getattr(app, "bootstrap_mode", False)):
+    if app.bootstrap_mode:
         return None
     try:
         return app.config
@@ -300,7 +302,7 @@ async def _postgres_check(app: Application) -> PreflightCheckResponse:
 
 
 def _repository_or_none(app: Application) -> ClipRepository | None:
-    if bool(getattr(app, "bootstrap_mode", False)):
+    if app.bootstrap_mode:
         return None
     try:
         return app.repository
@@ -399,7 +401,30 @@ async def _network_check() -> PreflightCheckResponse:
 
 def _network_probe() -> tuple[bool, str]:
     try:
-        socket.getaddrinfo("example.com", 443, type=socket.SOCK_STREAM)
+        host, port = _network_probe_target()
+    except ValueError as exc:
+        return False, f"DNS probe configuration invalid: {exc}"
+
+    try:
+        socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
-        return False, f"DNS probe failed: {exc}"
-    return True, "DNS resolution succeeded"
+        return False, f"DNS probe failed for {host}:{port}: {exc}"
+    return True, f"DNS resolution succeeded for {host}:{port}"
+
+
+def _network_probe_target() -> tuple[str, int]:
+    host = os.getenv(_NETWORK_PROBE_HOST_ENV, _NETWORK_PROBE_DEFAULT_HOST).strip()
+    if not host:
+        host = _NETWORK_PROBE_DEFAULT_HOST
+
+    port_value = os.getenv(_NETWORK_PROBE_PORT_ENV)
+    if port_value is None or not port_value.strip():
+        return host, _NETWORK_PROBE_DEFAULT_PORT
+
+    try:
+        port = int(port_value)
+    except ValueError:
+        raise ValueError(f"{_NETWORK_PROBE_PORT_ENV} must be an integer, got {port_value!r}") from None
+    if port < 1 or port > 65535:
+        raise ValueError(f"{_NETWORK_PROBE_PORT_ENV} must be in range 1..65535, got {port}")
+    return host, port
