@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, cast
 
 import pytest
@@ -125,6 +126,22 @@ class _SlowShutdownComponent:
         _ = timeout
         self.shutdown_called = True
         await asyncio.sleep(0.05)
+
+
+class _StubPipeline:
+    def __init__(self, *, raise_on_backstop: bool = False) -> None:
+        self.shutdown_called = False
+        self.prune_reasons: list[str] = []
+        self.raise_on_backstop = raise_on_backstop
+
+    def request_retention_prune(self, *, reason: str) -> None:
+        self.prune_reasons.append(reason)
+        if self.raise_on_backstop:
+            raise RuntimeError("simulated startup backstop failure")
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+        self.shutdown_called = True
 
 
 def _make_config() -> Config:
@@ -264,6 +281,88 @@ async def test_runtime_assembly_start_timeout_cleans_started_sources() -> None:
 
     # Then: Already-started sources are cleaned up
     assert started_source.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_assembly_start_triggers_startup_backstop_prune() -> None:
+    """Successful startup should trigger one startup backstop prune request."""
+    # Given: A runtime bundle with healthy startup source and pipeline
+    source = _StubSource(camera_name="front")
+    pipeline = _StubPipeline()
+    notifier = _StubNotifier()
+    assembler = RuntimeAssembler(
+        storage=_StubStorage(),
+        repository=cast(Any, object()),
+        notifier_factory=lambda _config: (
+            notifier,
+            [NotifierEntry(name="stub", notifier=notifier)],
+        ),
+        notifier_health_logger=_noop_notifier_health,
+        alert_policy_factory=lambda _config: _StubAlertPolicy(),
+        source_factory=lambda _config: ([source], {"front": source}),
+    )
+    runtime = RuntimeBundle(
+        generation=1,
+        config=_make_config(),
+        config_signature="cfgsig",
+        notifier=notifier,
+        notifier_entries=[],
+        filter_plugin=_StubFilter(),
+        vlm_plugin=_StubVLM(),
+        alert_policy=_StubAlertPolicy(),
+        pipeline=cast(Any, pipeline),
+        sources=[source],
+        sources_by_camera={"front": source},
+    )
+
+    # When: Starting runtime bundle preflight
+    await assembler.start_bundle(runtime)
+
+    # Then: Startup backstop prune is requested once
+    assert pipeline.prune_reasons == ["startup_backstop"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_assembly_startup_backstop_failure_is_non_fatal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Startup backstop trigger errors should be logged but not fail startup."""
+    # Given: A runtime bundle whose pipeline raises on startup backstop request
+    source = _StubSource(camera_name="front")
+    pipeline = _StubPipeline(raise_on_backstop=True)
+    notifier = _StubNotifier()
+    assembler = RuntimeAssembler(
+        storage=_StubStorage(),
+        repository=cast(Any, object()),
+        notifier_factory=lambda _config: (
+            notifier,
+            [NotifierEntry(name="stub", notifier=notifier)],
+        ),
+        notifier_health_logger=_noop_notifier_health,
+        alert_policy_factory=lambda _config: _StubAlertPolicy(),
+        source_factory=lambda _config: ([source], {"front": source}),
+    )
+    runtime = RuntimeBundle(
+        generation=1,
+        config=_make_config(),
+        config_signature="cfgsig",
+        notifier=notifier,
+        notifier_entries=[],
+        filter_plugin=_StubFilter(),
+        vlm_plugin=_StubVLM(),
+        alert_policy=_StubAlertPolicy(),
+        pipeline=cast(Any, pipeline),
+        sources=[source],
+        sources_by_camera={"front": source},
+    )
+    caplog.set_level(logging.ERROR)
+
+    # When: Starting runtime bundle preflight
+    await assembler.start_bundle(runtime)
+
+    # Then: Startup remains successful and failure is logged prominently
+    assert pipeline.prune_reasons == ["startup_backstop"]
+    assert "Startup backstop retention trigger failed" in caplog.text
 
 
 @pytest.mark.asyncio

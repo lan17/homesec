@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         AlertPolicy,
         Notifier,
         ObjectFilter,
+        RetentionPruner,
         StorageBackend,
         VLMAnalyzer,
     )
@@ -57,6 +58,7 @@ class ClipPipeline:
         vlm_plugin: VLMAnalyzer,
         notifier: Notifier,
         alert_policy: AlertPolicy,
+        retention_pruner: RetentionPruner,
         notifier_entries: list[NotifierEntry] | None = None,
     ) -> None:
         """Initialize pipeline with all dependencies."""
@@ -68,9 +70,11 @@ class ClipPipeline:
         self._notifier = notifier
         self._notifier_entries = self._resolve_notifier_entries(notifier, notifier_entries)
         self._alert_policy = alert_policy
+        self._retention_pruner = retention_pruner
 
         # Track in-flight processing
         self._tasks: set[asyncio.Task[None]] = set()
+        self._retention_prune_task: asyncio.Task[None] | None = None
 
         # Concurrency limits
         self._sem_global = asyncio.Semaphore(config.concurrency.max_clips_in_flight)
@@ -98,6 +102,49 @@ class ClipPipeline:
         runs in a different thread.
         """
         self._loop = loop
+
+    def request_retention_prune(self, *, reason: str) -> None:
+        """Request one retention prune pass with single-flight drop policy."""
+        logger.info("Retention prune requested: reason=%s", reason)
+        active_task = self._retention_prune_task
+        if active_task is not None and not active_task.done():
+            logger.warning(
+                "Retention prune trigger dropped: reason=%s policy=drop active=true",
+                reason,
+            )
+            return
+        task = asyncio.create_task(self._run_retention_prune(reason=reason))
+        self._retention_prune_task = task
+        task.add_done_callback(self._on_retention_prune_done)
+
+    async def _run_retention_prune(self, *, reason: str) -> None:
+        logger.info("Retention prune started: reason=%s", reason)
+        try:
+            summary = await self._retention_pruner.prune_once(reason=reason)
+        except Exception as exc:
+            logger.error(
+                "Retention prune failed: reason=%s error=%s",
+                reason,
+                exc,
+                exc_info=exc,
+            )
+            return
+        logger.info(
+            "Retention prune completed: reason=%s deleted_files=%d reclaimed_bytes=%d "
+            "eligible_bytes_before=%d eligible_bytes_after=%d blocked_over_limit=%s "
+            "measurement_incomplete=%s",
+            reason,
+            summary.deleted_files,
+            summary.reclaimed_bytes,
+            summary.eligible_bytes_before,
+            summary.eligible_bytes_after,
+            summary.blocked_over_limit,
+            summary.measurement_incomplete,
+        )
+
+    def _on_retention_prune_done(self, task: asyncio.Task[None]) -> None:
+        if self._retention_prune_task is task:
+            self._retention_prune_task = None
 
     def _create_task(self, loop: asyncio.AbstractEventLoop, clip: Clip) -> None:
         """Create and track a processing task in the given loop."""
@@ -346,13 +393,20 @@ class ClipPipeline:
         async def on_attempt_success(
             result: UploadOutcome, attempt_num: int, duration_ms: int
         ) -> None:
-            await self._repository.record_upload_completed(
+            persisted_state = await self._repository.record_upload_completed(
                 clip.clip_id,
                 result.storage_uri,
                 result.view_url,
                 duration_ms,
                 attempt=attempt_num,
             )
+            if persisted_state is None:
+                logger.warning(
+                    "Retention prune skipped: upload completion state not persisted for %s",
+                    clip.clip_id,
+                )
+                return
+            self.request_retention_prune(reason="upload_confirmed")
 
         async def on_attempt_failure(
             exc: Exception, attempt_num: int, will_retry: bool, _duration_ms: int
@@ -617,5 +671,14 @@ class ClipPipeline:
                 logger.warning("Timeout waiting for tasks, cancelling...")
                 for task in self._tasks:
                     task.cancel()
+
+        retention_task = self._retention_prune_task
+        if retention_task is not None and not retention_task.done():
+            logger.info("Waiting for retention prune task...")
+            try:
+                await asyncio.wait_for(retention_task, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout waiting for retention prune task, cancelling...")
+                retention_task.cancel()
 
         logger.info("Pipeline shutdown complete")

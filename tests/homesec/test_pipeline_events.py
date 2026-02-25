@@ -28,7 +28,13 @@ from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.repository import ClipRepository
 from homesec.state.postgres import PostgresEventStore, PostgresStateStore
-from tests.homesec.mocks import MockFilter, MockNotifier, MockStorage, MockVLM
+from tests.homesec.mocks import (
+    MockFilter,
+    MockNotifier,
+    MockRetentionPruner,
+    MockStorage,
+    MockVLM,
+)
 
 
 def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> Config:
@@ -132,6 +138,7 @@ async def test_pipeline_emits_success_events(
         ),
         notifier=MockNotifier(),
         alert_policy=make_alert_policy(config),
+        retention_pruner=MockRetentionPruner(),
     )
     clip = make_clip(tmp_path, "test-clip-events-001")
 
@@ -201,6 +208,7 @@ async def test_pipeline_emits_notification_events_per_notifier(
         notifier=MockNotifier(),
         notifier_entries=entries,
         alert_policy=make_alert_policy(config),
+        retention_pruner=MockRetentionPruner(),
     )
     clip = make_clip(tmp_path, "test-clip-events-004")
 
@@ -245,6 +253,7 @@ async def test_pipeline_emits_vlm_skipped_event(
         vlm_plugin=MockVLM(),
         notifier=MockNotifier(),
         alert_policy=make_alert_policy(config),
+        retention_pruner=MockRetentionPruner(),
     )
     clip = make_clip(tmp_path, "test-clip-events-002")
 
@@ -290,6 +299,7 @@ async def test_pipeline_emits_upload_failed_event(
         vlm_plugin=MockVLM(),
         notifier=MockNotifier(),
         alert_policy=make_alert_policy(config),
+        retention_pruner=MockRetentionPruner(),
     )
     clip = make_clip(tmp_path, "test-clip-events-003")
 

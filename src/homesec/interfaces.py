@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from homesec.models.enums import ClipStatus
 
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from homesec.models.filter import FilterOverrides, FilterResult
     from homesec.models.storage import StorageUploadResult
     from homesec.models.vlm import AnalysisResult, VLMConfig
+    from homesec.retention import RetentionPruneSummary
 
 
 class Shutdownable(ABC):
@@ -83,6 +84,14 @@ class ClipSource(Shutdownable, ABC):
         ping() pattern used by other interfaces.
         """
         raise NotImplementedError
+
+
+class RetentionPruner(Protocol):
+    """Prunes local clip files according to configured retention rules."""
+
+    async def prune_once(self, *, reason: str) -> RetentionPruneSummary:
+        """Run a single retention prune pass."""
+        ...
 
 
 class StorageBackend(Shutdownable, ABC):

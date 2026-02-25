@@ -21,10 +21,11 @@ async def _seed_state(
     local_path: Path,
     created_at: datetime,
     storage_uri: str | None,
+    status: ClipStatus = ClipStatus.DONE,
 ) -> None:
     state = ClipStateData(
         camera_name="front_door",
-        status=ClipStatus.DONE,
+        status=status,
         local_path=str(local_path),
         storage_uri=storage_uri,
     )
@@ -97,15 +98,15 @@ async def test_prune_deletes_oldest_until_under_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_prune_respects_upload_and_inflight_gates(tmp_path: Path) -> None:
-    # Given: One uploaded clip, one in-flight uploaded clip, and one local-only clip
+async def test_prune_respects_upload_and_done_gates(tmp_path: Path) -> None:
+    # Given: One finalized uploaded clip, one uploaded but non-final clip, and one local-only clip
     clips_dir = tmp_path / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
     clip_uploaded = clips_dir / "clip-uploaded.mp4"
-    clip_inflight = clips_dir / "clip-inflight.mp4"
+    clip_not_done = clips_dir / "clip-not-done.mp4"
     clip_local_only = clips_dir / "clip-local-only.mp4"
     clip_uploaded.write_bytes(b"a" * 20)
-    clip_inflight.write_bytes(b"b" * 30)
+    clip_not_done.write_bytes(b"b" * 30)
     clip_local_only.write_bytes(b"c" * 40)
 
     state_store = MockStateStore()
@@ -121,10 +122,11 @@ async def test_prune_respects_upload_and_inflight_gates(tmp_path: Path) -> None:
     )
     await _seed_state(
         state_store=state_store,
-        clip_id="clip-inflight",
-        local_path=clip_inflight,
+        clip_id="clip-not-done",
+        local_path=clip_not_done,
         created_at=now - timedelta(minutes=1),
-        storage_uri="mock://clip-inflight",
+        storage_uri="mock://clip-not-done",
+        status=ClipStatus.UPLOADED,
     )
     await _seed_state(
         state_store=state_store,
@@ -141,15 +143,15 @@ async def test_prune_respects_upload_and_inflight_gates(tmp_path: Path) -> None:
     before_upsert = state_store.upsert_count
     before_event_append = event_store.append_count
 
-    # When: A prune pass runs with one clip marked in-flight
-    summary = await pruner.prune_once(reason="test", in_flight_clip_ids={"clip-inflight"})
+    # When: A prune pass runs
+    summary = await pruner.prune_once(reason="test")
 
-    # Then: Only uploaded non-in-flight clip is deleted and no repository writes occur
+    # Then: Only finalized uploaded clip is deleted and no repository writes occur
     assert not clip_uploaded.exists()
-    assert clip_inflight.exists()
+    assert clip_not_done.exists()
     assert clip_local_only.exists()
     assert summary.deleted_files == 1
-    assert summary.skipped_in_flight == 1
+    assert summary.skipped_not_done == 1
     assert summary.skipped_not_uploaded == 1
     assert summary.measured_local_files == 3
     assert summary.unmeasured_local_files == 0

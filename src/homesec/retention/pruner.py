@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from homesec.models.enums import ClipStatus
 from homesec.repository import ClipRepository
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class RetentionPruneSummary:
     eligible_bytes_after: int
     reclaimed_bytes: int
     deleted_files: int
-    skipped_in_flight: int
+    skipped_not_done: int
     skipped_no_state: int
     skipped_not_uploaded: int
     skipped_path_mismatch: int
@@ -52,7 +53,7 @@ class _Candidate:
 
 @dataclass
 class _PruneCounters:
-    skipped_in_flight: int = 0
+    skipped_not_done: int = 0
     skipped_no_state: int = 0
     skipped_not_uploaded: int = 0
     skipped_path_mismatch: int = 0
@@ -67,7 +68,6 @@ class LocalRetentionPruner:
     This pruner is intentionally local-only:
     - It never deletes from remote storage.
     - It never mutates DB state or events.
-    - TODO(#71): Wire prune_once into upload-complete + startup backstop flows.
     """
 
     def __init__(
@@ -80,8 +80,6 @@ class LocalRetentionPruner:
     ) -> None:
         if max_local_size_bytes < 0:
             raise ValueError("max_local_size_bytes must be >= 0")
-        if not local_clip_dirs:
-            raise ValueError("local_clip_dirs must not be empty")
 
         normalized_suffixes = tuple(_normalize_suffix(suffix) for suffix in clip_suffixes)
         if not normalized_suffixes:
@@ -96,10 +94,8 @@ class LocalRetentionPruner:
         self,
         *,
         reason: str,
-        in_flight_clip_ids: set[str] | None = None,
     ) -> RetentionPruneSummary:
         """Run one local retention prune pass."""
-        in_flight = in_flight_clip_ids or set()
         counters = _PruneCounters()
 
         local_files = self._discover_local_files()
@@ -111,7 +107,6 @@ class LocalRetentionPruner:
         candidates = await self._build_candidates(
             local_files=local_files,
             local_file_sizes=local_file_sizes,
-            in_flight=in_flight,
             counters=counters,
         )
         eligible_before = sum(candidate.size_bytes for candidate in candidates)
@@ -180,25 +175,15 @@ class LocalRetentionPruner:
         *,
         local_files: list[Path],
         local_file_sizes: dict[Path, int],
-        in_flight: set[str],
         counters: _PruneCounters,
     ) -> list[_Candidate]:
         candidates: list[_Candidate] = []
-        non_in_flight: list[tuple[str, Path]] = []
-        lookup_clip_ids: set[str] = set()
+        lookup_clip_ids = sorted({local_path.stem for local_path in local_files})
+
+        state_by_clip_id = await self._repository.get_clip_states_with_created_at(lookup_clip_ids)
+
         for local_path in local_files:
             clip_id = local_path.stem
-            if clip_id in in_flight:
-                counters.skipped_in_flight += 1
-                continue
-            non_in_flight.append((clip_id, local_path))
-            lookup_clip_ids.add(clip_id)
-
-        state_by_clip_id = await self._repository.get_clip_states_with_created_at(
-            sorted(lookup_clip_ids)
-        )
-
-        for clip_id, local_path in non_in_flight:
             state_with_created = state_by_clip_id.get(clip_id)
             if state_with_created is None:
                 counters.skipped_no_state += 1
@@ -207,6 +192,10 @@ class LocalRetentionPruner:
             state, created_at = state_with_created
             if state.storage_uri is None:
                 counters.skipped_not_uploaded += 1
+                continue
+
+            if state.status != ClipStatus.DONE:
+                counters.skipped_not_done += 1
                 continue
 
             if not _paths_match(state.local_path, local_path):
@@ -284,7 +273,7 @@ class LocalRetentionPruner:
             eligible_bytes_after=eligible_bytes_after,
             reclaimed_bytes=max(0, eligible_bytes_before - eligible_bytes_after),
             deleted_files=deleted_files,
-            skipped_in_flight=counters.skipped_in_flight,
+            skipped_not_done=counters.skipped_not_done,
             skipped_no_state=counters.skipped_no_state,
             skipped_not_uploaded=counters.skipped_not_uploaded,
             skipped_path_mismatch=counters.skipped_path_mismatch,
