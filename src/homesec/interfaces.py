@@ -136,6 +136,16 @@ class StateStore(Shutdownable, ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_many_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        """Retrieve state and created_at for many clip ids.
+
+        Missing clip ids are omitted from the returned mapping.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_clip(self, clip_id: str) -> ClipStateData | None:
         """Get clip state by ID."""
         raise NotImplementedError
