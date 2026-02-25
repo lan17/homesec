@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,10 +30,12 @@ from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.repository import ClipRepository
+from homesec.retention import RetentionPruneSummary
 from tests.homesec.mocks import (
     MockEventStore,
     MockFilter,
     MockNotifier,
+    MockRetentionPruner,
     MockStateStore,
     MockStorage,
     MockVLM,
@@ -168,6 +171,7 @@ class TestClipPipelineHappyPath:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a new clip is processed
@@ -215,6 +219,7 @@ class TestClipPipelineHappyPath:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -265,6 +270,7 @@ class TestClipPipelineHappyPath:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -298,6 +304,7 @@ class TestClipPipelineErrorHandling:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -337,6 +344,7 @@ class TestClipPipelineErrorHandling:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -364,6 +372,7 @@ class TestClipPipelineErrorHandling:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -412,6 +421,7 @@ class TestClipPipelineErrorHandling:
             vlm_plugin=vlm_mock,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -464,6 +474,7 @@ class TestClipPipelineErrorHandling:
             vlm_plugin=vlm_mock,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -494,6 +505,7 @@ class TestClipPipelineErrorHandling:
             vlm_plugin=mocks.vlm,
             notifier=notifier_mock,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -505,6 +517,151 @@ class TestClipPipelineErrorHandling:
         state = await state_store.get(sample_clip.clip_id)
         assert state is not None
         assert state.status == "done"
+
+
+class TestClipPipelineRetention:
+    """Test retention trigger behavior and containment."""
+
+    @pytest.mark.asyncio
+    async def test_retention_trigger_fires_on_clip_arrival(
+        self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
+    ) -> None:
+        # Given: A pipeline with successful upload and a tracking retention pruner
+        retention_pruner = MockRetentionPruner()
+        pipeline = ClipPipeline(
+            config=base_config,
+            storage=mocks.storage,
+            repository=make_repository(base_config, mocks),
+            filter_plugin=mocks.filter,
+            vlm_plugin=mocks.vlm,
+            notifier=mocks.notifier,
+            alert_policy=make_alert_policy(base_config),
+            retention_pruner=retention_pruner,
+        )
+
+        # When: A clip is processed
+        pipeline.on_new_clip(sample_clip)
+        await pipeline.shutdown()
+
+        # Then: Clip-arrival trigger registers local path and executes one prune pass
+        assert retention_pruner.reasons == ["clip_arrived"]
+        assert retention_pruner.registered_clip_local_paths == [sample_clip.local_path]
+        assert retention_pruner.clip_local_paths == [None]
+
+    @pytest.mark.asyncio
+    async def test_retention_triggered_on_clip_arrival_even_when_upload_fails(
+        self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
+    ) -> None:
+        # Given: A pipeline where upload fails
+        retention_pruner = MockRetentionPruner()
+        storage_mock = MockStorage(simulate_failure=True)
+        pipeline = ClipPipeline(
+            config=base_config,
+            storage=storage_mock,
+            repository=make_repository(base_config, mocks),
+            filter_plugin=mocks.filter,
+            vlm_plugin=mocks.vlm,
+            notifier=mocks.notifier,
+            alert_policy=make_alert_policy(base_config),
+            retention_pruner=retention_pruner,
+        )
+
+        # When: A clip is processed
+        pipeline.on_new_clip(sample_clip)
+        await pipeline.shutdown()
+
+        # Then: Clip-arrival trigger still emits once and registers local path
+        assert retention_pruner.reasons == ["clip_arrived"]
+        assert retention_pruner.registered_clip_local_paths == [sample_clip.local_path]
+        assert retention_pruner.clip_local_paths == [None]
+
+    @pytest.mark.asyncio
+    async def test_retention_single_flight_drops_overlapping_triggers(
+        self, base_config: Config, mocks: PipelineMocks
+    ) -> None:
+        # Given: A retention pruner that blocks until released
+        class BlockingRetentionPruner:
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+                self.reasons: list[str] = []
+                self.clip_local_paths: list[Path | None] = []
+                self.registered_clip_local_paths: list[Path] = []
+
+            def register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+                self.registered_clip_local_paths.append(clip_local_path)
+
+            async def prune_once(
+                self,
+                *,
+                reason: str,
+                clip_local_path: Path | None = None,
+            ) -> RetentionPruneSummary:
+                self.reasons.append(reason)
+                self.clip_local_paths.append(clip_local_path)
+                self.started.set()
+                await self.release.wait()
+                return RetentionPruneSummary.empty(reason=reason)
+
+        retention_pruner = BlockingRetentionPruner()
+        pipeline = ClipPipeline(
+            config=base_config,
+            storage=mocks.storage,
+            repository=make_repository(base_config, mocks),
+            filter_plugin=mocks.filter,
+            vlm_plugin=mocks.vlm,
+            notifier=mocks.notifier,
+            alert_policy=make_alert_policy(base_config),
+            retention_pruner=retention_pruner,
+        )
+
+        first_clip_path = Path("/tmp/clip-1.mp4")
+        second_clip_path = Path("/tmp/clip-2.mp4")
+
+        # When: One prune is active and a second trigger arrives
+        pipeline.request_retention_prune(reason="clip_arrived", clip_local_path=first_clip_path)
+        await asyncio.wait_for(retention_pruner.started.wait(), timeout=1.0)
+        pipeline.request_retention_prune(reason="clip_arrived", clip_local_path=second_clip_path)
+        retention_pruner.release.set()
+        await pipeline.shutdown()
+
+        # Then: Only one prune pass executes, but both clip paths are registered
+        assert retention_pruner.reasons == ["clip_arrived"]
+        assert retention_pruner.clip_local_paths == [None]
+        assert retention_pruner.registered_clip_local_paths == [first_clip_path, second_clip_path]
+
+    @pytest.mark.asyncio
+    async def test_retention_failures_are_logged_and_non_fatal(
+        self,
+        base_config: Config,
+        sample_clip: Clip,
+        mocks: PipelineMocks,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Given: A retention pruner that fails
+        retention_pruner = MockRetentionPruner(simulate_failure=True)
+        pipeline = ClipPipeline(
+            config=base_config,
+            storage=mocks.storage,
+            repository=make_repository(base_config, mocks),
+            filter_plugin=mocks.filter,
+            vlm_plugin=mocks.vlm,
+            notifier=mocks.notifier,
+            alert_policy=make_alert_policy(base_config),
+            retention_pruner=retention_pruner,
+        )
+        caplog.set_level(logging.ERROR)
+
+        # When: A clip is processed
+        pipeline.on_new_clip(sample_clip)
+        await pipeline.shutdown()
+
+        # Then: Clip flow completes and retention failure is logged
+        state_store: MockStateStore = mocks.state_store
+        state = await state_store.get(sample_clip.clip_id)
+        assert state is not None
+        assert state.status == "done"
+        assert "Retention prune failed" in caplog.text
 
 
 class TestClipPipelineRetries:
@@ -600,6 +757,7 @@ class TestClipPipelineRetries:
             vlm_plugin=vlm_plugin,
             notifier=notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -693,6 +851,7 @@ class TestClipPipelineAlertPolicy:
             vlm_plugin=vlm_mock,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -730,6 +889,7 @@ class TestClipPipelineAlertPolicy:
             vlm_plugin=vlm_mock,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -788,6 +948,7 @@ class TestClipPipelineAlertOverrides:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -849,6 +1010,7 @@ class TestClipPipelineConcurrency:
             vlm_plugin=vlm_mock,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When all clips are submitted
@@ -903,6 +1065,7 @@ class TestClipPipelineConcurrency:
             vlm_plugin=SignalingVLM(),
             notifier=MockNotifier(),
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When a clip is processed
@@ -943,6 +1106,7 @@ class TestClipPipelineShutdown:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # When shutdown is called immediately after submitting a clip
@@ -990,6 +1154,7 @@ class TestClipPipelineSemaphores:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # Given two clips
@@ -1064,6 +1229,7 @@ class TestClipPipelineSemaphores:
             vlm_plugin=mocks.vlm,
             notifier=mocks.notifier,
             alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
         )
 
         # Given two clips

@@ -82,7 +82,13 @@ class NotifierConfig(BaseModel):
 class RetentionConfig(BaseModel):
     """Retention configuration for local storage."""
 
-    max_local_size: str | None = None
+    model_config = {"extra": "forbid"}
+
+    max_local_size_bytes: int = Field(
+        default=1_000_000_000,
+        ge=0,
+        description="Max local clip bytes to retain before oldest-first pruning.",
+    )
 
 
 class ConcurrencyConfig(BaseModel):

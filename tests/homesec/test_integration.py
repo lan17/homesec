@@ -27,6 +27,7 @@ from tests.homesec.mocks import (
     MockEventStore,
     MockFilter,
     MockNotifier,
+    MockRetentionPruner,
     MockStateStore,
     MockStorage,
     MockVLM,
@@ -149,6 +150,7 @@ class TestFullPipelineIntegration:
             vlm_plugin=vlm_plugin,
             notifier=notifier,
             alert_policy=make_alert_policy(integration_config),
+            retention_pruner=MockRetentionPruner(),
         )
         pipeline.set_event_loop(asyncio.get_running_loop())
 
@@ -214,6 +216,7 @@ class TestFullPipelineIntegration:
             vlm_plugin=vlm_plugin,
             notifier=notifier,
             alert_policy=make_alert_policy(integration_config),
+            retention_pruner=MockRetentionPruner(),
         )
         pipeline.set_event_loop(asyncio.get_running_loop())
 
