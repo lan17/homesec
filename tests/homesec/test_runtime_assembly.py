@@ -129,7 +129,6 @@ class _SlowShutdownComponent:
 
 class _FailOnRetentionPipeline:
     def __init__(self) -> None:
-        self.shutdown_called = False
         self.retention_requested = False
 
     def request_retention_prune(
@@ -142,7 +141,6 @@ class _FailOnRetentionPipeline:
 
     async def shutdown(self, timeout: float | None = None) -> None:
         _ = timeout
-        self.shutdown_called = True
 
 
 def _make_config() -> Config:
