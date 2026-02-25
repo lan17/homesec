@@ -30,6 +30,7 @@ from homesec.models.setup import (
     SetupStatusResponse,
 )
 from homesec.models.vlm import VLMConfig
+from homesec.state.postgres import PostgresStateStore
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -328,15 +329,26 @@ def _finalize_validation_errors(config: Config) -> list[str]:
 
 async def _postgres_check(app: Application) -> PreflightCheckResponse:
     repository = _repository_or_none(app)
+    start = time.perf_counter()
     if repository is None:
+        dsn, dsn_env = _state_store_dsn_for_preflight(app)
+        if not dsn:
+            env_hint = dsn_env or "DB_DSN"
+            return PreflightCheckResponse(
+                name="postgres",
+                passed=False,
+                message=f"Database DSN not configured (set {env_hint!r})",
+                latency_ms=(time.perf_counter() - start) * 1000.0,
+            )
+
+        ok = await _probe_postgres_dsn(dsn)
         return PreflightCheckResponse(
             name="postgres",
-            passed=False,
-            message="Database not configured",
-            latency_ms=None,
+            passed=ok,
+            message="Database reachable" if ok else "Database unavailable",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
         )
 
-    start = time.perf_counter()
     try:
         ok = await repository.ping()
     except Exception as exc:  # pragma: no cover - defensive
@@ -352,6 +364,31 @@ async def _postgres_check(app: Application) -> PreflightCheckResponse:
         message="Database reachable" if ok else "Database unavailable",
         latency_ms=(time.perf_counter() - start) * 1000.0,
     )
+
+
+def _state_store_dsn_for_preflight(app: Application) -> tuple[str | None, str | None]:
+    """Resolve DSN/env requirement for bootstrap postgres probing."""
+    active_config = _active_config(app)
+    if active_config is not None:
+        if active_config.state_store.dsn is not None:
+            return active_config.state_store.dsn, None
+        dsn_env = active_config.state_store.dsn_env
+        return (os.environ.get(dsn_env), dsn_env) if dsn_env else (None, None)
+
+    dsn_env = _default_state_store().dsn_env
+    return (os.environ.get(dsn_env), dsn_env) if dsn_env else (None, None)
+
+
+async def _probe_postgres_dsn(dsn: str) -> bool:
+    """Probe postgres reachability for setup preflight bootstrap mode."""
+    store = PostgresStateStore(dsn)
+    try:
+        initialized = await store.initialize()
+        if not initialized:
+            return False
+        return await store.ping()
+    finally:
+        await store.shutdown()
 
 
 def _repository_or_none(app: Application) -> ClipRepository | None:

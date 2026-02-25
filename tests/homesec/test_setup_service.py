@@ -227,11 +227,11 @@ async def test_run_preflight_returns_all_passed_when_checks_succeed(
 
 
 @pytest.mark.asyncio
-async def test_run_preflight_reports_postgres_not_configured_in_bootstrap(
+async def test_run_preflight_probes_postgres_via_dsn_in_bootstrap_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preflight should fail postgres check when repository is not initialized."""
-    # Given: A bootstrap app without repository and deterministic non-postgres probe success
+    """Preflight should probe postgres via DSN in bootstrap mode when repository is absent."""
+    # Given: A bootstrap app without repository but with DB_DSN configured
     monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     app = _StubApp(
         bootstrap_mode=True,
@@ -247,19 +247,20 @@ async def test_run_preflight_reports_postgres_not_configured_in_bootstrap(
         lambda path: (10_000_000_000, 2_000_000_000, 8_000_000_000),
     )
     monkeypatch.setattr(setup_service, "_network_probe", lambda: (True, "DNS resolution succeeded"))
+    monkeypatch.setattr(setup_service, "_probe_postgres_dsn", lambda dsn: asyncio.sleep(0, True))
 
     # When: Running setup preflight
     response = await setup_service.run_preflight(app)
 
-    # Then: Postgres reports not configured while other checks pass
+    # Then: Postgres check passes via bootstrap DSN probe and aggregate result is successful
     by_name = {check.name: check for check in response.checks}
-    assert by_name["postgres"].passed is False
-    assert by_name["postgres"].message == "Database not configured"
+    assert by_name["postgres"].passed is True
+    assert by_name["postgres"].message == "Database reachable"
     assert by_name["ffmpeg"].passed is True
     assert by_name["disk_space"].passed is True
     assert by_name["network"].passed is True
     assert by_name["config_env"].passed is True
-    assert response.all_passed is False
+    assert response.all_passed is True
 
 
 @pytest.mark.asyncio
@@ -333,6 +334,8 @@ async def test_run_preflight_reports_missing_state_store_env(
 
     # Then: config_env check is advisory in bootstrap mode and does not fail the check itself
     by_name = {check.name: check for check in response.checks}
+    assert by_name["postgres"].passed is False
+    assert "Database DSN not configured" in by_name["postgres"].message
     assert by_name["config_env"].passed is True
     assert "validated at finalize" in by_name["config_env"].message
     assert response.all_passed is False
