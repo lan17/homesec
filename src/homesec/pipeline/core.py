@@ -124,14 +124,12 @@ class ClipPipeline:
         logger.info("Retention prune requested: reason=%s", reason)
         active_task = self._retention_prune_task
         if active_task is not None and not active_task.done():
-            logger.warning(
+            logger.info(
                 "Retention prune trigger dropped: reason=%s policy=drop active=true",
                 reason,
             )
             return
-        task = asyncio.create_task(
-            self._run_retention_prune(reason=reason, clip_local_path=clip_local_path)
-        )
+        task = asyncio.create_task(self._run_retention_prune(reason=reason))
         self._retention_prune_task = task
         task.add_done_callback(self._on_retention_prune_done)
 
@@ -139,14 +137,10 @@ class ClipPipeline:
         self,
         *,
         reason: str,
-        clip_local_path: Path | None,
     ) -> None:
         logger.info("Retention prune started: reason=%s", reason)
         try:
-            summary = await self._retention_pruner.prune_once(
-                reason=reason,
-                clip_local_path=clip_local_path,
-            )
+            summary = await self._retention_pruner.prune_once(reason=reason)
         except Exception as exc:
             logger.error(
                 "Retention prune failed: reason=%s error=%s",

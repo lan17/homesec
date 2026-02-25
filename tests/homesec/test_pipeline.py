@@ -543,9 +543,10 @@ class TestClipPipelineRetention:
         pipeline.on_new_clip(sample_clip)
         await pipeline.shutdown()
 
-        # Then: Clip-arrival retention trigger runs exactly once
+        # Then: Clip-arrival trigger registers local path and executes one prune pass
         assert retention_pruner.reasons == ["clip_arrived"]
-        assert retention_pruner.clip_local_paths == [sample_clip.local_path]
+        assert retention_pruner.registered_clip_local_paths == [sample_clip.local_path]
+        assert retention_pruner.clip_local_paths == [None]
 
     @pytest.mark.asyncio
     async def test_retention_triggered_on_clip_arrival_even_when_upload_fails(
@@ -569,9 +570,10 @@ class TestClipPipelineRetention:
         pipeline.on_new_clip(sample_clip)
         await pipeline.shutdown()
 
-        # Then: Clip-arrival trigger still emits once
+        # Then: Clip-arrival trigger still emits once and registers local path
         assert retention_pruner.reasons == ["clip_arrived"]
-        assert retention_pruner.clip_local_paths == [sample_clip.local_path]
+        assert retention_pruner.registered_clip_local_paths == [sample_clip.local_path]
+        assert retention_pruner.clip_local_paths == [None]
 
     @pytest.mark.asyncio
     async def test_retention_single_flight_drops_overlapping_triggers(
@@ -625,7 +627,7 @@ class TestClipPipelineRetention:
 
         # Then: Only one prune pass executes, but both clip paths are registered
         assert retention_pruner.reasons == ["clip_arrived"]
-        assert retention_pruner.clip_local_paths == [first_clip_path]
+        assert retention_pruner.clip_local_paths == [None]
         assert retention_pruner.registered_clip_local_paths == [first_clip_path, second_clip_path]
 
     @pytest.mark.asyncio

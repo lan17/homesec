@@ -149,6 +149,8 @@ class LocalRetentionPruner:
         if clip_local_path is not None:
             self.register_local_dir_from_clip(clip_local_path)
 
+        # Snapshot local roots on the event-loop thread before filesystem scanning.
+        # Directory registration also occurs on the event-loop thread.
         scan_result = await asyncio.to_thread(
             self._scan_local_files,
             sorted(self._local_clip_dirs),
