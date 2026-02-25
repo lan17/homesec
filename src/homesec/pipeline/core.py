@@ -152,6 +152,7 @@ class ClipPipeline:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         task.add_done_callback(self._log_task_exception)
+        self.request_retention_prune(reason="clip_arrived")
 
     def _log_task_exception(self, task: asyncio.Task[None]) -> None:
         """Log unexpected task exceptions."""
@@ -393,20 +394,13 @@ class ClipPipeline:
         async def on_attempt_success(
             result: UploadOutcome, attempt_num: int, duration_ms: int
         ) -> None:
-            persisted_state = await self._repository.record_upload_completed(
+            await self._repository.record_upload_completed(
                 clip.clip_id,
                 result.storage_uri,
                 result.view_url,
                 duration_ms,
                 attempt=attempt_num,
             )
-            if persisted_state is None:
-                logger.warning(
-                    "Retention prune skipped: upload completion state not persisted for %s",
-                    clip.clip_id,
-                )
-                return
-            self.request_retention_prune(reason="upload_confirmed")
 
         async def on_attempt_failure(
             exc: Exception, attempt_num: int, will_retry: bool, _duration_ms: int

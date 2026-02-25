@@ -523,7 +523,7 @@ class TestClipPipelineRetention:
     """Test retention trigger behavior and containment."""
 
     @pytest.mark.asyncio
-    async def test_retention_trigger_fires_after_upload_success(
+    async def test_retention_trigger_fires_on_clip_arrival(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:
         # Given: A pipeline with successful upload and a tracking retention pruner
@@ -543,11 +543,11 @@ class TestClipPipelineRetention:
         pipeline.on_new_clip(sample_clip)
         await pipeline.shutdown()
 
-        # Then: Upload-confirmed retention trigger runs exactly once
-        assert retention_pruner.reasons == ["upload_confirmed"]
+        # Then: Clip-arrival retention trigger runs exactly once
+        assert retention_pruner.reasons == ["clip_arrived"]
 
     @pytest.mark.asyncio
-    async def test_retention_not_triggered_on_upload_failure(
+    async def test_retention_triggered_on_clip_arrival_even_when_upload_fails(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:
         # Given: A pipeline where upload fails
@@ -568,8 +568,8 @@ class TestClipPipelineRetention:
         pipeline.on_new_clip(sample_clip)
         await pipeline.shutdown()
 
-        # Then: No upload-confirmed retention trigger is emitted
-        assert retention_pruner.reasons == []
+        # Then: Clip-arrival trigger still emits once
+        assert retention_pruner.reasons == ["clip_arrived"]
 
     @pytest.mark.asyncio
     async def test_retention_single_flight_drops_overlapping_triggers(
@@ -623,14 +623,14 @@ class TestClipPipelineRetention:
         )
 
         # When: One prune is active and a second trigger arrives
-        pipeline.request_retention_prune(reason="upload_confirmed")
+        pipeline.request_retention_prune(reason="clip_arrived")
         await asyncio.wait_for(retention_pruner.started.wait(), timeout=1.0)
-        pipeline.request_retention_prune(reason="upload_confirmed")
+        pipeline.request_retention_prune(reason="clip_arrived")
         retention_pruner.release.set()
         await pipeline.shutdown()
 
         # Then: Only one prune pass executes due to single-flight drop policy
-        assert retention_pruner.reasons == ["upload_confirmed"]
+        assert retention_pruner.reasons == ["clip_arrived"]
 
     @pytest.mark.asyncio
     async def test_retention_failures_are_logged_and_non_fatal(
