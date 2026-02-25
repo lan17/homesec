@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.6.0 (2026-02-25)
+
+### Features
+
+- Implement oldest-first local clip retention pruning
+  ([#30](https://github.com/lan17/homesec/pull/30),
+  [`54b4a47`](https://github.com/lan17/homesec/commit/54b4a47c468689a7d238ebb8714332458d79bfa7))
+
+- Onvif support ([#28](https://github.com/lan17/homesec/pull/28),
+  [`44e6b38`](https://github.com/lan17/homesec/commit/44e6b38ac47d1a3845c0074c12b7d4cc075b3b27))
+
+- Trigger local retention pruning after upload (#71)
+  ([#31](https://github.com/lan17/homesec/pull/31),
+  [`9f88a3e`](https://github.com/lan17/homesec/commit/9f88a3ee16cc63a4a0cbecba9b53a655a85e4e18))
+
+
 ## v1.5.0 (2026-02-20)
 
 ### Features

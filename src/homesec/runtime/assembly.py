@@ -12,6 +12,7 @@ from homesec.pipeline import ClipPipeline
 from homesec.plugins.analyzers import load_analyzer
 from homesec.plugins.filters import load_filter
 from homesec.repository import ClipRepository
+from homesec.retention import build_local_retention_pruner
 from homesec.runtime.models import RuntimeBundle, config_signature
 
 if TYPE_CHECKING:
@@ -78,6 +79,12 @@ class RuntimeAssembler:
             vlm_plugin = load_analyzer(config.vlm)
             alert_policy = self._alert_policy_factory(config)
 
+            sources, sources_by_camera = self._source_factory(config)
+            retention_pruner = build_local_retention_pruner(
+                repository=self._repository,
+                retention=config.retention,
+            )
+
             pipeline = ClipPipeline(
                 config=config,
                 storage=self._storage,
@@ -86,11 +93,11 @@ class RuntimeAssembler:
                 vlm_plugin=vlm_plugin,
                 notifier=notifier,
                 alert_policy=alert_policy,
+                retention_pruner=retention_pruner,
                 notifier_entries=notifier_entries,
             )
             pipeline.set_event_loop(asyncio.get_running_loop())
 
-            sources, sources_by_camera = self._source_factory(config)
             for source in sources:
                 source.register_callback(pipeline.on_new_clip)
 

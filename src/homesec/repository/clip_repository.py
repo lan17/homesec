@@ -477,6 +477,26 @@ class ClipRepository:
         await self._safe_upsert(clip_id, state)
         return state
 
+    async def get_clip_states_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        """Read clip states and created_at timestamps for retention workflows."""
+        if not clip_ids:
+            return {}
+        try:
+            return await self._run_with_retries(
+                label="State store get_many_with_created_at",
+                clip_id="retention-batch",
+                op=lambda: self._state.get_many_with_created_at(clip_ids),
+            )
+        except Exception as exc:
+            logger.error(
+                "State store get_many_with_created_at failed after retries: %s",
+                exc,
+                exc_info=exc,
+            )
+            return {}
+
     async def get_clip(self, clip_id: str) -> ClipStateData | None:
         """Get clip state by ID."""
         return await self._safe_get(clip_id)

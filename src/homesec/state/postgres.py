@@ -55,6 +55,7 @@ from homesec.models.events import (
 )
 
 logger = logging.getLogger(__name__)
+_BATCH_STATE_LOOKUP_SIZE = 1000
 
 # Map EventType enum to event model classes
 # Using enum values ensures consistency with event models
@@ -246,10 +247,7 @@ class PostgresStateStore(StateStore):
                 return None
 
             raw, created_at = row
-            data_dict = self._parse_state_data(raw)
-            data_dict["clip_id"] = clip_id
-            data_dict["created_at"] = created_at
-            return ClipStateData.model_validate(data_dict)
+            return self._hydrate_clip_state(raw=raw, clip_id=clip_id, created_at=created_at)
         except Exception as e:
             logger.error(
                 "Failed to get clip state for %s: %s",
@@ -258,6 +256,51 @@ class PostgresStateStore(StateStore):
                 exc_info=True,
             )
             return None
+
+    async def get_many_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        """Retrieve state and created_at for a set of clip ids."""
+        if self._engine is None:
+            logger.warning("StateStore not initialized, returning empty state map")
+            return {}
+        if not clip_ids:
+            return {}
+
+        unique_ids = sorted(set(clip_ids))
+        items: dict[str, tuple[ClipStateData, datetime]] = {}
+        try:
+            async with self._engine.connect() as conn:
+                for offset in range(0, len(unique_ids), _BATCH_STATE_LOOKUP_SIZE):
+                    batch_ids = unique_ids[offset : offset + _BATCH_STATE_LOOKUP_SIZE]
+                    query = select(ClipState.clip_id, ClipState.data, ClipState.created_at).where(
+                        ClipState.clip_id.in_(batch_ids)
+                    )
+                    result = await conn.execute(query)
+                    rows = result.all()
+                    for clip_id, raw, created_at in rows:
+                        try:
+                            state = self._hydrate_clip_state(
+                                raw=raw, clip_id=clip_id, created_at=created_at
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed parsing clip state in batch load: %s error=%s",
+                                clip_id,
+                                exc,
+                                exc_info=True,
+                            )
+                            continue
+                        items[clip_id] = (state, created_at)
+        except Exception as e:
+            logger.error(
+                "Failed to batch load clip states with created_at: %s",
+                e,
+                exc_info=True,
+            )
+            return {}
+
+        return items
 
     async def list_clips(
         self,
@@ -351,10 +394,9 @@ class PostgresStateStore(StateStore):
         items: list[ClipStateData] = []
         for clip_id, raw, created_at in visible_rows:
             try:
-                data_dict = self._parse_state_data(raw)
-                data_dict["clip_id"] = clip_id
-                data_dict["created_at"] = created_at
-                items.append(ClipStateData.model_validate(data_dict))
+                items.append(
+                    self._hydrate_clip_state(raw=raw, clip_id=clip_id, created_at=created_at)
+                )
             except Exception as exc:
                 logger.warning("Failed parsing clip state %s: %s", clip_id, exc, exc_info=True)
 
@@ -391,10 +433,7 @@ class PostgresStateStore(StateStore):
             raise ValueError(f"Clip not found: {clip_id}")
 
         raw_data, created_at = row
-        data_dict = self._parse_state_data(raw_data)
-        data_dict["clip_id"] = clip_id
-        data_dict["created_at"] = created_at
-        return ClipStateData.model_validate(data_dict)
+        return self._hydrate_clip_state(raw=raw_data, clip_id=clip_id, created_at=created_at)
 
     async def count_clips_since(self, since: datetime) -> int:
         """Count clips created since the given timestamp."""
@@ -494,10 +533,7 @@ class PostgresStateStore(StateStore):
         items: list[tuple[str, ClipStateData, datetime]] = []
         for clip_id, raw, created_at in rows:
             try:
-                data_dict = self._parse_state_data(raw)
-                data_dict["clip_id"] = clip_id
-                data_dict["created_at"] = created_at
-                state = ClipStateData.model_validate(data_dict)
+                state = self._hydrate_clip_state(raw=raw, clip_id=clip_id, created_at=created_at)
             except Exception as exc:
                 logger.warning(
                     "Failed parsing clip state for cleanup: %s error=%s",
@@ -534,6 +570,15 @@ class PostgresStateStore(StateStore):
             await self._engine.dispose()
             self._engine = None
             logger.info("PostgresStateStore closed")
+
+    def _hydrate_clip_state(
+        self, *, raw: object, clip_id: str, created_at: datetime
+    ) -> ClipStateData:
+        """Hydrate ClipStateData with persisted metadata from clip_states."""
+        data_dict = self._parse_state_data(raw)
+        data_dict["clip_id"] = clip_id
+        data_dict["created_at"] = created_at
+        return ClipStateData.model_validate(data_dict)
 
     @staticmethod
     def _parse_state_data(raw: object) -> dict[str, Any]:
@@ -701,6 +746,12 @@ class NoopStateStore(StateStore):
 
     async def get(self, clip_id: str) -> ClipStateData | None:
         return None
+
+    async def get_many_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        _ = clip_ids
+        return {}
 
     async def get_clip(self, clip_id: str) -> ClipStateData | None:
         return None

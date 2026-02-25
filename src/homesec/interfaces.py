@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from homesec.models.enums import ClipStatus
 
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from homesec.models.filter import FilterOverrides, FilterResult
     from homesec.models.storage import StorageUploadResult
     from homesec.models.vlm import AnalysisResult, VLMConfig
+    from homesec.retention.pruner import RetentionPruneSummary
 
 
 class Shutdownable(ABC):
@@ -85,6 +86,23 @@ class ClipSource(Shutdownable, ABC):
         raise NotImplementedError
 
 
+class RetentionPruner(Protocol):
+    """Prunes local clip files according to configured retention rules."""
+
+    def register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+        """Register the clip parent directory as a candidate retention root."""
+        ...
+
+    async def prune_once(
+        self,
+        *,
+        reason: str,
+        clip_local_path: Path | None = None,
+    ) -> RetentionPruneSummary:
+        """Run a single retention prune pass."""
+        ...
+
+
 class StorageBackend(Shutdownable, ABC):
     """Stores raw clips and derived artifacts."""
 
@@ -133,6 +151,16 @@ class StateStore(Shutdownable, ABC):
     @abstractmethod
     async def get(self, clip_id: str) -> ClipStateData | None:
         """Retrieve clip state. Returns None if not found."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_many_with_created_at(
+        self, clip_ids: list[str]
+    ) -> dict[str, tuple[ClipStateData, datetime]]:
+        """Retrieve state and created_at for many clip ids.
+
+        Missing clip ids are omitted from the returned mapping.
+        """
         raise NotImplementedError
 
     @abstractmethod

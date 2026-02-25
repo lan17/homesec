@@ -127,6 +127,22 @@ class _SlowShutdownComponent:
         await asyncio.sleep(0.05)
 
 
+class _FailOnRetentionPipeline:
+    def __init__(self) -> None:
+        self.retention_requested = False
+
+    def request_retention_prune(
+        self, *, reason: str, clip_local_path: object | None = None
+    ) -> None:
+        _ = reason
+        _ = clip_local_path
+        self.retention_requested = True
+        raise AssertionError("Startup should not trigger retention prune request")
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+
+
 def _make_config() -> Config:
     return Config(
         cameras=[
@@ -160,6 +176,7 @@ def _make_config() -> Config:
 def _make_assembler(notifier: _StubNotifier) -> RuntimeAssembler:
     return RuntimeAssembler(
         storage=_StubStorage(),
+        # Repository is not exercised in these runtime-assembly tests.
         repository=cast(Any, object()),
         notifier_factory=lambda _config: (
             notifier,
@@ -264,6 +281,45 @@ async def test_runtime_assembly_start_timeout_cleans_started_sources() -> None:
 
     # Then: Already-started sources are cleaned up
     assert started_source.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_assembly_start_does_not_trigger_startup_retention_prune() -> None:
+    """Successful startup should not request retention prune from runtime assembly."""
+    # Given: A runtime bundle with healthy startup source and pipeline
+    source = _StubSource(camera_name="front")
+    pipeline = _FailOnRetentionPipeline()
+    notifier = _StubNotifier()
+    assembler = RuntimeAssembler(
+        storage=_StubStorage(),
+        repository=cast(Any, object()),
+        notifier_factory=lambda _config: (
+            notifier,
+            [NotifierEntry(name="stub", notifier=notifier)],
+        ),
+        notifier_health_logger=_noop_notifier_health,
+        alert_policy_factory=lambda _config: _StubAlertPolicy(),
+        source_factory=lambda _config: ([source], {"front": source}),
+    )
+    runtime = RuntimeBundle(
+        generation=1,
+        config=_make_config(),
+        config_signature="cfgsig",
+        notifier=notifier,
+        notifier_entries=[],
+        filter_plugin=_StubFilter(),
+        vlm_plugin=_StubVLM(),
+        alert_policy=_StubAlertPolicy(),
+        pipeline=cast(Any, pipeline),
+        sources=[source],
+        sources_by_camera={"front": source},
+    )
+
+    # When: Starting runtime bundle preflight
+    await assembler.start_bundle(runtime)
+
+    # Then: Runtime assembly startup does not invoke retention trigger
+    assert pipeline.retention_requested is False
 
 
 @pytest.mark.asyncio
