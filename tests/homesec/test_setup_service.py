@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from homesec.config.loader import ConfigError
 from homesec.config.manager import ConfigManager
 from homesec.models.config import FastAPIServerConfig
 from homesec.models.setup import FinalizeRequest
@@ -309,7 +310,7 @@ async def test_run_preflight_marks_check_failed_when_timeout_expires(
 async def test_run_preflight_reports_missing_state_store_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preflight should fail config_env check when default state-store env is missing."""
+    """Preflight should keep bootstrap config-env readiness advisory and non-blocking."""
     # Given: A bootstrap app with no DB_DSN env value configured
     monkeypatch.delenv("DB_DSN", raising=False)
     app = _StubApp(
@@ -330,10 +331,10 @@ async def test_run_preflight_reports_missing_state_store_env(
     # When: Running setup preflight
     response = await setup_service.run_preflight(app)
 
-    # Then: config_env check fails with actionable missing-env message
+    # Then: config_env check is advisory in bootstrap mode and does not fail the check itself
     by_name = {check.name: check for check in response.checks}
-    assert by_name["config_env"].passed is False
-    assert "DB_DSN" in by_name["config_env"].message
+    assert by_name["config_env"].passed is True
+    assert "validated at finalize" in by_name["config_env"].message
     assert response.all_passed is False
 
 
@@ -459,14 +460,12 @@ async def test_finalize_setup_returns_validation_error_without_writing_config(
         ]
     )
 
-    # When: Finalizing setup
-    response = await setup_service.finalize_setup(request, app)
+    # When/Then: Finalizing setup raises config validation error
+    with pytest.raises(ConfigError):
+        await setup_service.finalize_setup(request, app)
 
-    # Then: Validation fails, no config is written, and restart is not requested
-    assert response.success is False
-    assert response.restart_requested is False
+    # Then: No config is written and restart is not requested
     assert app.restart_requested is False
-    assert response.errors
     assert config_path.exists() is False
 
 
@@ -518,14 +517,14 @@ async def test_finalize_setup_rejects_empty_camera_set_on_fresh_bootstrap(
         config_manager=manager,
     )
 
-    # When: Finalizing setup with empty payload
-    response = await setup_service.finalize_setup(FinalizeRequest(), app)
+    # When/Then: Finalizing setup with empty payload raises semantic validation error
+    with pytest.raises(setup_service.SetupFinalizeValidationError) as exc_info:
+        await setup_service.finalize_setup(FinalizeRequest(), app)
 
-    # Then: Finalize fails before writing config and reports missing-camera requirement
-    assert response.success is False
-    assert response.restart_requested is False
+    # Then: Validation error reports missing-camera requirement and does not write config
+    errors = exc_info.value.errors
     assert app.restart_requested is False
-    assert "At least one camera" in response.errors[0]
+    assert any("At least one camera" in error for error in errors)
     assert config_path.exists() is False
 
 
@@ -557,12 +556,12 @@ async def test_finalize_setup_rejects_missing_state_store_env_when_defaults_appl
         ]
     )
 
-    # When: Finalizing setup with default state-store config
-    response = await setup_service.finalize_setup(request, app)
+    # When/Then: Finalizing setup raises semantic validation error
+    with pytest.raises(setup_service.SetupFinalizeValidationError) as exc_info:
+        await setup_service.finalize_setup(request, app)
 
-    # Then: Finalize fails with explicit missing-env error and no config write
-    assert response.success is False
-    assert response.restart_requested is False
+    # Then: Error includes missing-env guidance and no config is written
+    errors = exc_info.value.errors
     assert app.restart_requested is False
-    assert any("DB_DSN" in error for error in response.errors)
+    assert any("DB_DSN" in error for error in errors)
     assert config_path.exists() is False

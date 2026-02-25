@@ -229,7 +229,7 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_error_code="CONFLICT",
         ),
         _MatrixCase(
-            name="setup_finalize_is_available_in_bootstrap_mode",
+            name="setup_finalize_remains_available_in_bootstrap_mode",
             method="POST",
             path="/api/v1/setup/finalize",
             auth_enabled=False,

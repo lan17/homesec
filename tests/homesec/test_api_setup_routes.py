@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from homesec.api.server import create_app
+from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
 from homesec.models.config import FastAPIServerConfig
 from homesec.models.setup import (
@@ -17,6 +18,7 @@ from homesec.models.setup import (
     PreflightResponse,
     SetupStatusResponse,
 )
+from homesec.services import setup as setup_service
 
 
 class _StubSetupRepository:
@@ -251,3 +253,60 @@ def test_setup_finalize_delegates_to_service(monkeypatch: pytest.MonkeyPatch) ->
         "defaults_applied": ["storage"],
         "errors": [],
     }
+
+
+def test_setup_finalize_returns_canonical_422_for_semantic_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize route should map semantic validation errors to canonical 422 envelope."""
+    # Given: A bootstrap app and service-layer semantic validation failure
+    app = _StubSetupApp(
+        bootstrap_mode=True,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_finalize_setup(_: object, __: object) -> FinalizeResponse:
+        raise setup_service.SetupFinalizeValidationError(
+            ["At least one camera must be configured before finalizing setup."]
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.finalize_setup", _fake_finalize_setup)
+
+    # When: Calling setup finalize
+    response = client.post("/api/v1/setup/finalize", json={})
+
+    # Then: Route returns canonical 422 with setup-specific error code
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["error_code"] == "SETUP_FINALIZE_INVALID"
+    assert payload["errors"]
+
+
+def test_setup_finalize_returns_canonical_422_for_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize route should map config-loader errors to canonical 422 envelope."""
+    # Given: A bootstrap app and service-layer config validation error
+    app = _StubSetupApp(
+        bootstrap_mode=True,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_finalize_setup(_: object, __: object) -> FinalizeResponse:
+        raise ConfigError(
+            "Config validation failed",
+            code=ConfigErrorCode.VALIDATION_FAILED,
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.finalize_setup", _fake_finalize_setup)
+
+    # When: Calling setup finalize
+    response = client.post("/api/v1/setup/finalize", json={})
+
+    # Then: Route returns canonical 422 with propagated config error code
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["error_code"] == ConfigErrorCode.VALIDATION_FAILED.value
+    assert payload["detail"] == "Config validation failed"

@@ -44,6 +44,15 @@ _PREFLIGHT_CHECK_TIMEOUT_S = 10.0
 SectionT = TypeVar("SectionT")
 
 
+class SetupFinalizeValidationError(ValueError):
+    """Raised when finalize payload/config is semantically invalid."""
+
+    def __init__(self, errors: list[str]) -> None:
+        message = "; ".join(errors) if errors else "Setup finalize validation failed"
+        super().__init__(message)
+        self.errors = errors
+
+
 async def get_setup_status(app: Application) -> SetupStatusResponse:
     """Return setup completion status for onboarding orchestration."""
     config = _active_config(app)
@@ -113,25 +122,10 @@ async def finalize_setup(request: FinalizeRequest, app: Application) -> Finalize
     merged_config, defaults_applied = await _build_finalize_config(request=request, app=app)
     validation_errors = _finalize_validation_errors(merged_config)
     if validation_errors:
-        return FinalizeResponse(
-            success=False,
-            config_path=str(app.config_manager.config_path),
-            restart_requested=False,
-            defaults_applied=defaults_applied,
-            errors=validation_errors,
-        )
+        raise SetupFinalizeValidationError(validation_errors)
 
     config_path = app.config_manager.config_path
-    try:
-        await app.config_manager.replace_config(merged_config)
-    except ConfigError as exc:
-        return FinalizeResponse(
-            success=False,
-            config_path=str(config_path),
-            restart_requested=False,
-            defaults_applied=defaults_applied,
-            errors=[str(exc)],
-        )
+    await app.config_manager.replace_config(merged_config)
 
     app.request_restart()
     return FinalizeResponse(
@@ -462,10 +456,15 @@ async def _config_env_check(app: Application) -> PreflightCheckResponse:
     """Check environment-backed config readiness for state store connectivity."""
     start = time.perf_counter()
     active_config = _active_config(app)
-    if active_config is not None:
-        dsn_env = _state_store_dsn_env_requirement(active_config)
-    else:
-        dsn_env = _default_state_store().dsn_env
+    if active_config is None:
+        return PreflightCheckResponse(
+            name="config_env",
+            passed=True,
+            message="No active config loaded; state store env checks are validated at finalize.",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
+        )
+
+    dsn_env = _state_store_dsn_env_requirement(active_config)
 
     if not dsn_env:
         return PreflightCheckResponse(

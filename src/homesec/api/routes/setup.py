@@ -4,16 +4,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 
 from homesec.api.dependencies import get_homesec_app, require_bootstrap_mode
+from homesec.api.errors import APIError, APIErrorCode
+from homesec.config.loader import ConfigError
 from homesec.models.setup import (
     FinalizeRequest,
     FinalizeResponse,
     PreflightResponse,
     SetupStatusResponse,
 )
-from homesec.services.setup import finalize_setup, get_setup_status, run_preflight
+from homesec.services.setup import (
+    SetupFinalizeValidationError,
+    finalize_setup,
+    get_setup_status,
+    run_preflight,
+)
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -44,4 +51,18 @@ async def finalize_setup_endpoint(
     _: None = Depends(require_bootstrap_mode),
 ) -> FinalizeResponse:
     """Persist finalized setup config and request graceful restart."""
-    return await finalize_setup(payload, app)
+    try:
+        return await finalize_setup(payload, app)
+    except SetupFinalizeValidationError as exc:
+        raise APIError(
+            str(exc),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error_code=APIErrorCode.SETUP_FINALIZE_INVALID,
+            extra={"errors": exc.errors},
+        ) from exc
+    except ConfigError as exc:
+        raise APIError(
+            str(exc),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            error_code=exc.code.value,
+        ) from exc
