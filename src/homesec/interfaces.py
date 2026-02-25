@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from homesec.models.filter import FilterOverrides, FilterResult
     from homesec.models.storage import StorageUploadResult
     from homesec.models.vlm import AnalysisResult, VLMConfig
-    from homesec.retention import RetentionPruneSummary
+    from homesec.retention.pruner import RetentionPruneSummary
 
 
 class Shutdownable(ABC):
@@ -88,6 +88,10 @@ class ClipSource(Shutdownable, ABC):
 
 class RetentionPruner(Protocol):
     """Prunes local clip files according to configured retention rules."""
+
+    def register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+        """Register the clip parent directory as a candidate retention root."""
+        ...
 
     async def prune_once(
         self,

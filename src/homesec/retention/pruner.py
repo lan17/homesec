@@ -147,7 +147,7 @@ class LocalRetentionPruner:
         counters = _PruneCounters()
 
         if clip_local_path is not None:
-            self._register_local_dir_from_clip(clip_local_path)
+            self.register_local_dir_from_clip(clip_local_path)
 
         scan_result = await asyncio.to_thread(
             self._scan_local_files,
@@ -360,7 +360,8 @@ class LocalRetentionPruner:
             delete_errors=counters.delete_errors,
         )
 
-    def _register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+    def register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+        """Register clip parent directory for future prune scans."""
         local_dir = _normalize_path(Path(clip_local_path).parent)
         if local_dir in self._local_clip_dirs:
             return

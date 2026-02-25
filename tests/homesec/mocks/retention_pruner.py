@@ -25,6 +25,10 @@ class MockRetentionPruner:
         self.simulate_failure = simulate_failure
         self.reasons: list[str] = []
         self.clip_local_paths: list[Path | None] = []
+        self.registered_clip_local_paths: list[Path] = []
+
+    def register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+        self.registered_clip_local_paths.append(clip_local_path)
 
     async def prune_once(
         self,

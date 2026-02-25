@@ -111,6 +111,16 @@ class ClipPipeline:
         clip_local_path: Path | None = None,
     ) -> None:
         """Request one retention prune pass with single-flight drop policy."""
+        if clip_local_path is not None:
+            try:
+                self._retention_pruner.register_local_dir_from_clip(clip_local_path)
+            except Exception as exc:
+                logger.error(
+                    "Retention local-dir registration failed: path=%s error=%s",
+                    clip_local_path,
+                    exc,
+                    exc_info=exc,
+                )
         logger.info("Retention prune requested: reason=%s", reason)
         active_task = self._retention_prune_task
         if active_task is not None and not active_task.done():

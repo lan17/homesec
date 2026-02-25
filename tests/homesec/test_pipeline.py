@@ -583,6 +583,11 @@ class TestClipPipelineRetention:
                 self.started = asyncio.Event()
                 self.release = asyncio.Event()
                 self.reasons: list[str] = []
+                self.clip_local_paths: list[Path | None] = []
+                self.registered_clip_local_paths: list[Path] = []
+
+            def register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+                self.registered_clip_local_paths.append(clip_local_path)
 
             async def prune_once(
                 self,
@@ -590,8 +595,8 @@ class TestClipPipelineRetention:
                 reason: str,
                 clip_local_path: Path | None = None,
             ) -> RetentionPruneSummary:
-                _ = clip_local_path
                 self.reasons.append(reason)
+                self.clip_local_paths.append(clip_local_path)
                 self.started.set()
                 await self.release.wait()
                 return RetentionPruneSummary.empty(reason=reason)
@@ -608,15 +613,20 @@ class TestClipPipelineRetention:
             retention_pruner=retention_pruner,
         )
 
+        first_clip_path = Path("/tmp/clip-1.mp4")
+        second_clip_path = Path("/tmp/clip-2.mp4")
+
         # When: One prune is active and a second trigger arrives
-        pipeline.request_retention_prune(reason="clip_arrived")
+        pipeline.request_retention_prune(reason="clip_arrived", clip_local_path=first_clip_path)
         await asyncio.wait_for(retention_pruner.started.wait(), timeout=1.0)
-        pipeline.request_retention_prune(reason="clip_arrived")
+        pipeline.request_retention_prune(reason="clip_arrived", clip_local_path=second_clip_path)
         retention_pruner.release.set()
         await pipeline.shutdown()
 
-        # Then: Only one prune pass executes due to single-flight drop policy
+        # Then: Only one prune pass executes, but both clip paths are registered
         assert retention_pruner.reasons == ["clip_arrived"]
+        assert retention_pruner.clip_local_paths == [first_clip_path]
+        assert retention_pruner.registered_clip_local_paths == [first_clip_path, second_clip_path]
 
     @pytest.mark.asyncio
     async def test_retention_failures_are_logged_and_non_fatal(
