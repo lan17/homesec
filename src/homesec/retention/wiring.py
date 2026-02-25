@@ -18,10 +18,7 @@ _SOURCE_PATH_ATTRIBUTES: Final[tuple[str, ...]] = ("watch_dir", "root_dir", "out
 
 def resolve_max_local_size_bytes(retention: RetentionConfig) -> int:
     """Resolve configured local retention byte cap."""
-    max_local_size_bytes = int(retention.max_local_size_bytes)
-    if max_local_size_bytes < 0:
-        raise ValueError("retention.max_local_size_bytes must be >= 0")
-    return max_local_size_bytes
+    return retention.max_local_size_bytes
 
 
 def discover_local_clip_dirs(sources: list[ClipSource]) -> list[Path]:
@@ -64,6 +61,8 @@ def build_local_retention_pruner(
 ) -> LocalRetentionPruner:
     """Construct LocalRetentionPruner from runtime state."""
     local_clip_dirs = discover_local_clip_dirs(sources)
+    if not local_clip_dirs:
+        logger.warning("Retention pruner has no local clip directories; prune passes will no-op")
     max_local_size_bytes = resolve_max_local_size_bytes(retention)
     logger.info(
         "Retention pruner configured: max_local_size_bytes=%d local_clip_dirs=%s",
