@@ -154,14 +154,6 @@ class RuntimeAssembler:
                 started_sources.append(source)
 
         if not startup_errors:
-            try:
-                runtime.pipeline.request_retention_prune(reason="startup_backstop")
-            except Exception as exc:
-                logger.error(
-                    "Startup backstop retention trigger failed: reason=startup_backstop error=%s",
-                    exc,
-                    exc_info=exc,
-                )
             return
 
         await self._safe_shutdown_sources(started_sources)

@@ -389,8 +389,9 @@ class LocalRetentionPruner:
                     try:
                         is_file = candidate.is_file()
                     except OSError:
-                        # Don't fail discovery on stat errors; sizing stage records measurement
-                        # failures and marks the summary as incomplete.
+                        # Be conservative on path-type probe errors: keep candidate in scan flow
+                        # so downstream stat() can record skipped_stat_error and mark the summary
+                        # as measurement_incomplete.
                         is_file = True
                     if not is_file:
                         continue
