@@ -134,7 +134,10 @@ class _StubPipeline:
         self.prune_reasons: list[str] = []
         self.raise_on_backstop = raise_on_backstop
 
-    def request_retention_prune(self, *, reason: str) -> None:
+    def request_retention_prune(
+        self, *, reason: str, clip_local_path: object | None = None
+    ) -> None:
+        _ = clip_local_path
         self.prune_reasons.append(reason)
         if self.raise_on_backstop:
             raise RuntimeError("simulated startup backstop failure")
@@ -177,6 +180,7 @@ def _make_config() -> Config:
 def _make_assembler(notifier: _StubNotifier) -> RuntimeAssembler:
     return RuntimeAssembler(
         storage=_StubStorage(),
+        # Repository is not exercised in these runtime-assembly tests.
         repository=cast(Any, object()),
         notifier_factory=lambda _config: (
             notifier,

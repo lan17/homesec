@@ -89,7 +89,12 @@ class ClipSource(Shutdownable, ABC):
 class RetentionPruner(Protocol):
     """Prunes local clip files according to configured retention rules."""
 
-    async def prune_once(self, *, reason: str) -> RetentionPruneSummary:
+    async def prune_once(
+        self,
+        *,
+        reason: str,
+        clip_local_path: Path | None = None,
+    ) -> RetentionPruneSummary:
         """Run a single retention prune pass."""
         ...
 

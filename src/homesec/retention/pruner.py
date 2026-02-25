@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -42,6 +43,37 @@ class RetentionPruneSummary:
     skipped_missing_race: int
     delete_errors: int
 
+    @classmethod
+    def empty(
+        cls,
+        *,
+        reason: str,
+        max_local_size_bytes: int = 0,
+    ) -> RetentionPruneSummary:
+        return cls(
+            reason=reason,
+            max_local_size_bytes=max_local_size_bytes,
+            discovered_local_files=0,
+            measured_local_files=0,
+            unmeasured_local_files=0,
+            measured_local_bytes=0,
+            non_eligible_local_bytes=0,
+            measurement_incomplete=False,
+            blocked_over_limit=False,
+            eligible_candidates=0,
+            eligible_bytes_before=0,
+            eligible_bytes_after=0,
+            reclaimed_bytes=0,
+            deleted_files=0,
+            skipped_not_done=0,
+            skipped_no_state=0,
+            skipped_not_uploaded=0,
+            skipped_path_mismatch=0,
+            skipped_stat_error=0,
+            skipped_missing_race=0,
+            delete_errors=0,
+        )
+
 
 @dataclass(frozen=True)
 class _Candidate:
@@ -60,6 +92,21 @@ class _PruneCounters:
     skipped_stat_error: int = 0
     skipped_missing_race: int = 0
     delete_errors: int = 0
+
+
+@dataclass(frozen=True)
+class _ScanResult:
+    local_files: list[Path]
+    local_file_sizes: dict[Path, int]
+    skipped_stat_error: int
+
+
+@dataclass(frozen=True)
+class _DeleteResult:
+    remaining_bytes: int
+    deleted_files: int
+    skipped_missing_race: int
+    delete_errors: int
 
 
 class LocalRetentionPruner:
@@ -86,22 +133,29 @@ class LocalRetentionPruner:
             raise ValueError("clip_suffixes must not be empty")
 
         self._repository = repository
-        self._max_local_size_bytes = int(max_local_size_bytes)
-        self._local_clip_dirs = [Path(path).expanduser() for path in local_clip_dirs]
+        self._max_local_size_bytes = max_local_size_bytes
+        self._local_clip_dirs = {_normalize_path(path) for path in local_clip_dirs}
         self._clip_suffixes = normalized_suffixes
 
     async def prune_once(
         self,
         *,
         reason: str,
+        clip_local_path: Path | None = None,
     ) -> RetentionPruneSummary:
         """Run one local retention prune pass."""
         counters = _PruneCounters()
 
-        local_files = self._discover_local_files()
-        local_file_sizes = self._collect_local_file_sizes(
-            local_files=local_files, counters=counters
+        if clip_local_path is not None:
+            self._register_local_dir_from_clip(clip_local_path)
+
+        scan_result = await asyncio.to_thread(
+            self._scan_local_files,
+            sorted(self._local_clip_dirs),
         )
+        local_files = scan_result.local_files
+        local_file_sizes = scan_result.local_file_sizes
+        counters.skipped_stat_error = scan_result.skipped_stat_error
         measured_local_bytes = sum(local_file_sizes.values())
         unmeasured_local_files = len(local_files) - len(local_file_sizes)
         candidates = await self._build_candidates(
@@ -127,33 +181,15 @@ class LocalRetentionPruner:
             logger.info("Retention prune summary: %s", summary)
             return summary
 
-        remaining_bytes = eligible_before
-        deleted_files = 0
-
-        for candidate in sorted(candidates, key=lambda item: (item.created_at, item.clip_id)):
-            if remaining_bytes <= self._max_local_size_bytes:
-                break
-            try:
-                candidate.local_path.unlink()
-                deleted_files += 1
-                remaining_bytes = max(0, remaining_bytes - candidate.size_bytes)
-            except FileNotFoundError:
-                counters.skipped_missing_race += 1
-                remaining_bytes = max(0, remaining_bytes - candidate.size_bytes)
-                logger.info(
-                    "Retention skip: file disappeared before delete: clip=%s path=%s",
-                    candidate.clip_id,
-                    candidate.local_path,
-                )
-            except OSError as exc:
-                counters.delete_errors += 1
-                logger.warning(
-                    "Retention delete failed: clip=%s path=%s error=%s",
-                    candidate.clip_id,
-                    candidate.local_path,
-                    exc,
-                    exc_info=exc,
-                )
+        delete_result = await asyncio.to_thread(
+            self._delete_candidates_until_cap,
+            sorted(candidates, key=lambda item: (item.created_at, item.clip_id)),
+            eligible_before,
+        )
+        remaining_bytes = delete_result.remaining_bytes
+        deleted_files = delete_result.deleted_files
+        counters.skipped_missing_race = delete_result.skipped_missing_race
+        counters.delete_errors = delete_result.delete_errors
 
         summary = self._build_summary(
             reason=reason,
@@ -204,7 +240,7 @@ class LocalRetentionPruner:
 
             size_bytes = local_file_sizes.get(local_path)
             if size_bytes is None:
-                # Stat failures are counted in _collect_local_file_sizes.
+                # Stat failures are counted during the filesystem scan phase.
                 continue
 
             candidates.append(
@@ -218,25 +254,67 @@ class LocalRetentionPruner:
 
         return candidates
 
-    def _collect_local_file_sizes(
-        self,
-        *,
-        local_files: list[Path],
-        counters: _PruneCounters,
-    ) -> dict[Path, int]:
+    def _scan_local_files(self, local_clip_dirs: list[Path]) -> _ScanResult:
+        local_files = self._discover_local_files(local_clip_dirs)
         local_file_sizes: dict[Path, int] = {}
+        skipped_stat_error = 0
         for local_path in local_files:
             try:
                 local_file_sizes[local_path] = local_path.stat().st_size
             except OSError as exc:
-                counters.skipped_stat_error += 1
+                skipped_stat_error += 1
                 logger.warning(
                     "Retention stat failed: path=%s error=%s",
                     local_path,
                     exc,
                     exc_info=exc,
                 )
-        return local_file_sizes
+        return _ScanResult(
+            local_files=local_files,
+            local_file_sizes=local_file_sizes,
+            skipped_stat_error=skipped_stat_error,
+        )
+
+    def _delete_candidates_until_cap(
+        self,
+        candidates: list[_Candidate],
+        eligible_before: int,
+    ) -> _DeleteResult:
+        remaining_bytes = eligible_before
+        deleted_files = 0
+        skipped_missing_race = 0
+        delete_errors = 0
+
+        for candidate in candidates:
+            if remaining_bytes <= self._max_local_size_bytes:
+                break
+            try:
+                candidate.local_path.unlink()
+                deleted_files += 1
+                remaining_bytes = max(0, remaining_bytes - candidate.size_bytes)
+            except FileNotFoundError:
+                skipped_missing_race += 1
+                remaining_bytes = max(0, remaining_bytes - candidate.size_bytes)
+                logger.info(
+                    "Retention skip: file disappeared before delete: clip=%s path=%s",
+                    candidate.clip_id,
+                    candidate.local_path,
+                )
+            except OSError as exc:
+                delete_errors += 1
+                logger.warning(
+                    "Retention delete failed: clip=%s path=%s error=%s",
+                    candidate.clip_id,
+                    candidate.local_path,
+                    exc,
+                    exc_info=exc,
+                )
+        return _DeleteResult(
+            remaining_bytes=remaining_bytes,
+            deleted_files=deleted_files,
+            skipped_missing_race=skipped_missing_race,
+            delete_errors=delete_errors,
+        )
 
     def _build_summary(
         self,
@@ -282,16 +360,23 @@ class LocalRetentionPruner:
             delete_errors=counters.delete_errors,
         )
 
-    def _discover_local_files(self) -> list[Path]:
+    def _register_local_dir_from_clip(self, clip_local_path: Path) -> None:
+        local_dir = _normalize_path(Path(clip_local_path).parent)
+        if local_dir in self._local_clip_dirs:
+            return
+        self._local_clip_dirs.add(local_dir)
+        logger.info("Retention registered local clip directory from clip arrival: %s", local_dir)
+
+    def _discover_local_files(self, local_clip_dirs: list[Path]) -> list[Path]:
         discovered: list[Path] = []
         seen: set[Path] = set()
         patterns = tuple(f"*{suffix}" for suffix in self._clip_suffixes)
 
-        for root in self._local_clip_dirs:
+        for root in local_clip_dirs:
             if not root.exists():
                 continue
             if root.is_file():
-                resolved = root.resolve()
+                resolved = _normalize_path(root)
                 if resolved.suffix.lower() in self._clip_suffixes and resolved not in seen:
                     seen.add(resolved)
                     discovered.append(resolved)
@@ -309,11 +394,7 @@ class LocalRetentionPruner:
                         is_file = True
                     if not is_file:
                         continue
-                    try:
-                        resolved = candidate.resolve()
-                    except OSError:
-                        # Keep unresolved path so later stat/delete stages can account for errors.
-                        resolved = candidate
+                    resolved = _normalize_path(candidate)
                     if resolved in seen:
                         continue
                     seen.add(resolved)
@@ -330,6 +411,14 @@ def _normalize_suffix(raw: str) -> str:
     if not suffix.startswith("."):
         suffix = f".{suffix}"
     return suffix
+
+
+def _normalize_path(raw: Path) -> Path:
+    candidate = Path(raw).expanduser()
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate
 
 
 def _paths_match(state_local_path: str, discovered_path: Path) -> bool:

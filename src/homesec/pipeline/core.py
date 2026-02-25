@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from homesec.errors import FilterError, NotifyError, UploadError, VLMError
@@ -103,7 +104,12 @@ class ClipPipeline:
         """
         self._loop = loop
 
-    def request_retention_prune(self, *, reason: str) -> None:
+    def request_retention_prune(
+        self,
+        *,
+        reason: str,
+        clip_local_path: Path | None = None,
+    ) -> None:
         """Request one retention prune pass with single-flight drop policy."""
         logger.info("Retention prune requested: reason=%s", reason)
         active_task = self._retention_prune_task
@@ -113,14 +119,24 @@ class ClipPipeline:
                 reason,
             )
             return
-        task = asyncio.create_task(self._run_retention_prune(reason=reason))
+        task = asyncio.create_task(
+            self._run_retention_prune(reason=reason, clip_local_path=clip_local_path)
+        )
         self._retention_prune_task = task
         task.add_done_callback(self._on_retention_prune_done)
 
-    async def _run_retention_prune(self, *, reason: str) -> None:
+    async def _run_retention_prune(
+        self,
+        *,
+        reason: str,
+        clip_local_path: Path | None,
+    ) -> None:
         logger.info("Retention prune started: reason=%s", reason)
         try:
-            summary = await self._retention_pruner.prune_once(reason=reason)
+            summary = await self._retention_pruner.prune_once(
+                reason=reason,
+                clip_local_path=clip_local_path,
+            )
         except Exception as exc:
             logger.error(
                 "Retention prune failed: reason=%s error=%s",
@@ -152,7 +168,7 @@ class ClipPipeline:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         task.add_done_callback(self._log_task_exception)
-        self.request_retention_prune(reason="clip_arrived")
+        self.request_retention_prune(reason="clip_arrived", clip_local_path=clip.local_path)
 
     def _log_task_exception(self, task: asyncio.Task[None]) -> None:
         """Log unexpected task exceptions."""

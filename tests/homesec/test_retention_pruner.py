@@ -34,6 +34,50 @@ async def _seed_state(
 
 
 @pytest.mark.asyncio
+async def test_prune_discovers_local_dir_from_clip_arrival_path(tmp_path: Path) -> None:
+    # Given: An unseeded pruner and uploaded clips in the arrived clip's parent directory
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    clip_old = clips_dir / "clip-old.mp4"
+    clip_new = clips_dir / "clip-new.mp4"
+    clip_old.write_bytes(b"a" * 60)
+    clip_new.write_bytes(b"b" * 40)
+
+    state_store = MockStateStore()
+    repository = ClipRepository(state_store, MockEventStore())
+    now = datetime.now()
+    await _seed_state(
+        state_store=state_store,
+        clip_id="clip-old",
+        local_path=clip_old,
+        created_at=now - timedelta(minutes=1),
+        storage_uri="mock://clip-old",
+    )
+    await _seed_state(
+        state_store=state_store,
+        clip_id="clip-new",
+        local_path=clip_new,
+        created_at=now,
+        storage_uri="mock://clip-new",
+    )
+    pruner = LocalRetentionPruner(
+        repository=repository,
+        local_clip_dirs=[],
+        max_local_size_bytes=40,
+    )
+
+    # When: A prune pass runs with the newly arrived clip path
+    summary = await pruner.prune_once(reason="clip_arrived", clip_local_path=clip_new)
+
+    # Then: Pruner discovers the parent directory and deletes oldest-first
+    assert not clip_old.exists()
+    assert clip_new.exists()
+    assert summary.discovered_local_files == 2
+    assert summary.deleted_files == 1
+    assert summary.eligible_bytes_after == 40
+
+
+@pytest.mark.asyncio
 async def test_prune_deletes_oldest_until_under_limit(tmp_path: Path) -> None:
     # Given: Three uploaded local clips exceeding the retention byte limit
     clips_dir = tmp_path / "clips"

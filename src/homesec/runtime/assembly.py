@@ -83,7 +83,6 @@ class RuntimeAssembler:
             retention_pruner = build_local_retention_pruner(
                 repository=self._repository,
                 retention=config.retention,
-                sources=sources,
             )
 
             pipeline = ClipPipeline(
