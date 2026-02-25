@@ -518,7 +518,7 @@ storage:
     artifacts_dir: "artifacts"
 
 retention:
-  max_local_size: "10GB"
+  max_local_size_bytes: 1000000000  # 1GB default raw-byte cap
 
 mqtt:
   host: "localhost"
@@ -805,10 +805,10 @@ class ClipStateData(BaseModel):
 - **Backpressure:** bound concurrency for downloads/decoding/VLM calls; drop or defer gracefully.
 - **Graceful DB degradation:** if Postgres is down/unreachable, continue recording/uploading and process best-effort from the local queue with no local lock fallback; accept duplicates and tolerate missing state.
 - **Offline tolerance:** if internet/storage is down, persist clips locally and upload later (async uploader is allowed/encouraged).
-- **Retention:** never delete a local clip unless upload is confirmed (`stages.upload.status=ok`).
-  - Enforce `retention.max_local_size` by deleting oldest uploaded clips first.
-  - If `alert_decision.notify == true`, delete after `stages.notify.status=ok` unless storage pressure requires earlier cleanup of already-uploaded clips.
-  - Otherwise delete after filter/VLM completes (success or failure); retries can re-download from storage.
+- **Retention:** local cleanup is independent of notify and only deletes clips that are both uploaded and finalized (`storage_uri` present and `status == DONE`).
+  - Enforce `retention.max_local_size_bytes` by deleting oldest eligible local clips first.
+  - Trigger prune on clip arrival (`reason=clip_arrived`) with single-flight `drop` while a prune pass is active.
+  - Retention path is local-only: no storage-backend delete calls and no retention-driven DB cleanup/mutation writes.
 
 ### Performance
 - Motion detection should run in real time per camera; recording should not block on upload.
