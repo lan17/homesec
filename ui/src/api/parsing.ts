@@ -9,10 +9,13 @@ import type {
   DiagnosticsResponse,
   HealthResponse,
   MediaProfileResponse,
+  PreflightCheckResponse,
+  PreflightResponse,
   ProbeResponse,
   RuntimeReloadResponse,
   RuntimeState,
   RuntimeStatusResponse,
+  SetupStatusResponse,
   StatsResponse,
 } from './generated/types'
 
@@ -222,6 +225,61 @@ export function parseHealthResponse(payload: unknown): HealthResponse {
     postgres: expectString(payload.postgres, 'postgres'),
     cameras_online: expectNumber(payload.cameras_online, 'cameras_online'),
     bootstrap_mode: expectBoolean(payload.bootstrap_mode, 'bootstrap_mode'),
+  }
+}
+
+function parseSetupState(value: unknown, fieldName: string): SetupStatusResponse['state'] {
+  if (value === 'fresh' || value === 'partial' || value === 'complete') {
+    return value
+  }
+  throw new Error(`${fieldName} must be one of fresh|partial|complete`)
+}
+
+export function parseSetupStatusResponse(payload: unknown): SetupStatusResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Setup status response is not a JSON object')
+  }
+
+  return {
+    state: parseSetupState(payload.state, 'state'),
+    has_cameras: expectBoolean(payload.has_cameras, 'has_cameras'),
+    pipeline_running: expectBoolean(payload.pipeline_running, 'pipeline_running'),
+    auth_configured: expectBoolean(payload.auth_configured, 'auth_configured'),
+  }
+}
+
+function parsePreflightCheckResponse(payload: unknown): PreflightCheckResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preflight check response is not a JSON object')
+  }
+
+  return {
+    name: expectString(payload.name, 'name'),
+    passed: expectBoolean(payload.passed, 'passed'),
+    message: expectString(payload.message, 'message'),
+    latency_ms: expectNullableNumber(payload.latency_ms, 'latency_ms'),
+  }
+}
+
+export function parsePreflightResponse(payload: unknown): PreflightResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preflight response is not a JSON object')
+  }
+
+  const checks = payload.checks
+  if (!Array.isArray(checks)) {
+    throw new Error('checks must be an array')
+  }
+
+  return {
+    all_passed: expectBoolean(payload.all_passed, 'all_passed'),
+    checks: checks.map((check, index) => {
+      try {
+        return parsePreflightCheckResponse(check)
+      } catch (error) {
+        throw new Error(`checks[${index}] invalid: ${(error as Error).message}`)
+      }
+    }),
   }
 }
 

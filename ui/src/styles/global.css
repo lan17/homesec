@@ -784,7 +784,7 @@ a:hover {
   }
 
   .app-shell__nav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
   .app-shell__header {

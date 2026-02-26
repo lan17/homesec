@@ -16,10 +16,12 @@ import type {
   DiscoveredCameraResponse,
   HealthResponse,
   ListClipsQuery,
+  PreflightResponse,
   ProbeRequest,
   ProbeResponse,
   RuntimeReloadResponse,
   RuntimeStatusResponse,
+  SetupStatusResponse,
   StatsResponse,
 } from './types'
 
@@ -50,6 +52,8 @@ export interface GeneratedHomeSecClient {
     name: string,
     options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
+  getSetupStatus(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<SetupStatusResponse>>
+  runSetupPreflight(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<PreflightResponse>>
   getHealth(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<HealthResponse>>
   getStats(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<StatsResponse>>
   getDiagnostics(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<DiagnosticsResponse>>

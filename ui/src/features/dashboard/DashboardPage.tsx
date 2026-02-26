@@ -1,15 +1,23 @@
+import { Link } from 'react-router-dom'
+
 import { clearApiKey, isAPIError, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
 import { useHealthQuery } from '../../api/hooks/useHealthQuery'
 import { useStatsQuery } from '../../api/hooks/useStatsQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { useSetupRedirect } from '../setup/useSetupRedirect'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { describeAPIError, formatLastUpdated, healthTone } from './status'
 
 export function DashboardPage() {
+  const { shouldRedirect, isChecking } = useSetupRedirect()
   const healthQuery = useHealthQuery()
   const statsQuery = useStatsQuery()
+
+  if (isChecking || shouldRedirect) {
+    return null
+  }
 
   const isRefreshing = healthQuery.isFetching || statsQuery.isFetching
   const latestUpdateAt = Math.max(healthQuery.dataUpdatedAt, statsQuery.dataUpdatedAt)
@@ -40,6 +48,9 @@ export function DashboardPage() {
           <h1 className="page__title">Runtime Overview</h1>
           <p className="page__lead">Live health and stats from FastAPI control plane.</p>
           <p className="subtle">Last updated: {formatLastUpdated(latestUpdateAt)}</p>
+          <Link to="/setup" className="subtle">
+            Re-run setup wizard
+          </Link>
         </div>
         <Button variant="ghost" onClick={refreshAll} disabled={isRefreshing}>
           {isRefreshing ? 'Refreshing...' : 'Refresh'}

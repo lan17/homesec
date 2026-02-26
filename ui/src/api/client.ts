@@ -16,10 +16,12 @@ import type {
   DiagnosticsResponse,
   HealthResponse,
   ListClipsQuery,
+  PreflightResponse,
   ProbeRequest,
   ProbeResponse,
   RuntimeReloadResponse,
   RuntimeStatusResponse,
+  SetupStatusResponse,
   StatsResponse,
 } from './generated/types'
 
@@ -36,8 +38,10 @@ import {
   parseOnvifProbeResponse,
   parseDiagnosticsResponse,
   parseHealthResponse,
+  parsePreflightResponse,
   parseRuntimeReloadResponse,
   parseRuntimeStatusResponse,
+  parseSetupStatusResponse,
   parseStatsResponse,
   withHttpStatus,
 } from './parsing'
@@ -53,6 +57,8 @@ export type ClipSnapshot = ApiSnapshot<ClipResponse>
 export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
 export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
+export type SetupStatusSnapshot = ApiSnapshot<SetupStatusResponse>
+export type PreflightSnapshot = ApiSnapshot<PreflightResponse>
 export type ClipMediaTokenSnapshot = ApiSnapshot<ClipMediaTokenResponsePayload>
 
 export class HomeSecApiClient implements GeneratedHomeSecClient {
@@ -150,6 +156,39 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid delete-camera response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async getSetupStatus(options: ApiRequestOptions = {}): Promise<SetupStatusSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/setup/status', options)
+
+    try {
+      return withHttpStatus(parseSetupStatusResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid setup status response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async runSetupPreflight(options: ApiRequestOptions = {}): Promise<PreflightSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/setup/preflight', {
+      ...options,
+      method: 'POST',
+    })
+
+    try {
+      return withHttpStatus(parsePreflightResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid setup preflight response payload',
         response.status,
         response.payload,
         null,
