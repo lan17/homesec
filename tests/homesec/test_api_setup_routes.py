@@ -18,6 +18,9 @@ from homesec.models.setup import (
     PreflightResponse,
     SetupStatusResponse,
 )
+from homesec.models.setup import (
+    TestConnectionResponse as SetupTestConnectionResponse,
+)
 from homesec.services import setup as setup_service
 
 
@@ -167,6 +170,75 @@ def test_setup_preflight_route_returns_service_response(
     payload = response.json()
     assert payload["all_passed"] is True
     assert payload["checks"][0]["name"] == "postgres"
+
+
+def test_setup_test_connection_route_delegates_to_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup test-connection route should delegate and return service outcome."""
+    # Given: A deterministic test-connection response from the setup service layer
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_test_connection(_: object, __: object) -> SetupTestConnectionResponse:
+        return SetupTestConnectionResponse(
+            success=True,
+            message="Probe passed",
+            latency_ms=8.5,
+            details={"backend": "mqtt"},
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.test_connection", _fake_test_connection)
+
+    # When: Calling setup test-connection route
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={"type": "notifier", "backend": "mqtt", "config": {"host": "localhost"}},
+    )
+
+    # Then: Route returns service payload unchanged
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "message": "Probe passed",
+        "latency_ms": 8.5,
+        "details": {"backend": "mqtt"},
+    }
+
+
+def test_setup_test_connection_route_maps_request_error_to_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup test-connection route should map request dispatch errors to canonical 400."""
+    # Given: A setup service request error with available backend hints
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_test_connection(_: object, __: object) -> SetupTestConnectionResponse:
+        raise setup_service.SetupTestConnectionRequestError(
+            "Unknown notifier backend 'foo'.",
+            available_backends=["mqtt", "sendgrid_email"],
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.test_connection", _fake_test_connection)
+
+    # When: Calling setup test-connection route with unknown backend
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={"type": "notifier", "backend": "foo", "config": {}},
+    )
+
+    # Then: Route emits canonical BAD_REQUEST envelope with backend hints
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "BAD_REQUEST"
+    assert payload["available_backends"] == ["mqtt", "sendgrid_email"]
 
 
 def test_setup_status_route_delegates_to_service(monkeypatch: pytest.MonkeyPatch) -> None:

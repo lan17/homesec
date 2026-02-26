@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import tempfile
 import time
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
+
+from pydantic import BaseModel, Field, ValidationError
 
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.models.config import (
@@ -28,8 +31,27 @@ from homesec.models.setup import (
     PreflightResponse,
     SetupState,
     SetupStatusResponse,
+    TestConnectionRequest,
+    TestConnectionResponse,
 )
 from homesec.models.vlm import VLMConfig
+from homesec.onvif.client import OnvifCameraClient
+from homesec.onvif.discovery import discover_cameras
+from homesec.onvif.service import (
+    DEFAULT_ONVIF_PORT,
+    DEFAULT_PROBE_TIMEOUT_S,
+    OnvifProbeError,
+    OnvifProbeOptions,
+    OnvifProbeTimeoutError,
+    OnvifService,
+)
+from homesec.plugins.registry import PluginType, get_plugin_names, load_plugin, validate_plugin
+from homesec.plugins.storage.local import LocalStorageConfig
+from homesec.sources.ftp import FtpSourceConfig
+from homesec.sources.local_folder import LocalFolderSourceConfig
+from homesec.sources.rtsp.core import RTSPSourceConfig
+from homesec.sources.rtsp.preflight import PreflightError, RTSPStartupPreflight
+from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.state.postgres import PostgresStateStore
 
 if TYPE_CHECKING:
@@ -42,6 +64,8 @@ _NETWORK_PROBE_PORT_ENV = "HOMESEC_SETUP_NETWORK_PROBE_PORT"
 _NETWORK_PROBE_DEFAULT_HOST = "example.com"
 _NETWORK_PROBE_DEFAULT_PORT = 443
 _PREFLIGHT_CHECK_TIMEOUT_S = 10.0
+_TEST_CONNECTION_TIMEOUT_S = 10.0
+_SETUP_TEST_CAMERA_NAME = "setup-test-camera"
 SectionT = TypeVar("SectionT")
 
 
@@ -52,6 +76,35 @@ class SetupFinalizeValidationError(ValueError):
         message = "; ".join(errors) if errors else "Setup finalize validation failed"
         super().__init__(message)
         self.errors = errors
+
+
+class SetupTestConnectionRequestError(ValueError):
+    """Raised when test-connection payload cannot be dispatched."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        available_backends: list[str] | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.available_backends = available_backends
+        self.__cause__ = cause
+
+
+class _PingablePlugin(Protocol):
+    async def ping(self) -> bool: ...
+
+    async def shutdown(self, timeout: float | None = None) -> None: ...
+
+
+class _OnvifTestConnectionConfig(BaseModel):
+    host: str = Field(min_length=1)
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    port: int = Field(default=DEFAULT_ONVIF_PORT, ge=1, le=65535)
+    timeout_s: float = Field(default=DEFAULT_PROBE_TIMEOUT_S, gt=0.0, le=120.0)
 
 
 async def get_setup_status(app: Application) -> SetupStatusResponse:
@@ -87,6 +140,538 @@ async def run_preflight(app: Application) -> PreflightResponse:
     return PreflightResponse(
         checks=list(checks),
         all_passed=all(check.passed for check in checks),
+    )
+
+
+async def test_connection(
+    request: TestConnectionRequest,
+    app: Application,
+) -> TestConnectionResponse:
+    """Validate and probe connectivity for setup-configured integrations."""
+    _ = app
+    connection_type = request.type
+    backend = request.backend.strip().lower()
+
+    match connection_type:
+        case "camera":
+            return await _test_camera_connection(backend=backend, config=request.config)
+        case "storage":
+            return await _test_storage_connection(backend=backend, config=request.config)
+        case "notifier":
+            return await _test_notifier_connection(backend=backend, config=request.config)
+        case "analyzer":
+            return await _test_analyzer_connection(backend=backend, config=request.config)
+
+
+async def _test_camera_connection(
+    *,
+    backend: str,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    match backend:
+        case "rtsp":
+            _ensure_known_backend(PluginType.SOURCE, backend)
+            return await _test_rtsp_camera_connection(config=config)
+        case "ftp":
+            _ensure_known_backend(PluginType.SOURCE, backend)
+            return await _test_ftp_camera_connection(config=config)
+        case "local_folder":
+            _ensure_known_backend(PluginType.SOURCE, backend)
+            return await _test_local_folder_camera_connection(config=config)
+        case "onvif":
+            return await _test_onvif_camera_connection(config=config)
+        case _:
+            _ensure_known_backend(PluginType.SOURCE, backend)
+            return _result(
+                success=False,
+                message=f"Camera backend {backend!r} does not implement connection testing yet.",
+            )
+
+
+async def _test_storage_connection(
+    *,
+    backend: str,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    if backend == "local":
+        return _test_local_storage_connection(config=config)
+    return await _test_plugin_ping_connection(
+        plugin_type=PluginType.STORAGE,
+        backend=backend,
+        config=config,
+    )
+
+
+async def _test_notifier_connection(
+    *,
+    backend: str,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    return await _test_plugin_ping_connection(
+        plugin_type=PluginType.NOTIFIER,
+        backend=backend,
+        config=config,
+    )
+
+
+async def _test_analyzer_connection(
+    *,
+    backend: str,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    return await _test_plugin_ping_connection(
+        plugin_type=PluginType.ANALYZER,
+        backend=backend,
+        config=config,
+    )
+
+
+async def _test_rtsp_camera_connection(
+    *,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    start = time.perf_counter()
+    try:
+        validated = validate_plugin(
+            PluginType.SOURCE,
+            "rtsp",
+            config,
+            camera_name=_SETUP_TEST_CAMERA_NAME,
+        )
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+
+    if not isinstance(validated, RTSPSourceConfig):
+        return _result(
+            success=False,
+            message=f"Unexpected rtsp config model: {type(validated).__name__}",
+            start=start,
+        )
+
+    primary_url = _resolve_rtsp_primary_url(validated)
+    if not primary_url:
+        return _result(
+            success=False,
+            message="RTSP URL not resolved. Provide rtsp_url or set rtsp_url_env.",
+            start=start,
+        )
+    detect_url = _resolve_rtsp_detect_url(validated, primary_url)
+
+    with tempfile.TemporaryDirectory(prefix="homesec-rtsp-probe-") as temp_dir:
+        preflight = RTSPStartupPreflight(
+            output_dir=Path(temp_dir),
+            rtsp_connect_timeout_s=float(validated.stream.connect_timeout_s),
+            rtsp_io_timeout_s=float(validated.stream.io_timeout_s),
+            command_timeout_s=min(_TEST_CONNECTION_TIMEOUT_S, 8.0),
+        )
+        try:
+            outcome = await asyncio.wait_for(
+                asyncio.to_thread(
+                    preflight.run,
+                    camera_name=validated.camera_name or _SETUP_TEST_CAMERA_NAME,
+                    primary_rtsp_url=primary_url,
+                    detect_rtsp_url=detect_url,
+                ),
+                timeout=_TEST_CONNECTION_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            return _result(
+                success=False,
+                message=f"RTSP probe timed out after {_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
+                start=start,
+            )
+        except Exception as exc:
+            return _result(
+                success=False,
+                message=f"RTSP probe failed: {exc}",
+                start=start,
+            )
+
+    if isinstance(outcome, PreflightError):
+        return _result(
+            success=False,
+            message=outcome.message,
+            start=start,
+            details={
+                "stage": outcome.stage,
+                "camera_key": outcome.camera_key,
+            },
+        )
+
+    return _result(
+        success=True,
+        message="RTSP probe succeeded.",
+        start=start,
+        details={
+            "session_mode": outcome.diagnostics.session_mode,
+            "selected_recording_profile": outcome.diagnostics.selected_recording_profile,
+            "probed_streams": len(outcome.diagnostics.probes),
+        },
+    )
+
+
+async def _test_ftp_camera_connection(
+    *,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    start = time.perf_counter()
+    try:
+        validated = validate_plugin(
+            PluginType.SOURCE,
+            "ftp",
+            config,
+            camera_name=_SETUP_TEST_CAMERA_NAME,
+        )
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+
+    if not isinstance(validated, FtpSourceConfig):
+        return _result(
+            success=False,
+            message=f"Unexpected ftp config model: {type(validated).__name__}",
+            start=start,
+        )
+
+    try:
+        bound_port = await asyncio.wait_for(
+            asyncio.to_thread(_probe_tcp_bind, validated.host, int(validated.port)),
+            timeout=_TEST_CONNECTION_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        return _result(
+            success=False,
+            message=f"FTP bind probe timed out after {_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
+            start=start,
+        )
+    except OSError as exc:
+        return _result(
+            success=False,
+            message=f"FTP bind probe failed: {exc}",
+            start=start,
+        )
+
+    return _result(
+        success=True,
+        message="FTP bind probe succeeded.",
+        start=start,
+        details={"host": validated.host, "bound_port": bound_port},
+    )
+
+
+async def _test_local_folder_camera_connection(
+    *,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    start = time.perf_counter()
+    try:
+        validated = validate_plugin(
+            PluginType.SOURCE,
+            "local_folder",
+            config,
+            camera_name=_SETUP_TEST_CAMERA_NAME,
+        )
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+
+    if not isinstance(validated, LocalFolderSourceConfig):
+        return _result(
+            success=False,
+            message=f"Unexpected local_folder config model: {type(validated).__name__}",
+            start=start,
+        )
+
+    watch_dir = Path(validated.watch_dir).expanduser()
+    if not watch_dir.exists():
+        return _result(
+            success=False,
+            message=f"Watch directory does not exist: {watch_dir}",
+            start=start,
+        )
+    if not watch_dir.is_dir():
+        return _result(
+            success=False,
+            message=f"Watch path is not a directory: {watch_dir}",
+            start=start,
+        )
+    if not os.access(watch_dir, os.R_OK | os.W_OK | os.X_OK):
+        return _result(
+            success=False,
+            message=f"Watch directory is not readable/writable: {watch_dir}",
+            start=start,
+        )
+
+    return _result(
+        success=True,
+        message="Local folder path is accessible.",
+        start=start,
+        details={"watch_dir": str(watch_dir.resolve())},
+    )
+
+
+async def _test_onvif_camera_connection(
+    *,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    start = time.perf_counter()
+    try:
+        request = _OnvifTestConnectionConfig.model_validate(config)
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+
+    service = OnvifService(
+        discover_fn=discover_cameras,
+        client_factory=OnvifCameraClient,
+    )
+    timeout_s = min(request.timeout_s, _TEST_CONNECTION_TIMEOUT_S)
+    try:
+        probe_result = await service.probe(
+            OnvifProbeOptions(
+                host=request.host,
+                username=request.username,
+                password=request.password,
+                port=int(request.port),
+                timeout_s=timeout_s,
+            )
+        )
+    except OnvifProbeTimeoutError:
+        return _result(
+            success=False,
+            message=f"ONVIF probe timed out after {timeout_s:.1f}s.",
+            start=start,
+        )
+    except OnvifProbeError as exc:
+        return _result(
+            success=False,
+            message=f"ONVIF probe failed: {exc}",
+            start=start,
+        )
+
+    return _result(
+        success=True,
+        message="ONVIF probe succeeded.",
+        start=start,
+        details={
+            "profiles": len(probe_result.profiles),
+            "streams": len(probe_result.streams),
+        },
+    )
+
+
+def _test_local_storage_connection(*, config: dict[str, object]) -> TestConnectionResponse:
+    start = time.perf_counter()
+    _ensure_known_backend(PluginType.STORAGE, "local")
+    try:
+        validated = validate_plugin(PluginType.STORAGE, "local", config)
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+
+    if not isinstance(validated, LocalStorageConfig):
+        return _result(
+            success=False,
+            message=f"Unexpected local storage config model: {type(validated).__name__}",
+            start=start,
+        )
+
+    root = Path(validated.root).expanduser()
+    if root.exists():
+        if not root.is_dir():
+            return _result(
+                success=False,
+                message=f"Storage root is not a directory: {root}",
+                start=start,
+            )
+        if not os.access(root, os.R_OK | os.W_OK | os.X_OK):
+            return _result(
+                success=False,
+                message=f"Storage root is not readable/writable: {root}",
+                start=start,
+            )
+        return _result(
+            success=True,
+            message="Local storage root is accessible.",
+            start=start,
+            details={"root": str(root.resolve())},
+        )
+
+    parent = _nearest_existing_parent(root)
+    if parent is None:
+        return _result(
+            success=False,
+            message=f"No existing parent directory for storage root: {root}",
+            start=start,
+        )
+    if not os.access(parent, os.W_OK | os.X_OK):
+        return _result(
+            success=False,
+            message=f"Storage root parent is not writable: {parent}",
+            start=start,
+        )
+    return _result(
+        success=True,
+        message="Local storage root can be created.",
+        start=start,
+        details={"root": str(root), "writable_parent": str(parent)},
+    )
+
+
+async def _test_plugin_ping_connection(
+    *,
+    plugin_type: PluginType,
+    backend: str,
+    config: dict[str, object],
+) -> TestConnectionResponse:
+    start = time.perf_counter()
+    _ensure_known_backend(plugin_type, backend)
+
+    try:
+        validated_config = validate_plugin(plugin_type, backend, config)
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+
+    plugin: _PingablePlugin | None = None
+    try:
+        plugin = load_plugin(plugin_type, backend, validated_config)
+        ok = await asyncio.wait_for(plugin.ping(), timeout=_TEST_CONNECTION_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return _result(
+            success=False,
+            message=f"{plugin_type.value} probe timed out after {_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
+            start=start,
+        )
+    except Exception as exc:
+        return _result(
+            success=False,
+            message=f"{plugin_type.value} probe failed: {exc}",
+            start=start,
+        )
+    finally:
+        if plugin is not None:
+            await _shutdown_plugin(plugin)
+
+    if not ok:
+        return _result(
+            success=False,
+            message=f"{plugin_type.value} probe did not pass health checks.",
+            start=start,
+        )
+    return _result(
+        success=True,
+        message=f"{plugin_type.value} probe succeeded.",
+        start=start,
+    )
+
+
+def _ensure_known_backend(plugin_type: PluginType, backend: str) -> None:
+    available = get_plugin_names(plugin_type)
+    if backend in available:
+        return
+    raise SetupTestConnectionRequestError(
+        (
+            f"Unknown {plugin_type.value} backend {backend!r}. "
+            f"Available backends: {', '.join(available)}"
+        ),
+        available_backends=available,
+    )
+
+
+def _resolve_rtsp_primary_url(config: RTSPSourceConfig) -> str | None:
+    if config.rtsp_url_env:
+        env_url = os.getenv(config.rtsp_url_env)
+        if env_url:
+            return env_url
+    return config.rtsp_url
+
+
+def _resolve_rtsp_detect_url(config: RTSPSourceConfig, primary_url: str) -> str:
+    if config.detect_rtsp_url_env:
+        env_url = os.getenv(config.detect_rtsp_url_env)
+        if env_url:
+            return env_url
+    if config.detect_rtsp_url:
+        return config.detect_rtsp_url
+    derived = derive_detect_rtsp_url(primary_url)
+    if derived is not None:
+        return derived.url
+    return primary_url
+
+
+def _probe_tcp_bind(host: str, port: int) -> int:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        return int(sock.getsockname()[1])
+
+
+async def _shutdown_plugin(plugin: _PingablePlugin) -> None:
+    try:
+        await asyncio.wait_for(plugin.shutdown(timeout=5.0), timeout=5.0)
+    except Exception:
+        # Shutdown failure should not hide probe result.
+        return
+
+
+def _nearest_existing_parent(path: Path) -> Path | None:
+    current = path
+    while not current.exists():
+        if current == current.parent:
+            return None
+        current = current.parent
+    return current
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    errors = exc.errors(include_url=False)
+    if not errors:
+        return "Configuration validation failed."
+    first = errors[0]
+    loc_parts = [str(part) for part in first.get("loc", []) if str(part)]
+    location = ".".join(loc_parts)
+    message = str(first.get("msg", "invalid value"))
+    if location:
+        return f"Configuration validation failed at {location}: {message}"
+    return f"Configuration validation failed: {message}"
+
+
+def _result(
+    *,
+    success: bool,
+    message: str,
+    start: float | None = None,
+    details: dict[str, object] | None = None,
+) -> TestConnectionResponse:
+    latency_ms = None
+    if start is not None:
+        latency_ms = (time.perf_counter() - start) * 1000.0
+    return TestConnectionResponse(
+        success=success,
+        message=message,
+        latency_ms=latency_ms,
+        details=details,
     )
 
 
