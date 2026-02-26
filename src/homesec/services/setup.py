@@ -10,7 +10,7 @@ import tempfile
 import time
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -68,6 +68,7 @@ _NETWORK_PROBE_DEFAULT_PORT = 443
 _PREFLIGHT_CHECK_TIMEOUT_S = 10.0
 _TEST_CONNECTION_TIMEOUT_CAP_S = 30.0
 _RTSP_TEST_CONNECTION_TIMEOUT_S = 10.0
+_RTSP_PREFLIGHT_COMMAND_TIMEOUT_CAP_S = 8.0
 _FTP_TEST_CONNECTION_TIMEOUT_S = 5.0
 _ONVIF_TEST_CONNECTION_TIMEOUT_S = 15.0
 _PLUGIN_TEST_CONNECTION_TIMEOUT_S = 5.0
@@ -158,8 +159,7 @@ async def test_connection(
     app: Application,
 ) -> TestConnectionResponse:
     """Validate and probe connectivity for setup-configured integrations."""
-    lock = _get_test_connection_lock(app)
-    async with lock:
+    async with app.setup_test_connection_lock:
         connection_type = request.type
         backend = request.backend.strip().lower()
 
@@ -172,14 +172,6 @@ async def test_connection(
                 return await _test_notifier_connection(backend=backend, config=request.config)
             case "analyzer":
                 return await _test_analyzer_connection(backend=backend, config=request.config)
-
-
-def _get_test_connection_lock(app: Application) -> asyncio.Lock:
-    lock = cast(asyncio.Lock | None, getattr(app, "_setup_test_connection_lock", None))
-    if lock is None:
-        lock = asyncio.Lock()
-        cast(Any, app)._setup_test_connection_lock = lock
-    return lock
 
 
 async def _test_camera_connection(
@@ -207,6 +199,7 @@ async def _test_camera_connection(
         case "onvif":
             return await _test_onvif_camera_connection(config=config)
         case _:
+            # Defensive fallback for known-but-not-yet-probed camera source plugins.
             return _result(
                 success=False,
                 message=f"Camera backend {backend!r} does not implement connection testing yet.",
@@ -291,7 +284,11 @@ async def _test_rtsp_camera_connection(
             output_dir=Path(temp_dir),
             rtsp_connect_timeout_s=float(validated.stream.connect_timeout_s),
             rtsp_io_timeout_s=float(validated.stream.io_timeout_s),
-            command_timeout_s=min(_RTSP_TEST_CONNECTION_TIMEOUT_S, 8.0),
+            # Keep ffmpeg command execution bounded tighter than full request timeout.
+            command_timeout_s=min(
+                _RTSP_TEST_CONNECTION_TIMEOUT_S,
+                _RTSP_PREFLIGHT_COMMAND_TIMEOUT_CAP_S,
+            ),
         )
         try:
             outcome = await asyncio.wait_for(
@@ -387,7 +384,7 @@ async def _test_ftp_camera_connection(
 
     return _result(
         success=True,
-        message="FTP bind probe succeeded.",
+        message="FTP listen address is available.",
         start=start,
         details={"host": validated.host, "bound_port": bound_port},
     )
@@ -702,6 +699,7 @@ def _nearest_existing_parent(path: Path) -> Path | None:
 
 
 def _format_validation_error(exc: ValidationError) -> str:
+    # Return only the first validation issue to keep setup probe UX concise.
     errors = exc.errors(include_url=False)
     if not errors:
         return "Configuration validation failed."

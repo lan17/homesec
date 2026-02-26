@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import time
 from collections.abc import Callable
@@ -208,6 +209,7 @@ class _StubApp:
         self.runtime_reload_calls = 0
         self.restart_requested = False
         self.uptime_seconds = 0.0
+        self._setup_test_connection_lock = asyncio.Lock()
 
     @property
     def config(self):  # type: ignore[override]
@@ -238,6 +240,10 @@ class _StubApp:
 
     def request_restart(self) -> None:
         self.restart_requested = True
+
+    @property
+    def setup_test_connection_lock(self) -> asyncio.Lock:
+        return self._setup_test_connection_lock
 
 
 def _write_config(tmp_path, cameras: list[dict]) -> ConfigManager:

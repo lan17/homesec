@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,6 +48,7 @@ class _StubSetupApp:
         self.storage = _StubSetupStorage()
         self.config_manager = config_manager or ConfigManager(Path("config/config.yaml"))
         self.sources: list[object] = []
+        self._setup_test_connection_lock = asyncio.Lock()
         self.pipeline_running = False
         self.uptime_seconds = 0.0
         self._config = SimpleNamespace(
@@ -63,6 +65,10 @@ class _StubSetupApp:
     @property
     def server_config(self) -> FastAPIServerConfig:
         return self._config.server
+
+    @property
+    def setup_test_connection_lock(self) -> asyncio.Lock:
+        return self._setup_test_connection_lock
 
     def get_source(self, camera_name: str) -> None:
         _ = camera_name

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +19,12 @@ from homesec.services import setup as setup_service
 @dataclass
 class _StubApp:
     """Minimal app stub for setup service API."""
+
+    _setup_test_connection_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    @property
+    def setup_test_connection_lock(self) -> asyncio.Lock:
+        return self._setup_test_connection_lock
 
 
 class _DummyConfig(BaseModel):
