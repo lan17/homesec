@@ -57,7 +57,7 @@ describe('OnvifDiscoveryWizard', () => {
     expect((screen.getByLabelText('ONVIF port') as HTMLInputElement).value).toBe('8899')
   })
 
-  it('creates camera with injected RTSP credentials and applyChanges forwarding', async () => {
+  it('creates camera with injected RTSP credentials', async () => {
     // Given: Discovery + probe return a stream URI without embedded credentials
     discoverOnvifCamerasMock.mockResolvedValue([
       {
@@ -110,7 +110,7 @@ describe('OnvifDiscoveryWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Probe camera' }))
     await user.click(await screen.findByRole('button', { name: 'Create camera' }))
 
-    // Then: Create payload includes RTSP URI with credentials and applyChanges=true
+    // Then: Create payload includes RTSP URI with credentials
     expect(onCreateCamera).toHaveBeenCalledTimes(1)
     expect(onCreateCamera.mock.calls[0]?.[0]).toMatchObject({
       enabled: true,
@@ -119,7 +119,6 @@ describe('OnvifDiscoveryWizard', () => {
         rtsp_url: 'rtsp://admin:secret@camera.local/stream',
       },
     })
-    expect(onCreateCamera.mock.calls[0]?.[1]).toBe(true)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 

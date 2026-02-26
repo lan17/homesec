@@ -380,6 +380,62 @@ a:hover {
   font-size: 0.84rem;
 }
 
+.camera-add-flow {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.camera-add-flow__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.camera-add-flow__title {
+  margin: 0;
+  font-size: 1.02rem;
+}
+
+.camera-add-flow__backend-grid {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.camera-add-flow__backend-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+  color: var(--text-primary);
+  padding: var(--space-3);
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.camera-add-flow__backend-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.camera-add-flow__backend-card:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.camera-add-flow__backend-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.camera-add-flow__backend-description {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
 .camera-restart-banner {
   display: flex;
   align-items: center;

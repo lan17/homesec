@@ -121,6 +121,14 @@ function setupPage({
   }
 }
 
+async function openManualCameraCreateFlow(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  // Given: The add-camera launcher is visible
+  await user.click(screen.getByRole('button', { name: 'Add camera' }))
+
+  // When: Operator selects RTSP backend from reusable backend picker
+  await user.click(screen.getByRole('button', { name: /RTSP/i }))
+}
+
 describe('CamerasPage', () => {
   beforeEach(() => {
     useCamerasQueryMock.mockReset()
@@ -149,7 +157,8 @@ describe('CamerasPage', () => {
     const harness = setupPage()
     const user = userEvent.setup()
 
-    // When: Operator enters camera name and submits create form
+    // When: Operator opens flow, picks backend, enters camera name, and submits
+    await openManualCameraCreateFlow(user)
     await user.type(screen.getByLabelText('Camera name'), 'front_door')
     await user.click(screen.getByRole('button', { name: 'Create camera' }))
 
@@ -173,8 +182,10 @@ describe('CamerasPage', () => {
     const harness = setupPage()
     const user = userEvent.setup()
 
-    // When: Operator enables immediate apply and submits camera create
+    // When: Operator enables immediate apply, enters flow, and submits create
+    await user.click(screen.getByRole('button', { name: 'Add camera' }))
     await user.click(screen.getByLabelText('Apply changes immediately (runtime reload)'))
+    await user.click(screen.getByRole('button', { name: /RTSP/i }))
     await user.type(screen.getByLabelText('Camera name'), 'side_gate')
     await user.click(screen.getByRole('button', { name: 'Create camera' }))
 
@@ -191,7 +202,8 @@ describe('CamerasPage', () => {
     const harness = setupPage()
     const user = userEvent.setup()
 
-    // When: Operator submits an invalid JSON source_config
+    // When: Operator opens flow and submits an invalid JSON source_config
+    await openManualCameraCreateFlow(user)
     await user.type(screen.getByLabelText('Camera name'), 'garage')
     fireEvent.change(screen.getByLabelText('Source config (JSON)'), {
       target: { value: '{invalid-json' },

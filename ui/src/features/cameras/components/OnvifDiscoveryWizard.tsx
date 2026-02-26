@@ -18,16 +18,13 @@ import {
 import { OnvifDiscoverStep } from './OnvifDiscoverStep'
 import { OnvifProbeStep, type OnvifProbeCredentials } from './OnvifProbeStep'
 import { OnvifStreamSelectStep } from './OnvifStreamSelectStep'
-import type { CameraCreateActionResult } from '../hooks/useCameraActions'
+import type { CameraCreateActionResult } from '../actions'
 
 interface OnvifDiscoveryWizardProps {
   applyChangesImmediately: boolean
   createPending: boolean
   isMutating: boolean
-  onCreateCamera: (
-    payload: CameraCreate,
-    applyChanges: boolean,
-  ) => Promise<CameraCreateActionResult>
+  onCreateCamera: (payload: CameraCreate) => Promise<CameraCreateActionResult>
   onClose: () => void
 }
 
@@ -323,17 +320,14 @@ export function OnvifDiscoveryWizard({
       username: state.probeCredentials.username,
       password: state.probeCredentials.password,
     })
-    const createResult = await onCreateCamera(
-      {
-        name: trimmedName,
-        enabled: true,
-        source_backend: 'rtsp',
-        source_config: {
-          rtsp_url: rtspUrl,
-        },
+    const createResult = await onCreateCamera({
+      name: trimmedName,
+      enabled: true,
+      source_backend: 'rtsp',
+      source_config: {
+        rtsp_url: rtspUrl,
       },
-      applyChangesImmediately,
-    )
+    })
     if (createResult.ok) {
       closeWizard()
       return
