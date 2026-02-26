@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -214,6 +215,53 @@ async def test_test_connection_notifier_timeout_returns_failure(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_notifier_normalizes_backend_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Notifier test should normalize backend strings before plugin dispatch."""
+    # Given: A notifier request with whitespace and mixed-case backend name
+    plugin = _StubPingPlugin(ping_result=True)
+
+    def _fake_validate_plugin(
+        plugin_type: setup_service.PluginType,
+        backend: str,
+        config: dict[str, Any] | BaseModel,
+        **runtime_context: object,
+    ) -> BaseModel:
+        _ = (config, runtime_context)
+        assert plugin_type == setup_service.PluginType.NOTIFIER
+        assert backend == "mqtt"
+        return _DummyConfig()
+
+    def _fake_load_plugin(
+        plugin_type: setup_service.PluginType,
+        backend: str,
+        config: dict[str, Any] | BaseModel,
+        **runtime_context: object,
+    ) -> _StubPingPlugin:
+        _ = (config, runtime_context)
+        assert plugin_type == setup_service.PluginType.NOTIFIER
+        assert backend == "mqtt"
+        return plugin
+
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["mqtt"] if plugin_type == setup_service.PluginType.NOTIFIER else [],
+    )
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service, "load_plugin", _fake_load_plugin)
+    request = SetupTestConnectionRequest(type="notifier", backend=" MQTT ", config={})
+
+    # When: Running notifier test-connection
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The probe succeeds after backend normalization in dispatcher
+    assert response.success is True
+    assert plugin.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_test_connection_camera_rtsp_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -278,6 +326,191 @@ async def test_test_connection_camera_rtsp_success(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_camera_rtsp_validation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera rtsp test should return config validation failure details."""
+
+    # Given: An RTSP backend whose plugin validation raises a ValidationError
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.RTSPSourceConfig.model_validate({})
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["rtsp"] if plugin_type == setup_service.PluginType.SOURCE else [],
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="rtsp", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Validation failure is returned as a non-successful probe response
+    assert response.success is False
+    assert "Configuration validation failed" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_rtsp_env_url_missing_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera rtsp test should fail when env-based URL is configured but unset."""
+
+    # Given: An RTSP config that only references a missing environment variable
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.RTSPSourceConfig(rtsp_url_env="HOMESEC_RTSP_MISSING")
+
+    monkeypatch.delenv("HOMESEC_RTSP_MISSING", raising=False)
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["rtsp"] if plugin_type == setup_service.PluginType.SOURCE else [],
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="rtsp", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service returns a clear failure explaining unresolved RTSP URL
+    assert response.success is False
+    assert "RTSP URL not resolved" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_rtsp_timeout_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera rtsp test should fail when startup preflight exceeds timeout budget."""
+
+    # Given: An RTSP preflight implementation that takes longer than timeout budget
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
+
+    class _SlowStartupPreflight:
+        def __init__(
+            self,
+            *,
+            output_dir: Path,
+            rtsp_connect_timeout_s: float,
+            rtsp_io_timeout_s: float,
+            command_timeout_s: float,
+        ) -> None:
+            _ = (output_dir, rtsp_connect_timeout_s, rtsp_io_timeout_s, command_timeout_s)
+
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+        ) -> object:
+            _ = (camera_name, primary_rtsp_url, detect_rtsp_url)
+            time.sleep(0.05)
+            return SimpleNamespace(
+                diagnostics=SimpleNamespace(
+                    session_mode="single_stream",
+                    selected_recording_profile="copy_audio",
+                    probes=[{"stream": "main"}],
+                )
+            )
+
+    monkeypatch.setattr(setup_service, "_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service, "RTSPStartupPreflight", _SlowStartupPreflight)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["rtsp"] if plugin_type == setup_service.PluginType.SOURCE else [],
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="rtsp", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service returns timeout failure response
+    assert response.success is False
+    assert "timed out" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_rtsp_preflight_error_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera rtsp test should include stage/camera details on preflight error outcome."""
+
+    # Given: An RTSP preflight run that returns a PreflightError result value
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
+
+    class _FailingStartupPreflight:
+        def __init__(
+            self,
+            *,
+            output_dir: Path,
+            rtsp_connect_timeout_s: float,
+            rtsp_io_timeout_s: float,
+            command_timeout_s: float,
+        ) -> None:
+            _ = (output_dir, rtsp_connect_timeout_s, rtsp_io_timeout_s, command_timeout_s)
+
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+        ) -> object:
+            _ = (camera_name, primary_rtsp_url, detect_rtsp_url)
+            return setup_service.PreflightError(
+                camera_key="front-door",
+                stage="selection",
+                message="No compatible streams found",
+            )
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service, "RTSPStartupPreflight", _FailingStartupPreflight)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["rtsp"] if plugin_type == setup_service.PluginType.SOURCE else [],
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="rtsp", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Response captures preflight failure details for UI troubleshooting
+    assert response.success is False
+    assert response.details == {"stage": "selection", "camera_key": "front-door"}
+
+
+@pytest.mark.asyncio
 async def test_test_connection_camera_ftp_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -310,6 +543,80 @@ async def test_test_connection_camera_ftp_success(
     assert response.success is True
     assert response.details is not None
     assert response.details["bound_port"] == 42424
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_ftp_timeout_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera ftp test should fail when bind probe exceeds timeout."""
+
+    # Given: An FTP bind probe that blocks longer than timeout budget
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.FtpSourceConfig(host="127.0.0.1", port=0)
+
+    def _slow_probe(*_args: object, **_kwargs: object) -> int:
+        time.sleep(0.05)
+        return 42424
+
+    monkeypatch.setattr(setup_service, "_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service, "_probe_tcp_bind", _slow_probe)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["ftp"] if plugin_type == setup_service.PluginType.SOURCE else [],
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="ftp", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service returns timeout failure response
+    assert response.success is False
+    assert "timed out" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_ftp_bind_oserror_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera ftp test should fail when bind probe raises OSError."""
+
+    # Given: An FTP bind probe that fails with socket-level OSError
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.FtpSourceConfig(host="127.0.0.1", port=2121)
+
+    def _failing_probe(*_args: object, **_kwargs: object) -> int:
+        raise OSError("Address already in use")
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service, "_probe_tcp_bind", _failing_probe)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["ftp"] if plugin_type == setup_service.PluginType.SOURCE else [],
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="ftp", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service reports bind-probe failure without raising
+    assert response.success is False
+    assert "bind probe failed" in response.message
 
 
 @pytest.mark.asyncio
@@ -349,6 +656,88 @@ async def test_test_connection_camera_onvif_success(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_camera_onvif_validation_failure() -> None:
+    """Camera onvif test should fail when required config fields are missing."""
+    # Given: An ONVIF request missing required host/username/password fields
+    request = SetupTestConnectionRequest(type="camera", backend="onvif", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service returns a validation failure response
+    assert response.success is False
+    assert "Configuration validation failed" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_onvif_timeout_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera onvif test should map timeout errors to non-successful probe responses."""
+
+    # Given: An ONVIF service whose probe raises a timeout-specific service error
+    class _TimeoutOnvifService:
+        def __init__(self, *, discover_fn: object, client_factory: object) -> None:
+            _ = (discover_fn, client_factory)
+
+        async def probe(self, options: object) -> object:
+            _ = options
+            raise setup_service.OnvifProbeTimeoutError(1.0, cause=TimeoutError())
+
+    monkeypatch.setattr(setup_service, "OnvifService", _TimeoutOnvifService)
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="onvif",
+        config={
+            "host": "192.168.1.10",
+            "username": "admin",
+            "password": "secret",
+        },
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service returns timeout failure response
+    assert response.success is False
+    assert "timed out" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_onvif_probe_error_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera onvif test should map probe errors to non-successful probe responses."""
+
+    # Given: An ONVIF service whose probe raises a non-timeout service error
+    class _FailingOnvifService:
+        def __init__(self, *, discover_fn: object, client_factory: object) -> None:
+            _ = (discover_fn, client_factory)
+
+        async def probe(self, options: object) -> object:
+            _ = options
+            raise setup_service.OnvifProbeError("Authentication failed", cause=RuntimeError())
+
+    monkeypatch.setattr(setup_service, "OnvifService", _FailingOnvifService)
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="onvif",
+        config={
+            "host": "192.168.1.10",
+            "username": "admin",
+            "password": "secret",
+        },
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service returns probe failure response with ONVIF-specific context
+    assert response.success is False
+    assert "ONVIF probe failed" in response.message
+
+
+@pytest.mark.asyncio
 async def test_test_connection_storage_local_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -383,6 +772,163 @@ async def test_test_connection_storage_local_success(
     assert response.success is True
     assert response.details is not None
     assert response.details["root"] == str(root.resolve())
+
+
+@pytest.mark.asyncio
+async def test_test_connection_storage_local_rejects_file_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Storage local test should fail when configured root points to a file."""
+    # Given: A local storage config rooted at an existing regular file
+    file_root = tmp_path / "not-a-directory.txt"
+    file_root.write_text("x")
+
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.LocalStorageConfig(root=str(file_root))
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["local"] if plugin_type == setup_service.PluginType.STORAGE else [],
+    )
+    request = SetupTestConnectionRequest(type="storage", backend="local", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service reports root path must be a directory
+    assert response.success is False
+    assert "not a directory" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_storage_local_rejects_unwritable_existing_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Storage local test should fail when existing root lacks rwx access."""
+    # Given: A local storage config rooted at an existing directory with denied access
+    root = tmp_path / "clips-denied"
+    root.mkdir(parents=True)
+
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.LocalStorageConfig(root=str(root))
+
+    original_access = setup_service.os.access
+
+    def _fake_access(path: object, mode: int) -> bool:
+        if Path(str(path)) == root and mode == (
+            setup_service.os.R_OK | setup_service.os.W_OK | setup_service.os.X_OK
+        ):
+            return False
+        return original_access(path, mode)
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service.os, "access", _fake_access)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["local"] if plugin_type == setup_service.PluginType.STORAGE else [],
+    )
+    request = SetupTestConnectionRequest(type="storage", backend="local", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service reports root access constraints as a failed probe result
+    assert response.success is False
+    assert "not readable/writable" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_storage_local_rejects_unwritable_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Storage local test should fail when missing root's nearest parent is not writable."""
+    # Given: A local storage config rooted under an existing but unwritable parent
+    parent = tmp_path / "parent"
+    parent.mkdir(parents=True)
+    missing_root = parent / "child" / "clips"
+
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.LocalStorageConfig(root=str(missing_root))
+
+    original_access = setup_service.os.access
+
+    def _fake_access(path: object, mode: int) -> bool:
+        if Path(str(path)) == parent and mode == (setup_service.os.W_OK | setup_service.os.X_OK):
+            return False
+        return original_access(path, mode)
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service.os, "access", _fake_access)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["local"] if plugin_type == setup_service.PluginType.STORAGE else [],
+    )
+    request = SetupTestConnectionRequest(type="storage", backend="local", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service reports missing root cannot be created under unwritable parent
+    assert response.success is False
+    assert "parent is not writable" in response.message
+
+
+@pytest.mark.asyncio
+async def test_test_connection_storage_local_rejects_missing_parent_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Storage local test should fail when no existing parent directory is found."""
+
+    # Given: A local storage config with helper returning no existing parent
+    def _fake_validate_plugin(
+        plugin_type: object,
+        backend: str,
+        config: object,
+        **runtime_context: object,
+    ) -> object:
+        _ = (plugin_type, backend, config, runtime_context)
+        return setup_service.LocalStorageConfig(root="/nonexistent/root/dir")
+
+    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(setup_service, "_nearest_existing_parent", lambda _path: None)
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["local"] if plugin_type == setup_service.PluginType.STORAGE else [],
+    )
+    request = SetupTestConnectionRequest(type="storage", backend="local", config={})
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Service reports missing parent chain as a failed probe result
+    assert response.success is False
+    assert "No existing parent directory" in response.message
 
 
 @pytest.mark.asyncio
@@ -512,6 +1058,36 @@ async def test_test_connection_analyzer_ignores_shutdown_failure(
 
     # Then: Successful probe result is returned despite shutdown cleanup error
     assert response.success is True
+
+
+@pytest.mark.asyncio
+async def test_test_connection_analyzer_validation_failure_returns_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Analyzer test should map plugin-validation errors to non-successful responses."""
+
+    # Given: A registered analyzer backend whose config validation raises ValidationError
+    class _RequiredConfig(BaseModel):
+        required: str
+
+    monkeypatch.setattr(
+        setup_service,
+        "get_plugin_names",
+        lambda plugin_type: ["openai"] if plugin_type == setup_service.PluginType.ANALYZER else [],
+    )
+    monkeypatch.setattr(
+        setup_service,
+        "validate_plugin",
+        lambda *_args, **_kwargs: _RequiredConfig.model_validate({}),
+    )
+    request = SetupTestConnectionRequest(type="analyzer", backend="openai", config={})
+
+    # When: Running analyzer test-connection
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: Response returns canonical validation failure details
+    assert response.success is False
+    assert "Configuration validation failed" in response.message
 
 
 @pytest.mark.asyncio
