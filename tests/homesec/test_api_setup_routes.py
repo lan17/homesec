@@ -241,6 +241,30 @@ def test_setup_test_connection_route_maps_request_error_to_400(
     assert payload["available_backends"] == ["mqtt", "sendgrid_email"]
 
 
+def test_setup_test_connection_route_returns_canonical_422_for_invalid_payload() -> None:
+    """Setup test-connection route should return canonical validation envelope for bad input."""
+    # Given: A setup app and a malformed test-connection payload with invalid target type
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    # When: Calling setup test-connection with an invalid request body
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={"type": "invalid-target", "backend": "mqtt", "config": {}},
+    )
+
+    # Then: Route returns canonical request-validation error envelope
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"] == "Request validation failed"
+    assert payload["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert isinstance(payload["validation_errors"], list)
+    assert payload["validation_errors"]
+
+
 def test_setup_status_route_delegates_to_service(monkeypatch: pytest.MonkeyPatch) -> None:
     """Setup status route should delegate response generation to setup service."""
     # Given: A deterministic setup status result from service layer

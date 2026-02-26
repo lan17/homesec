@@ -54,6 +54,7 @@ class _MatrixCase:
     expected_status: int
     bootstrap_mode: bool = False
     expected_error_code: str | None = None
+    request_json: dict[str, object] | None = None
 
 
 def _sample_clip() -> ClipStateData:
@@ -106,7 +107,8 @@ def _build_client(tmp_path: Path, case: _MatrixCase) -> tuple[TestClient, _StubR
 def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]):
     if case.method == "GET":
         return client.get(case.path, headers=headers)
-    return client.post(case.path, headers=headers, json={})
+    request_json = case.request_json if case.request_json is not None else {}
+    return client.post(case.path, headers=headers, json=request_json)
 
 
 @pytest.mark.parametrize(
@@ -193,6 +195,31 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_error_code="UNAUTHORIZED",
         ),
         _MatrixCase(
+            name="setup_test_connection_requires_api_key_when_auth_enabled",
+            method="POST",
+            path="/api/v1/setup/test-connection",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+            request_json={"type": "storage", "backend": "local", "config": {"root": "/tmp"}},
+        ),
+        _MatrixCase(
+            name="setup_test_connection_accepts_api_key_when_auth_enabled",
+            method="POST",
+            path="/api/v1/setup/test-connection",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header="Bearer secret",
+            include_clip=False,
+            expected_status=200,
+            request_json={"type": "storage", "backend": "local", "config": {"root": "/tmp"}},
+        ),
+        _MatrixCase(
             name="setup_status_remains_available_in_bootstrap_mode",
             method="GET",
             path="/api/v1/setup/status",
@@ -203,6 +230,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             include_clip=False,
             expected_status=200,
             bootstrap_mode=True,
+        ),
+        _MatrixCase(
+            name="setup_test_connection_remains_available_in_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/test-connection",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+            request_json={"type": "storage", "backend": "local", "config": {"root": "/tmp"}},
         ),
         _MatrixCase(
             name="setup_preflight_remains_available_in_bootstrap_mode",
