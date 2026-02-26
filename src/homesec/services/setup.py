@@ -212,7 +212,7 @@ async def _test_storage_connection(
     config: dict[str, object],
 ) -> TestConnectionResponse:
     if backend == "local":
-        return _test_local_storage_connection(config=config)
+        return await _test_local_storage_connection(config=config)
     return await _test_plugin_ping_connection(
         plugin_type=PluginType.STORAGE,
         backend=backend,
@@ -417,30 +417,32 @@ async def _test_local_folder_camera_connection(
         )
 
     watch_dir = Path(validated.watch_dir).expanduser()
-    if not watch_dir.exists():
+    if not await asyncio.to_thread(watch_dir.exists):
         return _result(
             success=False,
             message=f"Watch directory does not exist: {watch_dir}",
             start=start,
         )
-    if not watch_dir.is_dir():
+    if not await asyncio.to_thread(watch_dir.is_dir):
         return _result(
             success=False,
             message=f"Watch path is not a directory: {watch_dir}",
             start=start,
         )
-    if not os.access(watch_dir, os.R_OK | os.W_OK | os.X_OK):
+    if not await asyncio.to_thread(os.access, watch_dir, os.R_OK | os.W_OK | os.X_OK):
         return _result(
             success=False,
             message=f"Watch directory is not readable/writable: {watch_dir}",
             start=start,
         )
 
+    resolved_watch_dir = await asyncio.to_thread(watch_dir.resolve)
+
     return _result(
         success=True,
         message="Local folder path is accessible.",
         start=start,
-        details={"watch_dir": str(watch_dir.resolve())},
+        details={"watch_dir": str(resolved_watch_dir)},
     )
 
 
@@ -498,7 +500,7 @@ async def _test_onvif_camera_connection(
     )
 
 
-def _test_local_storage_connection(*, config: dict[str, object]) -> TestConnectionResponse:
+async def _test_local_storage_connection(*, config: dict[str, object]) -> TestConnectionResponse:
     start = time.perf_counter()
     _ensure_known_backend(PluginType.STORAGE, "local")
     try:
@@ -518,34 +520,35 @@ def _test_local_storage_connection(*, config: dict[str, object]) -> TestConnecti
         )
 
     root = Path(validated.root).expanduser()
-    if root.exists():
-        if not root.is_dir():
+    if await asyncio.to_thread(root.exists):
+        if not await asyncio.to_thread(root.is_dir):
             return _result(
                 success=False,
                 message=f"Storage root is not a directory: {root}",
                 start=start,
             )
-        if not os.access(root, os.R_OK | os.W_OK | os.X_OK):
+        if not await asyncio.to_thread(os.access, root, os.R_OK | os.W_OK | os.X_OK):
             return _result(
                 success=False,
                 message=f"Storage root is not readable/writable: {root}",
                 start=start,
             )
+        resolved_root = await asyncio.to_thread(root.resolve)
         return _result(
             success=True,
             message="Local storage root is accessible.",
             start=start,
-            details={"root": str(root.resolve())},
+            details={"root": str(resolved_root)},
         )
 
-    parent = _nearest_existing_parent(root)
+    parent = await asyncio.to_thread(_nearest_existing_parent, root)
     if parent is None:
         return _result(
             success=False,
             message=f"No existing parent directory for storage root: {root}",
             start=start,
         )
-    if not os.access(parent, os.W_OK | os.X_OK):
+    if not await asyncio.to_thread(os.access, parent, os.W_OK | os.X_OK):
         return _result(
             success=False,
             message=f"Storage root parent is not writable: {parent}",
