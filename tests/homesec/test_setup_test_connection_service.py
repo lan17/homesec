@@ -1129,3 +1129,43 @@ async def test_test_connection_camera_unknown_backend_includes_onvif_hint(
 
     assert "Unknown camera backend" in str(exc_info.value)
     assert exc_info.value.available_backends == ["ftp", "onvif", "rtsp"]
+
+
+@pytest.mark.asyncio
+async def test_test_connection_serializes_concurrent_calls_per_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup test-connection should process only one probe at a time per app instance."""
+    # Given: A shared app instance and a probe handler that tracks active concurrency
+    app = _StubApp()
+    request = SetupTestConnectionRequest(type="storage", backend="local", config={})
+    active_calls = 0
+    max_active_calls = 0
+
+    async def _fake_test_storage_connection(
+        *,
+        backend: str,
+        config: dict[str, object],
+    ) -> setup_service.TestConnectionResponse:
+        _ = (backend, config)
+        nonlocal active_calls
+        nonlocal max_active_calls
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        await asyncio.sleep(0.02)
+        active_calls -= 1
+        return setup_service.TestConnectionResponse(
+            success=True,
+            message="ok",
+        )
+
+    monkeypatch.setattr(setup_service, "_test_storage_connection", _fake_test_storage_connection)
+
+    # When: Running two setup test-connection requests concurrently on the same app
+    await asyncio.gather(
+        setup_service.test_connection(request, app),
+        setup_service.test_connection(request, app),
+    )
+
+    # Then: The underlying probe handler never executes concurrently
+    assert max_active_calls == 1

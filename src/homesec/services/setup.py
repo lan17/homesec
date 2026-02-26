@@ -10,7 +10,7 @@ import tempfile
 import time
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -158,19 +158,28 @@ async def test_connection(
     app: Application,
 ) -> TestConnectionResponse:
     """Validate and probe connectivity for setup-configured integrations."""
-    _ = app
-    connection_type = request.type
-    backend = request.backend.strip().lower()
+    lock = _get_test_connection_lock(app)
+    async with lock:
+        connection_type = request.type
+        backend = request.backend.strip().lower()
 
-    match connection_type:
-        case "camera":
-            return await _test_camera_connection(backend=backend, config=request.config)
-        case "storage":
-            return await _test_storage_connection(backend=backend, config=request.config)
-        case "notifier":
-            return await _test_notifier_connection(backend=backend, config=request.config)
-        case "analyzer":
-            return await _test_analyzer_connection(backend=backend, config=request.config)
+        match connection_type:
+            case "camera":
+                return await _test_camera_connection(backend=backend, config=request.config)
+            case "storage":
+                return await _test_storage_connection(backend=backend, config=request.config)
+            case "notifier":
+                return await _test_notifier_connection(backend=backend, config=request.config)
+            case "analyzer":
+                return await _test_analyzer_connection(backend=backend, config=request.config)
+
+
+def _get_test_connection_lock(app: Application) -> asyncio.Lock:
+    lock = cast(asyncio.Lock | None, getattr(app, "_setup_test_connection_lock", None))
+    if lock is None:
+        lock = asyncio.Lock()
+        cast(Any, app)._setup_test_connection_lock = lock
+    return lock
 
 
 async def _test_camera_connection(
