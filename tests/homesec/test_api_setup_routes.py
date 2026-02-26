@@ -265,6 +265,37 @@ def test_setup_test_connection_route_returns_canonical_422_for_invalid_payload()
     assert payload["validation_errors"]
 
 
+def test_setup_test_connection_route_reports_onvif_timeout_above_cap() -> None:
+    """Setup test-connection route should return failed probe result when ONVIF timeout exceeds cap."""
+    # Given: A setup app and an ONVIF payload with timeout above allowed range
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    # When: Calling setup test-connection with timeout_s exceeding schema cap
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={
+            "type": "camera",
+            "backend": "onvif",
+            "config": {
+                "host": "192.168.1.10",
+                "username": "admin",
+                "password": "secret",
+                "timeout_s": 999.0,
+            },
+        },
+    )
+
+    # Then: Route returns a non-successful probe response with validation message
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is False
+    assert "Configuration validation failed" in payload["message"]
+
+
 def test_setup_status_route_delegates_to_service(monkeypatch: pytest.MonkeyPatch) -> None:
     """Setup status route should delegate response generation to setup service."""
     # Given: A deterministic setup status result from service layer

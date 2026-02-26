@@ -199,7 +199,7 @@ async def test_test_connection_notifier_timeout_returns_failure(
         assert backend == "mqtt"
         return plugin
 
-    monkeypatch.setattr(setup_service, "_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "_PLUGIN_TEST_CONNECTION_TIMEOUT_S", 0.01)
     monkeypatch.setattr(setup_service, "get_plugin_names", _fake_get_plugin_names)
     monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(setup_service, "load_plugin", _fake_load_plugin)
@@ -434,7 +434,7 @@ async def test_test_connection_camera_rtsp_timeout_returns_failure(
                 )
             )
 
-    monkeypatch.setattr(setup_service, "_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "_RTSP_TEST_CONNECTION_TIMEOUT_S", 0.01)
     monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(setup_service, "RTSPStartupPreflight", _SlowStartupPreflight)
     monkeypatch.setattr(
@@ -565,7 +565,7 @@ async def test_test_connection_camera_ftp_timeout_returns_failure(
         time.sleep(0.05)
         return 42424
 
-    monkeypatch.setattr(setup_service, "_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "_FTP_TEST_CONNECTION_TIMEOUT_S", 0.01)
     monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(setup_service, "_probe_tcp_bind", _slow_probe)
     monkeypatch.setattr(
@@ -1110,3 +1110,22 @@ async def test_test_connection_raises_for_unknown_backend(
 
     assert "Unknown storage backend" in str(exc_info.value)
     assert exc_info.value.available_backends == ["local", "dropbox"]
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_unknown_backend_includes_onvif_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown camera backend should report available backends including ONVIF support."""
+    # Given: Source plugin names that omit ONVIF because it is a setup-only camera backend
+    monkeypatch.setattr(
+        setup_service, "get_plugin_names", lambda *_args, **_kwargs: ["rtsp", "ftp"]
+    )
+    request = SetupTestConnectionRequest(type="camera", backend="unknown", config={})
+
+    # When / Then: Dispatch raises typed request error with ONVIF included in hints
+    with pytest.raises(setup_service.SetupTestConnectionRequestError) as exc_info:
+        await setup_service.test_connection(request, _StubApp())
+
+    assert "Unknown camera backend" in str(exc_info.value)
+    assert exc_info.value.available_backends == ["ftp", "onvif", "rtsp"]

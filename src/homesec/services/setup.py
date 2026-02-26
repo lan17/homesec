@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket
 import tempfile
 import time
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -39,7 +40,6 @@ from homesec.onvif.client import OnvifCameraClient
 from homesec.onvif.discovery import discover_cameras
 from homesec.onvif.service import (
     DEFAULT_ONVIF_PORT,
-    DEFAULT_PROBE_TIMEOUT_S,
     OnvifProbeError,
     OnvifProbeOptions,
     OnvifProbeTimeoutError,
@@ -58,13 +58,19 @@ if TYPE_CHECKING:
     from homesec.app import Application
     from homesec.repository.clip_repository import ClipRepository
 
+logger = logging.getLogger(__name__)
+
 _MIN_FREE_BYTES = 1_000_000_000
 _NETWORK_PROBE_HOST_ENV = "HOMESEC_SETUP_NETWORK_PROBE_HOST"
 _NETWORK_PROBE_PORT_ENV = "HOMESEC_SETUP_NETWORK_PROBE_PORT"
 _NETWORK_PROBE_DEFAULT_HOST = "example.com"
 _NETWORK_PROBE_DEFAULT_PORT = 443
 _PREFLIGHT_CHECK_TIMEOUT_S = 10.0
-_TEST_CONNECTION_TIMEOUT_S = 10.0
+_TEST_CONNECTION_TIMEOUT_CAP_S = 30.0
+_RTSP_TEST_CONNECTION_TIMEOUT_S = 10.0
+_FTP_TEST_CONNECTION_TIMEOUT_S = 5.0
+_ONVIF_TEST_CONNECTION_TIMEOUT_S = 15.0
+_PLUGIN_TEST_CONNECTION_TIMEOUT_S = 5.0
 _SETUP_TEST_CAMERA_NAME = "setup-test-camera"
 SectionT = TypeVar("SectionT")
 
@@ -104,7 +110,11 @@ class _OnvifTestConnectionConfig(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
     port: int = Field(default=DEFAULT_ONVIF_PORT, ge=1, le=65535)
-    timeout_s: float = Field(default=DEFAULT_PROBE_TIMEOUT_S, gt=0.0, le=120.0)
+    timeout_s: float = Field(
+        default=_ONVIF_TEST_CONNECTION_TIMEOUT_S,
+        gt=0.0,
+        le=_TEST_CONNECTION_TIMEOUT_CAP_S,
+    )
 
 
 async def get_setup_status(app: Application) -> SetupStatusResponse:
@@ -168,20 +178,26 @@ async def _test_camera_connection(
     backend: str,
     config: dict[str, object],
 ) -> TestConnectionResponse:
+    available_backends = _camera_backend_names()
+    if backend not in available_backends:
+        raise SetupTestConnectionRequestError(
+            (
+                f"Unknown camera backend {backend!r}. "
+                f"Available backends: {', '.join(available_backends)}"
+            ),
+            available_backends=available_backends,
+        )
+
     match backend:
         case "rtsp":
-            _ensure_known_backend(PluginType.SOURCE, backend)
             return await _test_rtsp_camera_connection(config=config)
         case "ftp":
-            _ensure_known_backend(PluginType.SOURCE, backend)
             return await _test_ftp_camera_connection(config=config)
         case "local_folder":
-            _ensure_known_backend(PluginType.SOURCE, backend)
             return await _test_local_folder_camera_connection(config=config)
         case "onvif":
             return await _test_onvif_camera_connection(config=config)
         case _:
-            _ensure_known_backend(PluginType.SOURCE, backend)
             return _result(
                 success=False,
                 message=f"Camera backend {backend!r} does not implement connection testing yet.",
@@ -266,7 +282,7 @@ async def _test_rtsp_camera_connection(
             output_dir=Path(temp_dir),
             rtsp_connect_timeout_s=float(validated.stream.connect_timeout_s),
             rtsp_io_timeout_s=float(validated.stream.io_timeout_s),
-            command_timeout_s=min(_TEST_CONNECTION_TIMEOUT_S, 8.0),
+            command_timeout_s=min(_RTSP_TEST_CONNECTION_TIMEOUT_S, 8.0),
         )
         try:
             outcome = await asyncio.wait_for(
@@ -276,18 +292,19 @@ async def _test_rtsp_camera_connection(
                     primary_rtsp_url=primary_url,
                     detect_rtsp_url=detect_url,
                 ),
-                timeout=_TEST_CONNECTION_TIMEOUT_S,
+                timeout=_RTSP_TEST_CONNECTION_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
             return _result(
                 success=False,
-                message=f"RTSP probe timed out after {_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
+                message=f"RTSP probe timed out after {_RTSP_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
                 start=start,
             )
-        except Exception as exc:
+        except Exception:
+            logger.warning("RTSP setup test probe failed", exc_info=True)
             return _result(
                 success=False,
-                message=f"RTSP probe failed: {exc}",
+                message="RTSP probe failed. Check stream URL, credentials, and network connectivity.",
                 start=start,
             )
 
@@ -343,18 +360,19 @@ async def _test_ftp_camera_connection(
     try:
         bound_port = await asyncio.wait_for(
             asyncio.to_thread(_probe_tcp_bind, validated.host, int(validated.port)),
-            timeout=_TEST_CONNECTION_TIMEOUT_S,
+            timeout=_FTP_TEST_CONNECTION_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
         return _result(
             success=False,
-            message=f"FTP bind probe timed out after {_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
+            message=f"FTP bind probe timed out after {_FTP_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
             start=start,
         )
-    except OSError as exc:
+    except OSError:
+        logger.warning("FTP setup test probe failed", exc_info=True)
         return _result(
             success=False,
-            message=f"FTP bind probe failed: {exc}",
+            message="FTP bind probe failed. Check bind host/port availability and permissions.",
             start=start,
         )
 
@@ -438,7 +456,7 @@ async def _test_onvif_camera_connection(
         discover_fn=discover_cameras,
         client_factory=OnvifCameraClient,
     )
-    timeout_s = min(request.timeout_s, _TEST_CONNECTION_TIMEOUT_S)
+    timeout_s = request.timeout_s
     try:
         probe_result = await service.probe(
             OnvifProbeOptions(
@@ -455,10 +473,11 @@ async def _test_onvif_camera_connection(
             message=f"ONVIF probe timed out after {timeout_s:.1f}s.",
             start=start,
         )
-    except OnvifProbeError as exc:
+    except OnvifProbeError:
+        logger.warning("ONVIF setup test probe failed", exc_info=True)
         return _result(
             success=False,
-            message=f"ONVIF probe failed: {exc}",
+            message="ONVIF probe failed. Check host, credentials, and camera reachability.",
             start=start,
         )
 
@@ -554,18 +573,41 @@ async def _test_plugin_ping_connection(
 
     plugin: _PingablePlugin | None = None
     try:
-        plugin = load_plugin(plugin_type, backend, validated_config)
-        ok = await asyncio.wait_for(plugin.ping(), timeout=_TEST_CONNECTION_TIMEOUT_S)
+        plugin = cast(
+            _PingablePlugin,
+            await asyncio.wait_for(
+                asyncio.to_thread(load_plugin, plugin_type, backend, validated_config),
+                timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S,
+            ),
+        )
+        ok = await asyncio.wait_for(plugin.ping(), timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S)
     except asyncio.TimeoutError:
+        logger.warning(
+            "Setup test probe timed out for %s backend=%s",
+            plugin_type.value,
+            backend,
+            exc_info=True,
+        )
         return _result(
             success=False,
-            message=f"{plugin_type.value} probe timed out after {_TEST_CONNECTION_TIMEOUT_S:.1f}s.",
+            message=(
+                f"{plugin_type.value} probe timed out after "
+                f"{_PLUGIN_TEST_CONNECTION_TIMEOUT_S:.1f}s."
+            ),
             start=start,
         )
-    except Exception as exc:
+    except Exception:
+        logger.warning(
+            "Setup test probe failed for %s backend=%s",
+            plugin_type.value,
+            backend,
+            exc_info=True,
+        )
         return _result(
             success=False,
-            message=f"{plugin_type.value} probe failed: {exc}",
+            message=(
+                f"{plugin_type.value} probe failed. Check backend configuration and connectivity."
+            ),
             start=start,
         )
     finally:
@@ -596,6 +638,12 @@ def _ensure_known_backend(plugin_type: PluginType, backend: str) -> None:
         ),
         available_backends=available,
     )
+
+
+def _camera_backend_names() -> list[str]:
+    available = set(get_plugin_names(PluginType.SOURCE))
+    available.add("onvif")
+    return sorted(available)
 
 
 def _resolve_rtsp_primary_url(config: RTSPSourceConfig) -> str | None:
