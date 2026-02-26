@@ -481,6 +481,26 @@ async def test_application_run_starts_api_and_performs_graceful_shutdown(
 
 
 @pytest.mark.asyncio
+async def test_application_run_enters_bootstrap_mode_when_config_missing(tmp_path: Path) -> None:
+    """run() should branch into bootstrap mode when config path does not exist."""
+    # Given: An application whose config path does not exist
+    missing_config = tmp_path / "missing-config.yaml"
+    app = Application(config_path=missing_config)
+    calls: list[str] = []
+
+    async def _run_bootstrap() -> None:
+        calls.append("bootstrap")
+
+    app._run_bootstrap = _run_bootstrap  # type: ignore[method-assign]
+
+    # When: Running the application
+    await app.run()
+
+    # Then: Bootstrap branch is executed instead of normal component startup
+    assert calls == ["bootstrap"]
+
+
+@pytest.mark.asyncio
 async def test_create_state_store_prefers_env_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
     """_create_state_store should resolve DSN from dsn_env when configured."""
     # Given: State store config with both inline DSN and dsn_env override

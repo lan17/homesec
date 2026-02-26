@@ -33,11 +33,12 @@ class _StubStorage:
 
 class _StubApp:
     def __init__(self, *, server_config: FastAPIServerConfig | None = None) -> None:
+        self._server_config = server_config or FastAPIServerConfig()
         self.repository = _StubRepository()
         self.storage = _StubStorage()
         self.sources: list[Any] = []
         self._config = SimpleNamespace(
-            server=server_config or FastAPIServerConfig(),
+            server=self._server_config,
             cameras=[],
         )
         self.uptime_seconds = 0.0
@@ -45,6 +46,10 @@ class _StubApp:
     @property
     def config(self):  # type: ignore[override]
         return self._config
+
+    @property
+    def server_config(self) -> FastAPIServerConfig:
+        return self._server_config
 
     @property
     def pipeline_running(self) -> bool:

@@ -1,6 +1,63 @@
 {
   "components": {
     "schemas": {
+      "AlertPolicyConfig": {
+        "description": "Alert policy plugin configuration.",
+        "properties": {
+          "backend": {
+            "default": "default",
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "AlertPolicyConfig",
+        "type": "object"
+      },
+      "BaseModel": {
+        "properties": {},
+        "title": "BaseModel",
+        "type": "object"
+      },
+      "CameraConfig": {
+        "description": "Camera configuration and clip source selection.",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CameraSourceConfig"
+          }
+        },
+        "required": [
+          "name",
+          "source"
+        ],
+        "title": "CameraConfig",
+        "type": "object"
+      },
       "CameraCreate": {
         "properties": {
           "enabled": {
@@ -74,6 +131,33 @@
           "source_config"
         ],
         "title": "CameraResponse",
+        "type": "object"
+      },
+      "CameraSourceConfig": {
+        "additionalProperties": false,
+        "description": "Camera source configuration wrapper.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          }
+        },
+        "required": [
+          "backend"
+        ],
+        "title": "CameraSourceConfig",
         "type": "object"
       },
       "CameraStatus": {
@@ -533,6 +617,224 @@
         "title": "DiscoveredCameraResponse",
         "type": "object"
       },
+      "FastAPIServerConfig": {
+        "description": "Configuration for the FastAPI server.",
+        "properties": {
+          "api_key_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Env"
+          },
+          "auth_enabled": {
+            "default": false,
+            "title": "Auth Enabled",
+            "type": "boolean"
+          },
+          "cors_origins": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cors Origins",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "host": {
+            "default": "0.0.0.0",
+            "title": "Host",
+            "type": "string"
+          },
+          "port": {
+            "default": 8081,
+            "title": "Port",
+            "type": "integer"
+          },
+          "serve_ui": {
+            "default": false,
+            "title": "Serve Ui",
+            "type": "boolean"
+          },
+          "ui_dist_dir": {
+            "default": "ui/dist",
+            "title": "Ui Dist Dir",
+            "type": "string"
+          }
+        },
+        "title": "FastAPIServerConfig",
+        "type": "object"
+      },
+      "FilterConfig": {
+        "additionalProperties": false,
+        "description": "Base filter configuration (plugin-agnostic).\n\nPlugin-specific config is stored in the 'config' field.\n- During YAML parsing: dict[str, Any] (preserves all third-party fields)\n- After plugin discovery: BaseModel subclass (validated against plugin.config_model)\n\nNote: Plugin names are validated against the registry at runtime via\nvalidate_plugin_names(). This allows third-party plugins via entry points.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          }
+        },
+        "required": [
+          "backend",
+          "config"
+        ],
+        "title": "FilterConfig",
+        "type": "object"
+      },
+      "FinalizeRequest": {
+        "description": "Finalize setup by writing the assembled config and requesting restart.",
+        "properties": {
+          "alert_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlertPolicyConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cameras": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CameraConfig"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameras"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FilterConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notifiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NotifierConfig"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notifiers"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FastAPIServerConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state_store": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StateStoreConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "storage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StorageConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vlm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VLMConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "FinalizeRequest",
+        "type": "object"
+      },
+      "FinalizeResponse": {
+        "description": "Finalize setup response for onboarding UI.",
+        "properties": {
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "defaults_applied": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Defaults Applied",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "restart_requested": {
+            "title": "Restart Requested",
+            "type": "boolean"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "config_path",
+          "restart_requested",
+          "defaults_applied",
+          "errors"
+        ],
+        "title": "FinalizeResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -548,6 +850,11 @@
       },
       "HealthResponse": {
         "properties": {
+          "bootstrap_mode": {
+            "default": false,
+            "title": "Bootstrap Mode",
+            "type": "boolean"
+          },
           "cameras_online": {
             "title": "Cameras Online",
             "type": "integer"
@@ -674,6 +981,94 @@
           "stream_error"
         ],
         "title": "MediaProfileResponse",
+        "type": "object"
+      },
+      "NotifierConfig": {
+        "description": "Notifier configuration entry.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "backend"
+        ],
+        "title": "NotifierConfig",
+        "type": "object"
+      },
+      "PreflightCheckResponse": {
+        "description": "Single preflight check outcome.",
+        "properties": {
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "passed",
+          "message"
+        ],
+        "title": "PreflightCheckResponse",
+        "type": "object"
+      },
+      "PreflightResponse": {
+        "description": "Aggregated preflight response.",
+        "properties": {
+          "all_passed": {
+            "title": "All Passed",
+            "type": "boolean"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PreflightCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "checks",
+          "all_passed"
+        ],
+        "title": "PreflightResponse",
         "type": "object"
       },
       "ProbeRequest": {
@@ -828,6 +1223,69 @@
         "title": "RuntimeStatusResponse",
         "type": "object"
       },
+      "SetupStatusResponse": {
+        "description": "Current setup completion state used by onboarding flows.",
+        "properties": {
+          "auth_configured": {
+            "title": "Auth Configured",
+            "type": "boolean"
+          },
+          "has_cameras": {
+            "title": "Has Cameras",
+            "type": "boolean"
+          },
+          "pipeline_running": {
+            "title": "Pipeline Running",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "fresh",
+              "partial",
+              "complete"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "has_cameras",
+          "pipeline_running",
+          "auth_configured"
+        ],
+        "title": "SetupStatusResponse",
+        "type": "object"
+      },
+      "StateStoreConfig": {
+        "description": "State store configuration.",
+        "properties": {
+          "dsn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dsn"
+          },
+          "dsn_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dsn Env"
+          }
+        },
+        "title": "StateStoreConfig",
+        "type": "object"
+      },
       "StatsResponse": {
         "properties": {
           "alerts_today": {
@@ -860,6 +1318,131 @@
         ],
         "title": "StatsResponse",
         "type": "object"
+      },
+      "StorageConfig": {
+        "additionalProperties": false,
+        "description": "Storage backend configuration.",
+        "properties": {
+          "backend": {
+            "default": "dropbox",
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          },
+          "paths": {
+            "$ref": "#/components/schemas/StoragePathsConfig"
+          }
+        },
+        "title": "StorageConfig",
+        "type": "object"
+      },
+      "StoragePathsConfig": {
+        "description": "Logical storage paths for different artifact types.",
+        "properties": {
+          "artifacts_dir": {
+            "default": "artifacts",
+            "title": "Artifacts Dir",
+            "type": "string"
+          },
+          "backups_dir": {
+            "default": "backups",
+            "title": "Backups Dir",
+            "type": "string"
+          },
+          "clips_dir": {
+            "default": "clips",
+            "title": "Clips Dir",
+            "type": "string"
+          }
+        },
+        "title": "StoragePathsConfig",
+        "type": "object"
+      },
+      "VLMConfig": {
+        "additionalProperties": false,
+        "description": "Base VLM configuration.\n\nBackend-specific config is stored in the 'config' field.\n- During YAML parsing: dict[str, Any] (preserves all third-party fields)\n- After plugin discovery: BaseModel subclass (validated against plugin.config_model)\n\nNote: Backend names are validated against the registry at runtime via\nvalidate_plugin_names(). This allows third-party VLM plugins via entry points.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          },
+          "preprocessing": {
+            "$ref": "#/components/schemas/VLMPreprocessConfig"
+          },
+          "run_mode": {
+            "$ref": "#/components/schemas/VLMRunMode",
+            "default": "trigger_only"
+          },
+          "trigger_classes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Trigger Classes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "backend",
+          "config"
+        ],
+        "title": "VLMConfig",
+        "type": "object"
+      },
+      "VLMPreprocessConfig": {
+        "additionalProperties": false,
+        "description": "Preprocessing configuration for VLM frame extraction.",
+        "properties": {
+          "max_frames": {
+            "default": 10,
+            "title": "Max Frames",
+            "type": "integer"
+          },
+          "max_size": {
+            "default": 1024,
+            "title": "Max Size",
+            "type": "integer"
+          },
+          "quality": {
+            "default": 85,
+            "title": "Quality",
+            "type": "integer"
+          }
+        },
+        "title": "VLMPreprocessConfig",
+        "type": "object"
+      },
+      "VLMRunMode": {
+        "description": "Policy for when to run VLM analysis.",
+        "enum": [
+          "trigger_only",
+          "always",
+          "never"
+        ],
+        "title": "VLMRunMode",
+        "type": "string"
       },
       "ValidationError": {
         "properties": {
@@ -1720,6 +2303,92 @@
         "summary": "Get Runtime Status",
         "tags": [
           "runtime"
+        ]
+      }
+    },
+    "/api/v1/setup/finalize": {
+      "post": {
+        "description": "Persist finalized setup config and request graceful restart.",
+        "operationId": "finalize_setup_endpoint_api_v1_setup_finalize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinalizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finalize Setup Endpoint",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/v1/setup/preflight": {
+      "post": {
+        "description": "Run setup preflight checks for onboarding UX.",
+        "operationId": "run_setup_preflight_endpoint_api_v1_setup_preflight_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Setup Preflight Endpoint",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/v1/setup/status": {
+      "get": {
+        "description": "Return setup completion status for onboarding UX.",
+        "operationId": "get_setup_status_endpoint_api_v1_setup_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Setup Status Endpoint",
+        "tags": [
+          "setup"
         ]
       }
     },

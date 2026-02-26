@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app, verify_api_key
+from homesec.api.dependencies import get_homesec_app, require_normal_mode, verify_api_key
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -23,6 +23,7 @@ class HealthResponse(BaseModel):
     pipeline: str
     postgres: str
     cameras_online: int
+    bootstrap_mode: bool = False
 
 
 class ComponentStatus(BaseModel):
@@ -49,6 +50,15 @@ async def _compute_health_response(
     app: Application,
 ) -> HealthResponse | JSONResponse:
     """Compute shared health payload for public and versioned health endpoints."""
+    if app.bootstrap_mode:
+        return HealthResponse(
+            status="setup_required",
+            pipeline="not_configured",
+            postgres="not_configured",
+            cameras_online=0,
+            bootstrap_mode=True,
+        )
+
     pipeline_running = app.pipeline_running
     postgres_ok = await app.repository.ping()
     cameras_online = sum(1 for source in app.sources if source.is_healthy())
@@ -65,6 +75,7 @@ async def _compute_health_response(
         pipeline="running" if pipeline_running else "stopped",
         postgres="connected" if postgres_ok else "unavailable",
         cameras_online=cameras_online,
+        bootstrap_mode=False,
     )
 
     if not pipeline_running:
@@ -89,7 +100,7 @@ async def get_health(app: Application = Depends(get_homesec_app)) -> HealthRespo
 @router.get(
     "/api/v1/diagnostics",
     response_model=DiagnosticsResponse,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
 )
 async def get_diagnostics(app: Application = Depends(get_homesec_app)) -> DiagnosticsResponse:
     """Detailed component diagnostics."""

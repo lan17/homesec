@@ -14,6 +14,7 @@ from homesec.models.clip import ClipStateData
 from homesec.models.config import FastAPIServerConfig
 from homesec.models.enums import ClipStatus
 from homesec.runtime.models import RuntimeState, RuntimeStatusSnapshot
+from homesec.services import setup as setup_service
 from tests.homesec.test_api_routes import (
     _client,
     _StubApp,
@@ -51,6 +52,7 @@ class _MatrixCase:
     auth_header: str | None
     include_clip: bool
     expected_status: int
+    bootstrap_mode: bool = False
     expected_error_code: str | None = None
 
 
@@ -95,6 +97,7 @@ def _build_client(tmp_path: Path, case: _MatrixCase) -> tuple[TestClient, _StubR
         sources_by_name={"front": _StubSource(healthy=True, heartbeat=1.0)},
         server_config=server_config,
         pipeline_running=case.pipeline_running,
+        bootstrap_mode=case.bootstrap_mode,
     )
     app.uptime_seconds = 12.0
     return _client(app), repository
@@ -103,7 +106,7 @@ def _build_client(tmp_path: Path, case: _MatrixCase) -> tuple[TestClient, _StubR
 def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]):
     if case.method == "GET":
         return client.get(case.path, headers=headers)
-    return client.post(case.path, headers=headers)
+    return client.post(case.path, headers=headers, json={})
 
 
 @pytest.mark.parametrize(
@@ -154,6 +157,90 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_status=503,
         ),
         _MatrixCase(
+            name="public_health_reports_setup_required_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/health",
+            auth_enabled=False,
+            db_ok=True,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
+            name="setup_status_requires_api_key_when_auth_enabled",
+            method="GET",
+            path="/api/v1/setup/status",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="setup_preflight_requires_api_key_when_auth_enabled",
+            method="POST",
+            path="/api/v1/setup/preflight",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="setup_status_remains_available_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/setup/status",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
+            name="setup_preflight_remains_available_in_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/preflight",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
+            name="setup_finalize_requires_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/finalize",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=409,
+            expected_error_code="CONFLICT",
+        ),
+        _MatrixCase(
+            name="setup_finalize_remains_available_in_bootstrap_mode",
+            method="POST",
+            path="/api/v1/setup/finalize",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
             name="config_requires_api_key_when_auth_enabled",
             method="GET",
             path="/api/v1/config",
@@ -175,6 +262,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             auth_header="Bearer secret",
             include_clip=False,
             expected_status=200,
+        ),
+        _MatrixCase(
+            name="config_route_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/config",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
             name="cameras_requires_api_key_when_auth_enabled",
@@ -200,6 +300,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_status=200,
         ),
         _MatrixCase(
+            name="cameras_route_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/cameras",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
             name="runtime_status_requires_api_key_when_auth_enabled",
             method="GET",
             path="/api/v1/runtime/status",
@@ -223,6 +336,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_status=200,
         ),
         _MatrixCase(
+            name="runtime_status_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/runtime/status",
+            auth_enabled=False,
+            db_ok=True,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
             name="diagnostics_requires_api_key_when_auth_enabled",
             method="GET",
             path="/api/v1/diagnostics",
@@ -244,6 +370,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             auth_header="Bearer secret",
             include_clip=False,
             expected_status=200,
+        ),
+        _MatrixCase(
+            name="diagnostics_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/diagnostics",
+            auth_enabled=False,
+            db_ok=True,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
             name="clips_requires_api_key_when_auth_enabled",
@@ -270,6 +409,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_error_code="DB_UNAVAILABLE",
         ),
         _MatrixCase(
+            name="clips_route_is_blocked_in_bootstrap_mode_before_db_probe",
+            method="GET",
+            path="/api/v1/clips",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
             name="stats_requires_db_when_repository_unavailable",
             method="GET",
             path="/api/v1/stats",
@@ -280,6 +432,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             include_clip=False,
             expected_status=503,
             expected_error_code="DB_UNAVAILABLE",
+        ),
+        _MatrixCase(
+            name="stats_route_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/stats",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
             name="media_route_rejects_missing_media_auth",
@@ -315,6 +480,19 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             auth_header="Bearer secret",
             include_clip=True,
             expected_status=200,
+        ),
+        _MatrixCase(
+            name="media_route_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/clips/clip-1/media",
+            auth_enabled=False,
+            db_ok=True,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=True,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
             name="media_token_mint_requires_api_key",
@@ -362,6 +540,7 @@ def test_api_bootstrap_dependency_matrix(
     """API groups should enforce consistent auth/DB bootstrap behavior."""
     # Given: A configured app with matrix-controlled auth, DB, and runtime bootstrap state
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    monkeypatch.setattr(setup_service, "_network_probe", lambda: (True, "DNS resolution succeeded"))
     client, repository = _build_client(tmp_path, case)
     headers: dict[str, str] = {}
     if case.auth_header is not None:
@@ -378,3 +557,32 @@ def test_api_bootstrap_dependency_matrix(
     # Then: DB-backed failures perform at least one reachability probe
     if case.expected_error_code == "DB_UNAVAILABLE":
         assert repository.ping_calls >= 1
+
+
+def test_onvif_discover_is_available_in_bootstrap_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ONVIF discover route should stay available in bootstrap mode for onboarding."""
+    # Given: A bootstrap-mode app and a deterministic ONVIF discovery stub
+    case = _MatrixCase(
+        name="onvif_discover_available_in_bootstrap_mode",
+        method="POST",
+        path="/api/v1/onvif/discover",
+        auth_enabled=False,
+        db_ok=False,
+        pipeline_running=False,
+        auth_header=None,
+        include_clip=False,
+        expected_status=200,
+        bootstrap_mode=True,
+    )
+    monkeypatch.setattr("homesec.api.routes.onvif.discover_cameras", lambda *_args, **_kwargs: [])
+    client, _ = _build_client(tmp_path, case)
+
+    # When: Calling ONVIF discover endpoint without API key in bootstrap mode
+    response = client.post(case.path, json={})
+
+    # Then: Endpoint responds successfully for setup-camera discovery flow
+    assert response.status_code == 200
+    assert response.json() == []

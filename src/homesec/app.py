@@ -15,6 +15,7 @@ from homesec.config import load_config, resolve_env_var, validate_config, valida
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
 from homesec.interfaces import EventStore
+from homesec.models.config import FastAPIServerConfig
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository import ClipRepository
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from homesec.models.config import Config
 
 logger = logging.getLogger(__name__)
+RESTART_EXIT_CODE = 42
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +67,13 @@ class Application:
     Handles component creation, lifecycle, and graceful shutdown.
     """
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        *,
+        bootstrap_host: str = "0.0.0.0",
+        bootstrap_port: int = 8081,
+    ) -> None:
         """Initialize application with config file path.
 
         Args:
@@ -84,10 +92,17 @@ class Application:
         self._runtime_heartbeat_stale_s = 10.0
         self._config_manager = ConfigManager(config_path)
         self._start_time: float | None = None
+        self._bootstrap = False
+        self._bootstrap_server_config = FastAPIServerConfig(
+            host=bootstrap_host,
+            port=bootstrap_port,
+            enabled=True,
+        )
 
         # Shutdown state
         self._shutdown_event = asyncio.Event()
         self._shutdown_started = False
+        self._restart_requested = False
 
     async def run(self) -> None:
         """Run the application.
@@ -95,6 +110,10 @@ class Application:
         Loads config, creates components, and runs until shutdown signal.
         """
         logger.info("Starting HomeSec application...")
+
+        if not self._config_path.exists():
+            await self._run_bootstrap()
+            return
 
         # Load config
         self._config = load_config(self._config_path)
@@ -117,6 +136,48 @@ class Application:
 
         # Graceful shutdown
         await self.shutdown()
+
+    async def _run_bootstrap(self) -> None:
+        """Start in bootstrap mode with API/UI only."""
+        logger.info(
+            "Config file not found at %s. Starting in bootstrap mode.",
+            self._config_path,
+        )
+        self._bootstrap = True
+
+        # Keep plugin metadata routes available during onboarding.
+        from homesec.plugins import discover_all_plugins
+
+        try:
+            discover_all_plugins()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Plugin discovery failed in bootstrap mode; continuing with setup APIs only: %s",
+                exc,
+                exc_info=True,
+            )
+
+        server_cfg = self.server_config
+        self._api_server = APIServer(
+            app=create_app(self),
+            host=server_cfg.host,
+            port=server_cfg.port,
+        )
+
+        self._setup_signal_handlers()
+        try:
+            await self._api_server.start()
+
+            self._start_time = time.time()
+            logger.info(
+                "Bootstrap mode active at http://%s:%d",
+                server_cfg.host,
+                server_cfg.port,
+            )
+
+            await self._shutdown_event.wait()
+        finally:
+            await self.shutdown()
 
     async def _create_components(self) -> None:
         """Create all components based on config."""
@@ -311,6 +372,17 @@ class Application:
         self._shutdown_started = True
         self._shutdown_event.set()
 
+    def request_restart(self) -> None:
+        """Request graceful shutdown so an external supervisor can restart the process."""
+        if self._shutdown_started:
+            return
+        if self._restart_requested:
+            return
+        logger.info("Restart requested by setup finalize endpoint")
+        self._restart_requested = True
+        self._shutdown_started = True
+        self._shutdown_event.set()
+
     async def shutdown(self) -> None:
         """Graceful shutdown of all components."""
         logger.info("Shutting down application...")
@@ -339,7 +411,13 @@ class Application:
 
     @property
     def bootstrap_mode(self) -> bool:
-        return False
+        return self._bootstrap
+
+    @property
+    def server_config(self) -> FastAPIServerConfig:
+        if self._config is not None:
+            return self._config.server
+        return self._bootstrap_server_config
 
     @property
     def repository(self) -> ClipRepository:
@@ -381,6 +459,14 @@ class Application:
         if self._start_time is None:
             return 0.0
         return time.time() - self._start_time
+
+    @property
+    def restart_requested(self) -> bool:
+        return self._restart_requested
+
+    @property
+    def restart_exit_code(self) -> int:
+        return RESTART_EXIT_CODE
 
     def get_source(self, camera_name: str) -> _CameraSourceSnapshot | None:
         status = self._camera_statuses().get(camera_name)

@@ -283,6 +283,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/setup/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finalize Setup Endpoint
+         * @description Persist finalized setup config and request graceful restart.
+         */
+        post: operations["finalize_setup_endpoint_api_v1_setup_finalize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Setup Preflight Endpoint
+         * @description Run setup preflight checks for onboarding UX.
+         */
+        post: operations["run_setup_preflight_endpoint_api_v1_setup_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup Status Endpoint
+         * @description Return setup completion status for onboarding UX.
+         */
+        get: operations["get_setup_status_endpoint_api_v1_setup_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stats": {
         parameters: {
             query?: never;
@@ -307,6 +367,42 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AlertPolicyConfig
+         * @description Alert policy plugin configuration.
+         */
+        AlertPolicyConfig: {
+            /**
+             * Backend
+             * @default default
+             */
+            backend: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** BaseModel */
+        BaseModel: Record<string, never>;
+        /**
+         * CameraConfig
+         * @description Camera configuration and clip source selection.
+         */
+        CameraConfig: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            source: components["schemas"]["CameraSourceConfig"];
+        };
         /** CameraCreate */
         CameraCreate: {
             /**
@@ -339,6 +435,18 @@ export interface components {
             source_config: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * CameraSourceConfig
+         * @description Camera source configuration wrapper.
+         */
+        CameraSourceConfig: {
+            /** Backend */
+            backend: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
         };
         /** CameraStatus */
         CameraStatus: {
@@ -503,6 +611,97 @@ export interface components {
             /** Xaddr */
             xaddr: string;
         };
+        /**
+         * FastAPIServerConfig
+         * @description Configuration for the FastAPI server.
+         */
+        FastAPIServerConfig: {
+            /** Api Key Env */
+            api_key_env?: string | null;
+            /**
+             * Auth Enabled
+             * @default false
+             */
+            auth_enabled: boolean;
+            /** Cors Origins */
+            cors_origins?: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Host
+             * @default 0.0.0.0
+             */
+            host: string;
+            /**
+             * Port
+             * @default 8081
+             */
+            port: number;
+            /**
+             * Serve Ui
+             * @default false
+             */
+            serve_ui: boolean;
+            /**
+             * Ui Dist Dir
+             * @default ui/dist
+             */
+            ui_dist_dir: string;
+        };
+        /**
+         * FilterConfig
+         * @description Base filter configuration (plugin-agnostic).
+         *
+         *     Plugin-specific config is stored in the 'config' field.
+         *     - During YAML parsing: dict[str, Any] (preserves all third-party fields)
+         *     - After plugin discovery: BaseModel subclass (validated against plugin.config_model)
+         *
+         *     Note: Plugin names are validated against the registry at runtime via
+         *     validate_plugin_names(). This allows third-party plugins via entry points.
+         */
+        FilterConfig: {
+            /** Backend */
+            backend: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+        };
+        /**
+         * FinalizeRequest
+         * @description Finalize setup by writing the assembled config and requesting restart.
+         */
+        FinalizeRequest: {
+            alert_policy?: components["schemas"]["AlertPolicyConfig"] | null;
+            /** Cameras */
+            cameras?: components["schemas"]["CameraConfig"][] | null;
+            filter?: components["schemas"]["FilterConfig"] | null;
+            /** Notifiers */
+            notifiers?: components["schemas"]["NotifierConfig"][] | null;
+            server?: components["schemas"]["FastAPIServerConfig"] | null;
+            state_store?: components["schemas"]["StateStoreConfig"] | null;
+            storage?: components["schemas"]["StorageConfig"] | null;
+            vlm?: components["schemas"]["VLMConfig"] | null;
+        };
+        /**
+         * FinalizeResponse
+         * @description Finalize setup response for onboarding UI.
+         */
+        FinalizeResponse: {
+            /** Config Path */
+            config_path: string;
+            /** Defaults Applied */
+            defaults_applied: string[];
+            /** Errors */
+            errors: string[];
+            /** Restart Requested */
+            restart_requested: boolean;
+            /** Success */
+            success: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -510,6 +709,11 @@ export interface components {
         };
         /** HealthResponse */
         HealthResponse: {
+            /**
+             * Bootstrap Mode
+             * @default false
+             */
+            bootstrap_mode: boolean;
             /** Cameras Online */
             cameras_online: number;
             /** Pipeline */
@@ -539,6 +743,47 @@ export interface components {
             video_encoding: string | null;
             /** Width */
             width: number | null;
+        };
+        /**
+         * NotifierConfig
+         * @description Notifier configuration entry.
+         */
+        NotifierConfig: {
+            /** Backend */
+            backend: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /**
+         * PreflightCheckResponse
+         * @description Single preflight check outcome.
+         */
+        PreflightCheckResponse: {
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Message */
+            message: string;
+            /** Name */
+            name: string;
+            /** Passed */
+            passed: boolean;
+        };
+        /**
+         * PreflightResponse
+         * @description Aggregated preflight response.
+         */
+        PreflightResponse: {
+            /** All Passed */
+            all_passed: boolean;
+            /** Checks */
+            checks: components["schemas"]["PreflightCheckResponse"][];
         };
         /** ProbeRequest */
         ProbeRequest: {
@@ -594,6 +839,33 @@ export interface components {
             reload_in_progress: boolean;
             state: components["schemas"]["RuntimeState"];
         };
+        /**
+         * SetupStatusResponse
+         * @description Current setup completion state used by onboarding flows.
+         */
+        SetupStatusResponse: {
+            /** Auth Configured */
+            auth_configured: boolean;
+            /** Has Cameras */
+            has_cameras: boolean;
+            /** Pipeline Running */
+            pipeline_running: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "fresh" | "partial" | "complete";
+        };
+        /**
+         * StateStoreConfig
+         * @description State store configuration.
+         */
+        StateStoreConfig: {
+            /** Dsn */
+            dsn?: string | null;
+            /** Dsn Env */
+            dsn_env?: string | null;
+        };
         /** StatsResponse */
         StatsResponse: {
             /** Alerts Today */
@@ -607,6 +879,94 @@ export interface components {
             /** Uptime Seconds */
             uptime_seconds: number;
         };
+        /**
+         * StorageConfig
+         * @description Storage backend configuration.
+         */
+        StorageConfig: {
+            /**
+             * Backend
+             * @default dropbox
+             */
+            backend: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+            paths?: components["schemas"]["StoragePathsConfig"];
+        };
+        /**
+         * StoragePathsConfig
+         * @description Logical storage paths for different artifact types.
+         */
+        StoragePathsConfig: {
+            /**
+             * Artifacts Dir
+             * @default artifacts
+             */
+            artifacts_dir: string;
+            /**
+             * Backups Dir
+             * @default backups
+             */
+            backups_dir: string;
+            /**
+             * Clips Dir
+             * @default clips
+             */
+            clips_dir: string;
+        };
+        /**
+         * VLMConfig
+         * @description Base VLM configuration.
+         *
+         *     Backend-specific config is stored in the 'config' field.
+         *     - During YAML parsing: dict[str, Any] (preserves all third-party fields)
+         *     - After plugin discovery: BaseModel subclass (validated against plugin.config_model)
+         *
+         *     Note: Backend names are validated against the registry at runtime via
+         *     validate_plugin_names(). This allows third-party VLM plugins via entry points.
+         */
+        VLMConfig: {
+            /** Backend */
+            backend: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+            preprocessing?: components["schemas"]["VLMPreprocessConfig"];
+            /** @default trigger_only */
+            run_mode: components["schemas"]["VLMRunMode"];
+            /** Trigger Classes */
+            trigger_classes?: string[];
+        };
+        /**
+         * VLMPreprocessConfig
+         * @description Preprocessing configuration for VLM frame extraction.
+         */
+        VLMPreprocessConfig: {
+            /**
+             * Max Frames
+             * @default 10
+             */
+            max_frames: number;
+            /**
+             * Max Size
+             * @default 1024
+             */
+            max_size: number;
+            /**
+             * Quality
+             * @default 85
+             */
+            quality: number;
+        };
+        /**
+         * VLMRunMode
+         * @description Policy for when to run VLM analysis.
+         * @enum {string}
+         */
+        VLMRunMode: "trigger_only" | "always" | "never";
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1113,6 +1473,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimeStatusResponse"];
+                };
+            };
+        };
+    };
+    finalize_setup_endpoint_api_v1_setup_finalize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FinalizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinalizeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_setup_preflight_endpoint_api_v1_setup_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreflightResponse"];
+                };
+            };
+        };
+    };
+    get_setup_status_endpoint_api_v1_setup_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatusResponse"];
                 };
             };
         };
