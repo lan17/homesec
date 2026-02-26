@@ -6,10 +6,12 @@ import { ClipDetailPage } from '../features/clips/ClipDetailPage'
 import { ClipsPage } from '../features/clips/ClipsPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
 import { NotFoundPage } from '../features/not-found/NotFoundPage'
+import { SetupPage } from '../features/setup/SetupPage'
 
 export function AppRouter() {
   return (
     <Routes>
+      <Route path="/setup" element={<SetupPage />} />
       <Route element={<AppShell />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/cameras" element={<CamerasPage />} />

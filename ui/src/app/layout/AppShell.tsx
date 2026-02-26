@@ -6,6 +6,7 @@ const NAV_LINKS = [
   { to: '/', label: 'Dashboard' },
   { to: '/cameras', label: 'Cameras' },
   { to: '/clips', label: 'Clips' },
+  { to: '/setup', label: 'Setup' },
 ]
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
