@@ -103,6 +103,7 @@ class Application:
         self._shutdown_event = asyncio.Event()
         self._shutdown_started = False
         self._restart_requested = False
+        self._setup_test_connection_lock = asyncio.Lock()
 
     async def run(self) -> None:
         """Run the application.
@@ -467,6 +468,10 @@ class Application:
     @property
     def restart_exit_code(self) -> int:
         return RESTART_EXIT_CODE
+
+    @property
+    def setup_test_connection_lock(self) -> asyncio.Lock:
+        return self._setup_test_connection_lock
 
     def get_source(self, camera_name: str) -> _CameraSourceSnapshot | None:
         status = self._camera_statuses().get(camera_name)

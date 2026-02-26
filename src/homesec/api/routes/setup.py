@@ -14,12 +14,16 @@ from homesec.models.setup import (
     FinalizeResponse,
     PreflightResponse,
     SetupStatusResponse,
+    TestConnectionRequest,
+    TestConnectionResponse,
 )
 from homesec.services.setup import (
     SetupFinalizeValidationError,
+    SetupTestConnectionRequestError,
     finalize_setup,
     get_setup_status,
     run_preflight,
+    test_connection,
 )
 
 if TYPE_CHECKING:
@@ -42,6 +46,26 @@ async def run_setup_preflight_endpoint(
 ) -> PreflightResponse:
     """Run setup preflight checks for onboarding UX."""
     return await run_preflight(app)
+
+
+@router.post("/api/v1/setup/test-connection", response_model=TestConnectionResponse)
+async def test_setup_connection_endpoint(
+    payload: TestConnectionRequest,
+    app: Application = Depends(get_homesec_app),
+) -> TestConnectionResponse:
+    """Run a non-persistent connection test for setup-managed integrations."""
+    try:
+        return await test_connection(payload, app)
+    except SetupTestConnectionRequestError as exc:
+        extra: dict[str, object] | None = None
+        if exc.available_backends is not None:
+            extra = {"available_backends": exc.available_backends}
+        raise APIError(
+            str(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code=APIErrorCode.BAD_REQUEST,
+            extra=extra,
+        ) from exc
 
 
 @router.post("/api/v1/setup/finalize", response_model=FinalizeResponse)

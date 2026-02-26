@@ -343,6 +343,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/setup/test-connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Setup Connection Endpoint
+         * @description Run a non-persistent connection test for setup-managed integrations.
+         */
+        post: operations["test_setup_connection_endpoint_api_v1_setup_test_connection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stats": {
         parameters: {
             query?: never;
@@ -915,6 +935,39 @@ export interface components {
              * @default clips
              */
             clips_dir: string;
+        };
+        /**
+         * TestConnectionRequest
+         * @description Payload for generic setup test-connection endpoint.
+         */
+        TestConnectionRequest: {
+            /** Backend */
+            backend: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "camera" | "storage" | "notifier" | "analyzer";
+        };
+        /**
+         * TestConnectionResponse
+         * @description Connection test outcome for setup/UI flows.
+         */
+        TestConnectionResponse: {
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            } | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Message */
+            message: string;
+            /** Success */
+            success: boolean;
         };
         /**
          * VLMConfig
@@ -1546,6 +1599,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupStatusResponse"];
+                };
+            };
+        };
+    };
+    test_setup_connection_endpoint_api_v1_setup_test_connection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestConnectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

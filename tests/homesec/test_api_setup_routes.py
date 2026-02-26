@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,9 @@ from homesec.models.setup import (
     PreflightCheckResponse,
     PreflightResponse,
     SetupStatusResponse,
+)
+from homesec.models.setup import (
+    TestConnectionResponse as SetupTestConnectionResponse,
 )
 from homesec.services import setup as setup_service
 
@@ -44,6 +48,7 @@ class _StubSetupApp:
         self.storage = _StubSetupStorage()
         self.config_manager = config_manager or ConfigManager(Path("config/config.yaml"))
         self.sources: list[object] = []
+        self._setup_test_connection_lock = asyncio.Lock()
         self.pipeline_running = False
         self.uptime_seconds = 0.0
         self._config = SimpleNamespace(
@@ -60,6 +65,10 @@ class _StubSetupApp:
     @property
     def server_config(self) -> FastAPIServerConfig:
         return self._config.server
+
+    @property
+    def setup_test_connection_lock(self) -> asyncio.Lock:
+        return self._setup_test_connection_lock
 
     def get_source(self, camera_name: str) -> None:
         _ = camera_name
@@ -167,6 +176,130 @@ def test_setup_preflight_route_returns_service_response(
     payload = response.json()
     assert payload["all_passed"] is True
     assert payload["checks"][0]["name"] == "postgres"
+
+
+def test_setup_test_connection_route_delegates_to_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup test-connection route should delegate and return service outcome."""
+    # Given: A deterministic test-connection response from the setup service layer
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_test_connection(_: object, __: object) -> SetupTestConnectionResponse:
+        return SetupTestConnectionResponse(
+            success=True,
+            message="Probe passed",
+            latency_ms=8.5,
+            details={"backend": "mqtt"},
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.test_connection", _fake_test_connection)
+
+    # When: Calling setup test-connection route
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={"type": "notifier", "backend": "mqtt", "config": {"host": "localhost"}},
+    )
+
+    # Then: Route returns service payload unchanged
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "message": "Probe passed",
+        "latency_ms": 8.5,
+        "details": {"backend": "mqtt"},
+    }
+
+
+def test_setup_test_connection_route_maps_request_error_to_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup test-connection route should map request dispatch errors to canonical 400."""
+    # Given: A setup service request error with available backend hints
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_test_connection(_: object, __: object) -> SetupTestConnectionResponse:
+        raise setup_service.SetupTestConnectionRequestError(
+            "Unknown notifier backend 'foo'.",
+            available_backends=["mqtt", "sendgrid_email"],
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.test_connection", _fake_test_connection)
+
+    # When: Calling setup test-connection route with unknown backend
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={"type": "notifier", "backend": "foo", "config": {}},
+    )
+
+    # Then: Route emits canonical BAD_REQUEST envelope with backend hints
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "BAD_REQUEST"
+    assert payload["available_backends"] == ["mqtt", "sendgrid_email"]
+
+
+def test_setup_test_connection_route_returns_canonical_422_for_invalid_payload() -> None:
+    """Setup test-connection route should return canonical validation envelope for bad input."""
+    # Given: A setup app and a malformed test-connection payload with invalid target type
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    # When: Calling setup test-connection with an invalid request body
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={"type": "invalid-target", "backend": "mqtt", "config": {}},
+    )
+
+    # Then: Route returns canonical request-validation error envelope
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"] == "Request validation failed"
+    assert payload["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert isinstance(payload["validation_errors"], list)
+    assert payload["validation_errors"]
+
+
+def test_setup_test_connection_route_reports_onvif_timeout_above_cap() -> None:
+    """Setup test-connection route should return failed probe result when ONVIF timeout exceeds cap."""
+    # Given: A setup app and an ONVIF payload with timeout above allowed range
+    app = _StubSetupApp(
+        bootstrap_mode=False,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    # When: Calling setup test-connection with timeout_s exceeding schema cap
+    response = client.post(
+        "/api/v1/setup/test-connection",
+        json={
+            "type": "camera",
+            "backend": "onvif",
+            "config": {
+                "host": "192.168.1.10",
+                "username": "admin",
+                "password": "secret",
+                "timeout_s": 999.0,
+            },
+        },
+    )
+
+    # Then: Route returns a non-successful probe response with validation message
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is False
+    assert "Configuration validation failed" in payload["message"]
 
 
 def test_setup_status_route_delegates_to_service(monkeypatch: pytest.MonkeyPatch) -> None:

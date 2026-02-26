@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -66,3 +66,23 @@ class FinalizeResponse(BaseModel):
     restart_requested: bool
     defaults_applied: list[str]
     errors: list[str]
+
+
+TestConnectionTarget = Literal["camera", "storage", "notifier", "analyzer"]
+
+
+class TestConnectionRequest(BaseModel):
+    """Payload for generic setup test-connection endpoint."""
+
+    type: TestConnectionTarget
+    backend: str
+    config: dict[str, Any]
+
+
+class TestConnectionResponse(BaseModel):
+    """Connection test outcome for setup/UI flows."""
+
+    success: bool
+    message: str
+    latency_ms: float | None = None
+    details: dict[str, Any] | None = None

@@ -1369,6 +1369,79 @@
         "title": "StoragePathsConfig",
         "type": "object"
       },
+      "TestConnectionRequest": {
+        "description": "Payload for generic setup test-connection endpoint.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "camera",
+              "storage",
+              "notifier",
+              "analyzer"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "backend",
+          "config"
+        ],
+        "title": "TestConnectionRequest",
+        "type": "object"
+      },
+      "TestConnectionResponse": {
+        "description": "Connection test outcome for setup/UI flows.",
+        "properties": {
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "message"
+        ],
+        "title": "TestConnectionResponse",
+        "type": "object"
+      },
       "VLMConfig": {
         "additionalProperties": false,
         "description": "Base VLM configuration.\n\nBackend-specific config is stored in the 'config' field.\n- During YAML parsing: dict[str, Any] (preserves all third-party fields)\n- After plugin discovery: BaseModel subclass (validated against plugin.config_model)\n\nNote: Backend names are validated against the registry at runtime via\nvalidate_plugin_names(). This allows third-party VLM plugins via entry points.",
@@ -2387,6 +2460,48 @@
           }
         },
         "summary": "Get Setup Status Endpoint",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/v1/setup/test-connection": {
+      "post": {
+        "description": "Run a non-persistent connection test for setup-managed integrations.",
+        "operationId": "test_setup_connection_endpoint_api_v1_setup_test_connection_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestConnectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Setup Connection Endpoint",
         "tags": [
           "setup"
         ]
