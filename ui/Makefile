@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 PNPM ?= pnpm
-VITE_API_PROXY_TARGET ?=
+VITE_API_PROXY_TARGET ?= http://127.0.0.1:8081
 VITE_API_BASE_URL ?=
 VITE_DEV_HOST ?= 0.0.0.0
 VITE_DEV_PORT ?=
