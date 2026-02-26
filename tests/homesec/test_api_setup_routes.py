@@ -19,9 +19,6 @@ from homesec.models.setup import (
     PreflightResponse,
     SetupStatusResponse,
 )
-from homesec.models.setup import (
-    TestConnectionResponse as SetupTestConnectionResponse,
-)
 from homesec.services import setup as setup_service
 
 
@@ -189,8 +186,8 @@ def test_setup_test_connection_route_delegates_to_service(
     )
     client = _client(app)
 
-    async def _fake_test_connection(_: object, __: object) -> SetupTestConnectionResponse:
-        return SetupTestConnectionResponse(
+    async def _fake_test_connection(_: object, __: object) -> setup_service.TestConnectionResponse:
+        return setup_service.TestConnectionResponse(
             success=True,
             message="Probe passed",
             latency_ms=8.5,
@@ -226,7 +223,7 @@ def test_setup_test_connection_route_maps_request_error_to_400(
     )
     client = _client(app)
 
-    async def _fake_test_connection(_: object, __: object) -> SetupTestConnectionResponse:
+    async def _fake_test_connection(_: object, __: object) -> setup_service.TestConnectionResponse:
         raise setup_service.SetupTestConnectionRequestError(
             "Unknown notifier backend 'foo'.",
             available_backends=["mqtt", "sendgrid_email"],

@@ -66,7 +66,7 @@ _NETWORK_PROBE_PORT_ENV = "HOMESEC_SETUP_NETWORK_PROBE_PORT"
 _NETWORK_PROBE_DEFAULT_HOST = "example.com"
 _NETWORK_PROBE_DEFAULT_PORT = 443
 _PREFLIGHT_CHECK_TIMEOUT_S = 10.0
-_TEST_CONNECTION_TIMEOUT_CAP_S = 30.0
+_ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S = 30.0
 _RTSP_TEST_CONNECTION_TIMEOUT_S = 10.0
 _RTSP_PREFLIGHT_COMMAND_TIMEOUT_CAP_S = 8.0
 _FTP_TEST_CONNECTION_TIMEOUT_S = 5.0
@@ -93,11 +93,9 @@ class SetupTestConnectionRequestError(ValueError):
         message: str,
         *,
         available_backends: list[str] | None = None,
-        cause: Exception | None = None,
     ) -> None:
         super().__init__(message)
         self.available_backends = available_backends
-        self.__cause__ = cause
 
 
 class _PingablePlugin(Protocol):
@@ -114,7 +112,7 @@ class _OnvifTestConnectionConfig(BaseModel):
     timeout_s: float = Field(
         default=_ONVIF_TEST_CONNECTION_TIMEOUT_S,
         gt=0.0,
-        le=_TEST_CONNECTION_TIMEOUT_CAP_S,
+        le=_ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S,
     )
 
 
@@ -589,10 +587,9 @@ async def _test_plugin_ping_connection(
                 timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S,
             ),
         )
-        ok = await asyncio.wait_for(plugin.ping(), timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S)
     except asyncio.TimeoutError:
         logger.warning(
-            "Setup test probe timed out for %s backend=%s",
+            "Setup test plugin load timed out for %s backend=%s",
             plugin_type.value,
             backend,
             exc_info=True,
@@ -600,14 +597,14 @@ async def _test_plugin_ping_connection(
         return _result(
             success=False,
             message=(
-                f"{plugin_type.value} probe timed out after "
+                f"{plugin_type.value} probe load timed out after "
                 f"{_PLUGIN_TEST_CONNECTION_TIMEOUT_S:.1f}s."
             ),
             start=start,
         )
     except Exception:
         logger.warning(
-            "Setup test probe failed for %s backend=%s",
+            "Setup test plugin load failed for %s backend=%s",
             plugin_type.value,
             backend,
             exc_info=True,
@@ -615,7 +612,41 @@ async def _test_plugin_ping_connection(
         return _result(
             success=False,
             message=(
-                f"{plugin_type.value} probe failed. Check backend configuration and connectivity."
+                f"{plugin_type.value} probe failed during plugin load. "
+                "Check backend configuration and connectivity."
+            ),
+            start=start,
+        )
+
+    try:
+        ok = await asyncio.wait_for(plugin.ping(), timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Setup test plugin ping timed out for %s backend=%s",
+            plugin_type.value,
+            backend,
+            exc_info=True,
+        )
+        return _result(
+            success=False,
+            message=(
+                f"{plugin_type.value} probe ping timed out after "
+                f"{_PLUGIN_TEST_CONNECTION_TIMEOUT_S:.1f}s."
+            ),
+            start=start,
+        )
+    except Exception:
+        logger.warning(
+            "Setup test plugin ping failed for %s backend=%s",
+            plugin_type.value,
+            backend,
+            exc_info=True,
+        )
+        return _result(
+            success=False,
+            message=(
+                f"{plugin_type.value} probe failed during ping. "
+                "Check backend configuration and connectivity."
             ),
             start=start,
         )
