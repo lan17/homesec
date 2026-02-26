@@ -83,6 +83,24 @@ describe('useSetupRedirect', () => {
     })
   })
 
+  it('does not redirect when setup state is complete', async () => {
+    // Given: Setup status reports complete system bootstrap state
+    useSetupStatusQueryMock.mockReturnValue({
+      data: setupStatusSnapshot('complete'),
+      error: null,
+      isPending: false,
+    })
+
+    // When: Running setup redirect hook
+    const { result } = renderHook(() => useSetupRedirect(), { wrapper: createWrapper() })
+
+    // Then: Redirect remains disabled and navigation is not triggered
+    await waitFor(() => {
+      expect(result.current.shouldRedirect).toBe(false)
+      expect(navigateMock).not.toHaveBeenCalled()
+    })
+  })
+
   it('does not redirect when setup status query fails', async () => {
     // Given: Setup status query has an API error
     useSetupStatusQueryMock.mockReturnValue({
