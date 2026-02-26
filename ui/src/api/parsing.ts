@@ -9,6 +9,8 @@ import type {
   DiagnosticsResponse,
   HealthResponse,
   MediaProfileResponse,
+  PreflightCheckResponse,
+  PreflightResponse,
   ProbeResponse,
   RuntimeReloadResponse,
   RuntimeState,
@@ -243,6 +245,41 @@ export function parseSetupStatusResponse(payload: unknown): SetupStatusResponse 
     has_cameras: expectBoolean(payload.has_cameras, 'has_cameras'),
     pipeline_running: expectBoolean(payload.pipeline_running, 'pipeline_running'),
     auth_configured: expectBoolean(payload.auth_configured, 'auth_configured'),
+  }
+}
+
+function parsePreflightCheckResponse(payload: unknown): PreflightCheckResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preflight check response is not a JSON object')
+  }
+
+  return {
+    name: expectString(payload.name, 'name'),
+    passed: expectBoolean(payload.passed, 'passed'),
+    message: expectString(payload.message, 'message'),
+    latency_ms: expectNullableNumber(payload.latency_ms, 'latency_ms'),
+  }
+}
+
+export function parsePreflightResponse(payload: unknown): PreflightResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preflight response is not a JSON object')
+  }
+
+  const checks = payload.checks
+  if (!Array.isArray(checks)) {
+    throw new Error('checks must be an array')
+  }
+
+  return {
+    all_passed: expectBoolean(payload.all_passed, 'all_passed'),
+    checks: checks.map((check, index) => {
+      try {
+        return parsePreflightCheckResponse(check)
+      } catch (error) {
+        throw new Error(`checks[${index}] invalid: ${(error as Error).message}`)
+      }
+    }),
   }
 }
 

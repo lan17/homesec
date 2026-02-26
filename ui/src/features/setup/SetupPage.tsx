@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { Button } from '../../components/ui/Button'
 import { SetupWizardShell } from './SetupWizardShell'
+import { WelcomeStep } from './steps/WelcomeStep'
 import type { WizardStepDef } from './types'
 import { useWizardState } from './useWizardState'
 import './wizard.css'
@@ -10,7 +11,7 @@ const WIZARD_STEPS: readonly WizardStepDef[] = [
   {
     id: 'welcome',
     title: 'Welcome',
-    subtitle: 'Define setup context and operator preferences.',
+    subtitle: 'Review prerequisites before configuring cameras and services.',
     skippable: true,
   },
   {
@@ -86,6 +87,7 @@ export function SetupPage() {
   const isLastStep = state.currentStep === WIZARD_STEPS.length - 1
   const completedCount = state.completedSteps.size
   const skippedCount = state.skippedSteps.size
+  const isWelcomeStep = activeStep.id === 'welcome'
 
   function handleNoteChange(note: string): void {
     updateStepData(activeStep.id, { note })
@@ -107,6 +109,41 @@ export function SetupPage() {
     goNext()
   }
 
+  function renderActiveStepContent() {
+    if (isWelcomeStep) {
+      return <WelcomeStep isComplete={isComplete} onComplete={handleMarkComplete} />
+    }
+
+    return (
+      <section className="wizard-step-card">
+        <header className="wizard-step-card__header">
+          <p className="wizard-step-card__status">
+            Step status: {statusText(isComplete, isSkipped)}
+          </p>
+          {!isComplete ? (
+            <Button variant="ghost" onClick={handleMarkComplete}>
+              Mark step complete
+            </Button>
+          ) : null}
+        </header>
+
+        <label className="field-label" htmlFor="wizard-step-note">
+          Step notes (non-secret)
+        </label>
+        <textarea
+          id="wizard-step-note"
+          className="input wizard-step-card__textarea"
+          value={draft.note}
+          onChange={(event) => handleNoteChange(event.target.value)}
+          placeholder="Capture setup decisions for this step."
+        />
+        <p className="subtle">
+          Security: credentials and secrets are not persisted in browser localStorage.
+        </p>
+      </section>
+    )
+  }
+
   return (
     <main className="setup-page">
       <SetupWizardShell
@@ -120,32 +157,7 @@ export function SetupPage() {
         onBack={goBack}
         onSkip={skipStep}
       >
-        <section className="wizard-step-card">
-          <header className="wizard-step-card__header">
-            <p className="wizard-step-card__status">
-              Step status: {statusText(isComplete, isSkipped)}
-            </p>
-            {!isComplete ? (
-              <Button variant="ghost" onClick={handleMarkComplete}>
-                Mark step complete
-              </Button>
-            ) : null}
-          </header>
-
-          <label className="field-label" htmlFor="wizard-step-note">
-            Step notes (non-secret)
-          </label>
-          <textarea
-            id="wizard-step-note"
-            className="input wizard-step-card__textarea"
-            value={draft.note}
-            onChange={(event) => handleNoteChange(event.target.value)}
-            placeholder="Capture setup decisions for this step."
-          />
-          <p className="subtle">
-            Security: credentials and secrets are not persisted in browser localStorage.
-          </p>
-        </section>
+        {renderActiveStepContent()}
 
         <section className="wizard-summary-card">
           <h2 className="wizard-summary-card__title">Session summary</h2>

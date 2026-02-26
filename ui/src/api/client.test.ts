@@ -186,6 +186,62 @@ describe('HomeSecApiClient.getSetupStatus', () => {
   })
 })
 
+describe('HomeSecApiClient.runSetupPreflight', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns structured preflight data for successful responses', async () => {
+    // Given: A setup preflight endpoint with two prerequisite checks
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          all_passed: false,
+          checks: [
+            { name: 'postgres', passed: true, message: 'Connected', latency_ms: 4.2 },
+            { name: 'ffmpeg', passed: false, message: 'ffmpeg not found', latency_ms: null },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Triggering setup preflight checks
+    const result = await client.runSetupPreflight()
+
+    // Then: Response should include typed checks payload and HTTP metadata
+    expect(result.httpStatus).toBe(200)
+    expect(result.all_passed).toBe(false)
+    expect(result.checks).toHaveLength(2)
+    expect(result.checks[0]?.name).toBe('postgres')
+    expect(result.checks[1]?.passed).toBe(false)
+  })
+
+  it('throws APIError when preflight payload is malformed', async () => {
+    // Given: A malformed preflight payload with non-array checks
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          all_passed: true,
+          checks: 'invalid',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client rejects malformed preflight payloads with APIError
+    await expect(client.runSetupPreflight()).rejects.toBeInstanceOf(APIError)
+  })
+})
+
 describe('HomeSecApiClient.getStats', () => {
   afterEach(() => {
     vi.restoreAllMocks()
