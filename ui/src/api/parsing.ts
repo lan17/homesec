@@ -13,6 +13,7 @@ import type {
   RuntimeReloadResponse,
   RuntimeState,
   RuntimeStatusResponse,
+  SetupStatusResponse,
   StatsResponse,
 } from './generated/types'
 
@@ -222,6 +223,26 @@ export function parseHealthResponse(payload: unknown): HealthResponse {
     postgres: expectString(payload.postgres, 'postgres'),
     cameras_online: expectNumber(payload.cameras_online, 'cameras_online'),
     bootstrap_mode: expectBoolean(payload.bootstrap_mode, 'bootstrap_mode'),
+  }
+}
+
+function parseSetupState(value: unknown, fieldName: string): SetupStatusResponse['state'] {
+  if (value === 'fresh' || value === 'partial' || value === 'complete') {
+    return value
+  }
+  throw new Error(`${fieldName} must be one of fresh|partial|complete`)
+}
+
+export function parseSetupStatusResponse(payload: unknown): SetupStatusResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Setup status response is not a JSON object')
+  }
+
+  return {
+    state: parseSetupState(payload.state, 'state'),
+    has_cameras: expectBoolean(payload.has_cameras, 'has_cameras'),
+    pipeline_running: expectBoolean(payload.pipeline_running, 'pipeline_running'),
+    auth_configured: expectBoolean(payload.auth_configured, 'auth_configured'),
   }
 }
 
