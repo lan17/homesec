@@ -1,9 +1,22 @@
 import { useNavigate } from 'react-router-dom'
 
-import { Button } from '../../components/ui/Button'
 import type { CameraCreate } from '../../api/generated/types'
+import type { DetectionStepData } from '../settings/detection/types'
+import type { NotificationStepData } from '../settings/notifiers/types'
+import type { StorageFormState } from '../settings/storage/types'
 import { SetupWizardShell } from './SetupWizardShell'
+import type { ReviewWizardDrafts } from './review'
+import {
+  parseCameraStepDraft,
+  parseDetectionStepDraft,
+  parseNotificationStepDraft,
+  parseStorageStepDraft,
+} from './stepDrafts'
 import { CameraStep } from './steps/CameraStep'
+import { DetectionStep } from './steps/DetectionStep'
+import { NotificationStep } from './steps/NotificationStep'
+import { ReviewStep } from './steps/ReviewStep'
+import { StorageStep } from './steps/StorageStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 import type { WizardStepDef } from './types'
 import { useWizardState } from './useWizardState'
@@ -48,74 +61,40 @@ const WIZARD_STEPS: readonly WizardStepDef[] = [
   },
 ]
 
-interface StepDraft {
-  note: string
-}
-
-interface CameraStepDraft {
-  camera: CameraCreate
-}
-
-function toStepDraft(value: unknown): StepDraft {
-  if (
-    value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    typeof (value as { note?: unknown }).note === 'string'
-  ) {
-    return {
-      note: (value as { note: string }).note,
-    }
-  }
-  return { note: '' }
-}
-
-function toCameraStepDraft(value: unknown): CameraStepDraft | null {
-  if (
-    value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    'camera' in value
-  ) {
-    const cameraValue = (value as { camera: unknown }).camera
-    if (cameraValue && typeof cameraValue === 'object' && !Array.isArray(cameraValue)) {
-      return {
-        camera: cameraValue as CameraCreate,
-      }
-    }
-  }
-  return null
-}
-
-function statusText(isComplete: boolean, isSkipped: boolean): string {
-  if (isComplete) {
-    return 'Completed'
-  }
-  if (isSkipped) {
-    return 'Skipped'
-  }
-  return 'Pending'
-}
-
 export function SetupPage() {
   const navigate = useNavigate()
-  const { state, goNext, goBack, skipStep, updateStepData, markComplete, reset } =
+  const {
+    state,
+    goNext,
+    goBack,
+    goToStep,
+    skipStep,
+    updateStepData,
+    markComplete,
+    clearPersistedState,
+  } =
     useWizardState(WIZARD_STEPS)
 
   const activeStep = WIZARD_STEPS[state.currentStep] ?? WIZARD_STEPS[0]
   const isComplete = state.completedSteps.has(activeStep.id)
-  const isSkipped = state.skippedSteps.has(activeStep.id)
-  const draft = toStepDraft(state.stepData[activeStep.id])
-  const canGoNext = activeStep.skippable || isComplete
-  const isLastStep = state.currentStep === WIZARD_STEPS.length - 1
+  const isReviewStep = activeStep.id === 'review'
+  const canGoNext = !isReviewStep && (activeStep.skippable || isComplete)
   const completedCount = state.completedSteps.size
   const skippedCount = state.skippedSteps.size
   const isWelcomeStep = activeStep.id === 'welcome'
   const isCameraStep = activeStep.id === 'camera'
-  const cameraStepDraft = toCameraStepDraft(state.stepData.camera)
-
-  function handleNoteChange(note: string): void {
-    updateStepData(activeStep.id, { note })
+  const isStorageStep = activeStep.id === 'storage'
+  const isDetectionStep = activeStep.id === 'detection'
+  const isNotificationsStep = activeStep.id === 'notifications'
+  const cameraStepDraft = parseCameraStepDraft(state.stepData.camera)
+  const storageStepDraft = parseStorageStepDraft(state.stepData.storage)
+  const detectionStepDraft = parseDetectionStepDraft(state.stepData.detection)
+  const notificationStepDraft = parseNotificationStepDraft(state.stepData.notifications)
+  const reviewWizardData: ReviewWizardDrafts = {
+    camera: cameraStepDraft,
+    storage: storageStepDraft,
+    detection: detectionStepDraft,
+    notifications: notificationStepDraft,
   }
 
   function handleMarkComplete(): void {
@@ -135,16 +114,59 @@ export function SetupPage() {
     skipStep()
   }
 
+  function handleStorageStepUpdateData(storage: StorageFormState): void {
+    updateStepData('storage', { storage })
+  }
+
+  function handleStorageStepComplete(): void {
+    markComplete('storage')
+    goNext()
+  }
+
+  function handleStorageStepSkip(): void {
+    skipStep()
+  }
+
+  function handleDetectionStepUpdateData(detection: DetectionStepData): void {
+    updateStepData('detection', { detection })
+  }
+
+  function handleDetectionStepComplete(): void {
+    markComplete('detection')
+    goNext()
+  }
+
+  function handleDetectionStepSkip(): void {
+    skipStep()
+  }
+
+  function handleNotificationStepUpdateData(notifications: NotificationStepData): void {
+    updateStepData('notifications', { notifications })
+  }
+
+  function handleNotificationStepComplete(): void {
+    markComplete('notifications')
+    goNext()
+  }
+
+  function handleNotificationStepSkip(): void {
+    skipStep()
+  }
+
   function handleNext(): void {
     if (!canGoNext) {
       return
     }
-    if (isLastStep) {
-      reset()
-      navigate('/', { replace: true })
-      return
-    }
     goNext()
+  }
+
+  function handleReviewLaunchSuccess(): void {
+    clearPersistedState()
+  }
+
+  function handleGoDashboard(): void {
+    clearPersistedState()
+    navigate('/', { replace: true })
   }
 
   function renderActiveStepContent() {
@@ -155,7 +177,7 @@ export function SetupPage() {
       return (
         <CameraStep
           existingCameraNames={
-            cameraStepDraft ? [cameraStepDraft.camera.name] : []
+            cameraStepDraft ? [cameraStepDraft.name] : []
           }
           onUpdateData={handleCameraStepUpdateData}
           onComplete={handleCameraStepComplete}
@@ -163,33 +185,51 @@ export function SetupPage() {
         />
       )
     }
+    if (isStorageStep) {
+      return (
+        <StorageStep
+          initialData={storageStepDraft}
+          onUpdateData={handleStorageStepUpdateData}
+          onComplete={handleStorageStepComplete}
+          onSkip={handleStorageStepSkip}
+        />
+      )
+    }
+    if (isDetectionStep) {
+      return (
+        <DetectionStep
+          initialData={detectionStepDraft}
+          onUpdateData={handleDetectionStepUpdateData}
+          onComplete={handleDetectionStepComplete}
+          onSkip={handleDetectionStepSkip}
+        />
+      )
+    }
+    if (isNotificationsStep) {
+      return (
+        <NotificationStep
+          initialData={notificationStepDraft}
+          onUpdateData={handleNotificationStepUpdateData}
+          onComplete={handleNotificationStepComplete}
+          onSkip={handleNotificationStepSkip}
+        />
+      )
+    }
+    if (isReviewStep) {
+      return (
+        <ReviewStep
+          wizardData={reviewWizardData}
+          skippedSteps={state.skippedSteps}
+          onGoToStep={goToStep}
+          onLaunchSuccess={handleReviewLaunchSuccess}
+          onGoDashboard={handleGoDashboard}
+        />
+      )
+    }
 
     return (
       <section className="wizard-step-card">
-        <header className="wizard-step-card__header">
-          <p className="wizard-step-card__status">
-            Step status: {statusText(isComplete, isSkipped)}
-          </p>
-          {!isComplete ? (
-            <Button variant="ghost" onClick={handleMarkComplete}>
-              Mark step complete
-            </Button>
-          ) : null}
-        </header>
-
-        <label className="field-label" htmlFor="wizard-step-note">
-          Step notes (non-secret)
-        </label>
-        <textarea
-          id="wizard-step-note"
-          className="input wizard-step-card__textarea"
-          value={draft.note}
-          onChange={(event) => handleNoteChange(event.target.value)}
-          placeholder="Capture setup decisions for this step."
-        />
-        <p className="subtle">
-          Security: credentials and secrets are not persisted in browser localStorage.
-        </p>
+        <p className="subtle">Unknown setup step.</p>
       </section>
     )
   }
@@ -202,7 +242,8 @@ export function SetupPage() {
         completedSteps={state.completedSteps}
         skippedSteps={state.skippedSteps}
         canGoNext={canGoNext}
-        nextLabel={isLastStep ? 'Launch' : 'Next'}
+        showNext={!isReviewStep}
+        nextLabel="Next"
         onNext={handleNext}
         onBack={goBack}
         onSkip={skipStep}
@@ -227,7 +268,7 @@ export function SetupPage() {
               <dd>{skippedCount}</dd>
             </div>
           </dl>
-          {isLastStep ? (
+          {isReviewStep ? (
             <p className="subtle">
               Launch clears persisted wizard state and returns to the dashboard.
             </p>

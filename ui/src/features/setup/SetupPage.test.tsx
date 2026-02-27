@@ -45,6 +45,22 @@ vi.mock('./steps/CameraStep', () => ({
   ),
 }))
 
+vi.mock('./steps/StorageStep', () => ({
+  StorageStep: () => <section>Mock storage step</section>,
+}))
+
+vi.mock('./steps/DetectionStep', () => ({
+  DetectionStep: () => <section>Mock detection step</section>,
+}))
+
+vi.mock('./steps/NotificationStep', () => ({
+  NotificationStep: () => <section>Mock notification step</section>,
+}))
+
+vi.mock('./steps/ReviewStep', () => ({
+  ReviewStep: () => <section>Mock review step</section>,
+}))
+
 function renderSetupPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -88,6 +104,7 @@ describe('SetupPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Storage' })).toBeTruthy()
     })
+    expect(screen.getByText('Mock storage step')).toBeTruthy()
     const raw = window.localStorage.getItem(WIZARD_STATE_STORAGE_KEY)
     expect(raw).toBeTruthy()
     const parsed = JSON.parse(raw ?? '{}') as { stepData?: Record<string, unknown> }
@@ -109,5 +126,41 @@ describe('SetupPage', () => {
     const progress = screen.getByRole('list', { name: 'Setup steps' })
     const cameraStep = within(progress).getByText('Camera').closest('li')
     expect(cameraStep?.className).toContain('wizard__progress-step--skipped')
+  })
+
+  it('renders detection step component on wizard detection stage', () => {
+    // Given: Wizard URL points to detection step
+    renderSetupPage('/setup?step=3')
+
+    // When: Setup page renders active step content
+    const marker = screen.getByText('Mock detection step')
+
+    // Then: Detection step wrapper is mounted for step 4
+    expect(marker).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Detection' })).toBeTruthy()
+  })
+
+  it('renders notification step component on wizard notifications stage', () => {
+    // Given: Wizard URL points to notifications step
+    renderSetupPage('/setup?step=4')
+
+    // When: Setup page renders active step content
+    const marker = screen.getByText('Mock notification step')
+
+    // Then: Notification step wrapper is mounted for step 5
+    expect(marker).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeTruthy()
+  })
+
+  it('renders review step component on wizard review stage', () => {
+    // Given: Wizard URL points to review step
+    renderSetupPage('/setup?step=5')
+
+    // When: Setup page renders active step content
+    const marker = screen.getByText('Mock review step')
+
+    // Then: Review step wrapper is mounted for step 6
+    expect(marker).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Review & Launch' })).toBeTruthy()
   })
 })

@@ -10,6 +10,7 @@ interface SetupWizardShellProps {
   completedSteps: ReadonlySet<string>
   skippedSteps: ReadonlySet<string>
   canGoNext: boolean
+  showNext?: boolean
   nextLabel?: string
   onNext: () => void
   onBack: () => void
@@ -42,6 +43,7 @@ export function SetupWizardShell({
   completedSteps,
   skippedSteps,
   canGoNext,
+  showNext = true,
   nextLabel = 'Next',
   onNext,
   onBack,
@@ -84,9 +86,11 @@ export function SetupWizardShell({
               Skip
             </Button>
           ) : null}
-          <Button onClick={onNext} disabled={!canGoNext}>
-            {nextLabel}
-          </Button>
+          {showNext ? (
+            <Button onClick={onNext} disabled={!canGoNext}>
+              {nextLabel}
+            </Button>
+          ) : null}
         </div>
         <Link className="wizard__exit-link" to="/">
           Exit to Dashboard

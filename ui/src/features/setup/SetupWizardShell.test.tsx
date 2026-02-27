@@ -19,6 +19,7 @@ function renderShell({
   completedSteps = new Set<string>(),
   skippedSteps = new Set<string>(),
   canGoNext = true,
+  showNext = true,
   onNext = vi.fn(),
   onBack = vi.fn(),
   onSkip = vi.fn(),
@@ -27,6 +28,7 @@ function renderShell({
   completedSteps?: ReadonlySet<string>
   skippedSteps?: ReadonlySet<string>
   canGoNext?: boolean
+  showNext?: boolean
   onNext?: () => void
   onBack?: () => void
   onSkip?: () => void
@@ -39,6 +41,7 @@ function renderShell({
         completedSteps={completedSteps}
         skippedSteps={skippedSteps}
         canGoNext={canGoNext}
+        showNext={showNext}
         onNext={onNext}
         onBack={onBack}
         onSkip={onSkip}
@@ -128,5 +131,19 @@ describe('SetupWizardShell', () => {
     expect(onBack).toHaveBeenCalledTimes(1)
     expect(onSkip).toHaveBeenCalledTimes(1)
     expect(onNext).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides Next button when requested by caller', () => {
+    // Given: Wizard shell is configured to suppress footer next action
+    renderShell({
+      currentStep: 2,
+      showNext: false,
+    })
+
+    // When: Footer actions render
+    const nextButton = screen.queryByRole('button', { name: 'Next' })
+
+    // Then: Next button is omitted so step content can own primary action
+    expect(nextButton).toBeNull()
   })
 })

@@ -434,6 +434,47 @@ async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
 
 
 @pytest.mark.asyncio
+async def test_finalize_setup_validate_only_returns_success_without_writing_or_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validate-only finalize should run full validation without mutating runtime/config."""
+    # Given: A bootstrap app and valid camera finalize payload in validate-only mode
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
+    config_path = tmp_path / "config.yaml"
+    manager = ConfigManager(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+    request = FinalizeRequest(
+        validate_only=True,
+        cameras=[
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp/front"}},
+            }
+        ],
+    )
+
+    # When: Finalizing setup in validation-only mode
+    response = await setup_service.finalize_setup(request, app)
+
+    # Then: Service validates and reports success without writing config or requesting restart
+    assert response.success is True
+    assert response.restart_requested is False
+    assert app.restart_requested is False
+    assert response.config_path == str(config_path)
+    assert "storage" in response.defaults_applied
+    assert config_path.exists() is False
+
+
+@pytest.mark.asyncio
 async def test_finalize_setup_returns_validation_error_without_writing_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

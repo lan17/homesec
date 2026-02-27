@@ -362,14 +362,14 @@ a:hover {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
-.camera-checkbox-field {
+.form-checkbox-field {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-top: 1.75rem;
 }
 
-.camera-checkbox-field input {
+.form-checkbox-field input {
   margin: 0;
 }
 
@@ -393,18 +393,21 @@ a:hover {
   flex-wrap: wrap;
 }
 
-.camera-add-flow__title {
+.camera-add-flow__title,
+.backend-picker__title {
   margin: 0;
   font-size: 1.02rem;
 }
 
-.camera-add-flow__backend-grid {
+.camera-add-flow__backend-grid,
+.backend-picker__grid {
   display: grid;
   gap: var(--space-2);
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
-.camera-add-flow__backend-card {
+.camera-add-flow__backend-card,
+.backend-picker__card {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface-1) 72%, transparent);
@@ -416,27 +419,32 @@ a:hover {
   gap: 0.35rem;
 }
 
-.camera-add-flow__backend-card:hover:not(:disabled) {
+.camera-add-flow__backend-card:hover:not(:disabled),
+.backend-picker__card:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.camera-add-flow__backend-card:disabled {
+.camera-add-flow__backend-card:disabled,
+.backend-picker__card:disabled {
   opacity: 0.62;
   cursor: wait;
 }
 
-.camera-add-flow__backend-title {
+.camera-add-flow__backend-title,
+.backend-picker__title-text {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
 }
 
-.camera-add-flow__backend-description {
+.camera-add-flow__backend-description,
+.backend-picker__description {
   margin: 0;
   color: var(--text-secondary);
 }
 
-.camera-add-flow__test-result {
+.camera-add-flow__test-result,
+.test-connection__result {
   display: grid;
   gap: var(--space-2);
   border: 1px solid var(--line);

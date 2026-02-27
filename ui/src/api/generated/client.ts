@@ -14,6 +14,8 @@ import type {
   DiagnosticsResponse,
   DiscoverRequest,
   DiscoveredCameraResponse,
+  FinalizeRequest,
+  FinalizeResponse,
   HealthResponse,
   ListClipsQuery,
   PreflightResponse,
@@ -55,6 +57,10 @@ export interface GeneratedHomeSecClient {
     options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
   getSetupStatus(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<SetupStatusResponse>>
+  finalizeSetup(
+    payload: FinalizeRequest,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<FinalizeResponse>>
   runSetupPreflight(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<PreflightResponse>>
   runSetupTestConnection(
     payload: TestConnectionRequest,

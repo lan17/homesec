@@ -781,6 +781,11 @@
               }
             ]
           },
+          "validate_only": {
+            "default": false,
+            "title": "Validate Only",
+            "type": "boolean"
+          },
           "vlm": {
             "anyOf": [
               {

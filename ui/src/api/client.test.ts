@@ -242,6 +242,68 @@ describe('HomeSecApiClient.runSetupPreflight', () => {
   })
 })
 
+describe('HomeSecApiClient.finalizeSetup', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns structured finalize data for successful responses', async () => {
+    // Given: A setup finalize endpoint success payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          config_path: '/etc/homesec/config.yaml',
+          restart_requested: true,
+          defaults_applied: ['storage', 'vlm'],
+          errors: [],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Triggering setup finalize with empty section payload
+    const result = await client.finalizeSetup({ validate_only: false })
+
+    // Then: Response should include typed payload and HTTP metadata
+    expect(result).toEqual({
+      success: true,
+      config_path: '/etc/homesec/config.yaml',
+      restart_requested: true,
+      defaults_applied: ['storage', 'vlm'],
+      errors: [],
+      httpStatus: 200,
+    })
+  })
+
+  it('throws APIError when finalize payload is malformed', async () => {
+    // Given: A malformed finalize response with invalid defaults_applied shape
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          config_path: '/etc/homesec/config.yaml',
+          restart_requested: true,
+          defaults_applied: 'invalid',
+          errors: [],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client rejects malformed finalize payloads with APIError
+    await expect(client.finalizeSetup({ validate_only: false })).rejects.toBeInstanceOf(APIError)
+  })
+})
+
 describe('HomeSecApiClient.runSetupTestConnection', () => {
   afterEach(() => {
     vi.restoreAllMocks()

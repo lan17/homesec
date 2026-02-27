@@ -793,13 +793,22 @@ async def _run_preflight_check(
 
 
 async def finalize_setup(request: FinalizeRequest, app: Application) -> FinalizeResponse:
-    """Persist finalized setup config and request graceful restart."""
+    """Finalize setup with optional validation-only dry run."""
     merged_config, defaults_applied = await _build_finalize_config(request=request, app=app)
     validation_errors = _finalize_validation_errors(merged_config)
     if validation_errors:
         raise SetupFinalizeValidationError(validation_errors)
 
     config_path = app.config_manager.config_path
+    if request.validate_only:
+        return FinalizeResponse(
+            success=True,
+            config_path=str(config_path),
+            restart_requested=False,
+            defaults_applied=defaults_applied,
+            errors=[],
+        )
+
     await app.config_manager.replace_config(merged_config)
 
     app.request_restart()

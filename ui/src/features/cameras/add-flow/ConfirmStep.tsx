@@ -64,7 +64,7 @@ export function ConfirmStep({
         </div>
       </dl>
 
-      <label className="field-label camera-checkbox-field" htmlFor="camera-confirm-apply-changes">
+      <label className="field-label form-checkbox-field" htmlFor="camera-confirm-apply-changes">
         <input
           id="camera-confirm-apply-changes"
           type="checkbox"
