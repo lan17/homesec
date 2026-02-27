@@ -11,9 +11,11 @@ export interface UseWizardStateResult {
   state: WizardState
   goNext: () => void
   goBack: () => void
+  goToStep: (stepId: string) => void
   skipStep: () => void
   updateStepData: (stepId: string, data: unknown, options?: UpdateStepDataOptions) => void
   markComplete: (stepId: string) => void
+  clearPersistedState: () => void
   reset: () => void
 }
 
@@ -168,6 +170,13 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
   const maxStepIndex = Math.max(steps.length - 1, 0)
   const stepIds = useMemo(() => steps.map((step) => step.id), [steps])
   const knownStepIds = useMemo(() => new Set(stepIds), [stepIds])
+  const stepIndexById = useMemo(() => {
+    const result = new Map<string, number>()
+    for (const [index, step] of steps.entries()) {
+      result.set(step.id, index)
+    }
+    return result
+  }, [steps])
   const persistedState = useMemo(
     () => loadPersistedState(knownStepIds, maxStepIndex),
     [knownStepIds, maxStepIndex],
@@ -231,6 +240,15 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
   function goBack(): void {
     persistencePausedRef.current = false
     setStepFromActions(currentStep - 1)
+  }
+
+  function goToStep(stepId: string): void {
+    const nextStep = stepIndexById.get(stepId)
+    if (nextStep === undefined) {
+      return
+    }
+    persistencePausedRef.current = false
+    setStepFromActions(nextStep)
   }
 
   function skipStep(): void {
@@ -313,6 +331,12 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
     setSearchParams(nextParams, { replace: true })
   }, [searchParams, setSearchParams])
 
+  const clearPersistedState = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(WIZARD_STATE_STORAGE_KEY)
+    }
+  }, [])
+
   return {
     state: {
       currentStep,
@@ -322,9 +346,11 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
     },
     goNext,
     goBack,
+    goToStep,
     skipStep,
     updateStepData,
     markComplete,
+    clearPersistedState,
     reset,
   }
 }

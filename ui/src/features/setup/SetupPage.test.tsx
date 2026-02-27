@@ -57,6 +57,10 @@ vi.mock('./steps/NotificationStep', () => ({
   NotificationStep: () => <section>Mock notification step</section>,
 }))
 
+vi.mock('./steps/ReviewStep', () => ({
+  ReviewStep: () => <section>Mock review step</section>,
+}))
+
 function renderSetupPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -146,5 +150,17 @@ describe('SetupPage', () => {
     // Then: Notification step wrapper is mounted for step 5
     expect(marker).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeTruthy()
+  })
+
+  it('renders review step component on wizard review stage', () => {
+    // Given: Wizard URL points to review step
+    renderSetupPage('/setup?step=5')
+
+    // When: Setup page renders active step content
+    const marker = screen.getByText('Mock review step')
+
+    // Then: Review step wrapper is mounted for step 6
+    expect(marker).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Review & Launch' })).toBeTruthy()
   })
 })

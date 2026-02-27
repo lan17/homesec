@@ -72,6 +72,22 @@ describe('useWizardState', () => {
     })
   })
 
+  it('goToStep navigates directly to a known step id', async () => {
+    // Given: A fresh wizard session at step 0
+    const { result } = renderWizard('/setup')
+
+    // When: Jumping directly to review step by id
+    act(() => {
+      result.current.wizard.goToStep('review')
+    })
+
+    // Then: Wizard state and URL align with the mapped review step index
+    await waitFor(() => {
+      expect(result.current.wizard.state.currentStep).toBe(2)
+      expect(result.current.location.search).toBe('?step=2')
+    })
+  })
+
   it('goBack at step zero is a no-op', async () => {
     // Given: A fresh wizard session at first step
     const { result } = renderWizard('/setup')
