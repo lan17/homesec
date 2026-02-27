@@ -14,6 +14,8 @@ import type {
   DiscoverRequest,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
+  FinalizeRequest,
+  FinalizeResponse,
   HealthResponse,
   ListClipsQuery,
   PreflightResponse,
@@ -39,6 +41,7 @@ import {
   parseOnvifDiscoverResponse,
   parseOnvifProbeResponse,
   parseDiagnosticsResponse,
+  parseFinalizeResponse,
   parseHealthResponse,
   parsePreflightResponse,
   parseTestConnectionResponse,
@@ -61,6 +64,7 @@ export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
 export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
 export type SetupStatusSnapshot = ApiSnapshot<SetupStatusResponse>
+export type FinalizeSnapshot = ApiSnapshot<FinalizeResponse>
 export type PreflightSnapshot = ApiSnapshot<PreflightResponse>
 export type TestConnectionSnapshot = ApiSnapshot<TestConnectionResponse>
 export type ClipMediaTokenSnapshot = ApiSnapshot<ClipMediaTokenResponsePayload>
@@ -175,6 +179,28 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid setup status response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async finalizeSetup(
+    payload: FinalizeRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<FinalizeSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/setup/finalize', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return withHttpStatus(parseFinalizeResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid setup finalize response payload',
         response.status,
         response.payload,
         null,

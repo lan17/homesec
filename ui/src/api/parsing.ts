@@ -7,6 +7,7 @@ import type {
   DeviceInfoResponse,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
+  FinalizeResponse,
   HealthResponse,
   MediaProfileResponse,
   PreflightCheckResponse,
@@ -246,6 +247,31 @@ export function parseSetupStatusResponse(payload: unknown): SetupStatusResponse 
     has_cameras: expectBoolean(payload.has_cameras, 'has_cameras'),
     pipeline_running: expectBoolean(payload.pipeline_running, 'pipeline_running'),
     auth_configured: expectBoolean(payload.auth_configured, 'auth_configured'),
+  }
+}
+
+export function parseFinalizeResponse(payload: unknown): FinalizeResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Finalize response is not a JSON object')
+  }
+
+  const defaultsApplied = payload.defaults_applied
+  if (!Array.isArray(defaultsApplied)) {
+    throw new Error('defaults_applied must be an array')
+  }
+  const errors = payload.errors
+  if (!Array.isArray(errors)) {
+    throw new Error('errors must be an array')
+  }
+
+  return {
+    success: expectBoolean(payload.success, 'success'),
+    config_path: expectString(payload.config_path, 'config_path'),
+    restart_requested: expectBoolean(payload.restart_requested, 'restart_requested'),
+    defaults_applied: defaultsApplied.map((value, index) =>
+      expectString(value, `defaults_applied[${index}]`),
+    ),
+    errors: errors.map((value, index) => expectString(value, `errors[${index}]`)),
   }
 }
 
