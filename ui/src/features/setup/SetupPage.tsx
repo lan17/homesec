@@ -5,6 +5,7 @@ import type { CameraCreate } from '../../api/generated/types'
 import type { DetectionStepData } from '../settings/detection/types'
 import type { StorageFormState } from '../settings/storage/types'
 import { SetupWizardShell } from './SetupWizardShell'
+import { parseCameraStepDraft, parseDetectionStepDraft, parseStorageStepDraft } from './stepDrafts'
 import { CameraStep } from './steps/CameraStep'
 import { DetectionStep } from './steps/DetectionStep'
 import { StorageStep } from './steps/StorageStep'
@@ -56,18 +57,6 @@ interface StepDraft {
   note: string
 }
 
-interface CameraStepDraft {
-  camera: CameraCreate
-}
-
-interface StorageStepDraft {
-  storage: StorageFormState
-}
-
-interface DetectionStepDraft {
-  detection: DetectionStepData
-}
-
 function toStepDraft(value: unknown): StepDraft {
   if (
     value &&
@@ -80,80 +69,6 @@ function toStepDraft(value: unknown): StepDraft {
     }
   }
   return { note: '' }
-}
-
-function toCameraStepDraft(value: unknown): CameraStepDraft | null {
-  if (
-    value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    'camera' in value
-  ) {
-    const cameraValue = (value as { camera: unknown }).camera
-    if (cameraValue && typeof cameraValue === 'object' && !Array.isArray(cameraValue)) {
-      return {
-        camera: cameraValue as CameraCreate,
-      }
-    }
-  }
-  return null
-}
-
-function toStorageStepDraft(value: unknown): StorageStepDraft | null {
-  if (
-    value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    'storage' in value
-  ) {
-    const storageValue = (value as { storage: unknown }).storage
-    if (
-      storageValue &&
-      typeof storageValue === 'object' &&
-      !Array.isArray(storageValue) &&
-      'backend' in storageValue &&
-      'config' in storageValue
-    ) {
-      const typed = storageValue as { backend: unknown; config: unknown }
-      if (
-        (typed.backend === 'local' || typed.backend === 'dropbox')
-        && typed.config
-        && typeof typed.config === 'object'
-        && !Array.isArray(typed.config)
-      ) {
-        return {
-          storage: {
-            backend: typed.backend,
-            config: typed.config as Record<string, unknown>,
-          },
-        }
-      }
-    }
-  }
-  return null
-}
-
-function toDetectionStepDraft(value: unknown): DetectionStepDraft | null {
-  if (
-    value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && 'detection' in value
-  ) {
-    const detectionValue = (value as { detection: unknown }).detection
-    if (
-      detectionValue
-      && typeof detectionValue === 'object'
-      && !Array.isArray(detectionValue)
-      && 'filter' in detectionValue
-      && 'vlm' in detectionValue
-    ) {
-      return {
-        detection: detectionValue as DetectionStepData,
-      }
-    }
-  }
-  return null
 }
 
 function statusText(isComplete: boolean, isSkipped: boolean): string {
@@ -183,9 +98,9 @@ export function SetupPage() {
   const isCameraStep = activeStep.id === 'camera'
   const isStorageStep = activeStep.id === 'storage'
   const isDetectionStep = activeStep.id === 'detection'
-  const cameraStepDraft = toCameraStepDraft(state.stepData.camera)
-  const storageStepDraft = toStorageStepDraft(state.stepData.storage)
-  const detectionStepDraft = toDetectionStepDraft(state.stepData.detection)
+  const cameraStepDraft = parseCameraStepDraft(state.stepData.camera)
+  const storageStepDraft = parseStorageStepDraft(state.stepData.storage)
+  const detectionStepDraft = parseDetectionStepDraft(state.stepData.detection)
 
   function handleNoteChange(note: string): void {
     updateStepData(activeStep.id, { note })
@@ -254,7 +169,7 @@ export function SetupPage() {
       return (
         <CameraStep
           existingCameraNames={
-            cameraStepDraft ? [cameraStepDraft.camera.name] : []
+            cameraStepDraft ? [cameraStepDraft.name] : []
           }
           onUpdateData={handleCameraStepUpdateData}
           onComplete={handleCameraStepComplete}
@@ -265,7 +180,7 @@ export function SetupPage() {
     if (isStorageStep) {
       return (
         <StorageStep
-          initialData={storageStepDraft?.storage ?? null}
+          initialData={storageStepDraft}
           onUpdateData={handleStorageStepUpdateData}
           onComplete={handleStorageStepComplete}
           onSkip={handleStorageStepSkip}
@@ -275,7 +190,7 @@ export function SetupPage() {
     if (isDetectionStep) {
       return (
         <DetectionStep
-          initialData={detectionStepDraft?.detection ?? null}
+          initialData={detectionStepDraft}
           onUpdateData={handleDetectionStepUpdateData}
           onComplete={handleDetectionStepComplete}
           onSkip={handleDetectionStepSkip}
