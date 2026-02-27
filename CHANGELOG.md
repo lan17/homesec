@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.0 (2026-02-27)
+
+### Features
+
+- Always serve UI dist and fail fast when missing ([#38](https://github.com/lan17/homesec/pull/38),
+  [`c1ae42c`](https://github.com/lan17/homesec/commit/c1ae42c1ad7e790a77fb94eaa0813cd367615f26))
+
+
 ## v1.7.0 (2026-02-27)
 
 ### Bug Fixes
