@@ -178,7 +178,7 @@ export function SetupPage() {
   }
 
   function handleStorageStepUpdateData(storage: StorageFormState): void {
-    updateStepData('storage', { storage }, { persist: false })
+    updateStepData('storage', { storage })
   }
 
   function handleStorageStepComplete(): void {

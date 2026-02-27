@@ -57,10 +57,6 @@ export function StorageStep({
 
   return (
     <section className="wizard-step-card">
-      <header className="wizard-step-card__header">
-        <p className="wizard-step-card__status">Step status: Pending</p>
-      </header>
-
       <StorageConfigForm
         value={value}
         onChange={(nextValue) => {

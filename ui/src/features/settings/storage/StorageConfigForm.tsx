@@ -20,10 +20,10 @@ export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
 
   return (
     <section className="inline-form">
-      <h3 className="camera-add-flow__title">Configure storage backend</h3>
+      <h3 className="backend-picker__title">Configure storage backend</h3>
       <p className="subtle">Choose where clips are uploaded after capture.</p>
 
-      <div className="camera-add-flow__backend-grid">
+      <div className="backend-picker__grid">
         {STORAGE_BACKEND_ORDER.map((backendId) => {
           const backend = STORAGE_BACKENDS[backendId]
           const selected = backendId === value.backend
@@ -31,18 +31,18 @@ export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
             <button
               key={backend.id}
               type="button"
-              className="camera-add-flow__backend-card"
+              className="backend-picker__card"
               aria-label={backend.label}
               aria-pressed={selected}
               onClick={() => {
                 handleSelectBackend(backend.id)
               }}
             >
-              <p className="camera-add-flow__backend-title">
+              <p className="backend-picker__title-text">
                 {backend.label}
                 {selected ? ' (selected)' : ''}
               </p>
-              <p className="camera-add-flow__backend-description">{backend.description}</p>
+              <p className="backend-picker__description">{backend.description}</p>
             </button>
           )
         })}

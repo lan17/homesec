@@ -65,7 +65,7 @@ export function TestConnectionButton({
       {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
 
       {result ? (
-        <div className="camera-add-flow__test-result">
+        <div className="test-connection__result">
           <StatusBadge tone={result.success ? 'healthy' : 'unhealthy'}>
             {result.success ? 'PASS' : 'FAIL'}
           </StatusBadge>
