@@ -387,6 +387,44 @@ def test_setup_finalize_delegates_to_service(monkeypatch: pytest.MonkeyPatch) ->
     }
 
 
+def test_setup_finalize_delegates_to_service_for_apply_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize route should delegate non-validate-only requests unchanged."""
+    # Given: A bootstrap app and deterministic finalize response for apply mode
+    app = _StubSetupApp(
+        bootstrap_mode=True,
+        server_config=FastAPIServerConfig(auth_enabled=False),
+    )
+    client = _client(app)
+
+    async def _fake_finalize_setup(request: FinalizeRequest, _: object) -> FinalizeResponse:
+        assert request.validate_only is False
+        return FinalizeResponse(
+            success=True,
+            config_path="/tmp/config.yaml",
+            restart_requested=True,
+            defaults_applied=[],
+            errors=[],
+        )
+
+    monkeypatch.setattr("homesec.api.routes.setup.finalize_setup", _fake_finalize_setup)
+
+    # When: Calling setup finalize for real apply
+    response = client.post("/api/v1/setup/finalize", json={"validate_only": False})
+
+    # Then: Route returns service payload without mutating request intent
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "success": True,
+        "config_path": "/tmp/config.yaml",
+        "restart_requested": True,
+        "defaults_applied": [],
+        "errors": [],
+    }
+
+
 def test_setup_finalize_returns_canonical_422_for_semantic_validation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

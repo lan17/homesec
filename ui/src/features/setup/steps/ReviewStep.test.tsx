@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import { apiClient } from '../../../api/client'
+import { APIError, apiClient } from '../../../api/client'
 import type { FinalizeSnapshot } from '../../../api/client'
 import { ReviewStep } from './ReviewStep'
 
@@ -135,15 +135,19 @@ describe('ReviewStep', () => {
   })
 
   it('surfaces precheck errors and skips launch polling', async () => {
-    // Given: Validation-only precheck returns a structured finalize failure response
-    finalizeMutationState.mutateAsync.mockResolvedValue({
-      success: false,
-      config_path: '/tmp/config.yaml',
-      restart_requested: false,
-      defaults_applied: [],
-      errors: ['At least one camera must be configured before finalizing setup.'],
-      httpStatus: 200,
-    } satisfies FinalizeSnapshot)
+    // Given: Validation-only precheck fails with canonical 422 API envelope
+    finalizeMutationState.mutateAsync.mockRejectedValue(
+      new APIError(
+        'Configuration validation failed',
+        422,
+        {
+          detail: 'Configuration validation failed',
+          error_code: 'SETUP_FINALIZE_INVALID',
+          errors: ['At least one camera must be configured before finalizing setup.'],
+        },
+        'SETUP_FINALIZE_INVALID',
+      ),
+    )
     const setupStatusSpy = vi.spyOn(apiClient, 'getSetupStatus')
 
     render(
@@ -165,10 +169,11 @@ describe('ReviewStep', () => {
     // When: Launch is triggered and precheck fails
     await user.click(screen.getByRole('button', { name: 'Launch pipeline' }))
 
-    // Then: Error details and retry action are shown without polling setup status
+    // Then: API error details and retry action are shown without polling setup status
     await waitFor(() => {
       const alert = screen.getByRole('alert')
-      expect(alert.textContent).toContain('At least one camera must be configured')
+      expect(alert.textContent).toContain('Configuration validation failed')
+      expect(alert.textContent).toContain('SETUP_FINALIZE_INVALID')
       expect(screen.getByRole('button', { name: 'Retry launch' })).toBeTruthy()
       expect(finalizeMutationState.mutateAsync).toHaveBeenCalledTimes(1)
       expect(setupStatusSpy).not.toHaveBeenCalled()

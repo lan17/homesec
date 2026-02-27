@@ -68,6 +68,13 @@ function toLaunchErrorMessage(error: unknown): string {
   return 'Launch failed unexpectedly.'
 }
 
+function finalizeErrorMessage(errors: readonly string[]): string {
+  if (errors.length > 0) {
+    return errors.join('; ')
+  }
+  return 'Setup finalize failed.'
+}
+
 interface WaitForPipelineStartResult {
   started: boolean
   cancelled: boolean
@@ -162,14 +169,11 @@ export function ReviewStep({
         signal: launchAbortController.signal,
       })
       if (!precheckResult.success) {
-        const combinedError = precheckResult.errors.length > 0
-          ? precheckResult.errors.join('; ')
-          : 'Setup finalize failed.'
         if (!isMountedRef.current) {
           return
         }
         setLaunchStatus('failed')
-        setLaunchError(combinedError)
+        setLaunchError(finalizeErrorMessage(precheckResult.errors))
         return
       }
 
@@ -178,14 +182,11 @@ export function ReviewStep({
         signal: launchAbortController.signal,
       })
       if (!result.success) {
-        const combinedError = result.errors.length > 0
-          ? result.errors.join('; ')
-          : 'Setup finalize failed.'
         if (!isMountedRef.current) {
           return
         }
         setLaunchStatus('failed')
-        setLaunchError(combinedError)
+        setLaunchError(finalizeErrorMessage(result.errors))
         return
       }
 
