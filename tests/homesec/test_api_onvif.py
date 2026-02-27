@@ -14,6 +14,7 @@ from homesec.api.server import create_app
 from homesec.models.config import FastAPIServerConfig
 from homesec.onvif.discovery import DiscoveredCamera
 from homesec.runtime.models import RuntimeReloadRequest
+from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 # ---------------------------------------------------------------------------
 # Minimal stub app – the ONVIF routes don't depend on get_homesec_app, but
@@ -33,7 +34,7 @@ class _StubStorage:
 
 class _StubApp:
     def __init__(self, *, server_config: FastAPIServerConfig | None = None) -> None:
-        self._server_config = server_config or FastAPIServerConfig()
+        self._server_config = ensure_stub_ui_dist(server_config or FastAPIServerConfig())
         self.repository = _StubRepository()
         self.storage = _StubStorage()
         self.sources: list[Any] = []

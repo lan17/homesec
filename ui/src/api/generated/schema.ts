@@ -661,11 +661,6 @@ export interface components {
              */
             port: number;
             /**
-             * Serve Ui
-             * @default false
-             */
-            serve_ui: boolean;
-            /**
              * Ui Dist Dir
              * @default ui/dist
              */

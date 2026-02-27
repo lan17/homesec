@@ -66,25 +66,24 @@ def create_app(app_instance: Application) -> FastAPI:
 
 
 def _configure_ui_serving(app: FastAPI, server_config: FastAPIServerConfig) -> None:
-    """Serve built SPA assets from FastAPI when enabled."""
-    if not server_config.serve_ui:
-        return
-
+    """Serve built SPA assets from FastAPI using configured ui_dist_dir."""
     dist_dir = Path(server_config.ui_dist_dir).expanduser().resolve()
     index_path = dist_dir / "index.html"
     assets_dir = dist_dir / "assets"
 
     if not index_path.is_file():
-        logger.warning(
-            "UI serving enabled but index file not found: %s. Skipping SPA static routes.",
-            index_path,
+        raise RuntimeError(
+            "UI dist is missing required index.html "
+            f"(ui_dist_dir={dist_dir}, expected={index_path})"
         )
-        return
 
-    if assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="ui-assets")
-    else:
-        logger.warning("UI assets directory not found at %s", assets_dir)
+    if not assets_dir.is_dir():
+        raise RuntimeError(
+            "UI dist is missing required assets directory "
+            f"(ui_dist_dir={dist_dir}, expected={assets_dir})"
+        )
+
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="ui-assets")
 
     @app.get("/", include_in_schema=False)
     async def _serve_ui_index() -> FileResponse:
@@ -108,6 +107,15 @@ def _configure_ui_serving(app: FastAPI, server_config: FastAPIServerConfig) -> N
             return FileResponse(index_path)
 
         # Do not expose arbitrary files from dist (defense in depth).
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    @app.api_route(
+        "/{full_path:path}",
+        include_in_schema=False,
+        methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
+    async def _reject_non_get_spa_path(full_path: str) -> None:
+        _ = full_path
         raise HTTPException(status_code=404, detail="Not Found")
 
 

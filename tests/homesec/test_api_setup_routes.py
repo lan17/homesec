@@ -21,6 +21,7 @@ from homesec.models.setup import (
     SetupStatusResponse,
 )
 from homesec.services import setup as setup_service
+from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
 class _StubSetupRepository:
@@ -49,6 +50,7 @@ class _StubSetupApp:
         self._setup_test_connection_lock = asyncio.Lock()
         self.pipeline_running = False
         self.uptime_seconds = 0.0
+        server_config = ensure_stub_ui_dist(server_config)
         self._config = SimpleNamespace(
             server=server_config,
             cameras=[],

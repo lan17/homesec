@@ -95,7 +95,6 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
-ENV HOMESEC_SERVER_SERVE_UI=true
 ENV HOMESEC_SERVER_UI_DIST_DIR=/app/ui/dist
 
 # Create directories for volume mounts and make entrypoint executable

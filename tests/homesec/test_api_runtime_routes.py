@@ -15,6 +15,7 @@ from homesec.runtime.models import (
     RuntimeState,
     RuntimeStatusSnapshot,
 )
+from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
 class _StubRuntimeApp:
@@ -30,8 +31,9 @@ class _StubRuntimeApp:
         self._reload_error = reload_error
         self.wait_calls = 0
         self._bootstrap_mode = False
+        server_config = ensure_stub_ui_dist(FastAPIServerConfig())
         self._config = SimpleNamespace(
-            server=FastAPIServerConfig(),
+            server=server_config,
             cameras=[],
         )
 

@@ -27,6 +27,7 @@ from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.models import RuntimeReloadRequest
+from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
 class _StubRepository:
@@ -185,7 +186,7 @@ class _StubApp:
         self._sources_by_name = sources_by_name or {}
         self.sources = list(self._sources_by_name.values())
         self._config = SimpleNamespace(
-            server=server_config or FastAPIServerConfig(),
+            server=ensure_stub_ui_dist(server_config or FastAPIServerConfig()),
             cameras=[
                 CameraConfig(
                     name=name,
@@ -1117,9 +1118,9 @@ def test_cors_allows_credentials_for_explicit_origins(tmp_path) -> None:
 
 def test_ui_serving_serves_spa_shell_without_shadowing_api(tmp_path) -> None:
     """UI serving should return SPA shell while preserving API and docs routes."""
-    # Given a built UI dist directory and UI serving enabled
+    # Given a built UI dist directory
     dist_dir = _write_ui_dist(tmp_path)
-    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(dist_dir))
+    server_config = FastAPIServerConfig(ui_dist_dir=str(dist_dir))
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
         config_manager=manager,
@@ -1157,11 +1158,11 @@ def test_ui_serving_serves_spa_shell_without_shadowing_api(tmp_path) -> None:
     assert "Swagger UI" in docs_response.text
 
 
-def test_ui_serving_skips_routes_when_dist_missing(tmp_path, caplog) -> None:
-    """UI serving should no-op with warning when configured dist is missing."""
-    # Given UI serving enabled with a missing dist directory
+def test_ui_serving_fails_fast_when_dist_missing(tmp_path) -> None:
+    """App creation should fail fast when configured UI dist is missing."""
+    # Given a missing UI dist directory
     missing_dist = tmp_path / "missing-dist"
-    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(missing_dist))
+    server_config = FastAPIServerConfig(ui_dist_dir=str(missing_dist))
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
         config_manager=manager,
@@ -1170,27 +1171,18 @@ def test_ui_serving_skips_routes_when_dist_missing(tmp_path, caplog) -> None:
         server_config=server_config,
     )
 
-    # When creating app and requesting root
-    with caplog.at_level("WARNING"):
-        client = _client(app)
-    root_response = client.get("/")
-    health_response = client.get("/api/v1/health")
-
-    # Then root remains unresolved and a warning is emitted without breaking API routes
-    assert root_response.status_code == 404
-    assert health_response.status_code == 200
-    assert any(
-        "UI serving enabled but index file not found" in rec.message for rec in caplog.records
-    )
+    # When/Then: Creating app fails with actionable missing-dist error
+    with pytest.raises(RuntimeError, match="missing required index\\.html"):
+        _ = _client(app)
 
 
-def test_ui_serving_warns_when_assets_directory_missing(tmp_path, caplog) -> None:
-    """UI serving should warn when index exists but assets directory is missing."""
+def test_ui_serving_fails_fast_when_assets_directory_missing(tmp_path) -> None:
+    """App creation should fail fast when assets directory is missing."""
     # Given a dist directory with index.html but no /assets directory
     dist_dir = tmp_path / "ui-dist"
     dist_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("<!doctype html><html><body>HomeSec UI</body></html>")
-    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(dist_dir))
+    server_config = FastAPIServerConfig(ui_dist_dir=str(dist_dir))
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
         config_manager=manager,
@@ -1199,15 +1191,9 @@ def test_ui_serving_warns_when_assets_directory_missing(tmp_path, caplog) -> Non
         server_config=server_config,
     )
 
-    # When creating app and requesting root
-    with caplog.at_level("WARNING"):
-        client = _client(app)
-    root_response = client.get("/")
-
-    # Then root still serves SPA shell and missing-assets warning is emitted
-    assert root_response.status_code == 200
-    assert "HomeSec UI" in root_response.text
-    assert any("UI assets directory not found" in rec.message for rec in caplog.records)
+    # When/Then: Creating app fails with actionable missing-assets error
+    with pytest.raises(RuntimeError, match="missing required assets directory"):
+        _ = _client(app)
 
 
 @pytest.mark.asyncio
@@ -1215,7 +1201,7 @@ async def test_ui_serving_catch_all_rejects_path_traversal_input(tmp_path) -> No
     """SPA catch-all should reject traversal-like full_path values."""
     # Given a FastAPI app with SPA serving enabled
     dist_dir = _write_ui_dist(tmp_path)
-    server_config = FastAPIServerConfig(serve_ui=True, ui_dist_dir=str(dist_dir))
+    server_config = FastAPIServerConfig(ui_dist_dir=str(dist_dir))
     manager = _write_config(tmp_path, cameras=[])
     app = _StubApp(
         config_manager=manager,

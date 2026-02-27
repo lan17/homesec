@@ -618,6 +618,7 @@
         "type": "object"
       },
       "FastAPIServerConfig": {
+        "additionalProperties": false,
         "description": "Configuration for the FastAPI server.",
         "properties": {
           "api_key_env": {
@@ -657,11 +658,6 @@
             "default": 8081,
             "title": "Port",
             "type": "integer"
-          },
-          "serve_ui": {
-            "default": false,
-            "title": "Serve Ui",
-            "type": "boolean"
           },
           "ui_dist_dir": {
             "default": "ui/dist",
