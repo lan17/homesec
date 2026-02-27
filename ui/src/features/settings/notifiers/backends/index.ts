@@ -1,4 +1,8 @@
-import type { NotifierBackend, NotifierBackendDef } from '../types'
+import {
+  NOTIFIER_BACKEND_IDS,
+  type NotifierBackend,
+  type NotifierBackendDef,
+} from '../types'
 import { MqttForm } from './MqttForm'
 import { SendgridForm } from './SendgridForm'
 
@@ -61,10 +65,7 @@ const SENDGRID_BACKEND: NotifierBackendDef = {
   component: SendgridForm,
 }
 
-export const NOTIFIER_BACKEND_ORDER: readonly NotifierBackend[] = [
-  'mqtt',
-  'sendgrid_email',
-] as const
+export const NOTIFIER_BACKEND_ORDER: readonly NotifierBackend[] = NOTIFIER_BACKEND_IDS
 
 export const NOTIFIER_BACKENDS: Record<NotifierBackend, NotifierBackendDef> = {
   mqtt: MQTT_BACKEND,

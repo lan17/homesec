@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 
 import type { TestConnectionResponse } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
@@ -8,10 +8,11 @@ import { NotifierConfigForm } from '../../settings/notifiers/NotifierConfigForm'
 import {
   buildNotificationStepData,
   buildNotifierTestRequest,
+  enabledNotifierBackends,
+  NOTIFIER_BACKEND_IDS,
   notificationFormStateFromStepData,
   type NotificationStepData,
   type NotifierBackend,
-  type NotifierFormState,
   validateNotificationState,
 } from '../../settings/notifiers/types'
 import { TestConnectionButton } from '../../shared/TestConnectionButton'
@@ -30,15 +31,9 @@ const DEFAULT_NOTIFIER_CONFIGS = {
   sendgrid_email: NOTIFIER_BACKENDS.sendgrid_email.defaultConfig,
 }
 
-function enabledNotifierBackends(value: NotifierFormState): NotifierBackend[] {
-  const backends: NotifierBackend[] = []
-  if (value.mqtt.enabled) {
-    backends.push('mqtt')
-  }
-  if (value.sendgrid_email.enabled) {
-    backends.push('sendgrid_email')
-  }
-  return backends
+function emptyNotifierResults(): NotifierResultByBackend {
+  const entries = NOTIFIER_BACKEND_IDS.map((backendId) => [backendId, null] as const)
+  return Object.fromEntries(entries) as NotifierResultByBackend
 }
 
 export function NotificationStep({
@@ -47,18 +42,15 @@ export function NotificationStep({
   onUpdateData,
   onSkip,
 }: NotificationStepProps) {
-  const initialState = useMemo(
-    () =>
-      notificationFormStateFromStepData(initialData, DEFAULT_NOTIFIER_CONFIGS),
-    [initialData],
+  const [initialState] = useState(() =>
+    notificationFormStateFromStepData(initialData, DEFAULT_NOTIFIER_CONFIGS),
   )
   const [notifiers, setNotifiers] = useState(initialState.notifiers)
   const [alertPolicy, setAlertPolicy] = useState(initialState.alertPolicy)
   const [validationError, setValidationError] = useState<string | null>(null)
-  const [resultsByBackend, setResultsByBackend] = useState<NotifierResultByBackend>({
-    mqtt: null,
-    sendgrid_email: null,
-  })
+  const [resultsByBackend, setResultsByBackend] = useState<NotifierResultByBackend>(
+    emptyNotifierResults,
+  )
 
   function handleSaveAndContinue(): void {
     const maybeError = validateNotificationState(notifiers, alertPolicy, {
@@ -81,18 +73,23 @@ export function NotificationStep({
       <NotifierConfigForm
         value={notifiers}
         onChange={(nextValue) => {
-          setNotifiers(nextValue)
-          setValidationError(null)
-          setResultsByBackend((current) => {
-            const nextState = { ...current }
-            if (!nextValue.mqtt.enabled) {
-              nextState.mqtt = null
-            }
-            if (!nextValue.sendgrid_email.enabled) {
-              nextState.sendgrid_email = null
-            }
-            return nextState
+          setNotifiers((currentValue) => {
+            setResultsByBackend((currentResults) => {
+              const nextResults = { ...currentResults }
+              for (const backendId of NOTIFIER_BACKEND_IDS) {
+                const previous = currentValue[backendId]
+                const next = nextValue[backendId]
+                const enabledChanged = previous.enabled !== next.enabled
+                const configChanged = previous.config !== next.config
+                if (!next.enabled || enabledChanged || configChanged) {
+                  nextResults[backendId] = null
+                }
+              }
+              return nextResults
+            })
+            return nextValue
           })
+          setValidationError(null)
         }}
       />
 

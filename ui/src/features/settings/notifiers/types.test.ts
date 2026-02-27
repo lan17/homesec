@@ -47,4 +47,34 @@ describe('notifier types helpers', () => {
     // Then: Validation surfaces notifier backend config error
     expect(error).toBe('MQTT host is required.')
   })
+
+  it('requires at least one risk level only when a notifier is enabled', () => {
+    // Given: Notification state with valid notifier config and no selected risks
+    const notifiers = defaultNotifierFormState({
+      mqtt: NOTIFIER_BACKENDS.mqtt.defaultConfig,
+      sendgrid_email: NOTIFIER_BACKENDS.sendgrid_email.defaultConfig,
+    })
+    const alertPolicy: AlertPolicyFormState = {
+      selectedRiskLevels: [],
+    }
+
+    // When: Validating with no enabled notifier
+    const noNotifierError = validateNotificationState(notifiers, alertPolicy, {
+      mqtt: NOTIFIER_BACKENDS.mqtt.validate,
+      sendgrid_email: NOTIFIER_BACKENDS.sendgrid_email.validate,
+    })
+
+    // Then: Empty risk selection is accepted when no notifier is enabled
+    expect(noNotifierError).toBeNull()
+
+    // When: Enabling mqtt notifier and re-validating
+    notifiers.mqtt.enabled = true
+    const enabledNotifierError = validateNotificationState(notifiers, alertPolicy, {
+      mqtt: NOTIFIER_BACKENDS.mqtt.validate,
+      sendgrid_email: NOTIFIER_BACKENDS.sendgrid_email.validate,
+    })
+
+    // Then: Risk-level selection becomes mandatory for active notifications
+    expect(enabledNotifierError).toBe('Select at least one risk level for alert policy.')
+  })
 })

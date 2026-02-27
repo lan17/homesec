@@ -362,14 +362,14 @@ a:hover {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
-.camera-checkbox-field {
+.form-checkbox-field {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-top: 1.75rem;
 }
 
-.camera-checkbox-field input {
+.form-checkbox-field input {
   margin: 0;
 }
 

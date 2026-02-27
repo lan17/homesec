@@ -40,7 +40,7 @@ export function NotifierConfigForm({ value, onChange }: NotifierConfigFormProps)
           const BackendComponent = backend.component
           return (
             <section key={backendId} className="notifier-config__card">
-              <label className="field-label camera-checkbox-field">
+              <label className="field-label form-checkbox-field">
                 <input
                   type="checkbox"
                   checked={state.enabled}

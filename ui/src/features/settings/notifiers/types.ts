@@ -5,6 +5,18 @@ import type { TestConnectionRequest } from '../../../api/generated/types'
 export type NotifierBackend = 'mqtt' | 'sendgrid_email'
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
+export const NOTIFIER_BACKEND_IDS: readonly NotifierBackend[] = [
+  'mqtt',
+  'sendgrid_email',
+] as const
+
+export const ALERT_POLICY_RISK_LEVELS: readonly RiskLevel[] = [
+  'low',
+  'medium',
+  'high',
+  'critical',
+] as const
+
 export interface NotifierEntryState {
   enabled: boolean
   config: Record<string, unknown>
@@ -46,11 +58,9 @@ export interface NotifierBackendDef {
   component: (props: NotifierBackendFormProps) => JSX.Element
 }
 
-const RISK_LEVEL_ORDER: readonly RiskLevel[] = ['low', 'medium', 'high', 'critical'] as const
-
 function normalizeRiskLevels(values: readonly string[]): RiskLevel[] {
   const normalized: RiskLevel[] = []
-  for (const candidate of RISK_LEVEL_ORDER) {
+  for (const candidate of ALERT_POLICY_RISK_LEVELS) {
     if (values.includes(candidate)) {
       normalized.push(candidate)
     }
@@ -143,13 +153,7 @@ export function validateNotificationState(
   alertPolicy: AlertPolicyFormState,
   validators: Record<NotifierBackend, (config: Record<string, unknown>) => string | null>,
 ): string | null {
-  const enabledBackends: NotifierBackend[] = []
-  if (value.mqtt.enabled) {
-    enabledBackends.push('mqtt')
-  }
-  if (value.sendgrid_email.enabled) {
-    enabledBackends.push('sendgrid_email')
-  }
+  const enabledBackends = enabledNotifierBackends(value)
 
   for (const backend of enabledBackends) {
     const entry = value[backend]
@@ -159,32 +163,37 @@ export function validateNotificationState(
     }
   }
 
-  if (normalizeRiskLevels(alertPolicy.selectedRiskLevels).length === 0) {
+  if (
+    enabledBackends.length > 0
+    && normalizeRiskLevels(alertPolicy.selectedRiskLevels).length === 0
+  ) {
     return 'Select at least one risk level for alert policy.'
   }
 
   return null
 }
 
+export function enabledNotifierBackends(value: NotifierFormState): NotifierBackend[] {
+  const enabled: NotifierBackend[] = []
+  for (const backendId of NOTIFIER_BACKEND_IDS) {
+    if (value[backendId].enabled) {
+      enabled.push(backendId)
+    }
+  }
+  return enabled
+}
+
 export function buildNotificationStepData(
   value: NotifierFormState,
   alertPolicy: AlertPolicyFormState,
 ): NotificationStepData {
-  const notifiers: NotificationStepData['notifiers'] = []
-  if (value.mqtt.enabled) {
-    notifiers.push({
-      backend: 'mqtt',
+  const notifiers: NotificationStepData['notifiers'] = enabledNotifierBackends(value).map(
+    (backendId) => ({
+      backend: backendId,
       enabled: true,
-      config: value.mqtt.config,
-    })
-  }
-  if (value.sendgrid_email.enabled) {
-    notifiers.push({
-      backend: 'sendgrid_email',
-      enabled: true,
-      config: value.sendgrid_email.config,
-    })
-  }
+      config: value[backendId].config,
+    }),
+  )
 
   return {
     notifiers,

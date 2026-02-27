@@ -65,7 +65,7 @@ export function FtpForm({ config, onChange }: BackendFormStepProps) {
         />
       </label>
 
-      <label className="field-label camera-checkbox-field" htmlFor="camera-ftp-anonymous">
+      <label className="field-label form-checkbox-field" htmlFor="camera-ftp-anonymous">
         <input
           id="camera-ftp-anonymous"
           type="checkbox"

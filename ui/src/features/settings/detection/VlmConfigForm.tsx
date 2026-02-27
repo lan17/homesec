@@ -44,7 +44,7 @@ export function VlmConfigForm({
 
   return (
     <section className="inline-form">
-      <label className="field-label camera-checkbox-field" htmlFor="detection-vlm-enabled">
+      <label className="field-label form-checkbox-field" htmlFor="detection-vlm-enabled">
         <input
           id="detection-vlm-enabled"
           type="checkbox"
@@ -152,7 +152,7 @@ export function VlmConfigForm({
             <legend>Trigger classes</legend>
             <div className="detection-vlm__trigger-grid">
               {triggerClassOptions.map((className) => (
-                <label key={className} className="camera-checkbox-field">
+                <label key={className} className="form-checkbox-field">
                   <input
                     type="checkbox"
                     checked={value.trigger_classes.includes(className)}

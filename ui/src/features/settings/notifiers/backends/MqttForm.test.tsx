@@ -50,4 +50,41 @@ describe('MqttForm', () => {
       topic_template: 'homesec/alerts/{camera_name}',
     })
   })
+
+  it('parses mqtt port input changes as numbers', () => {
+    // Given: MQTT form with the default port
+    const onChange = vi.fn()
+
+    function Harness() {
+      const [value, setValue] = useState<Record<string, unknown>>({
+        host: 'localhost',
+        port: 1883,
+        topic_template: 'homecam/alerts/{camera_name}',
+      })
+      return (
+        <MqttForm
+          config={value}
+          onChange={(nextValue) => {
+            onChange(nextValue)
+            setValue(nextValue)
+          }}
+        />
+      )
+    }
+
+    render(<Harness />)
+
+    // When: Operator updates and clears the port field
+    fireEvent.change(screen.getByLabelText('MQTT port'), {
+      target: { value: '1999' },
+    })
+    fireEvent.change(screen.getByLabelText('MQTT port'), {
+      target: { value: '' },
+    })
+
+    // Then: Port is parsed as number and empty input resets to default
+    expect(onChange).toHaveBeenCalled()
+    expect(onChange.mock.calls[0]?.[0]).toMatchObject({ port: 1999 })
+    expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({ port: 1883 })
+  })
 })
