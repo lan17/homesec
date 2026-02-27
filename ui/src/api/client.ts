@@ -17,6 +17,8 @@ import type {
   HealthResponse,
   ListClipsQuery,
   PreflightResponse,
+  TestConnectionRequest,
+  TestConnectionResponse,
   ProbeRequest,
   ProbeResponse,
   RuntimeReloadResponse,
@@ -39,6 +41,7 @@ import {
   parseDiagnosticsResponse,
   parseHealthResponse,
   parsePreflightResponse,
+  parseTestConnectionResponse,
   parseRuntimeReloadResponse,
   parseRuntimeStatusResponse,
   parseSetupStatusResponse,
@@ -59,6 +62,7 @@ export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
 export type SetupStatusSnapshot = ApiSnapshot<SetupStatusResponse>
 export type PreflightSnapshot = ApiSnapshot<PreflightResponse>
+export type TestConnectionSnapshot = ApiSnapshot<TestConnectionResponse>
 export type ClipMediaTokenSnapshot = ApiSnapshot<ClipMediaTokenResponsePayload>
 
 export class HomeSecApiClient implements GeneratedHomeSecClient {
@@ -189,6 +193,28 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid setup preflight response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async runSetupTestConnection(
+    payload: TestConnectionRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<TestConnectionSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/setup/test-connection', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return withHttpStatus(parseTestConnectionResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid setup test-connection response payload',
         response.status,
         response.payload,
         null,

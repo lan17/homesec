@@ -1,6 +1,5 @@
 import { useMemo, useReducer } from 'react'
 
-import { isAPIError } from '../../../api/client'
 import type {
   CameraCreate,
   DiscoveredCameraResponse,
@@ -19,12 +18,15 @@ import { OnvifDiscoverStep } from './OnvifDiscoverStep'
 import { OnvifProbeStep, type OnvifProbeCredentials } from './OnvifProbeStep'
 import { OnvifStreamSelectStep } from './OnvifStreamSelectStep'
 import type { CameraCreateActionResult } from '../actions'
+import { describeCameraCreateError } from '../add-flow/validation'
 
 interface OnvifDiscoveryWizardProps {
   applyChangesImmediately: boolean
   createPending: boolean
   isMutating: boolean
   onCreateCamera: (payload: CameraCreate) => Promise<CameraCreateActionResult>
+  submitLabel?: string
+  showApplyChangesSummary?: boolean
   onClose: () => void
 }
 
@@ -197,6 +199,8 @@ export function OnvifDiscoveryWizard({
   createPending,
   isMutating,
   onCreateCamera,
+  submitLabel,
+  showApplyChangesSummary,
   onClose,
 }: OnvifDiscoveryWizardProps) {
   const [state, dispatch] = useReducer(onvifWizardReducer, undefined, createInitialWizardState)
@@ -287,16 +291,6 @@ export function OnvifDiscoveryWizard({
     )
   }, [state.probeResult, state.selectedProfileToken])
 
-  function describeCreateError(error: unknown): string {
-    if (isAPIError(error) && error.errorCode === 'CAMERA_ALREADY_EXISTS') {
-      return 'Camera name already exists. Choose a different name and retry.'
-    }
-    if (error instanceof Error && error.message.trim().length > 0) {
-      return `Create camera failed: ${error.message}`
-    }
-    return 'Create camera failed. Review the page error details and retry.'
-  }
-
   async function handleCreateCamera(): Promise<void> {
     if (!selectedProfile?.stream_uri) {
       dispatch({
@@ -334,7 +328,7 @@ export function OnvifDiscoveryWizard({
     }
     dispatch({
       type: 'create_error_set',
-      error: describeCreateError(createResult.error),
+      error: describeCameraCreateError(createResult.error),
     })
   }
 
@@ -389,6 +383,8 @@ export function OnvifDiscoveryWizard({
             createPending={createPending}
             isMutating={isMutating}
             applyChangesImmediately={applyChangesImmediately}
+            submitLabel={submitLabel}
+            showApplyChangesSummary={showApplyChangesSummary}
             error={state.createError}
             onSelectProfile={(token) => {
               dispatch({ type: 'stream_selected', token })

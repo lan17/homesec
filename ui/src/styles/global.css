@@ -436,6 +436,15 @@ a:hover {
   color: var(--text-secondary);
 }
 
+.camera-add-flow__test-result {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--surface-1) 70%, transparent);
+}
+
 .camera-restart-banner {
   display: flex;
   align-items: center;

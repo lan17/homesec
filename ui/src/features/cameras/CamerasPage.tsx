@@ -139,11 +139,15 @@ export function CamerasPage() {
 
       {showCameraAddFlow ? (
         <CameraAddFlow
+          existingCameraNames={cameras.map((camera) => camera.name)}
           defaultApplyChangesImmediately={applyChangesImmediately}
           onApplyChangesImmediatelyChange={setApplyChangesImmediately}
           onComplete={(payload, options) =>
             cameraActions.createCamera(payload, options.applyChangesImmediately)
           }
+          onDone={() => {
+            setShowCameraAddFlow(false)
+          }}
           onCancel={() => {
             setShowCameraAddFlow(false)
           }}
