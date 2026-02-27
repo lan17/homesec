@@ -3,11 +3,18 @@ import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import type { CameraCreate } from '../../api/generated/types'
 import type { DetectionStepData } from '../settings/detection/types'
+import type { NotificationStepData } from '../settings/notifiers/types'
 import type { StorageFormState } from '../settings/storage/types'
 import { SetupWizardShell } from './SetupWizardShell'
-import { parseCameraStepDraft, parseDetectionStepDraft, parseStorageStepDraft } from './stepDrafts'
+import {
+  parseCameraStepDraft,
+  parseDetectionStepDraft,
+  parseNotificationStepDraft,
+  parseStorageStepDraft,
+} from './stepDrafts'
 import { CameraStep } from './steps/CameraStep'
 import { DetectionStep } from './steps/DetectionStep'
+import { NotificationStep } from './steps/NotificationStep'
 import { StorageStep } from './steps/StorageStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 import type { WizardStepDef } from './types'
@@ -98,9 +105,11 @@ export function SetupPage() {
   const isCameraStep = activeStep.id === 'camera'
   const isStorageStep = activeStep.id === 'storage'
   const isDetectionStep = activeStep.id === 'detection'
+  const isNotificationsStep = activeStep.id === 'notifications'
   const cameraStepDraft = parseCameraStepDraft(state.stepData.camera)
   const storageStepDraft = parseStorageStepDraft(state.stepData.storage)
   const detectionStepDraft = parseDetectionStepDraft(state.stepData.detection)
+  const notificationStepDraft = parseNotificationStepDraft(state.stepData.notifications)
 
   function handleNoteChange(note: string): void {
     updateStepData(activeStep.id, { note })
@@ -149,6 +158,19 @@ export function SetupPage() {
     skipStep()
   }
 
+  function handleNotificationStepUpdateData(notifications: NotificationStepData): void {
+    updateStepData('notifications', { notifications })
+  }
+
+  function handleNotificationStepComplete(): void {
+    markComplete('notifications')
+    goNext()
+  }
+
+  function handleNotificationStepSkip(): void {
+    skipStep()
+  }
+
   function handleNext(): void {
     if (!canGoNext) {
       return
@@ -194,6 +216,16 @@ export function SetupPage() {
           onUpdateData={handleDetectionStepUpdateData}
           onComplete={handleDetectionStepComplete}
           onSkip={handleDetectionStepSkip}
+        />
+      )
+    }
+    if (isNotificationsStep) {
+      return (
+        <NotificationStep
+          initialData={notificationStepDraft}
+          onUpdateData={handleNotificationStepUpdateData}
+          onComplete={handleNotificationStepComplete}
+          onSkip={handleNotificationStepSkip}
         />
       )
     }

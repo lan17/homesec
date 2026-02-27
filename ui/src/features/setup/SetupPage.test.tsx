@@ -53,6 +53,10 @@ vi.mock('./steps/DetectionStep', () => ({
   DetectionStep: () => <section>Mock detection step</section>,
 }))
 
+vi.mock('./steps/NotificationStep', () => ({
+  NotificationStep: () => <section>Mock notification step</section>,
+}))
+
 function renderSetupPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -130,5 +134,17 @@ describe('SetupPage', () => {
     // Then: Detection step wrapper is mounted for step 4
     expect(marker).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Detection' })).toBeTruthy()
+  })
+
+  it('renders notification step component on wizard notifications stage', () => {
+    // Given: Wizard URL points to notifications step
+    renderSetupPage('/setup?step=4')
+
+    // When: Setup page renders active step content
+    const marker = screen.getByText('Mock notification step')
+
+    // Then: Notification step wrapper is mounted for step 5
+    expect(marker).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeTruthy()
   })
 })

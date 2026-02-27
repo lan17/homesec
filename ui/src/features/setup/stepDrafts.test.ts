@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseCameraStepDraft,
   parseDetectionStepDraft,
+  parseNotificationStepDraft,
   parseStorageStepDraft,
 } from './stepDrafts'
 
@@ -84,6 +85,47 @@ describe('stepDrafts', () => {
     expect(parsedValid).toMatchObject({
       filter: { backend: 'yolo' },
       vlm: { backend: 'openai', run_mode: 'trigger_only' },
+    })
+    expect(parsedInvalid).toBeNull()
+  })
+
+  it('parses notification draft only when notifier and alert policy shapes are valid', () => {
+    // Given: Valid and malformed notification draft payloads
+    const valid = {
+      notifications: {
+        notifiers: [
+          {
+            backend: 'mqtt',
+            enabled: true,
+            config: { host: 'localhost', port: 1883 },
+          },
+        ],
+        alert_policy: {
+          backend: 'default',
+          enabled: true,
+          config: { min_risk_level: 'high' },
+        },
+      },
+    }
+    const invalid = {
+      notifications: {
+        notifiers: [{ backend: 'mqtt', enabled: 'yes', config: {} }],
+        alert_policy: {
+          backend: 'default',
+          enabled: true,
+          config: { min_risk_level: 'high' },
+        },
+      },
+    }
+
+    // When: Parsing notification step drafts
+    const parsedValid = parseNotificationStepDraft(valid)
+    const parsedInvalid = parseNotificationStepDraft(invalid)
+
+    // Then: Valid payload is accepted and malformed notifiers are rejected
+    expect(parsedValid).toMatchObject({
+      notifiers: [{ backend: 'mqtt', enabled: true }],
+      alert_policy: { backend: 'default', enabled: true },
     })
     expect(parsedInvalid).toBeNull()
   })

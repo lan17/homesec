@@ -1,5 +1,6 @@
 import type { CameraCreate } from '../../api/generated/types'
 import type { DetectionStepData } from '../settings/detection/types'
+import type { NotificationStepData } from '../settings/notifiers/types'
 import type { StorageFormState } from '../settings/storage/types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -84,5 +85,54 @@ export function parseDetectionStepDraft(value: unknown): DetectionStepData | nul
   return {
     filter: parsedFilter,
     vlm: null,
+  }
+}
+
+export function parseNotificationStepDraft(value: unknown): NotificationStepData | null {
+  const notifications = readNestedRecord(value, 'notifications')
+  if (!notifications) {
+    return null
+  }
+
+  const notifiers = notifications.notifiers
+  if (!Array.isArray(notifiers)) {
+    return null
+  }
+  const parsedNotifiers: NotificationStepData['notifiers'] = []
+  for (const entry of notifiers) {
+    if (!isRecord(entry)) {
+      return null
+    }
+    if (
+      typeof entry.backend !== 'string'
+      || typeof entry.enabled !== 'boolean'
+      || !isRecord(entry.config)
+    ) {
+      return null
+    }
+    parsedNotifiers.push({
+      backend: entry.backend,
+      enabled: entry.enabled,
+      config: entry.config,
+    })
+  }
+
+  const alertPolicy = notifications.alert_policy
+  if (
+    !isRecord(alertPolicy)
+    || typeof alertPolicy.backend !== 'string'
+    || typeof alertPolicy.enabled !== 'boolean'
+    || !isRecord(alertPolicy.config)
+  ) {
+    return null
+  }
+
+  return {
+    notifiers: parsedNotifiers,
+    alert_policy: {
+      backend: alertPolicy.backend,
+      enabled: alertPolicy.enabled,
+      config: alertPolicy.config,
+    },
   }
 }

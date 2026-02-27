@@ -248,6 +248,27 @@
   gap: 0.25rem 0.5rem;
 }
 
+.notifier-config__cards {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.notifier-config__card,
+.notifier-config__test-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.7rem;
+  background: color-mix(in srgb, var(--surface-0) 80%, transparent);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.alert-policy__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.35rem 0.55rem;
+}
+
 .wizard-summary-card__title {
   margin: 0;
   font-size: 1rem;
