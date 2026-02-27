@@ -49,6 +49,10 @@ vi.mock('./steps/StorageStep', () => ({
   StorageStep: () => <section>Mock storage step</section>,
 }))
 
+vi.mock('./steps/DetectionStep', () => ({
+  DetectionStep: () => <section>Mock detection step</section>,
+}))
+
 function renderSetupPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -114,5 +118,17 @@ describe('SetupPage', () => {
     const progress = screen.getByRole('list', { name: 'Setup steps' })
     const cameraStep = within(progress).getByText('Camera').closest('li')
     expect(cameraStep?.className).toContain('wizard__progress-step--skipped')
+  })
+
+  it('renders detection step component on wizard detection stage', () => {
+    // Given: Wizard URL points to detection step
+    renderSetupPage('/setup?step=3')
+
+    // When: Setup page renders active step content
+    const marker = screen.getByText('Mock detection step')
+
+    // Then: Detection step wrapper is mounted for step 4
+    expect(marker).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Detection' })).toBeTruthy()
   })
 })

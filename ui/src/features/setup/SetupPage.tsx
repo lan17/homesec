@@ -2,9 +2,11 @@ import { useNavigate } from 'react-router-dom'
 
 import { Button } from '../../components/ui/Button'
 import type { CameraCreate } from '../../api/generated/types'
+import type { DetectionStepData } from '../settings/detection/types'
 import type { StorageFormState } from '../settings/storage/types'
 import { SetupWizardShell } from './SetupWizardShell'
 import { CameraStep } from './steps/CameraStep'
+import { DetectionStep } from './steps/DetectionStep'
 import { StorageStep } from './steps/StorageStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 import type { WizardStepDef } from './types'
@@ -60,6 +62,10 @@ interface CameraStepDraft {
 
 interface StorageStepDraft {
   storage: StorageFormState
+}
+
+interface DetectionStepDraft {
+  detection: DetectionStepData
 }
 
 function toStepDraft(value: unknown): StepDraft {
@@ -127,6 +133,29 @@ function toStorageStepDraft(value: unknown): StorageStepDraft | null {
   return null
 }
 
+function toDetectionStepDraft(value: unknown): DetectionStepDraft | null {
+  if (
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && 'detection' in value
+  ) {
+    const detectionValue = (value as { detection: unknown }).detection
+    if (
+      detectionValue
+      && typeof detectionValue === 'object'
+      && !Array.isArray(detectionValue)
+      && 'filter' in detectionValue
+      && 'vlm' in detectionValue
+    ) {
+      return {
+        detection: detectionValue as DetectionStepData,
+      }
+    }
+  }
+  return null
+}
+
 function statusText(isComplete: boolean, isSkipped: boolean): string {
   if (isComplete) {
     return 'Completed'
@@ -153,8 +182,10 @@ export function SetupPage() {
   const isWelcomeStep = activeStep.id === 'welcome'
   const isCameraStep = activeStep.id === 'camera'
   const isStorageStep = activeStep.id === 'storage'
+  const isDetectionStep = activeStep.id === 'detection'
   const cameraStepDraft = toCameraStepDraft(state.stepData.camera)
   const storageStepDraft = toStorageStepDraft(state.stepData.storage)
+  const detectionStepDraft = toDetectionStepDraft(state.stepData.detection)
 
   function handleNoteChange(note: string): void {
     updateStepData(activeStep.id, { note })
@@ -187,6 +218,19 @@ export function SetupPage() {
   }
 
   function handleStorageStepSkip(): void {
+    skipStep()
+  }
+
+  function handleDetectionStepUpdateData(detection: DetectionStepData): void {
+    updateStepData('detection', { detection })
+  }
+
+  function handleDetectionStepComplete(): void {
+    markComplete('detection')
+    goNext()
+  }
+
+  function handleDetectionStepSkip(): void {
     skipStep()
   }
 
@@ -225,6 +269,16 @@ export function SetupPage() {
           onUpdateData={handleStorageStepUpdateData}
           onComplete={handleStorageStepComplete}
           onSkip={handleStorageStepSkip}
+        />
+      )
+    }
+    if (isDetectionStep) {
+      return (
+        <DetectionStep
+          initialData={detectionStepDraft?.detection ?? null}
+          onUpdateData={handleDetectionStepUpdateData}
+          onComplete={handleDetectionStepComplete}
+          onSkip={handleDetectionStepSkip}
         />
       )
     }
