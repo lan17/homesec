@@ -43,6 +43,7 @@ describe('review helpers', () => {
     const payload = buildFinalizeRequestFromDrafts(drafts)
 
     // Then: Payload includes normalized section contracts expected by finalize endpoint
+    expect(payload.validate_only).toBe(false)
     expect(payload.cameras).toEqual([
       {
         name: 'front_door',

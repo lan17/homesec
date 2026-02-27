@@ -267,7 +267,7 @@ describe('HomeSecApiClient.finalizeSetup', () => {
     const client = new HomeSecApiClient('http://localhost:8081')
 
     // When: Triggering setup finalize with empty section payload
-    const result = await client.finalizeSetup({})
+    const result = await client.finalizeSetup({ validate_only: false })
 
     // Then: Response should include typed payload and HTTP metadata
     expect(result).toEqual({
@@ -300,7 +300,7 @@ describe('HomeSecApiClient.finalizeSetup', () => {
     const client = new HomeSecApiClient('http://localhost:8081')
 
     // When / Then: Client rejects malformed finalize payloads with APIError
-    await expect(client.finalizeSetup({})).rejects.toBeInstanceOf(APIError)
+    await expect(client.finalizeSetup({ validate_only: false })).rejects.toBeInstanceOf(APIError)
   })
 })
 

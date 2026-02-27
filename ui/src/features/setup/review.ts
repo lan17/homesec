@@ -122,7 +122,7 @@ function toFinalizeCamera(camera: CameraCreate): NonNullable<FinalizeRequest['ca
 }
 
 export function buildFinalizeRequestFromDrafts(drafts: ReviewWizardDrafts): FinalizeRequest {
-  const payload: FinalizeRequest = {}
+  const payload: FinalizeRequest = { validate_only: false }
 
   if (drafts.camera) {
     payload.cameras = [toFinalizeCamera(drafts.camera)]

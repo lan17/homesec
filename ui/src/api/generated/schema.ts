@@ -704,6 +704,11 @@ export interface components {
             server?: components["schemas"]["FastAPIServerConfig"] | null;
             state_store?: components["schemas"]["StateStoreConfig"] | null;
             storage?: components["schemas"]["StorageConfig"] | null;
+            /**
+             * Validate Only
+             * @default false
+             */
+            validate_only: boolean;
             vlm?: components["schemas"]["VLMConfig"] | null;
         };
         /**

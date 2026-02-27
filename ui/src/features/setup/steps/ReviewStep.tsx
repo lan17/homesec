@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { apiClient, isAPIError } from '../../../api/client'
 import { useFinalizeMutation } from '../../../api/hooks/useFinalizeMutation'
+import type { FinalizeRequest } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
 import {
   buildFinalizeRequestFromDrafts,
@@ -23,9 +24,34 @@ interface ReviewStepProps {
   onGoDashboard: () => void
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
+function _abortError(): Error {
+  const error = new Error('Aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(_abortError())
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+
+    function onAbort() {
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', onAbort)
+      reject(_abortError())
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -42,30 +68,55 @@ function toLaunchErrorMessage(error: unknown): string {
   return 'Launch failed unexpectedly.'
 }
 
-async function waitForPipelineStart(): Promise<{ started: boolean; error: string | null }> {
+interface WaitForPipelineStartResult {
+  started: boolean
+  cancelled: boolean
+  error: string | null
+}
+
+async function waitForPipelineStart(
+  signal: AbortSignal,
+): Promise<WaitForPipelineStartResult> {
   const deadline = Date.now() + LAUNCH_POLL_TIMEOUT_MS
   let lastPollError: unknown = null
 
   while (Date.now() < deadline) {
+    if (signal.aborted) {
+      return { started: false, cancelled: true, error: null }
+    }
+
     try {
-      const status = await apiClient.getSetupStatus()
+      const status = await apiClient.getSetupStatus({ signal })
       if (status.pipeline_running) {
-        return { started: true, error: null }
+        return { started: true, cancelled: false, error: null }
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        return { started: false, cancelled: true, error: null }
+      }
       lastPollError = error
     }
-    await sleep(LAUNCH_POLL_INTERVAL_MS)
+
+    try {
+      await sleepWithAbort(LAUNCH_POLL_INTERVAL_MS, signal)
+    } catch (error) {
+      if (isAbortError(error)) {
+        return { started: false, cancelled: true, error: null }
+      }
+      throw error
+    }
   }
 
   if (lastPollError) {
     return {
       started: false,
+      cancelled: false,
       error: `Timed out waiting for pipeline startup. Last check error: ${toLaunchErrorMessage(lastPollError)}`,
     }
   }
   return {
     started: false,
+    cancelled: false,
     error: 'Timed out waiting for pipeline startup.',
   }
 }
@@ -85,20 +136,47 @@ export function ReviewStep({
   const [launchStatus, setLaunchStatus] = useState<LaunchProgressStatus | null>(null)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const isMountedRef = useRef(true)
+  const launchAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false
+      launchAbortRef.current?.abort()
+      launchAbortRef.current = null
     }
   }, [])
 
   async function handleLaunch(): Promise<void> {
+    launchAbortRef.current?.abort()
+    const launchAbortController = new AbortController()
+    launchAbortRef.current = launchAbortController
+
     setLaunchError(null)
     setLaunchStatus('launching')
 
     try {
       const payload = buildFinalizeRequestFromDrafts(wizardData)
-      const result = await finalizeMutation.mutateAsync(payload)
+      const precheckPayload: FinalizeRequest = { ...payload, validate_only: true }
+      const precheckResult = await finalizeMutation.mutateAsync({
+        payload: precheckPayload,
+        signal: launchAbortController.signal,
+      })
+      if (!precheckResult.success) {
+        const combinedError = precheckResult.errors.length > 0
+          ? precheckResult.errors.join('; ')
+          : 'Setup finalize failed.'
+        if (!isMountedRef.current) {
+          return
+        }
+        setLaunchStatus('failed')
+        setLaunchError(combinedError)
+        return
+      }
+
+      const result = await finalizeMutation.mutateAsync({
+        payload: { ...payload, validate_only: false },
+        signal: launchAbortController.signal,
+      })
       if (!result.success) {
         const combinedError = result.errors.length > 0
           ? result.errors.join('; ')
@@ -111,8 +189,11 @@ export function ReviewStep({
         return
       }
 
-      const pollResult = await waitForPipelineStart()
+      const pollResult = await waitForPipelineStart(launchAbortController.signal)
       if (!isMountedRef.current) {
+        return
+      }
+      if (pollResult.cancelled) {
         return
       }
       if (pollResult.started) {
@@ -125,11 +206,18 @@ export function ReviewStep({
       setLaunchStatus('failed')
       setLaunchError(pollResult.error ?? 'Pipeline failed to start.')
     } catch (error) {
+      if (isAbortError(error)) {
+        return
+      }
       if (!isMountedRef.current) {
         return
       }
       setLaunchStatus('failed')
       setLaunchError(toLaunchErrorMessage(error))
+    } finally {
+      if (launchAbortRef.current === launchAbortController) {
+        launchAbortRef.current = null
+      }
     }
   }
 
