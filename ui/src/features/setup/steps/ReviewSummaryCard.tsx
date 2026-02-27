@@ -50,8 +50,8 @@ export function ReviewSummaryCard({
 
       {items.length > 0 ? (
         <dl className="review-summary-card__items">
-          {items.map((item) => (
-            <div key={`${item.label}:${item.value}`} className="review-summary-card__item">
+          {items.map((item, index) => (
+            <div key={`${item.label}:${index}`} className="review-summary-card__item">
               <dt>{item.label}</dt>
               <dd>{item.value}</dd>
             </div>

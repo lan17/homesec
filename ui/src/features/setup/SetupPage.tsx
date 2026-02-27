@@ -72,7 +72,6 @@ export function SetupPage() {
     updateStepData,
     markComplete,
     clearPersistedState,
-    reset,
   } =
     useWizardState(WIZARD_STEPS)
 
@@ -80,7 +79,6 @@ export function SetupPage() {
   const isComplete = state.completedSteps.has(activeStep.id)
   const isReviewStep = activeStep.id === 'review'
   const canGoNext = !isReviewStep && (activeStep.skippable || isComplete)
-  const isLastStep = state.currentStep === WIZARD_STEPS.length - 1
   const completedCount = state.completedSteps.size
   const skippedCount = state.skippedSteps.size
   const isWelcomeStep = activeStep.id === 'welcome'
@@ -157,11 +155,6 @@ export function SetupPage() {
 
   function handleNext(): void {
     if (!canGoNext) {
-      return
-    }
-    if (isLastStep) {
-      reset()
-      navigate('/', { replace: true })
       return
     }
     goNext()
@@ -250,7 +243,7 @@ export function SetupPage() {
         skippedSteps={state.skippedSteps}
         canGoNext={canGoNext}
         showNext={!isReviewStep}
-        nextLabel={isLastStep ? 'Launch' : 'Next'}
+        nextLabel="Next"
         onNext={handleNext}
         onBack={goBack}
         onSkip={skipStep}
@@ -275,7 +268,7 @@ export function SetupPage() {
               <dd>{skippedCount}</dd>
             </div>
           </dl>
-          {isLastStep ? (
+          {isReviewStep ? (
             <p className="subtle">
               Launch clears persisted wizard state and returns to the dashboard.
             </p>

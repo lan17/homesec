@@ -37,4 +37,17 @@ describe('LaunchProgress', () => {
     expect(badge).toBeTruthy()
     expect(error.textContent).toContain('Timed out waiting for startup.')
   })
+
+  it('renders started state details', () => {
+    // Given: A launch progress view after runtime startup succeeds
+    render(<LaunchProgress status="started" />)
+
+    // When: The component renders started state
+    const badge = screen.getByText('Started')
+    const message = screen.getByText('Setup complete. HomeSec runtime is healthy.')
+
+    // Then: Success status and completion guidance are visible
+    expect(badge).toBeTruthy()
+    expect(message).toBeTruthy()
+  })
 })
