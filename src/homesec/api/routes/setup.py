@@ -74,7 +74,7 @@ async def finalize_setup_endpoint(
     app: Application = Depends(get_homesec_app),
     _: None = Depends(require_bootstrap_mode),
 ) -> FinalizeResponse:
-    """Persist finalized setup config and request graceful restart."""
+    """Persist finalized setup config and activate runtime in-process."""
     try:
         return await finalize_setup(payload, app)
     except SetupFinalizeValidationError as exc:

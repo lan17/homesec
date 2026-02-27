@@ -180,7 +180,7 @@ class Application:
         finally:
             await self.shutdown()
 
-    async def _create_components(self) -> None:
+    async def _create_components(self, *, configure_api_server: bool = True) -> None:
         """Create all components based on config."""
         config = self._require_config()
 
@@ -192,36 +192,63 @@ class Application:
         # Validate config references and plugin names before instantiating components
         self._validate_config(config)
 
-        # Create shell components that remain stable across runtime reloads.
-        self._storage = self._create_storage(config)
-        self._state_store = await self._create_state_store(config)
-        self._event_store = self._create_event_store(self._state_store)
-        self._repository = ClipRepository(
-            self._state_store,
-            self._event_store,
+        # Build components locally first so partial failures do not leak mutable app state.
+        storage = self._create_storage(config)
+        state_store = await self._create_state_store(config)
+        event_store = self._create_event_store(state_store)
+        repository = ClipRepository(
+            state_store,
+            event_store,
             retry=config.retry,
         )
-        assert self._storage is not None
-
-        # Create runtime manager and start the initial runtime.
-        self._runtime_manager = RuntimeManager(
+        runtime_manager = RuntimeManager(
             self._create_runtime_controller(),
             on_runtime_activated=self._bind_active_runtime,
         )
-        await self._runtime_manager.start_initial_runtime(config)
+        try:
+            await runtime_manager.start_initial_runtime(config)
+        except Exception:
+            await runtime_manager.shutdown()
+            await state_store.shutdown()
+            await storage.shutdown()
+            raise
 
-        server_cfg = config.server
-        if server_cfg.enabled:
-            api_app = create_app(self)
-            self._api_server = APIServer(
-                app=api_app,
-                host=server_cfg.host,
-                port=server_cfg.port,
-            )
-        else:
-            self._api_server = None
+        api_server = self._api_server
+        if configure_api_server:
+            server_cfg = config.server
+            if server_cfg.enabled:
+                api_app = create_app(self)
+                api_server = APIServer(
+                    app=api_app,
+                    host=server_cfg.host,
+                    port=server_cfg.port,
+                )
+            else:
+                api_server = None
+
+        self._storage = storage
+        self._state_store = state_store
+        self._event_store = event_store
+        self._repository = repository
+        self._runtime_manager = runtime_manager
+        self._api_server = api_server
 
         logger.info("All components created")
+
+    async def activate_setup_config(self, config: Config) -> None:
+        """Apply setup-finalized config and start runtime without restarting FastAPI."""
+        if not self._bootstrap:
+            raise RuntimeError("Setup activation is only supported in bootstrap mode")
+
+        self._config = config
+        try:
+            await self._create_components(configure_api_server=False)
+        except Exception:
+            self._config = None
+            raise
+
+        self._bootstrap = False
+        logger.info("Setup finalized; runtime activated in-process without API restart")
 
     def _create_storage(self, config: Config) -> StorageBackend:
         """Create storage backend based on config."""

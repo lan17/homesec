@@ -701,7 +701,7 @@
         "type": "object"
       },
       "FinalizeRequest": {
-        "description": "Finalize setup by writing the assembled config and requesting restart.",
+        "description": "Finalize setup by writing the assembled config and applying it in-process.",
         "properties": {
           "alert_policy": {
             "anyOf": [
@@ -2386,7 +2386,7 @@
     },
     "/api/v1/setup/finalize": {
       "post": {
-        "description": "Persist finalized setup config and request graceful restart.",
+        "description": "Persist finalized setup config and activate runtime in-process.",
         "operationId": "finalize_setup_endpoint_api_v1_setup_finalize_post",
         "requestBody": {
           "content": {

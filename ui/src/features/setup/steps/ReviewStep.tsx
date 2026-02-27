@@ -230,8 +230,8 @@ export function ReviewStep({
       <header className="review-step__header">
         <h2 className="review-step__title">Review configuration before launch</h2>
         <p className="subtle">
-          Inspect each section and jump back to edit as needed. Launch writes config and restarts
-          HomeSec.
+          Inspect each section and jump back to edit as needed. Launch writes config and starts the
+          pipeline in-place.
         </p>
       </header>
 

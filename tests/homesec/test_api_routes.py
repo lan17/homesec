@@ -241,6 +241,11 @@ class _StubApp:
     def request_restart(self) -> None:
         self.restart_requested = True
 
+    async def activate_setup_config(self, config) -> None:
+        self._config = config
+        self._bootstrap_mode = False
+        self._pipeline_running = True
+
     @property
     def setup_test_connection_lock(self) -> asyncio.Lock:
         return self._setup_test_connection_lock

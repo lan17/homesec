@@ -42,6 +42,7 @@ class _StubApp:
         self._server_config = server_config
         self.config_manager = config_manager or ConfigManager(Path("config/config.yaml"))
         self.restart_requested = False
+        self.activate_setup_config_called = False
         if has_cameras:
             cameras = [SimpleNamespace(name="front")]
         else:
@@ -71,6 +72,12 @@ class _StubApp:
 
     def request_restart(self) -> None:
         self.restart_requested = True
+
+    async def activate_setup_config(self, config) -> None:
+        self.activate_setup_config_called = True
+        self.bootstrap_mode = False
+        self.pipeline_running = True
+        self._config = config
 
 
 def _write_existing_config(path: Path) -> ConfigManager:
@@ -391,10 +398,10 @@ def test_network_probe_returns_config_error_for_invalid_port_env(
 
 
 @pytest.mark.asyncio
-async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
+async def test_finalize_setup_writes_config_with_defaults_and_activates_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Finalize should persist merged config and request restart in bootstrap mode."""
+    """Finalize should persist merged config and activate runtime without restart."""
     # Given: A bootstrap app without existing config and a finalize payload with camera only
     monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     config_path = tmp_path / "config.yaml"
@@ -420,10 +427,11 @@ async def test_finalize_setup_writes_config_with_defaults_and_requests_restart(
     # When: Finalizing setup
     response = await setup_service.finalize_setup(request, app)
 
-    # Then: Config is written, defaults are applied for omitted sections, and restart is requested
+    # Then: Config is written, defaults are applied, and setup activation runs in-process
     assert response.success is True
-    assert response.restart_requested is True
-    assert app.restart_requested is True
+    assert response.restart_requested is False
+    assert app.restart_requested is False
+    assert app.activate_setup_config_called is True
     assert "storage" in response.defaults_applied
     assert "vlm" in response.defaults_applied
     persisted = manager.get_config()

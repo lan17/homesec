@@ -810,12 +810,11 @@ async def finalize_setup(request: FinalizeRequest, app: Application) -> Finalize
         )
 
     await app.config_manager.replace_config(merged_config)
-
-    app.request_restart()
+    await app.activate_setup_config(merged_config)
     return FinalizeResponse(
         success=True,
         config_path=str(config_path),
-        restart_requested=True,
+        restart_requested=False,
         defaults_applied=defaults_applied,
         errors=[],
     )

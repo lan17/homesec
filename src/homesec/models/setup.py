@@ -46,7 +46,7 @@ class PreflightResponse(BaseModel):
 
 
 class FinalizeRequest(BaseModel):
-    """Finalize setup by writing the assembled config and requesting restart."""
+    """Finalize setup by writing the assembled config and applying it in-process."""
 
     validate_only: bool = False
     cameras: list[CameraConfig] | None = None

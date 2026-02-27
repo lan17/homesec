@@ -294,7 +294,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize Setup Endpoint
-         * @description Persist finalized setup config and request graceful restart.
+         * @description Persist finalized setup config and activate runtime in-process.
          */
         post: operations["finalize_setup_endpoint_api_v1_setup_finalize_post"];
         delete?: never;
@@ -692,7 +692,7 @@ export interface components {
         };
         /**
          * FinalizeRequest
-         * @description Finalize setup by writing the assembled config and requesting restart.
+         * @description Finalize setup by writing the assembled config and applying it in-process.
          */
         FinalizeRequest: {
             alert_policy?: components["schemas"]["AlertPolicyConfig"] | null;
