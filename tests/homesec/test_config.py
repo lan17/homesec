@@ -661,34 +661,46 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
 
 
 def test_server_ui_env_defaults_apply_when_fields_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Server UI env defaults should apply when config does not set values."""
-    # Given HomeSec server UI env defaults and config without explicit server block
-    monkeypatch.setenv("HOMESEC_SERVER_SERVE_UI", "true")
+    """Server UI dist path should default from env when config omits it."""
+    # Given an env-configured UI dist path and config without explicit server block
     monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
     data = minimal_config()
 
     # When loading config
     config = load_config_from_dict(data)
 
-    # Then server UI values come from environment defaults
-    assert config.server.serve_ui is True
+    # Then server UI dist path comes from env default
     assert config.server.ui_dist_dir == "/app/ui/dist"
 
 
 def test_server_ui_config_values_override_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Explicit server UI config should win over env defaults."""
-    # Given env defaults and explicit server config values
-    monkeypatch.setenv("HOMESEC_SERVER_SERVE_UI", "true")
+    """Explicit ui_dist_dir config should win over env defaults."""
+    # Given env defaults and explicit ui_dist_dir config value
     monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
     data = minimal_config()
     data["server"] = {
-        "serve_ui": False,
         "ui_dist_dir": "./custom-ui-dist",
     }
 
     # When loading config
     config = load_config_from_dict(data)
 
-    # Then explicit config values are preserved
-    assert config.server.serve_ui is False
+    # Then explicit config value is preserved
     assert config.server.ui_dist_dir == "./custom-ui-dist"
+
+
+def test_server_config_rejects_legacy_serve_ui_field() -> None:
+    """Legacy `server.serve_ui` should fail validation after toggle removal."""
+    # Given a config payload with removed legacy server.serve_ui key
+    data = minimal_config()
+    data["server"] = {
+        "serve_ui": True,
+        "ui_dist_dir": "./ui/dist",
+    }
+
+    # When/Then: Loading config fails with schema validation error
+    with pytest.raises(ConfigError) as exc_info:
+        _ = load_config_from_dict(data)
+
+    assert exc_info.value.code == ConfigErrorCode.VALIDATION_FAILED
+    assert "serve_ui" in str(exc_info.value)
