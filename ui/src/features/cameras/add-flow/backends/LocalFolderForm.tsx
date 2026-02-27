@@ -1,14 +1,5 @@
 import type { BackendFormStepProps } from './types'
-
-function readString(config: Record<string, unknown>, key: string, fallback: string): string {
-  const value = config[key]
-  return typeof value === 'string' ? value : fallback
-}
-
-function readNumber(config: Record<string, unknown>, key: string, fallback: number): number {
-  const value = config[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
+import { readNumber, readString } from './configReaders'
 
 export function LocalFolderForm({ config, onChange }: BackendFormStepProps) {
   const watchDir = readString(config, 'watch_dir', './recordings')
@@ -81,4 +72,3 @@ export function LocalFolderForm({ config, onChange }: BackendFormStepProps) {
     </div>
   )
 }
-

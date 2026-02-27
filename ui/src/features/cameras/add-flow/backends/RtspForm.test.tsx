@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 
 import { RtspForm } from './RtspForm'
@@ -12,10 +11,9 @@ describe('RtspForm', () => {
     cleanup()
   })
 
-  it('renders RTSP fields and emits updated config values on change', async () => {
+  it('renders RTSP fields and emits updated config values on change', () => {
     // Given: RTSP form with baseline config and update callback
     const onChange = vi.fn()
-    const user = userEvent.setup()
     function RtspHarness() {
       const [config, setConfig] = useState<Record<string, unknown>>({
         rtsp_url: 'rtsp://old-user:old-pass@camera.local/stream',
@@ -36,8 +34,9 @@ describe('RtspForm', () => {
     render(<RtspHarness />)
 
     // When: Operator updates RTSP URL value
-    await user.clear(screen.getByLabelText('RTSP URL'))
-    await user.type(screen.getByLabelText('RTSP URL'), 'rtsp://new-user:new-pass@camera.local/live')
+    fireEvent.change(screen.getByLabelText('RTSP URL'), {
+      target: { value: 'rtsp://new-user:new-pass@camera.local/live' },
+    })
 
     // Then: Form emits updated config preserving sibling fields
     expect(screen.getByLabelText('Output directory')).toBeTruthy()

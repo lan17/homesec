@@ -121,6 +121,65 @@ describe('CameraAddFlow', () => {
     ).toBeTruthy()
   })
 
+  it('rejects duplicate camera names before sending create request', async () => {
+    // Given: Existing camera name already occupies the target name (case-insensitive)
+    const onComplete = vi.fn().mockResolvedValue({ ok: true })
+    const user = userEvent.setup()
+    render(
+      <CameraAddFlow
+        existingCameraNames={['Front_Door']}
+        onComplete={onComplete}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    await advanceToConfirm(user)
+    await user.clear(screen.getByLabelText('Camera name'))
+    await user.type(screen.getByLabelText('Camera name'), 'front_door')
+
+    // When: Operator submits with duplicate camera name
+    await user.click(screen.getByRole('button', { name: 'Create camera' }))
+
+    // Then: Flow surfaces duplicate-name validation and does not call create
+    expect(onComplete).not.toHaveBeenCalled()
+    expect(
+      screen.getByText('Camera name already exists. Choose a different name and retry.'),
+    ).toBeTruthy()
+  })
+
+  it('disables back and cancel while create request is in-flight', async () => {
+    // Given: Confirm step with pending create operation
+    let resolveCreate!: (value: { ok: true }) => void
+    const createPromise = new Promise<{ ok: true }>((resolve) => {
+      resolveCreate = resolve
+    })
+    const onComplete = vi.fn().mockReturnValue(createPromise)
+    const onCancel = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <CameraAddFlow
+        existingCameraNames={[]}
+        onComplete={onComplete}
+        onDone={vi.fn()}
+        onCancel={onCancel}
+      />,
+    )
+    await advanceToConfirm(user)
+
+    // When: Operator submits create and request remains unresolved
+    await user.click(screen.getByRole('button', { name: 'Create camera' }))
+
+    // Then: Back/cancel actions are disabled until request finishes
+    const backButton = screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+    expect(backButton.disabled).toBe(true)
+    expect(cancelButton.disabled).toBe(true)
+    expect(onCancel).not.toHaveBeenCalled()
+
+    resolveCreate({ ok: true })
+    await screen.findByText('Select source backend')
+  })
+
   it('runs setup test-connection during test step and shows result', async () => {
     // Given: Flow in test step with mocked successful setup test endpoint
     const user = userEvent.setup()
@@ -154,4 +213,3 @@ describe('CameraAddFlow', () => {
     expect(onvifWizardMock).toHaveBeenCalledTimes(1)
   })
 })
-

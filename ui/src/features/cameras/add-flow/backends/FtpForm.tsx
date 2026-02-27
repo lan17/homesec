@@ -1,19 +1,5 @@
 import type { BackendFormStepProps } from './types'
-
-function readString(config: Record<string, unknown>, key: string, fallback: string): string {
-  const value = config[key]
-  return typeof value === 'string' ? value : fallback
-}
-
-function readNumber(config: Record<string, unknown>, key: string, fallback: number): number {
-  const value = config[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function readBoolean(config: Record<string, unknown>, key: string, fallback: boolean): boolean {
-  const value = config[key]
-  return typeof value === 'boolean' ? value : fallback
-}
+import { readBoolean, readNumber, readString } from './configReaders'
 
 export function FtpForm({ config, onChange }: BackendFormStepProps) {
   const host = readString(config, 'host', '0.0.0.0')
@@ -96,4 +82,3 @@ export function FtpForm({ config, onChange }: BackendFormStepProps) {
     </div>
   )
 }
-

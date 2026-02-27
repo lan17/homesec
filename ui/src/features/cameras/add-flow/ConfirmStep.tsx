@@ -40,6 +40,7 @@ export function ConfirmStep({
           className="input"
           type="text"
           value={cameraName}
+          disabled={submitPending}
           onChange={(event) => {
             onCameraNameChange(event.target.value)
           }}
@@ -68,6 +69,7 @@ export function ConfirmStep({
           id="camera-confirm-apply-changes"
           type="checkbox"
           checked={applyChangesImmediately}
+          disabled={submitPending}
           onChange={(event) => {
             onApplyChangesImmediatelyChange(event.target.checked)
           }}
@@ -96,4 +98,3 @@ export function ConfirmStep({
     </section>
   )
 }
-

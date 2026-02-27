@@ -3,13 +3,11 @@ import { CAMERA_ADD_BACKENDS, CAMERA_BACKEND_ORDER } from './backends'
 import type { CameraAddBackend } from './types'
 
 interface BackendPickerProps {
-  isMutating: boolean
   onSelect: (backend: CameraAddBackend) => void
   onCancel: () => void
 }
 
 export function BackendPicker({
-  isMutating,
   onSelect,
   onCancel,
 }: BackendPickerProps) {
@@ -17,7 +15,7 @@ export function BackendPicker({
     <div className="camera-add-flow">
       <div className="camera-add-flow__header">
         <h3 className="camera-add-flow__title">Select source backend</h3>
-        <Button variant="ghost" onClick={onCancel} disabled={isMutating}>
+        <Button variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
       </div>
@@ -36,7 +34,6 @@ export function BackendPicker({
               onClick={() => {
                 onSelect(backend.id)
               }}
-              disabled={isMutating}
             >
               <p className="camera-add-flow__backend-title">{backend.label}</p>
               <p className="camera-add-flow__backend-description">{backend.description}</p>

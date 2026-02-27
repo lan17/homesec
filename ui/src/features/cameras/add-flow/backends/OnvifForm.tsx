@@ -1,14 +1,14 @@
+import { useState } from 'react'
+
 import type { CameraCreate } from '../../../../api/generated/types'
+import { Button } from '../../../../components/ui/Button'
 import { OnvifDiscoveryWizard } from '../../components/OnvifDiscoveryWizard'
 import type { BackendFormStepProps } from './types'
-
-function readString(config: Record<string, unknown>, key: string, fallback: string): string {
-  const value = config[key]
-  return typeof value === 'string' ? value : fallback
-}
+import { readString } from './configReaders'
 
 export function OnvifForm({ config, onChange, onSuggestedNameChange }: BackendFormStepProps) {
   const selectedRtspUrl = readString(config, 'rtsp_url', '')
+  const [showWizard, setShowWizard] = useState(selectedRtspUrl.trim().length === 0)
 
   async function handleResolvedCandidate(payload: CameraCreate) {
     onChange({
@@ -20,33 +20,50 @@ export function OnvifForm({ config, onChange, onSuggestedNameChange }: BackendFo
           : './recordings',
     })
     onSuggestedNameChange(payload.name)
+    setShowWizard(false)
     return { ok: true as const }
   }
 
   return (
     <div className="inline-form">
       {selectedRtspUrl ? (
-        <p className="subtle">
-          Selected stream URI: <span className="camera-mono">{selectedRtspUrl}</span>
-        </p>
+        <div className="camera-add-flow__step-hint">
+          <p className="subtle">
+            Selected stream URI: <span className="camera-mono">{selectedRtspUrl}</span>
+          </p>
+        </div>
       ) : (
         <p className="subtle">
           Complete ONVIF discovery to select a stream profile before continuing.
         </p>
       )}
 
-      <OnvifDiscoveryWizard
-        applyChangesImmediately={false}
-        createPending={false}
-        isMutating={false}
-        submitLabel="Use selected stream"
-        showApplyChangesSummary={false}
-        onCreateCamera={handleResolvedCandidate}
-        onClose={() => {
-          // Keep operator on current configure step; parent controls overall flow navigation.
-        }}
-      />
+      {showWizard ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            setShowWizard(true)
+          }}
+        >
+          {selectedRtspUrl ? 'Choose different stream' : 'Open ONVIF discovery'}
+        </Button>
+      )}
+
+      {showWizard ? (
+        <OnvifDiscoveryWizard
+          applyChangesImmediately={false}
+          createPending={false}
+          isMutating={false}
+          submitLabel="Use selected stream"
+          showApplyChangesSummary={false}
+          onCreateCamera={handleResolvedCandidate}
+          onClose={() => {
+            // Keep operator on current configure step; parent controls overall flow navigation.
+            setShowWizard(false)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
-

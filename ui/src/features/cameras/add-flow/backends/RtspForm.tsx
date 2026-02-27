@@ -1,9 +1,5 @@
 import type { BackendFormStepProps } from './types'
-
-function readString(config: Record<string, unknown>, key: string, fallback: string): string {
-  const value = config[key]
-  return typeof value === 'string' ? value : fallback
-}
+import { readString } from './configReaders'
 
 export function RtspForm({ config, onChange }: BackendFormStepProps) {
   const rtspUrl = readString(config, 'rtsp_url', '')
@@ -46,4 +42,3 @@ export function RtspForm({ config, onChange }: BackendFormStepProps) {
     </div>
   )
 }
-

@@ -15,7 +15,7 @@ describe('BackendPicker', () => {
     // Given: Backend picker with a select callback
     const onSelect = vi.fn()
     const user = userEvent.setup()
-    render(<BackendPicker isMutating={false} onSelect={onSelect} onCancel={vi.fn()} />)
+    render(<BackendPicker onSelect={onSelect} onCancel={vi.fn()} />)
 
     // When: Operator chooses Local Folder backend
     await user.click(screen.getByRole('button', { name: 'Local Folder' }))
@@ -28,4 +28,3 @@ describe('BackendPicker', () => {
     expect(onSelect).toHaveBeenCalledWith('local_folder')
   })
 })
-

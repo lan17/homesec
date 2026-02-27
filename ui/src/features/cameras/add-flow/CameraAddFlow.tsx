@@ -53,6 +53,9 @@ export function CameraAddFlow({
   }
 
   function handleCancel(): void {
+    if (submitPending) {
+      return
+    }
     cameraAddState.reset()
     setValidationError(null)
     setCreateError(null)
@@ -94,6 +97,9 @@ export function CameraAddFlow({
     if (!backendDef) {
       return
     }
+    if (submitPending) {
+      return
+    }
     setValidationError(null)
     cameraAddState.goBack(backendStepCount)
   }
@@ -103,14 +109,22 @@ export function CameraAddFlow({
       return
     }
 
-    const cameraNameError = validateCameraName(cameraAddState.state.cameraName)
+    const trimmedCameraName = cameraAddState.state.cameraName.trim()
+    const cameraNameError = validateCameraName(trimmedCameraName)
     if (cameraNameError) {
       setCreateError(cameraNameError)
       return
     }
+    const duplicateName = existingCameraNames.some(
+      (name) => name.trim().toLowerCase() === trimmedCameraName.toLowerCase(),
+    )
+    if (duplicateName) {
+      setCreateError('Camera name already exists. Choose a different name and retry.')
+      return
+    }
 
     const payload: CameraCreate = {
-      name: cameraAddState.state.cameraName.trim(),
+      name: trimmedCameraName,
       enabled: true,
       ...backendDef.buildCameraSource(cameraAddState.state.config),
     }
@@ -137,11 +151,7 @@ export function CameraAddFlow({
   return (
     <Card title="Add Camera" subtitle="Choose a backend, test connectivity, and confirm creation.">
       {stage === 'pick-backend' ? (
-        <BackendPicker
-          isMutating={submitPending}
-          onSelect={handleSelectBackend}
-          onCancel={handleCancel}
-        />
+        <BackendPicker onSelect={handleSelectBackend} onCancel={handleCancel} />
       ) : null}
 
       {stage === 'configure' && backendDef ? (
@@ -170,13 +180,15 @@ export function CameraAddFlow({
           {validationError ? <p className="error-text">{validationError}</p> : null}
 
           <div className="inline-form__actions">
-            <Button variant="ghost" onClick={handleBack}>
+            <Button variant="ghost" onClick={handleBack} disabled={submitPending}>
               Back
             </Button>
-            <Button variant="ghost" onClick={handleCancel}>
+            <Button variant="ghost" onClick={handleCancel} disabled={submitPending}>
               Cancel
             </Button>
-            <Button onClick={handleNext}>Next</Button>
+            <Button onClick={handleNext} disabled={submitPending}>
+              Next
+            </Button>
           </div>
         </section>
       ) : null}
@@ -192,13 +204,15 @@ export function CameraAddFlow({
           />
 
           <div className="inline-form__actions">
-            <Button variant="ghost" onClick={handleBack}>
+            <Button variant="ghost" onClick={handleBack} disabled={submitPending}>
               Back
             </Button>
-            <Button variant="ghost" onClick={handleCancel}>
+            <Button variant="ghost" onClick={handleCancel} disabled={submitPending}>
               Cancel
             </Button>
-            <Button onClick={handleNext}>Continue</Button>
+            <Button onClick={handleNext} disabled={submitPending}>
+              Continue
+            </Button>
           </div>
         </section>
       ) : null}
@@ -224,10 +238,10 @@ export function CameraAddFlow({
           />
 
           <div className="inline-form__actions">
-            <Button variant="ghost" onClick={handleBack}>
+            <Button variant="ghost" onClick={handleBack} disabled={submitPending}>
               Back
             </Button>
-            <Button variant="ghost" onClick={handleCancel}>
+            <Button variant="ghost" onClick={handleCancel} disabled={submitPending}>
               Cancel
             </Button>
           </div>
@@ -236,4 +250,3 @@ export function CameraAddFlow({
     </Card>
   )
 }
-
