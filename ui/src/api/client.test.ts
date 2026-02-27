@@ -242,6 +242,47 @@ describe('HomeSecApiClient.runSetupPreflight', () => {
   })
 })
 
+describe('HomeSecApiClient.runSetupTestConnection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns structured setup test-connection data for successful responses', async () => {
+    // Given: A setup test-connection endpoint success payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          message: 'RTSP probe succeeded.',
+          latency_ms: 14.3,
+          details: { stage: 'startup' },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Triggering setup test-connection
+    const result = await client.runSetupTestConnection({
+      type: 'camera',
+      backend: 'rtsp',
+      config: { rtsp_url: 'rtsp://camera.local/stream' },
+    })
+
+    // Then: Response should include typed payload and HTTP metadata
+    expect(result).toEqual({
+      success: true,
+      message: 'RTSP probe succeeded.',
+      latency_ms: 14.3,
+      details: { stage: 'startup' },
+      httpStatus: 200,
+    })
+  })
+})
+
 describe('HomeSecApiClient.getStats', () => {
   afterEach(() => {
     vi.restoreAllMocks()

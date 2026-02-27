@@ -11,6 +11,7 @@ import type {
   CameraResponse,
   ConfigChangeResponse,
 } from '../../../api/generated/types'
+import type { CameraCreateActionResult } from '../actions'
 
 interface UseCameraActionsOptions {
   onRuntimeStatusRefresh: () => Promise<void>
@@ -38,10 +39,6 @@ interface CameraActionState {
   pending: CameraActionPending
   errors: CameraActionErrors
 }
-
-export type CameraCreateActionResult =
-  | { ok: true }
-  | { ok: false; error: unknown }
 
 interface UseCameraActionsResult extends CameraActionState {
   createCamera: (payload: CameraCreate, applyChanges: boolean) => Promise<CameraCreateActionResult>

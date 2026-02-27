@@ -14,6 +14,7 @@ import { CamerasPage } from './CamerasPage'
 const useCamerasQueryMock = vi.fn()
 const useRuntimeStatusQueryMock = vi.fn()
 const useCameraActionsMock = vi.fn()
+const setupTestConnectionMutateAsyncMock = vi.fn()
 
 vi.mock('../../api/hooks/useCamerasQuery', () => ({
   useCamerasQuery: () => useCamerasQueryMock(),
@@ -25,6 +26,13 @@ vi.mock('../../api/hooks/useRuntimeStatusQuery', () => ({
 
 vi.mock('./hooks/useCameraActions', () => ({
   useCameraActions: (options: unknown) => useCameraActionsMock(options),
+}))
+
+vi.mock('../../api/hooks/useSetupTestConnectionMutation', () => ({
+  useSetupTestConnectionMutation: () => ({
+    mutateAsync: setupTestConnectionMutateAsyncMock,
+    isPending: false,
+  }),
 }))
 
 interface CamerasPageHarness {
@@ -121,11 +129,29 @@ function setupPage({
   }
 }
 
+async function openManualCameraCreateFlow(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  // Given: The add-camera launcher is visible
+  await user.click(screen.getByRole('button', { name: 'Add camera' }))
+
+  // When: Operator selects RTSP backend and advances to confirm step
+  await user.click(screen.getByRole('button', { name: 'RTSP' }))
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+  await user.click(screen.getByRole('button', { name: 'Continue' }))
+}
+
 describe('CamerasPage', () => {
   beforeEach(() => {
     useCamerasQueryMock.mockReset()
     useRuntimeStatusQueryMock.mockReset()
     useCameraActionsMock.mockReset()
+    setupTestConnectionMutateAsyncMock.mockReset()
+    setupTestConnectionMutateAsyncMock.mockResolvedValue({
+      httpStatus: 200,
+      success: true,
+      message: 'RTSP probe succeeded.',
+      latency_ms: 12.3,
+      details: null,
+    })
     vi.restoreAllMocks()
   })
 
@@ -149,7 +175,9 @@ describe('CamerasPage', () => {
     const harness = setupPage()
     const user = userEvent.setup()
 
-    // When: Operator enters camera name and submits create form
+    // When: Operator opens flow, enters camera name in confirm step, and submits
+    await openManualCameraCreateFlow(user)
+    await user.clear(screen.getByLabelText('Camera name'))
     await user.type(screen.getByLabelText('Camera name'), 'front_door')
     await user.click(screen.getByRole('button', { name: 'Create camera' }))
 
@@ -173,8 +201,10 @@ describe('CamerasPage', () => {
     const harness = setupPage()
     const user = userEvent.setup()
 
-    // When: Operator enables immediate apply and submits camera create
+    // When: Operator enables immediate apply in confirm step and submits create
+    await openManualCameraCreateFlow(user)
     await user.click(screen.getByLabelText('Apply changes immediately (runtime reload)'))
+    await user.clear(screen.getByLabelText('Camera name'))
     await user.type(screen.getByLabelText('Camera name'), 'side_gate')
     await user.click(screen.getByRole('button', { name: 'Create camera' }))
 
@@ -186,20 +216,21 @@ describe('CamerasPage', () => {
     )
   })
 
-  it('rejects invalid source config JSON before mutation', async () => {
-    // Given: A ready page and malformed source config input
+  it('rejects invalid camera names before mutation', async () => {
+    // Given: A ready page and invalid camera name in confirm step
     const harness = setupPage()
     const user = userEvent.setup()
 
-    // When: Operator submits an invalid JSON source_config
-    await user.type(screen.getByLabelText('Camera name'), 'garage')
-    fireEvent.change(screen.getByLabelText('Source config (JSON)'), {
-      target: { value: '{invalid-json' },
-    })
+    // When: Operator submits confirm step with invalid camera name
+    await openManualCameraCreateFlow(user)
+    await user.clear(screen.getByLabelText('Camera name'))
+    await user.type(screen.getByLabelText('Camera name'), 'garage camera')
     await user.click(screen.getByRole('button', { name: 'Create camera' }))
 
     // Then: Validation error is surfaced and no create mutation is sent
-    expect(screen.getByText('Source config must be valid JSON.')).toBeTruthy()
+    expect(
+      screen.getByText('Camera name may contain only letters, numbers, underscores, and hyphens.'),
+    ).toBeTruthy()
     expect(harness.createCamera).not.toHaveBeenCalled()
   })
 

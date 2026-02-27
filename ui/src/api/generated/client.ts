@@ -17,6 +17,8 @@ import type {
   HealthResponse,
   ListClipsQuery,
   PreflightResponse,
+  TestConnectionRequest,
+  TestConnectionResponse,
   ProbeRequest,
   ProbeResponse,
   RuntimeReloadResponse,
@@ -54,6 +56,10 @@ export interface GeneratedHomeSecClient {
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
   getSetupStatus(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<SetupStatusResponse>>
   runSetupPreflight(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<PreflightResponse>>
+  runSetupTestConnection(
+    payload: TestConnectionRequest,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<TestConnectionResponse>>
   getHealth(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<HealthResponse>>
   getStats(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<StatsResponse>>
   getDiagnostics(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<DiagnosticsResponse>>

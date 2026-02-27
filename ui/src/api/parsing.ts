@@ -11,6 +11,7 @@ import type {
   MediaProfileResponse,
   PreflightCheckResponse,
   PreflightResponse,
+  TestConnectionResponse,
   ProbeResponse,
   RuntimeReloadResponse,
   RuntimeState,
@@ -280,6 +281,24 @@ export function parsePreflightResponse(payload: unknown): PreflightResponse {
         throw new Error(`checks[${index}] invalid: ${(error as Error).message}`)
       }
     }),
+  }
+}
+
+export function parseTestConnectionResponse(payload: unknown): TestConnectionResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Test-connection response is not a JSON object')
+  }
+
+  const details = payload.details
+  if (details !== null && details !== undefined && !isJsonObject(details)) {
+    throw new Error('details must be an object when provided')
+  }
+
+  return {
+    success: expectBoolean(payload.success, 'success'),
+    message: expectString(payload.message, 'message'),
+    latency_ms: expectNullableNumber(payload.latency_ms, 'latency_ms'),
+    details: (details ?? null) as TestConnectionResponse['details'],
   }
 }
 

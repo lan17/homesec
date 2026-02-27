@@ -9,6 +9,8 @@ interface OnvifStreamSelectStepProps {
   createPending: boolean
   isMutating: boolean
   applyChangesImmediately: boolean
+  showApplyChangesSummary?: boolean
+  submitLabel?: string
   error: string | null
   onSelectProfile: (profileToken: string) => void
   onCameraNameChange: (value: string) => void
@@ -25,6 +27,8 @@ export function OnvifStreamSelectStep({
   createPending,
   isMutating,
   applyChangesImmediately,
+  showApplyChangesSummary = true,
+  submitLabel = 'Create camera',
   error,
   onSelectProfile,
   onCameraNameChange,
@@ -136,14 +140,16 @@ export function OnvifStreamSelectStep({
         />
       </label>
 
-      <p className="subtle">
-        Apply changes immediately: {applyChangesImmediately ? 'enabled' : 'disabled'}.
-      </p>
+      {showApplyChangesSummary ? (
+        <p className="subtle">
+          Apply changes immediately: {applyChangesImmediately ? 'enabled' : 'disabled'}.
+        </p>
+      ) : null}
       {error ? <p className="error-text">{error}</p> : null}
 
       <div className="inline-form__actions">
         <Button type="submit" disabled={!canSubmit}>
-          {createPending ? 'Creating...' : 'Create camera'}
+          {createPending ? 'Submitting...' : submitLabel}
         </Button>
       </div>
     </form>

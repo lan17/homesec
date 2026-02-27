@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState } from 'react'
 
 import { clearApiKey, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
 import { useCamerasQuery } from '../../api/hooks/useCamerasQuery'
@@ -6,18 +6,12 @@ import { useRuntimeStatusQuery } from '../../api/hooks/useRuntimeStatusQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
-import {
-  defaultSourceConfigForBackend,
-  parseSourceConfigJson,
-  type CameraBackend,
-} from './forms'
 import type { CameraCreate } from '../../api/generated/types'
 import { useCameraActions } from './hooks/useCameraActions'
 import { describeCameraError } from './presentation'
-import { CameraCreateForm } from './components/CameraCreateForm'
 import { RuntimeReloadBanner } from './components/RuntimeReloadBanner'
 import { CameraList } from './components/CameraList'
-import { OnvifDiscoveryWizard } from './components/OnvifDiscoveryWizard'
+import { CameraAddFlow } from './add-flow/CameraAddFlow'
 
 export function CamerasPage() {
   const camerasQuery = useCamerasQuery()
@@ -29,13 +23,8 @@ export function CamerasPage() {
     },
   })
 
-  const [cameraName, setCameraName] = useState('')
-  const [cameraEnabled, setCameraEnabled] = useState(true)
-  const [cameraBackend, setCameraBackend] = useState<CameraBackend>('rtsp')
-  const [sourceConfigRaw, setSourceConfigRaw] = useState(defaultSourceConfigForBackend('rtsp'))
-  const [createFormError, setCreateFormError] = useState<string | null>(null)
   const [applyChangesImmediately, setApplyChangesImmediately] = useState(false)
-  const [showOnvifWizard, setShowOnvifWizard] = useState(false)
+  const [showCameraAddFlow, setShowCameraAddFlow] = useState(false)
 
   const cameras = useMemo(() => camerasQuery.data ?? [], [camerasQuery.data])
   const runtimeStatus = runtimeStatusQuery.data
@@ -60,40 +49,6 @@ export function CamerasPage() {
   async function clearStoredApiKey(): Promise<void> {
     clearApiKey()
     await refreshAll()
-  }
-
-  function updateBackend(nextBackend: CameraBackend): void {
-    setCameraBackend(nextBackend)
-    setSourceConfigRaw(defaultSourceConfigForBackend(nextBackend))
-    setCreateFormError(null)
-  }
-
-  async function handleCreateCamera(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-
-    const normalizedName = cameraName.trim()
-    if (!normalizedName) {
-      setCreateFormError('Camera name is required.')
-      return
-    }
-
-    const parsedSourceConfig = parseSourceConfigJson(sourceConfigRaw)
-    if (!parsedSourceConfig.ok) {
-      setCreateFormError(parsedSourceConfig.message)
-      return
-    }
-
-    setCreateFormError(null)
-    const createResult = await cameraActions.createCamera({
-      name: normalizedName,
-      enabled: cameraEnabled,
-      source_backend: cameraBackend,
-      source_config: parsedSourceConfig.value,
-    }, applyChangesImmediately)
-    if (!createResult.ok) {
-      return
-    }
-    setCameraName('')
   }
 
   async function handleToggleEnabled(camera: (typeof cameras)[number]): Promise<void> {
@@ -182,54 +137,35 @@ export function CamerasPage() {
         </Card>
       ) : null}
 
-      <CameraCreateForm
-        cameraName={cameraName}
-        cameraEnabled={cameraEnabled}
-        cameraBackend={cameraBackend}
-        sourceConfigRaw={sourceConfigRaw}
-        createFormError={createFormError}
-        applyChangesImmediately={applyChangesImmediately}
-        isMutating={cameraActions.isMutating}
-        createPending={cameraActions.pending.create}
-        onSubmit={(event) => {
-          void handleCreateCamera(event)
-        }}
-        onCameraNameChange={setCameraName}
-        onCameraEnabledChange={setCameraEnabled}
-        onCameraBackendChange={updateBackend}
-        onSourceConfigChange={setSourceConfigRaw}
-        onApplyChangesImmediatelyChange={setApplyChangesImmediately}
-        onResetTemplate={() => {
-          setSourceConfigRaw(defaultSourceConfigForBackend(cameraBackend))
-        }}
-      />
-
-      {!unauthorized ? (
-        showOnvifWizard ? (
-          <OnvifDiscoveryWizard
-            applyChangesImmediately={applyChangesImmediately}
-            createPending={cameraActions.pending.create}
-            isMutating={cameraActions.isMutating}
-            onCreateCamera={cameraActions.createCamera}
-            onClose={() => {
-              setShowOnvifWizard(false)
-            }}
-          />
-        ) : (
-          <Card title="Discover Camera (ONVIF)" subtitle="Auto-discover and probe ONVIF cameras">
-            <div className="inline-form__actions">
-              <Button
-                onClick={() => {
-                  setShowOnvifWizard(true)
-                }}
-                disabled={cameraActions.isMutating}
-              >
-                Discover cameras
-              </Button>
-            </div>
-          </Card>
-        )
-      ) : null}
+      {showCameraAddFlow ? (
+        <CameraAddFlow
+          existingCameraNames={cameras.map((camera) => camera.name)}
+          defaultApplyChangesImmediately={applyChangesImmediately}
+          onApplyChangesImmediatelyChange={setApplyChangesImmediately}
+          onComplete={(payload, options) =>
+            cameraActions.createCamera(payload, options.applyChangesImmediately)
+          }
+          onDone={() => {
+            setShowCameraAddFlow(false)
+          }}
+          onCancel={() => {
+            setShowCameraAddFlow(false)
+          }}
+        />
+      ) : (
+        <Card title="Add Camera" subtitle="Launch reusable camera onboarding flow">
+          <div className="inline-form__actions">
+            <Button
+              onClick={() => {
+                setShowCameraAddFlow(true)
+              }}
+              disabled={cameraActions.isMutating}
+            >
+              Add camera
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <RuntimeReloadBanner
         hasPendingReload={cameraActions.hasPendingReload}
