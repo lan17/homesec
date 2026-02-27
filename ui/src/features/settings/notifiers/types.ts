@@ -28,7 +28,7 @@ export interface NotifierFormState {
 }
 
 export interface AlertPolicyFormState {
-  selectedRiskLevels: RiskLevel[]
+  minRiskLevel: RiskLevel
 }
 
 export interface NotificationStepData {
@@ -58,19 +58,11 @@ export interface NotifierBackendDef {
   component: (props: NotifierBackendFormProps) => JSX.Element
 }
 
-function normalizeRiskLevels(values: readonly string[]): RiskLevel[] {
-  const normalized: RiskLevel[] = []
-  for (const candidate of ALERT_POLICY_RISK_LEVELS) {
-    if (values.includes(candidate)) {
-      normalized.push(candidate)
-    }
+function normalizeRiskLevel(value: unknown): RiskLevel {
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'critical') {
+    return value
   }
-  return normalized
-}
-
-function lowestRiskLevel(values: readonly RiskLevel[]): RiskLevel {
-  const normalized = normalizeRiskLevels(values)
-  return normalized[0] ?? 'high'
+  return 'high'
 }
 
 export function defaultNotifierFormState(
@@ -90,7 +82,7 @@ export function defaultNotifierFormState(
 
 export function defaultAlertPolicyFormState(): AlertPolicyFormState {
   return {
-    selectedRiskLevels: ['high', 'critical'],
+    minRiskLevel: 'high',
   }
 }
 
@@ -122,17 +114,7 @@ export function notificationFormStateFromStepData(
     })
   }
 
-  const risk = value?.alert_policy?.config?.min_risk_level
-  const selectedRiskLevels: RiskLevel[] =
-    risk === 'low'
-      ? ['low', 'medium', 'high', 'critical']
-      : risk === 'medium'
-        ? ['medium', 'high', 'critical']
-        : risk === 'high'
-          ? ['high', 'critical']
-          : risk === 'critical'
-            ? ['critical']
-            : defaultAlertPolicyFormState().selectedRiskLevels
+  const risk = normalizeRiskLevel(value?.alert_policy?.config?.min_risk_level)
 
   return {
     notifiers: {
@@ -143,14 +125,13 @@ export function notificationFormStateFromStepData(
       ),
     },
     alertPolicy: {
-      selectedRiskLevels,
+      minRiskLevel: risk,
     },
   }
 }
 
 export function validateNotificationState(
   value: NotifierFormState,
-  alertPolicy: AlertPolicyFormState,
   validators: Record<NotifierBackend, (config: Record<string, unknown>) => string | null>,
 ): string | null {
   const enabledBackends = enabledNotifierBackends(value)
@@ -161,13 +142,6 @@ export function validateNotificationState(
     if (error) {
       return error
     }
-  }
-
-  if (
-    enabledBackends.length > 0
-    && normalizeRiskLevels(alertPolicy.selectedRiskLevels).length === 0
-  ) {
-    return 'Select at least one risk level for alert policy.'
   }
 
   return null
@@ -197,12 +171,16 @@ export function buildNotificationStepData(
 
   return {
     notifiers,
-    alert_policy: {
-      backend: 'default',
-      enabled: true,
-      config: {
-        min_risk_level: lowestRiskLevel(alertPolicy.selectedRiskLevels),
-      },
+    alert_policy: buildAlertPolicyConfigEntry(alertPolicy.minRiskLevel),
+  }
+}
+
+export function buildAlertPolicyConfigEntry(minRiskLevel: RiskLevel): NotificationStepData['alert_policy'] {
+  return {
+    backend: 'default',
+    enabled: true,
+    config: {
+      min_risk_level: minRiskLevel,
     },
   }
 }

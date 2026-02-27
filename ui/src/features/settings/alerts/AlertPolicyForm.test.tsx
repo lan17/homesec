@@ -13,14 +13,14 @@ describe('AlertPolicyForm', () => {
     cleanup()
   })
 
-  it('toggles selected risk levels for alert policy baseline', async () => {
-    // Given: Alert policy defaults to high and critical selections
+  it('updates minimum risk threshold for alert policy baseline', async () => {
+    // Given: Alert policy defaults to high threshold
     const onChange = vi.fn()
     const user = userEvent.setup()
 
     function Harness() {
       const [value, setValue] = useState<AlertPolicyFormState>({
-        selectedRiskLevels: ['high', 'critical'],
+        minRiskLevel: 'high',
       })
       return (
         <AlertPolicyForm
@@ -35,13 +35,13 @@ describe('AlertPolicyForm', () => {
 
     render(<Harness />)
 
-    // When: Operator enables medium risk notifications
-    await user.click(screen.getByRole('checkbox', { name: 'medium' }))
+    // When: Operator lowers threshold to medium
+    await user.selectOptions(screen.getByLabelText('Minimum risk level'), 'medium')
 
-    // Then: Form emits updated selected risk levels
+    // Then: Form emits updated threshold value
     expect(onChange).toHaveBeenCalled()
     expect(onChange.mock.calls.at(-1)?.[0]).toEqual({
-      selectedRiskLevels: ['high', 'critical', 'medium'],
+      minRiskLevel: 'medium',
     })
   })
 })

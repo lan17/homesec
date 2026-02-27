@@ -13,6 +13,7 @@ import {
   notificationFormStateFromStepData,
   type NotificationStepData,
   type NotifierBackend,
+  type NotifierFormState,
   validateNotificationState,
 } from '../../settings/notifiers/types'
 import { TestConnectionButton } from '../../shared/TestConnectionButton'
@@ -36,6 +37,24 @@ function emptyNotifierResults(): NotifierResultByBackend {
   return Object.fromEntries(entries) as NotifierResultByBackend
 }
 
+function clearStaleNotifierResults(
+  currentNotifiers: NotifierFormState,
+  nextNotifiers: NotifierFormState,
+  currentResults: NotifierResultByBackend,
+): NotifierResultByBackend {
+  const nextResults = { ...currentResults }
+  for (const backendId of NOTIFIER_BACKEND_IDS) {
+    const previous = currentNotifiers[backendId]
+    const next = nextNotifiers[backendId]
+    const enabledChanged = previous.enabled !== next.enabled
+    const configChanged = previous.config !== next.config
+    if (!next.enabled || enabledChanged || configChanged) {
+      nextResults[backendId] = null
+    }
+  }
+  return nextResults
+}
+
 export function NotificationStep({
   initialData,
   onComplete,
@@ -53,7 +72,7 @@ export function NotificationStep({
   )
 
   function handleSaveAndContinue(): void {
-    const maybeError = validateNotificationState(notifiers, alertPolicy, {
+    const maybeError = validateNotificationState(notifiers, {
       mqtt: NOTIFIER_BACKENDS.mqtt.validate,
       sendgrid_email: NOTIFIER_BACKENDS.sendgrid_email.validate,
     })
@@ -73,22 +92,10 @@ export function NotificationStep({
       <NotifierConfigForm
         value={notifiers}
         onChange={(nextValue) => {
-          setNotifiers((currentValue) => {
-            setResultsByBackend((currentResults) => {
-              const nextResults = { ...currentResults }
-              for (const backendId of NOTIFIER_BACKEND_IDS) {
-                const previous = currentValue[backendId]
-                const next = nextValue[backendId]
-                const enabledChanged = previous.enabled !== next.enabled
-                const configChanged = previous.config !== next.config
-                if (!next.enabled || enabledChanged || configChanged) {
-                  nextResults[backendId] = null
-                }
-              }
-              return nextResults
-            })
-            return nextValue
-          })
+          setResultsByBackend((currentResults) =>
+            clearStaleNotifierResults(notifiers, nextValue, currentResults),
+          )
+          setNotifiers(nextValue)
           setValidationError(null)
         }}
       />
@@ -139,11 +146,6 @@ export function NotificationStep({
       {enabledBackends.length === 0 ? (
         <p className="subtle">
           No notifier selected. You can still continue and add one later.
-        </p>
-      ) : null}
-      {enabledBackends.length > 0 && alertPolicy.selectedRiskLevels.length === 0 ? (
-        <p className="subtle">
-          Choose at least one risk level to decide when enabled notifiers should trigger.
         </p>
       ) : null}
     </section>

@@ -159,8 +159,8 @@ describe('NotificationStep', () => {
     expect(onComplete).not.toHaveBeenCalled()
   })
 
-  it('hydrates notifier and alert-policy fields from initial step data', () => {
-    // Given: Wizard step draft with mqtt config and critical-only alert policy
+  it('hydrates notifier and alert-policy threshold from initial step data', () => {
+    // Given: Wizard step draft with mqtt config and critical threshold
     render(
       <NotificationStep
         initialData={{
@@ -191,15 +191,13 @@ describe('NotificationStep', () => {
 
     // When: Step renders with restored wizard data
     const mqttEnabled = screen.getByRole('checkbox', { name: 'MQTT' }) as HTMLInputElement
-    const criticalRisk = screen.getByRole('checkbox', { name: 'critical' }) as HTMLInputElement
-    const highRisk = screen.getByRole('checkbox', { name: 'high' }) as HTMLInputElement
     const mqttHost = screen.getByLabelText('MQTT host') as HTMLInputElement
+    const minRiskLevel = screen.getByLabelText('Minimum risk level') as HTMLSelectElement
 
-    // Then: Form fields and risk selections match persisted draft payload
+    // Then: Form fields and threshold match persisted draft payload
     expect(mqttEnabled.checked).toBe(true)
     expect(mqttHost.value).toBe('broker.internal')
-    expect(criticalRisk.checked).toBe(true)
-    expect(highRisk.checked).toBe(false)
+    expect(minRiskLevel.value).toBe('critical')
   })
 
   it('clears test results when notifier config changes or backend is toggled', async () => {
