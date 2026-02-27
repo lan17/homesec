@@ -2,8 +2,10 @@ import { useNavigate } from 'react-router-dom'
 
 import { Button } from '../../components/ui/Button'
 import type { CameraCreate } from '../../api/generated/types'
+import type { StorageFormState } from '../settings/storage/types'
 import { SetupWizardShell } from './SetupWizardShell'
 import { CameraStep } from './steps/CameraStep'
+import { StorageStep } from './steps/StorageStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 import type { WizardStepDef } from './types'
 import { useWizardState } from './useWizardState'
@@ -56,6 +58,10 @@ interface CameraStepDraft {
   camera: CameraCreate
 }
 
+interface StorageStepDraft {
+  storage: StorageFormState
+}
+
 function toStepDraft(value: unknown): StepDraft {
   if (
     value &&
@@ -87,6 +93,40 @@ function toCameraStepDraft(value: unknown): CameraStepDraft | null {
   return null
 }
 
+function toStorageStepDraft(value: unknown): StorageStepDraft | null {
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    'storage' in value
+  ) {
+    const storageValue = (value as { storage: unknown }).storage
+    if (
+      storageValue &&
+      typeof storageValue === 'object' &&
+      !Array.isArray(storageValue) &&
+      'backend' in storageValue &&
+      'config' in storageValue
+    ) {
+      const typed = storageValue as { backend: unknown; config: unknown }
+      if (
+        (typed.backend === 'local' || typed.backend === 'dropbox')
+        && typed.config
+        && typeof typed.config === 'object'
+        && !Array.isArray(typed.config)
+      ) {
+        return {
+          storage: {
+            backend: typed.backend,
+            config: typed.config as Record<string, unknown>,
+          },
+        }
+      }
+    }
+  }
+  return null
+}
+
 function statusText(isComplete: boolean, isSkipped: boolean): string {
   if (isComplete) {
     return 'Completed'
@@ -112,7 +152,9 @@ export function SetupPage() {
   const skippedCount = state.skippedSteps.size
   const isWelcomeStep = activeStep.id === 'welcome'
   const isCameraStep = activeStep.id === 'camera'
+  const isStorageStep = activeStep.id === 'storage'
   const cameraStepDraft = toCameraStepDraft(state.stepData.camera)
+  const storageStepDraft = toStorageStepDraft(state.stepData.storage)
 
   function handleNoteChange(note: string): void {
     updateStepData(activeStep.id, { note })
@@ -132,6 +174,19 @@ export function SetupPage() {
   }
 
   function handleCameraStepSkip(): void {
+    skipStep()
+  }
+
+  function handleStorageStepUpdateData(storage: StorageFormState): void {
+    updateStepData('storage', { storage }, { persist: false })
+  }
+
+  function handleStorageStepComplete(): void {
+    markComplete('storage')
+    goNext()
+  }
+
+  function handleStorageStepSkip(): void {
     skipStep()
   }
 
@@ -160,6 +215,16 @@ export function SetupPage() {
           onUpdateData={handleCameraStepUpdateData}
           onComplete={handleCameraStepComplete}
           onSkip={handleCameraStepSkip}
+        />
+      )
+    }
+    if (isStorageStep) {
+      return (
+        <StorageStep
+          initialData={storageStepDraft?.storage ?? null}
+          onUpdateData={handleStorageStepUpdateData}
+          onComplete={handleStorageStepComplete}
+          onSkip={handleStorageStepSkip}
         />
       )
     }

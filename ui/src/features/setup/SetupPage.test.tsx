@@ -45,6 +45,10 @@ vi.mock('./steps/CameraStep', () => ({
   ),
 }))
 
+vi.mock('./steps/StorageStep', () => ({
+  StorageStep: () => <section>Mock storage step</section>,
+}))
+
 function renderSetupPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -88,6 +92,7 @@ describe('SetupPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Storage' })).toBeTruthy()
     })
+    expect(screen.getByText('Mock storage step')).toBeTruthy()
     const raw = window.localStorage.getItem(WIZARD_STATE_STORAGE_KEY)
     expect(raw).toBeTruthy()
     const parsed = JSON.parse(raw ?? '{}') as { stepData?: Record<string, unknown> }
