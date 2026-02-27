@@ -1,7 +1,9 @@
 import { useNavigate } from 'react-router-dom'
 
 import { Button } from '../../components/ui/Button'
+import type { CameraCreate } from '../../api/generated/types'
 import { SetupWizardShell } from './SetupWizardShell'
+import { CameraStep } from './steps/CameraStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 import type { WizardStepDef } from './types'
 import { useWizardState } from './useWizardState'
@@ -50,6 +52,10 @@ interface StepDraft {
   note: string
 }
 
+interface CameraStepDraft {
+  camera: CameraCreate
+}
+
 function toStepDraft(value: unknown): StepDraft {
   if (
     value &&
@@ -62,6 +68,23 @@ function toStepDraft(value: unknown): StepDraft {
     }
   }
   return { note: '' }
+}
+
+function toCameraStepDraft(value: unknown): CameraStepDraft | null {
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    'camera' in value
+  ) {
+    const cameraValue = (value as { camera: unknown }).camera
+    if (cameraValue && typeof cameraValue === 'object' && !Array.isArray(cameraValue)) {
+      return {
+        camera: cameraValue as CameraCreate,
+      }
+    }
+  }
+  return null
 }
 
 function statusText(isComplete: boolean, isSkipped: boolean): string {
@@ -88,6 +111,8 @@ export function SetupPage() {
   const completedCount = state.completedSteps.size
   const skippedCount = state.skippedSteps.size
   const isWelcomeStep = activeStep.id === 'welcome'
+  const isCameraStep = activeStep.id === 'camera'
+  const cameraStepDraft = toCameraStepDraft(state.stepData.camera)
 
   function handleNoteChange(note: string): void {
     updateStepData(activeStep.id, { note })
@@ -95,6 +120,19 @@ export function SetupPage() {
 
   function handleMarkComplete(): void {
     markComplete(activeStep.id)
+  }
+
+  function handleCameraStepUpdateData(camera: CameraCreate): void {
+    updateStepData('camera', { camera }, { persist: false })
+  }
+
+  function handleCameraStepComplete(): void {
+    markComplete('camera')
+    goNext()
+  }
+
+  function handleCameraStepSkip(): void {
+    skipStep()
   }
 
   function handleNext(): void {
@@ -112,6 +150,18 @@ export function SetupPage() {
   function renderActiveStepContent() {
     if (isWelcomeStep) {
       return <WelcomeStep isComplete={isComplete} onComplete={handleMarkComplete} />
+    }
+    if (isCameraStep) {
+      return (
+        <CameraStep
+          existingCameraNames={
+            cameraStepDraft ? [cameraStepDraft.camera.name] : []
+          }
+          onUpdateData={handleCameraStepUpdateData}
+          onComplete={handleCameraStepComplete}
+          onSkip={handleCameraStepSkip}
+        />
+      )
     }
 
     return (
