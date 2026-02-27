@@ -2,6 +2,8 @@ import type { ListClipsQuery } from '../generated/types'
 
 export const QUERY_KEYS = {
   cameras: ['cameras'] as const,
+  storage: ['storage'] as const,
+  storageBackends: ['storage-backends'] as const,
   setupStatus: ['setup-status'] as const,
   runtimeStatus: ['runtime-status'] as const,
   health: ['health'] as const,

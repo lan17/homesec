@@ -7,6 +7,7 @@ import { ClipsPage } from '../features/clips/ClipsPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
 import { NotFoundPage } from '../features/not-found/NotFoundPage'
 import { SetupPage } from '../features/setup/SetupPage'
+import { StoragePage } from '../features/storage/StoragePage'
 
 export function AppRouter() {
   return (
@@ -15,6 +16,7 @@ export function AppRouter() {
       <Route element={<AppShell />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/cameras" element={<CamerasPage />} />
+        <Route path="/storage" element={<StoragePage />} />
         <Route path="/clips" element={<ClipsPage />} />
         <Route path="/clips/:clipId" element={<ClipDetailPage />} />
         <Route path="/home" element={<Navigate to="/" replace />} />

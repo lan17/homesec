@@ -1082,6 +1082,175 @@ def test_get_config_returns_empty_mapping_when_redaction_result_is_not_mapping(
     assert response.json() == {"config": {}}
 
 
+def test_get_storage_returns_active_storage_config(tmp_path) -> None:
+    """GET /storage should return active storage backend config."""
+    # Given: A config with storage configuration
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Requesting storage config
+    response = client.get("/api/v1/storage")
+
+    # Then: Route returns active storage backend and config
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend"] == "dropbox"
+    assert payload["config"]["root"] == "/homecam"
+    assert payload["paths"]["clips_dir"] == "clips"
+
+
+def test_get_storage_redacts_sensitive_url_credentials(tmp_path) -> None:
+    """GET /storage should redact URL credentials in storage config payload."""
+    # Given: A storage config with URL credentials embedded in web_url_prefix
+    payload = {
+        "version": 1,
+        "cameras": [
+            {
+                "name": "front",
+                "enabled": True,
+                "source": {"backend": "local_folder", "config": {"watch_dir": "/tmp"}},
+            }
+        ],
+        "storage": {
+            "backend": "dropbox",
+            "config": {
+                "root": "/homecam",
+                "web_url_prefix": "https://user:pass@example.com/home",
+            },
+        },
+        "state_store": {"dsn": "postgresql://user:pass@localhost/db"},
+        "notifiers": [{"backend": "mqtt", "config": {"host": "localhost"}}],
+        "filter": {"backend": "yolo", "config": {}},
+        "vlm": {"backend": "openai", "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"}},
+        "alert_policy": {"backend": "default", "config": {}},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    manager = ConfigManager(path)
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Requesting storage config
+    response = client.get("/api/v1/storage")
+
+    # Then: Credentials are redacted from URL-valued config fields
+    assert response.status_code == 200
+    storage_config = response.json()["config"]
+    assert storage_config["web_url_prefix"] == "https://***redacted***@example.com/home"
+
+
+def test_patch_storage_updates_storage_config(tmp_path) -> None:
+    """PATCH /storage should persist storage config updates."""
+    # Given: A config with existing storage settings
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Patching storage root path
+    response = client.patch(
+        "/api/v1/storage",
+        json={"config": {"root": "/new-homecam"}},
+    )
+
+    # Then: Update succeeds and persisted config reflects the patch
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["restart_required"] is True
+    assert payload["storage"]["backend"] == "dropbox"
+    assert payload["storage"]["config"]["root"] == "/new-homecam"
+
+
+def test_patch_storage_apply_changes_triggers_runtime_reload(tmp_path) -> None:
+    """PATCH /storage should optionally trigger runtime reload when apply_changes=true."""
+    # Given: A storage update and runtime reload request accepted by app
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_request=RuntimeReloadRequest(
+            accepted=True,
+            message="Runtime reload started",
+            target_generation=11,
+        ),
+    )
+    client = _client(app)
+
+    # When: Patching storage with apply_changes enabled
+    response = client.patch(
+        "/api/v1/storage?apply_changes=true",
+        json={"config": {"root": "/apply-now"}},
+    )
+
+    # Then: Route returns runtime reload payload and no restart-required banner
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["restart_required"] is False
+    assert payload["runtime_reload"]["accepted"] is True
+    assert payload["runtime_reload"]["target_generation"] == 11
+    assert app.runtime_reload_calls == 1
+
+
+def test_patch_storage_invalid_backend_returns_400(tmp_path) -> None:
+    """PATCH /storage should return canonical 400 for invalid backend updates."""
+    # Given: A config with valid initial storage settings
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Switching storage backend to an unknown backend
+    response = client.patch(
+        "/api/v1/storage",
+        json={"backend": "unknown_storage"},
+    )
+
+    # Then: Route returns canonical invalid storage config error
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "STORAGE_CONFIG_INVALID"
+
+
+def test_patch_storage_redacted_placeholder_returns_400(tmp_path) -> None:
+    """PATCH /storage should reject redacted placeholders in config patch payloads."""
+    # Given: A config with valid initial storage settings
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Sending a redacted placeholder in storage config patch
+    response = client.patch(
+        "/api/v1/storage",
+        json={"config": {"root": "***redacted***"}},
+    )
+
+    # Then: Route returns canonical invalid storage config error
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "STORAGE_CONFIG_INVALID"
+
+
+def test_get_storage_backends_lists_plugin_metadata(tmp_path) -> None:
+    """GET /storage/backends should list plugin-discovered storage backend metadata."""
+    # Given: A running app with plugin discovery completed during app creation
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Requesting storage backend metadata
+    response = client.get("/api/v1/storage/backends")
+
+    # Then: Route returns metadata entries for built-in storage backends
+    assert response.status_code == 200
+    payload = response.json()
+    backend_ids = {entry["backend"] for entry in payload}
+    assert "local" in backend_ids
+    assert "dropbox" in backend_ids
+    local = next(entry for entry in payload if entry["backend"] == "local")
+    field_names = {field["name"] for field in local["fields"]}
+    assert "root" in field_names
+
+
 def test_cors_disables_credentials_for_wildcard_origins(tmp_path) -> None:
     """CORS should disable credentials when wildcard origins are configured."""
     # Given a server config with wildcard origin

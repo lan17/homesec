@@ -26,3 +26,20 @@ class CameraConfigInvalidError(CameraMutationError):
 
 class CameraConfigRedactedPlaceholderError(CameraConfigInvalidError):
     """Raised when a source_config mutation attempts to persist redacted placeholders."""
+
+
+class StorageMutationError(RuntimeError):
+    """Base error for storage configuration mutations."""
+
+    def __init__(self, message: str, *, cause: Exception | None = None) -> None:
+        super().__init__(message)
+        if cause is not None:
+            self.__cause__ = cause
+
+
+class StorageConfigInvalidError(StorageMutationError):
+    """Raised when a storage config mutation fails validation."""
+
+
+class StorageConfigRedactedPlaceholderError(StorageConfigInvalidError):
+    """Raised when a storage config mutation attempts to persist redacted placeholders."""

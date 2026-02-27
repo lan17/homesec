@@ -1,6 +1,7 @@
 import type {
   ApiRequestOptions,
   CameraMutationOptions,
+  StorageMutationOptions,
   GeneratedHomeSecClient,
 } from './generated/client'
 import type {
@@ -11,6 +12,10 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  StorageBackendsResponse,
+  StorageChangeResponse,
+  StorageResponse,
+  StorageUpdate,
   DiscoverRequest,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
@@ -38,6 +43,9 @@ import {
   parseClipMediaTokenResponse,
   parseClipResponse,
   parseConfigChangeResponse,
+  parseStorageBackendsResponse,
+  parseStorageChangeResponse,
+  parseStorageResponse,
   parseOnvifDiscoverResponse,
   parseOnvifProbeResponse,
   parseDiagnosticsResponse,
@@ -61,6 +69,7 @@ export type DiagnosticsSnapshot = ApiSnapshot<DiagnosticsResponse>
 export type ClipListSnapshot = ApiSnapshot<ClipListResponse>
 export type ClipSnapshot = ApiSnapshot<ClipResponse>
 export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
+export type StorageChangeSnapshot = ApiSnapshot<StorageChangeResponse>
 export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
 export type SetupStatusSnapshot = ApiSnapshot<SetupStatusResponse>
@@ -164,6 +173,60 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid delete-camera response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async getStorage(options: ApiRequestOptions = {}): Promise<StorageResponse> {
+    const response = await this.httpClient.requestJson('/api/v1/storage', options)
+
+    try {
+      return parseStorageResponse(response.payload)
+    } catch {
+      throw new APIError(
+        'Invalid storage response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async listStorageBackends(options: ApiRequestOptions = {}): Promise<StorageBackendsResponse> {
+    const response = await this.httpClient.requestJson('/api/v1/storage/backends', options)
+
+    try {
+      return parseStorageBackendsResponse(response.payload)
+    } catch {
+      throw new APIError(
+        'Invalid storage backends response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async updateStorage(
+    payload: StorageUpdate,
+    options: StorageMutationOptions = {},
+  ): Promise<StorageChangeSnapshot> {
+    const { applyChanges = false, ...requestOptions } = options
+    const response = await this.httpClient.requestJson('/api/v1/storage', {
+      ...requestOptions,
+      query: applyChanges ? { apply_changes: true } : undefined,
+      method: 'PATCH',
+      body: payload,
+    })
+
+    try {
+      return withHttpStatus(parseStorageChangeResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid update-storage response payload',
         response.status,
         response.payload,
         null,

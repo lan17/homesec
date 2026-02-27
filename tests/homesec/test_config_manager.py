@@ -14,6 +14,7 @@ from homesec.config.errors import (
     CameraConfigInvalidError,
     CameraConfigRedactedPlaceholderError,
     CameraNotFoundError,
+    StorageConfigRedactedPlaceholderError,
 )
 from homesec.config.loader import load_config_from_dict
 from homesec.config.manager import ConfigManager
@@ -347,6 +348,92 @@ async def test_config_manager_update_camera_allows_null_clear_for_optional_sourc
     updated = next(camera for camera in config.cameras if camera.name == "front")
     assert "detect_rtsp_url" not in updated.source.config
     assert updated.source.config["rtsp_url"] == "rtsp://user:pass@camera.local/stream"
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_storage_merges_patch_and_preserves_existing_keys(
+    tmp_path: Path,
+) -> None:
+    """Storage updates should merge config patches instead of replacing full config."""
+    # Given: A config with a dropbox storage backend and multiple config keys
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(config_path, cameras=[])
+    raw = yaml.safe_load(config_path.read_text())
+    raw["storage"] = {
+        "backend": "dropbox",
+        "config": {
+            "root": "/homecam",
+            "token_env": "DROPBOX_TOKEN",
+            "web_url_prefix": "https://www.dropbox.com/home",
+        },
+    }
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    # When: Applying a partial storage patch that changes only root
+    await manager.update_storage(
+        storage_backend=None,
+        storage_config={"root": "/new-homecam"},
+    )
+
+    # Then: Existing unrelated storage keys remain and only patched value changes
+    config = manager.get_config()
+    assert config.storage.backend == "dropbox"
+    assert config.storage.config["root"] == "/new-homecam"
+    assert config.storage.config["token_env"] == "DROPBOX_TOKEN"
+    assert config.storage.config["web_url_prefix"] == "https://www.dropbox.com/home"
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_storage_rejects_redacted_placeholder_values(
+    tmp_path: Path,
+) -> None:
+    """Storage updates should reject redacted placeholders in config patches."""
+    # Given: A config with persisted storage values
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(config_path, cameras=[])
+    raw = yaml.safe_load(config_path.read_text())
+    raw["storage"] = {
+        "backend": "dropbox",
+        "config": {
+            "root": "/homecam",
+            "token_env": "DROPBOX_TOKEN",
+        },
+    }
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    # When/Then: Applying a patch containing redacted placeholder marker is rejected
+    with pytest.raises(StorageConfigRedactedPlaceholderError):
+        await manager.update_storage(
+            storage_backend=None,
+            storage_config={"root": "***redacted***"},
+        )
+
+    # Then: Persisted storage config remains unchanged
+    config = manager.get_config()
+    assert config.storage.backend == "dropbox"
+    assert config.storage.config["root"] == "/homecam"
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_storage_supports_backend_switch_with_new_config(
+    tmp_path: Path,
+) -> None:
+    """Storage updates should allow backend switches with valid replacement config."""
+    # Given: A config with dropbox storage
+    config_path = tmp_path / "config.yaml"
+    manager = _write_config(config_path, cameras=[])
+
+    # When: Switching storage backend to local with a local storage config patch
+    await manager.update_storage(
+        storage_backend="local",
+        storage_config={"root": "./storage"},
+    )
+
+    # Then: Backend and config are updated to the new storage type
+    config = manager.get_config()
+    assert config.storage.backend == "local"
+    assert config.storage.config["root"] == "./storage"
+    assert "token_env" not in config.storage.config
 
 
 @pytest.mark.asyncio
