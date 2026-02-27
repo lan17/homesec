@@ -37,6 +37,7 @@ from homesec.runtime.models import (
 )
 from homesec.runtime.subprocess_controller import SubprocessRuntimeHandle
 from homesec.sources.local_folder import LocalFolderSourceConfig
+from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
 class _StubStorage:
@@ -217,6 +218,7 @@ async def test_application_wires_runtime_and_api(
         ]
     )
     app = Application(config_path=__file__)
+    config.server = ensure_stub_ui_dist(config.server)
     app._config = config
 
     # When: Creating components
