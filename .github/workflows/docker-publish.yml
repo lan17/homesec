@@ -1,4 +1,4 @@
-name: Publish Docker Image
+name: Publish Docker Artifacts
 
 on:
   push:
@@ -24,12 +24,18 @@ jobs:
 
     env:
       IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE }}
+      COMPOSE_FILE: docker-compose.oci.yml
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+        with:
+          version: latest
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -65,6 +71,22 @@ jobs:
 
           echo "BRANCH_TAG=$tag" >> "$GITHUB_ENV"
 
+      - name: Resolve compose artifact name
+        run: |
+          override="${{ vars.DOCKERHUB_COMPOSE_ARTIFACT }}"
+          if [ -n "$override" ]; then
+            artifact="$override"
+          else
+            image="${IMAGE_NAME}"
+            if [[ "$image" == */* ]]; then
+              artifact="${image%/*}/${image##*/}-compose"
+            else
+              artifact="${image}-compose"
+            fi
+          fi
+
+          echo "COMPOSE_ARTIFACT_NAME=$artifact" >> "$GITHUB_ENV"
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -84,3 +106,24 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Validate publish compose file
+        run: docker compose -f "$COMPOSE_FILE" config >/dev/null
+
+      - name: Publish compose artifact (main)
+        if: github.ref == 'refs/heads/main'
+        env:
+          HOMESEC_IMAGE: ${{ env.IMAGE_NAME }}:latest
+        run: docker compose -f "$COMPOSE_FILE" publish "${COMPOSE_ARTIFACT_NAME}:latest"
+
+      - name: Publish compose artifact (release)
+        if: github.event_name == 'release'
+        env:
+          HOMESEC_IMAGE: ${{ env.IMAGE_NAME }}:${{ env.RELEASE_VERSION }}
+        run: docker compose -f "$COMPOSE_FILE" publish "${COMPOSE_ARTIFACT_NAME}:${RELEASE_VERSION}"
+
+      - name: Publish compose artifact (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          HOMESEC_IMAGE: ${{ env.IMAGE_NAME }}:${{ env.BRANCH_TAG }}
+        run: docker compose -f "$COMPOSE_FILE" publish "${COMPOSE_ARTIFACT_NAME}:${BRANCH_TAG}"

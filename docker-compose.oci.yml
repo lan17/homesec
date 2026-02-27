@@ -1,0 +1,40 @@
+services:
+  homesec:
+    image: ${HOMESEC_IMAGE:-leva/homesec:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${HOMESEC_PORT:-8081}:8081"
+    volumes:
+      - homesec_config:/config
+      - homesec_recordings:/data/recordings
+      - homesec_storage:/data/storage
+      - homesec_yolo_cache:/app/yolo_cache
+    environment:
+      DB_DSN: postgresql+asyncpg://${POSTGRES_USER:-homesec}:${POSTGRES_PASSWORD:-homesec}@postgres:5432/${POSTGRES_DB:-homesec}
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-homesec}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-homesec}
+      POSTGRES_DB: ${POSTGRES_DB:-homesec}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - homesec_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-homesec} -d ${POSTGRES_DB:-homesec}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  homesec_config:
+  homesec_recordings:
+  homesec_storage:
+  homesec_yolo_cache:
+  homesec_pgdata:
