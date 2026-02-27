@@ -2,6 +2,48 @@
 
 <!-- version list -->
 
+## v1.7.0 (2026-02-27)
+
+### Bug Fixes
+
+- Clean setup probe timeout/error handling ([#33](https://github.com/lan17/homesec/pull/33),
+  [`81631d6`](https://github.com/lan17/homesec/commit/81631d600135897710f1ce8a79082aa1f373ac79))
+
+- **setup**: Finalize in-process without killing FastAPI
+  ([`969b99f`](https://github.com/lan17/homesec/commit/969b99fda50699b3b6d26076af41b8529a880f4c))
+
+### Chores
+
+- Fixup setup.py
+  ([`9b29b13`](https://github.com/lan17/homesec/commit/9b29b13387313b9fa105409d50d47ea6382599e7))
+
+### Features
+
+- Bootstrap mode + setup status/preflight endpoints
+  ([#29](https://github.com/lan17/homesec/pull/29),
+  [`9b7160f`](https://github.com/lan17/homesec/commit/9b7160fde0d0585225a48abde008a069acd25c0f))
+
+- Setup wizard shell + welcome preflight + first-run redirect (#49, #50, #57)
+  ([#34](https://github.com/lan17/homesec/pull/34),
+  [`4ce496e`](https://github.com/lan17/homesec/commit/4ce496e8da1b38e85ac7c2aa3afd6d895f28d830))
+
+- **setup**: Add generic setup test-connection endpoint
+  ([#32](https://github.com/lan17/homesec/pull/32),
+  [`4a428d6`](https://github.com/lan17/homesec/commit/4a428d69c860436d196ab1b36b21d95effaa1b34))
+
+- **ui**: Complete reusable CameraAddFlow architecture (#51)
+  ([#35](https://github.com/lan17/homesec/pull/35),
+  [`a398383`](https://github.com/lan17/homesec/commit/a398383ebc633b34e3633f8f12f170ec54bdc43c))
+
+- **ui**: Complete setup wizard flows through review + launch (#53/#54/#55/#56)
+  ([#37](https://github.com/lan17/homesec/pull/37),
+  [`1386d19`](https://github.com/lan17/homesec/commit/1386d19b98d42b83a5b9c4de40051a17511d87e1))
+
+- **ui**: Integrate CameraAddFlow into setup camera step
+  ([#36](https://github.com/lan17/homesec/pull/36),
+  [`765b978`](https://github.com/lan17/homesec/commit/765b978c5886366ab40b27dad5ad59ddcab7d368))
+
+
 ## v1.6.0 (2026-02-25)
 
 ### Features
