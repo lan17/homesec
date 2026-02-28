@@ -1,0 +1,17 @@
+rtspAddress: :8099
+rtpAddress: :8100
+rtcpAddress: :8101
+authMethod: internal
+authInternalUsers:
+  - user: admin
+    pass: admin123
+    permissions:
+      - action: publish
+        path: live
+      - action: read
+        path: live
+      - action: playback
+        path: live
+
+paths:
+  live:
