@@ -283,6 +283,53 @@ class TestClipPipelineHappyPath:
         assert state is not None
         assert state.analysis_result is not None
 
+    @pytest.mark.asyncio
+    async def test_run_mode_never_skips_vlm_with_explicit_reason(
+        self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
+    ) -> None:
+        """When run_mode=never, VLM is skipped even for trigger detections."""
+        # Given run_mode=never and a trigger-class filter result
+        base_config = Config(
+            cameras=base_config.cameras,
+            storage=base_config.storage,
+            state_store=base_config.state_store,
+            notifiers=base_config.notifiers,
+            filter=base_config.filter,
+            vlm=base_config.vlm.model_copy(update={"run_mode": "never"}),
+            alert_policy=base_config.alert_policy,
+        )
+        person_result = FilterResult(
+            detected_classes=["person"],
+            confidence=0.95,
+            model="mock",
+            sampled_frames=30,
+        )
+        filter_mock = MockFilter(result=person_result)
+        mocks.filter = filter_mock
+
+        pipeline = ClipPipeline(
+            config=base_config,
+            storage=mocks.storage,
+            repository=make_repository(base_config, mocks),
+            filter_plugin=filter_mock,
+            vlm_plugin=mocks.vlm,
+            notifier=mocks.notifier,
+            alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
+        )
+
+        # When a clip is processed
+        pipeline.on_new_clip(sample_clip)
+        await pipeline.shutdown()
+
+        # Then VLM is skipped with a run_mode-specific reason
+        events = await mocks.event_store.get_events(sample_clip.clip_id)
+        skipped_events = [event for event in events if event.event_type == "vlm_skipped"]
+        assert len(skipped_events) == 1
+        assert skipped_events[0].reason == "run_mode_never"
+        assert all(event.event_type != "vlm_started" for event in events)
+        assert all(event.event_type != "vlm_completed" for event in events)
+
 
 class TestClipPipelineErrorHandling:
     """Test error handling and partial failures."""

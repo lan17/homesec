@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -143,7 +144,7 @@ class _FailOnRetentionPipeline:
         _ = timeout
 
 
-def _make_config() -> Config:
+def _make_config(*, run_mode: str = "trigger_only") -> Config:
     return Config(
         cameras=[
             CameraConfig(
@@ -166,6 +167,7 @@ def _make_config() -> Config:
         ),
         vlm=VLMConfig(
             backend="openai",
+            run_mode=run_mode,
             config=OpenAIConfig(api_key_env="OPENAI_API_KEY", model="gpt-4o"),
             trigger_classes=["person"],
         ),
@@ -238,6 +240,48 @@ async def test_runtime_assembly_cleans_filter_and_notifier_when_analyzer_build_f
         await assembler.build_bundle(config, generation=1)
 
     # Then: Created components are shut down during partial-build cleanup
+    assert notifier.shutdown_called is True
+    assert filter_plugin.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_assembly_skips_analyzer_load_when_run_mode_never(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_mode=never should avoid analyzer plugin instantiation at startup."""
+    # Given: Runtime assembly with VLM disabled and filter creation stubbed
+    notifier = _StubNotifier()
+    filter_plugin = _StubFilter()
+    assembler = _make_assembler(notifier)
+    config = _make_config(run_mode="never")
+
+    monkeypatch.setattr("homesec.runtime.assembly.load_filter", lambda _cfg: filter_plugin)
+
+    def _fail_if_called(_: object) -> object:
+        raise AssertionError("load_analyzer should not run when run_mode=never")
+
+    monkeypatch.setattr("homesec.runtime.assembly.load_analyzer", _fail_if_called)
+
+    # When: Building a runtime bundle
+    runtime = await assembler.build_bundle(config, generation=1)
+
+    # Then: Runtime uses disabled analyzer semantics and bundle remains healthy
+    try:
+        assert await runtime.vlm_plugin.ping() is True
+        analysis = await runtime.vlm_plugin.analyze(
+            video_path=Path("/tmp/disabled-vlm-test.mp4"),
+            filter_result=FilterResult(
+                detected_classes=["person"],
+                confidence=0.9,
+                model="stub",
+                sampled_frames=1,
+            ),
+            config=config.vlm,
+        )
+        assert analysis.activity_type == "skipped"
+        assert analysis.summary == "VLM analysis disabled (run_mode=never)"
+    finally:
+        await assembler.shutdown_bundle(runtime)
     assert notifier.shutdown_called is True
     assert filter_plugin.shutdown_called is True
 

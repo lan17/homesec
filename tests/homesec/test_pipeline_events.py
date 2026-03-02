@@ -37,7 +37,12 @@ from tests.homesec.mocks import (
 )
 
 
-def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> Config:
+def build_config(
+    *,
+    notify_on_motion: bool = False,
+    notifier_count: int = 1,
+    run_mode: str = "trigger_only",
+) -> Config:
     """Build a minimal config for pipeline tests."""
     cameras = [
         CameraConfig(
@@ -68,6 +73,7 @@ def build_config(*, notify_on_motion: bool = False, notifier_count: int = 1) -> 
         ),
         vlm=VLMConfig(
             backend="openai",
+            run_mode=run_mode,
             trigger_classes=["person", "car"],
             config=OpenAIConfig(api_key_env="OPENAI_API_KEY", model="gpt-4o"),
         ),
@@ -314,6 +320,52 @@ async def test_pipeline_emits_vlm_skipped_event(
     assert "vlm_completed" not in event_types
     skipped_event = next(event for event in events if event.event_type == "vlm_skipped")
     assert skipped_event.reason == "no_trigger_classes"
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_emits_vlm_skipped_event_for_run_mode_never(
+    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+) -> None:
+    # Given: A clip with trigger classes but run_mode forcing VLM disabled
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    event_store = state_store.create_event_store()
+    assert isinstance(event_store, PostgresEventStore)
+    config = build_config(run_mode="never")
+    repository = ClipRepository(state_store, event_store, retry=config.retry)
+
+    filter_result = FilterResult(
+        detected_classes=["person"],
+        confidence=0.9,
+        model="mock",
+        sampled_frames=30,
+    )
+    pipeline = ClipPipeline(
+        config=config,
+        storage=MockStorage(),
+        repository=repository,
+        filter_plugin=MockFilter(result=filter_result),
+        vlm_plugin=MockVLM(),
+        notifier=MockNotifier(),
+        alert_policy=make_alert_policy(config),
+        retention_pruner=MockRetentionPruner(),
+    )
+    clip = make_clip(tmp_path, "test-clip-events-006")
+
+    # When: A clip is processed
+    pipeline.on_new_clip(clip)
+    await pipeline.shutdown()
+
+    # Then: VLM is skipped because run mode is disabled
+    events = await event_store.get_events(clip.clip_id)
+    event_types = {event.event_type for event in events}
+    assert "vlm_skipped" in event_types
+    assert "vlm_started" not in event_types
+    assert "vlm_completed" not in event_types
+    skipped_event = next(event for event in events if event.event_type == "vlm_skipped")
+    assert skipped_event.reason == "run_mode_never"
 
     await state_store.shutdown()
 

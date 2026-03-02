@@ -142,7 +142,7 @@ class VLMFailedEvent(ClipEvent):
 
 
 class VLMSkippedEvent(ClipEvent):
-    """VLM analysis skipped (no trigger classes detected)."""
+    """VLM analysis skipped by runtime policy."""
 
     event_type: Literal[EventType.VLM_SKIPPED] = EventType.VLM_SKIPPED
     reason: str
