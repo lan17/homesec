@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish ui-%
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish ui-% fake-camera
 
 help:
 	@echo "Targets:"
@@ -20,6 +20,7 @@ help:
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
 	@echo "    make check         Run lint + typecheck + test + ui-check"
+	@echo "    make fake-camera   Start a mock ONVIF + RTSP camera (requires ffmpeg, mediamtx)"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make db-migrate    Run migrations"
@@ -86,6 +87,15 @@ lint-fix:
 	uv run ruff format src tests
 
 check: lint typecheck test ui-check
+
+fake-camera:
+	@echo "Starting mock ONVIF server on port 8000..."
+	@python3 dev/fake-camera/mock_onvif.py &
+	@echo "Starting RTSP server on port 8099..."
+	@./mediamtx dev/fake-camera/mediamtx.yml &
+	@sleep 2
+	@echo "Streaming media/sample.mp4 to rtsp://localhost:8099/live..."
+	@ffmpeg -re -stream_loop -1 -i media/sample.mp4 -c copy -f rtsp rtsp://admin:admin123@localhost:8099/live
 
 # Database
 db-migrate:
