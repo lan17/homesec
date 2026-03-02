@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homesec.config import resolve_env_var
+from homesec.interfaces import Notifier
 from homesec.logging_setup import configure_logging
+from homesec.models.alert import Alert
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.alert_policies import load_alert_policy
@@ -35,7 +37,6 @@ if TYPE_CHECKING:
         AlertPolicy,
         ClipSource,
         EventStore,
-        Notifier,
         StateStore,
         StorageBackend,
     )
@@ -44,10 +45,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _NoopNotifier:
+class _NoopNotifier(Notifier):
     """No-op notifier used when no notifiers are configured."""
 
-    async def send(self, alert: object) -> None:
+    async def send(self, alert: Alert) -> None:
+        _ = alert
         logger.debug("NoopNotifier: alert suppressed (no notifiers configured)")
 
     async def ping(self) -> bool:

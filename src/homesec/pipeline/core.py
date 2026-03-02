@@ -91,7 +91,7 @@ class ClipPipeline:
         notifier: Notifier,
         notifier_entries: list[NotifierEntry] | None,
     ) -> list[NotifierEntry]:
-        if notifier_entries:
+        if notifier_entries is not None:
             return list(notifier_entries)
         name = getattr(notifier, "name", type(notifier).__name__)
         return [NotifierEntry(name=name, notifier=notifier)]
