@@ -315,29 +315,35 @@ class ClipPipeline:
 
             # Stage 5: Notify (conditional)
             if alert_decision.notify:
-                notify_result = await self._notify_stage(
-                    clip,
-                    alert_decision,
-                    analysis_result,
-                    storage_uri,
-                    view_url,
-                    upload_failed,
-                    vlm_failed,
-                )
-                match notify_result:
-                    case NotifyError() as notify_err:
-                        logger.error(
-                            "Notify failed for %s: %s",
-                            clip.clip_id,
-                            notify_err.cause,
-                            exc_info=notify_err.cause,
-                        )
-                    case None:
-                        logger.info("Notification sent for %s", clip.clip_id)
-                    case _:
-                        raise TypeError(
-                            f"Unexpected notify result type: {type(notify_result).__name__}"
-                        )
+                if not self._notifier_entries:
+                    logger.info(
+                        "Notification skipped for %s: no enabled notifiers configured",
+                        clip.clip_id,
+                    )
+                else:
+                    notify_result = await self._notify_stage(
+                        clip,
+                        alert_decision,
+                        analysis_result,
+                        storage_uri,
+                        view_url,
+                        upload_failed,
+                        vlm_failed,
+                    )
+                    match notify_result:
+                        case NotifyError() as notify_err:
+                            logger.error(
+                                "Notify failed for %s: %s",
+                                clip.clip_id,
+                                notify_err.cause,
+                                exc_info=notify_err.cause,
+                            )
+                        case None:
+                            logger.info("Notification sent for %s", clip.clip_id)
+                        case _:
+                            raise TypeError(
+                                f"Unexpected notify result type: {type(notify_result).__name__}"
+                            )
 
             await self._repository.mark_done(clip.clip_id)
             logger.info("Clip processing complete: %s", clip.clip_id)
@@ -546,6 +552,9 @@ class ClipPipeline:
         vlm_failed: bool,
     ) -> None | NotifyError:
         """Send notification. Returns None on success or NotifyError."""
+        if not self._notifier_entries:
+            return None
+
         alert = Alert(
             clip_id=clip.clip_id,
             camera_name=clip.camera_name,

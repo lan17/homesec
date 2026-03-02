@@ -228,6 +228,51 @@ async def test_pipeline_emits_notification_events_per_notifier(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_records_alert_decision_without_notification_events_when_no_notifiers(
+    postgres_dsn: str, tmp_path: Path, clean_test_db: None
+) -> None:
+    # Given: A real Postgres event store and runtime-provided empty notifier entries
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    event_store = state_store.create_event_store()
+    assert isinstance(event_store, PostgresEventStore)
+    config = build_config(notifier_count=0)
+    repository = ClipRepository(state_store, event_store, retry=config.retry)
+
+    filter_result = FilterResult(
+        detected_classes=["person"],
+        confidence=0.9,
+        model="mock",
+        sampled_frames=30,
+    )
+    pipeline = ClipPipeline(
+        config=config,
+        storage=MockStorage(),
+        repository=repository,
+        filter_plugin=MockFilter(result=filter_result),
+        vlm_plugin=MockVLM(),
+        notifier=MockNotifier(),
+        notifier_entries=[],
+        alert_policy=make_alert_policy(config),
+        retention_pruner=MockRetentionPruner(),
+    )
+    clip = make_clip(tmp_path, "test-clip-events-005")
+
+    # When: A clip is processed
+    pipeline.on_new_clip(clip)
+    await pipeline.shutdown()
+
+    # Then: Alert decision is recorded, but no notification sent/failed events are emitted
+    events = await event_store.get_events(clip.clip_id)
+    event_types = {event.event_type for event in events}
+    assert "alert_decision_made" in event_types
+    assert "notification_sent" not in event_types
+    assert "notification_failed" not in event_types
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_emits_vlm_skipped_event(
     postgres_dsn: str, tmp_path: Path, clean_test_db: None
 ) -> None:
