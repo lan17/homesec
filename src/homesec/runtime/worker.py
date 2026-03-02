@@ -44,6 +44,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _NoopNotifier:
+    """No-op notifier used when no notifiers are configured."""
+
+    async def send(self, alert: object) -> None:
+        logger.debug("NoopNotifier: alert suppressed (no notifiers configured)")
+
+    async def ping(self) -> bool:
+        return True
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        pass
+
+
 class _WorkerEventEmitter:
     """Sends typed worker events over unix datagram IPC."""
 
@@ -192,7 +205,8 @@ class _RuntimeWorkerService:
             )
 
         if not entries:
-            raise RuntimeError("No enabled notifiers configured")
+            logger.info("No notifiers configured; notifications disabled")
+            return _NoopNotifier(), entries
         if len(entries) == 1:
             return entries[0].notifier, entries
         return MultiplexNotifier(entries), entries

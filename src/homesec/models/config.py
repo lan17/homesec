@@ -181,7 +181,7 @@ class Config(BaseModel):
     cameras: list[CameraConfig]
     storage: StorageConfig
     state_store: StateStoreConfig = Field(default_factory=StateStoreConfig)
-    notifiers: list[NotifierConfig]
+    notifiers: list[NotifierConfig] = Field(default_factory=list)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
@@ -189,9 +189,3 @@ class Config(BaseModel):
     filter: FilterConfig
     vlm: VLMConfig
     alert_policy: AlertPolicyConfig
-
-    @model_validator(mode="after")
-    def _validate_notifiers(self) -> Config:
-        if not self.notifiers:
-            raise ValueError("notifiers must include at least one notifier")
-        return self

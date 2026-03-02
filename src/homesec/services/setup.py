@@ -860,7 +860,7 @@ async def _build_finalize_config(
     notifiers = _pick_section(
         requested=request.notifiers,
         existing=existing.notifiers if existing is not None else None,
-        default=[_default_notifier()],
+        default=[],
         key="notifiers",
         defaults_applied=defaults_applied,
     )

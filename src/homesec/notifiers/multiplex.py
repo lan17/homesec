@@ -26,8 +26,6 @@ class MultiplexNotifier(Notifier):
     """Send notifications to multiple notifiers in parallel."""
 
     def __init__(self, entries: list[NotifierEntry]) -> None:
-        if not entries:
-            raise ValueError("MultiplexNotifier requires at least one notifier")
         self._entries = list(entries)
         self._shutdown_called = False
 
