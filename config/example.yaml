@@ -98,6 +98,7 @@ state_store:
 # =============================================================================
 # Notifiers - How to send alerts
 # =============================================================================
+# Optional: set to [] (or disable all entries) to run analysis-only with no external alerts.
 notifiers:
   # MQTT (for Home Assistant, Node-RED, etc.)
   - backend: mqtt

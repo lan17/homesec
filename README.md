@@ -202,7 +202,7 @@ See [`config/example.yaml`](config/example.yaml) for a complete reference of all
 ### Tips
 
 - **Secrets**: Never put secrets in YAML. Use env vars (`*_env`) and set them in your shell or `.env`.
-- **Notifiers**: At least one notifier (mqtt/email) must be enabled unless `alert_policy.enabled` is false.
+- **Notifiers**: Notifiers are optional. With no enabled notifiers, alert decisions are still evaluated and recorded, but no external notifications are sent.
 - **YOLO Classes**: Built-in classes include `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
 
 After installation, the `homesec` command is available:

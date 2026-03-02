@@ -813,6 +813,46 @@ class TestClipPipelineAlertPolicy:
     """Test alert policy integration."""
 
     @pytest.mark.asyncio
+    async def test_no_notification_when_notifier_entries_explicitly_empty(
+        self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
+    ) -> None:
+        """No notification side effects when runtime provides no notifier entries."""
+        # Given: A config that would normally notify, but runtime passes no notifier entries
+        no_notifier_config = Config(
+            cameras=base_config.cameras,
+            storage=base_config.storage,
+            state_store=base_config.state_store,
+            notifiers=[],
+            filter=base_config.filter,
+            vlm=base_config.vlm,
+            alert_policy=base_config.alert_policy,
+            retry=base_config.retry,
+        )
+        notifier = MockNotifier()
+        pipeline = ClipPipeline(
+            config=no_notifier_config,
+            storage=mocks.storage,
+            repository=make_repository(no_notifier_config, mocks),
+            filter_plugin=mocks.filter,
+            vlm_plugin=mocks.vlm,
+            notifier=notifier,
+            notifier_entries=[],
+            alert_policy=make_alert_policy(no_notifier_config),
+            retention_pruner=MockRetentionPruner(),
+        )
+
+        # When: A clip is processed
+        pipeline.on_new_clip(sample_clip)
+        await pipeline.shutdown()
+
+        # Then: No notifier is called and no notification_sent event is recorded
+        assert notifier.sent_alerts == []
+        notification_sent_events = [
+            event for event in mocks.event_store.events if event.event_type == "notification_sent"
+        ]
+        assert notification_sent_events == []
+
+    @pytest.mark.asyncio
     async def test_no_notification_when_below_risk_threshold(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:

@@ -19,7 +19,6 @@ from homesec.models.config import (
     AlertPolicyConfig,
     Config,
     FastAPIServerConfig,
-    NotifierConfig,
     StateStoreConfig,
     StorageConfig,
 )
@@ -860,7 +859,7 @@ async def _build_finalize_config(
     notifiers = _pick_section(
         requested=request.notifiers,
         existing=existing.notifiers if existing is not None else None,
-        default=[_default_notifier()],
+        default=[],
         key="notifiers",
         defaults_applied=defaults_applied,
     )
@@ -938,10 +937,6 @@ def _default_storage() -> StorageConfig:
 
 def _default_state_store() -> StateStoreConfig:
     return StateStoreConfig(dsn_env="DB_DSN")
-
-
-def _default_notifier() -> NotifierConfig:
-    return NotifierConfig(backend="mqtt", enabled=True, config={"host": "localhost", "port": 1883})
 
 
 def _default_filter() -> FilterConfig:

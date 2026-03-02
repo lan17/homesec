@@ -3,8 +3,55 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from typing import Any, cast
 
 import homesec.runtime.worker as worker_module
+from homesec.models.config import (
+    AlertPolicyConfig,
+    CameraConfig,
+    CameraSourceConfig,
+    Config,
+    NotifierConfig,
+    StateStoreConfig,
+    StorageConfig,
+)
+from homesec.models.filter import FilterConfig
+from homesec.models.vlm import VLMConfig
+
+
+class _StubEmitter:
+    def send(self, event: object) -> None:
+        _ = event
+
+    def close(self) -> None:
+        return None
+
+
+def _make_config(*, notifiers: list[NotifierConfig]) -> Config:
+    return Config(
+        cameras=[
+            CameraConfig(
+                name="front",
+                source=CameraSourceConfig(backend="local_folder", config={}),
+            )
+        ],
+        storage=StorageConfig(backend="local", config={}),
+        state_store=StateStoreConfig(dsn="postgresql://user:pass@localhost/homesec"),
+        notifiers=notifiers,
+        filter=FilterConfig(backend="yolo", config={}),
+        vlm=VLMConfig(backend="openai", config={}),
+        alert_policy=AlertPolicyConfig(backend="default", config={}),
+    )
+
+
+def _make_service(config: Config) -> worker_module._RuntimeWorkerService:
+    return worker_module._RuntimeWorkerService(
+        config=config,
+        generation=1,
+        correlation_id="test-correlation-id",
+        heartbeat_interval_s=1.0,
+        emitter=cast(Any, _StubEmitter()),
+    )
 
 
 def test_worker_main_uses_shared_logging_configuration(monkeypatch) -> None:
@@ -37,3 +84,41 @@ def test_worker_main_uses_shared_logging_configuration(monkeypatch) -> None:
     assert calls["log_level"] == "INFO"
     assert calls["camera_name"] == "runtime-worker-g7"
     assert calls["ran"] is True
+
+
+def test_runtime_worker_create_notifier_returns_noop_when_notifier_list_empty() -> None:
+    # Given: Runtime worker config with no notifier entries
+    config = _make_config(notifiers=[])
+    service = _make_service(config)
+
+    # When: Building notifier stack for runtime bundle
+    notifier, entries = service._create_notifier(config)
+
+    # Then: Worker uses a noop notifier and exposes no notifier entries
+    assert isinstance(notifier, worker_module._NoopNotifier)
+    assert entries == []
+
+
+def test_runtime_worker_create_notifier_skips_disabled_entries(
+    monkeypatch,
+) -> None:
+    # Given: Runtime worker config with only disabled notifiers
+    config = _make_config(
+        notifiers=[
+            NotifierConfig(backend="mqtt", enabled=False, config={"host": "localhost"}),
+            NotifierConfig(backend="sendgrid", enabled=False, config={"api_key_env": "SENDGRID"}),
+        ]
+    )
+    service = _make_service(config)
+
+    def _unexpected_plugin_load(*_: object) -> object:
+        raise AssertionError("Disabled notifiers should not be loaded")
+
+    monkeypatch.setattr(worker_module, "load_notifier_plugin", _unexpected_plugin_load)
+
+    # When: Building notifier stack for runtime bundle
+    notifier, entries = service._create_notifier(config)
+
+    # Then: Worker keeps notifications disabled and does not load plugins
+    assert isinstance(notifier, worker_module._NoopNotifier)
+    assert entries == []
