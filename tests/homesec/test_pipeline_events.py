@@ -18,6 +18,7 @@ from homesec.models.config import (
     StateStoreConfig,
     StorageConfig,
 )
+from homesec.models.enums import VLMSkipReason
 from homesec.models.filter import FilterConfig, FilterResult
 from homesec.models.vlm import AnalysisResult, VLMConfig
 from homesec.notifiers.multiplex import NotifierEntry
@@ -319,7 +320,7 @@ async def test_pipeline_emits_vlm_skipped_event(
     assert "vlm_started" not in event_types
     assert "vlm_completed" not in event_types
     skipped_event = next(event for event in events if event.event_type == "vlm_skipped")
-    assert skipped_event.reason == "no_trigger_classes"
+    assert skipped_event.reason == VLMSkipReason.NO_TRIGGER_CLASSES
 
     await state_store.shutdown()
 
@@ -365,7 +366,7 @@ async def test_pipeline_emits_vlm_skipped_event_for_run_mode_never(
     assert "vlm_started" not in event_types
     assert "vlm_completed" not in event_types
     skipped_event = next(event for event in events if event.event_type == "vlm_skipped")
-    assert skipped_event.reason == "run_mode_never"
+    assert skipped_event.reason == VLMSkipReason.RUN_MODE_NEVER
 
     await state_store.shutdown()
 

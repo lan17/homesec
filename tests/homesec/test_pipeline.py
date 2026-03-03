@@ -21,7 +21,7 @@ from homesec.models.config import (
     StateStoreConfig,
     StorageConfig,
 )
-from homesec.models.enums import RiskLevel
+from homesec.models.enums import RiskLevel, VLMSkipReason
 from homesec.models.filter import FilterConfig, FilterOverrides, FilterResult
 from homesec.models.vlm import AnalysisResult, VLMConfig
 from homesec.pipeline import ClipPipeline
@@ -326,7 +326,7 @@ class TestClipPipelineHappyPath:
         events = await mocks.event_store.get_events(sample_clip.clip_id)
         skipped_events = [event for event in events if event.event_type == "vlm_skipped"]
         assert len(skipped_events) == 1
-        assert skipped_events[0].reason == "run_mode_never"
+        assert skipped_events[0].reason == VLMSkipReason.RUN_MODE_NEVER
         assert all(event.event_type != "vlm_started" for event in events)
         assert all(event.event_type != "vlm_completed" for event in events)
 

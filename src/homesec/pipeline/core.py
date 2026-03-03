@@ -15,7 +15,7 @@ from homesec.errors import FilterError, NotifyError, UploadError, VLMError
 from homesec.models.alert import Alert, AlertDecision
 from homesec.models.clip import Clip
 from homesec.models.config import Config
-from homesec.models.enums import VLMRunMode
+from homesec.models.enums import VLMRunMode, VLMSkipReason
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.notifiers.multiplex import NotifierEntry
@@ -643,11 +643,11 @@ class ClipPipeline:
                 return type(exc.cause).__name__
         return type(exc).__name__
 
-    def _vlm_skip_reason(self, filter_result: FilterResult) -> str | None:
+    def _vlm_skip_reason(self, filter_result: FilterResult) -> VLMSkipReason | None:
         """Return skip reason when VLM should not run, otherwise None."""
         run_mode = self._config.vlm.run_mode
         if run_mode == VLMRunMode.NEVER:
-            return "run_mode_never"
+            return VLMSkipReason.RUN_MODE_NEVER
         if run_mode == VLMRunMode.ALWAYS:
             return None
 
@@ -655,7 +655,7 @@ class ClipPipeline:
         trigger = set(self._config.vlm.trigger_classes)
         if detected & trigger:
             return None
-        return "no_trigger_classes"
+        return VLMSkipReason.NO_TRIGGER_CLASSES
 
     async def _apply_upload_result(
         self,

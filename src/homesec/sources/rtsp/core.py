@@ -36,7 +36,7 @@ from homesec.sources.rtsp.preflight import (
     RTSPStartupPreflight,
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
-from homesec.sources.rtsp.recording_profile import MotionProfile, RecordingProfile
+from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
@@ -434,14 +434,7 @@ class RTSPSource(ThreadedClipSource):
 
     def _build_fallback_preflight_outcome(self, camera_key: str) -> CameraPreflightOutcome:
         motion_profile = MotionProfile(input_url=self.rtsp_url, ffmpeg_input_args=[])
-        recording_profile = RecordingProfile(
-            input_url=self.rtsp_url,
-            ffmpeg_input_args=[],
-            container="mp4",
-            video_mode="copy",
-            audio_mode="copy",
-            ffmpeg_output_args=["-movflags", "+frag_keyframe+empty_moov+faststart"],
-        )
+        recording_profile = build_default_recording_profile(self.rtsp_url)
         diagnostics = CameraPreflightDiagnostics(
             attempted_urls=[self.rtsp_url],
             probes=[],

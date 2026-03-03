@@ -74,6 +74,13 @@ class VLMRunMode(StrEnum):
     NEVER = "never"
 
 
+class VLMSkipReason(StrEnum):
+    """Reason why VLM analysis was skipped for a clip."""
+
+    RUN_MODE_NEVER = "run_mode_never"
+    NO_TRIGGER_CLASSES = "no_trigger_classes"
+
+
 class RiskLevel(IntEnum):
     """VLM risk assessment levels.
 

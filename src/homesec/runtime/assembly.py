@@ -5,19 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from homesec.interfaces import VLMAnalyzer
-from homesec.models.enums import RiskLevel, VLMRunMode
-from homesec.models.filter import FilterResult
-from homesec.models.vlm import AnalysisResult, VLMConfig
+from homesec.models.enums import VLMRunMode
 from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
 from homesec.plugins.analyzers import load_analyzer
 from homesec.plugins.filters import load_filter
 from homesec.repository import ClipRepository
 from homesec.retention import build_local_retention_pruner
+from homesec.runtime.disabled_vlm import DisabledVLMAnalyzer
 from homesec.runtime.models import RuntimeBundle, config_signature
 
 if TYPE_CHECKING:
@@ -27,6 +24,7 @@ if TYPE_CHECKING:
         Notifier,
         ObjectFilter,
         StorageBackend,
+        VLMAnalyzer,
     )
     from homesec.models.config import Config
 
@@ -36,28 +34,6 @@ logger = logging.getLogger(__name__)
 class _AsyncShutdown(Protocol):
     async def shutdown(self, timeout: float = 30.0) -> None:
         """Release resources."""
-
-
-class _DisabledVLMAnalyzer(VLMAnalyzer):
-    """Runtime-only analyzer used when VLM run_mode is disabled."""
-
-    async def analyze(
-        self, video_path: Path, filter_result: FilterResult, config: VLMConfig
-    ) -> AnalysisResult:
-        _ = video_path
-        _ = filter_result
-        _ = config
-        return AnalysisResult(
-            risk_level=RiskLevel.LOW,
-            activity_type="skipped",
-            summary="VLM analysis disabled (run_mode=never)",
-        )
-
-    async def ping(self) -> bool:
-        return True
-
-    async def shutdown(self, timeout: float | None = None) -> None:
-        _ = timeout
 
 
 class RuntimeAssembler:
@@ -104,7 +80,7 @@ class RuntimeAssembler:
             filter_plugin = load_filter(config.filter)
             if config.vlm.run_mode == VLMRunMode.NEVER:
                 logger.info("VLM run_mode=never; runtime will use disabled analyzer")
-                vlm_plugin = _DisabledVLMAnalyzer()
+                vlm_plugin = DisabledVLMAnalyzer()
             else:
                 vlm_plugin = load_analyzer(config.vlm)
             alert_policy = self._alert_policy_factory(config)

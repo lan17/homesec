@@ -15,7 +15,7 @@ from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.recorder import FfmpegRecorder
-from homesec.sources.rtsp.recording_profile import MotionProfile
+from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 
 
 class FakeClock:
@@ -294,6 +294,21 @@ def test_detect_stream_defaults_to_main(tmp_path: Path) -> None:
     assert source.detect_rtsp_url == source.rtsp_url
     assert source._detect_rtsp_url_source == "same_as_rtsp_url"
     assert not source._detect_stream_available
+
+
+def test_session_limit_fallback_uses_default_recording_profile(tmp_path: Path) -> None:
+    """Session-limit fallback should reuse shared default recording profile builder."""
+    # Given: an RTSP source with default startup configuration
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: constructing the startup session-limit fallback outcome
+    outcome = source._build_fallback_preflight_outcome("cam-key")
+
+    # Then: fallback uses the canonical default recording profile
+    expected_profile = build_default_recording_profile(source.rtsp_url)
+    assert outcome.recording_profile == expected_profile
+    assert outcome.diagnostics.selected_recording_profile == expected_profile.profile_id()
 
 
 def test_reconnect_retries_until_success(tmp_path: Path) -> None:

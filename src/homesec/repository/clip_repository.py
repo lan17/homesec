@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from homesec.models.clip import Clip, ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.config import RetryConfig
-from homesec.models.enums import ClipStatus, RiskLevelField
+from homesec.models.enums import ClipStatus, RiskLevelField, VLMSkipReason
 from homesec.models.events import (
     AlertDecisionMadeEvent,
     ClipDeletedEvent,
@@ -285,7 +285,7 @@ class ClipRepository:
             )
         )
 
-    async def record_vlm_skipped(self, clip_id: str, reason: str) -> None:
+    async def record_vlm_skipped(self, clip_id: str, reason: VLMSkipReason) -> None:
         """Record VLM skipped event."""
         await self._safe_append(
             VLMSkippedEvent(
