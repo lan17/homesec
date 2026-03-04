@@ -1,6 +1,9 @@
 rtspAddress: :8099
 rtpAddress: :8100
 rtcpAddress: :8101
+readTimeout: 20s
+writeTimeout: 20s
+writeQueueSize: 2048
 authMethod: internal
 authInternalUsers:
   - user: admin
@@ -15,3 +18,4 @@ authInternalUsers:
 
 paths:
   live:
+    maxReaders: 10

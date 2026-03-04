@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from homesec.models.enums import EventType, RiskLevelField
+from homesec.models.enums import EventType, RiskLevelField, VLMSkipReason
 from homesec.models.filter import FilterResult
 
 
@@ -142,10 +142,10 @@ class VLMFailedEvent(ClipEvent):
 
 
 class VLMSkippedEvent(ClipEvent):
-    """VLM analysis skipped (no trigger classes detected)."""
+    """VLM analysis skipped by runtime policy."""
 
     event_type: Literal[EventType.VLM_SKIPPED] = EventType.VLM_SKIPPED
-    reason: str
+    reason: VLMSkipReason
 
 
 class AlertDecisionMadeEvent(ClipEvent):

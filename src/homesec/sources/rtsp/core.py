@@ -30,12 +30,13 @@ from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeli
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
 from homesec.sources.rtsp.motion import MotionDetector
 from homesec.sources.rtsp.preflight import (
+    CameraPreflightDiagnostics,
     CameraPreflightOutcome,
     PreflightError,
     RTSPStartupPreflight,
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
-from homesec.sources.rtsp.recording_profile import MotionProfile
+from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
@@ -407,21 +408,48 @@ class RTSPSource(ThreadedClipSource):
             case CameraPreflightOutcome() as outcome:
                 self._apply_preflight_outcome(outcome)
             case PreflightError() as err:
-                logger.error(
-                    "RTSP startup preflight failed: camera=%s key=%s stage=%s reason=%s",
-                    self.camera_name,
-                    err.camera_key,
-                    err.stage,
-                    err.message,
-                )
-                raise RuntimeError(
-                    f"RTSP preflight failed for {self.camera_name} at {err.stage}: {err.message}"
-                ) from err
+                if err.stage == "session_limit":
+                    logger.warning(
+                        "RTSP session-limit preflight failed for %s; falling back to single-stream defaults",
+                        self.camera_name,
+                    )
+                    fallback = self._build_fallback_preflight_outcome(err.camera_key)
+                    self._apply_preflight_outcome(fallback)
+                else:
+                    logger.error(
+                        "RTSP startup preflight failed: camera=%s key=%s stage=%s reason=%s",
+                        self.camera_name,
+                        err.camera_key,
+                        err.stage,
+                        err.message,
+                    )
+                    raise RuntimeError(
+                        f"RTSP preflight failed for {self.camera_name} at {err.stage}: {err.message}"
+                    ) from err
             case _:
                 raise RuntimeError(
                     "RTSP startup preflight returned unexpected result type: "
                     f"{type(result).__name__}"
                 )
+
+    def _build_fallback_preflight_outcome(self, camera_key: str) -> CameraPreflightOutcome:
+        motion_profile = MotionProfile(input_url=self.rtsp_url, ffmpeg_input_args=[])
+        recording_profile = build_default_recording_profile(self.rtsp_url)
+        diagnostics = CameraPreflightDiagnostics(
+            attempted_urls=[self.rtsp_url],
+            probes=[],
+            selected_motion_url=self.rtsp_url,
+            selected_recording_url=self.rtsp_url,
+            selected_recording_profile=recording_profile.profile_id(),
+            session_mode="single_stream",
+            notes=["Session-limit preflight failed; using single-stream fallback defaults"],
+        )
+        return CameraPreflightOutcome(
+            camera_key=camera_key,
+            motion_profile=motion_profile,
+            recording_profile=recording_profile,
+            diagnostics=diagnostics,
+        )
 
     def _apply_preflight_outcome(self, outcome: CameraPreflightOutcome) -> None:
         self._preflight_outcome = outcome

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from argparse import Namespace
 from typing import Any, cast
+
+import pytest
 
 import homesec.runtime.worker as worker_module
 from homesec.models.config import (
@@ -27,7 +30,7 @@ class _StubEmitter:
         return None
 
 
-def _make_config(*, notifiers: list[NotifierConfig]) -> Config:
+def _make_config(*, notifiers: list[NotifierConfig], run_mode: str = "trigger_only") -> Config:
     return Config(
         cameras=[
             CameraConfig(
@@ -39,7 +42,7 @@ def _make_config(*, notifiers: list[NotifierConfig]) -> Config:
         state_store=StateStoreConfig(dsn="postgresql://user:pass@localhost/homesec"),
         notifiers=notifiers,
         filter=FilterConfig(backend="yolo", config={}),
-        vlm=VLMConfig(backend="openai", config={}),
+        vlm=VLMConfig(backend="openai", run_mode=run_mode, config={}),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
     )
 
@@ -122,3 +125,53 @@ def test_runtime_worker_create_notifier_skips_disabled_entries(
     # Then: Worker keeps notifications disabled and does not load plugins
     assert isinstance(notifier, worker_module._NoopNotifier)
     assert entries == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_never(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_mode=never should avoid analyzer plugin loading in worker startup."""
+    # Given: Runtime worker with VLM disabled and analyzer loader guarded
+    config = _make_config(notifiers=[], run_mode="never")
+    service = _make_service(config)
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    class _StubStorage:
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+
+    class _StubStateStore:
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+
+    class _StubEventStore:
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+
+    class _StubFilter:
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+
+    async def _fake_create_state_store(_config: Config) -> _StubStateStore:
+        return _StubStateStore()
+
+    monkeypatch.setattr(worker_module, "discover_all_plugins", lambda: None)
+    monkeypatch.setattr(worker_module, "load_storage_plugin", lambda _cfg: _StubStorage())
+    monkeypatch.setattr(service, "_create_state_store", _fake_create_state_store)
+    monkeypatch.setattr(service, "_create_event_store", lambda _state: _StubEventStore())
+    monkeypatch.setattr(service, "_create_alert_policy", lambda _cfg: cast(Any, object()))
+    monkeypatch.setattr(service, "_create_sources", lambda _cfg: ([], {}))
+    monkeypatch.setattr("homesec.runtime.assembly.load_filter", lambda _cfg: _StubFilter())
+
+    def _fail_if_called(_: object) -> object:
+        raise AssertionError("load_analyzer should not be called for run_mode=never")
+
+    monkeypatch.setattr("homesec.runtime.assembly.load_analyzer", _fail_if_called)
+
+    # When: Running runtime worker startup/shutdown cycle
+    await service.run_runtime(stop_event)
+
+    # Then: Worker completes lifecycle without invoking analyzer loader
+    assert service._runtime_bundle is None

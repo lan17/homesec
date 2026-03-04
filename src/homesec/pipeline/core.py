@@ -15,6 +15,7 @@ from homesec.errors import FilterError, NotifyError, UploadError, VLMError
 from homesec.models.alert import Alert, AlertDecision
 from homesec.models.clip import Clip
 from homesec.models.config import Config
+from homesec.models.enums import VLMRunMode, VLMSkipReason
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.notifiers.multiplex import NotifierEntry
@@ -262,7 +263,8 @@ class ClipPipeline:
             # Stage 3: VLM (conditional)
             analysis_result: AnalysisResult | None = None
             vlm_failed = False
-            if self._should_run_vlm(filter_res):
+            vlm_skip_reason = self._vlm_skip_reason(filter_res)
+            if vlm_skip_reason is None:
                 vlm_result = await self._vlm_stage(clip, filter_res)
                 match vlm_result:
                     case VLMError() as vlm_err:
@@ -284,9 +286,9 @@ class ClipPipeline:
             else:
                 await self._repository.record_vlm_skipped(
                     clip.clip_id,
-                    reason="no_trigger_classes",
+                    reason=vlm_skip_reason,
                 )
-                logger.info("VLM skipped for %s: no trigger classes", clip.clip_id)
+                logger.info("VLM skipped for %s: %s", clip.clip_id, vlm_skip_reason)
 
             # Await upload after filter/VLM to maximize overlap
             upload_result = await upload_task
@@ -641,17 +643,19 @@ class ClipPipeline:
                 return type(exc.cause).__name__
         return type(exc).__name__
 
-    def _should_run_vlm(self, filter_result: FilterResult) -> bool:
-        """Check if VLM should run based on detected classes and config."""
+    def _vlm_skip_reason(self, filter_result: FilterResult) -> VLMSkipReason | None:
+        """Return skip reason when VLM should not run, otherwise None."""
         run_mode = self._config.vlm.run_mode
-        if run_mode == "never":
-            return False
-        if run_mode == "always":
-            return True
+        if run_mode == VLMRunMode.NEVER:
+            return VLMSkipReason.RUN_MODE_NEVER
+        if run_mode == VLMRunMode.ALWAYS:
+            return None
 
         detected = set(filter_result.detected_classes)
         trigger = set(self._config.vlm.trigger_classes)
-        return bool(detected & trigger)
+        if detected & trigger:
+            return None
+        return VLMSkipReason.NO_TRIGGER_CLASSES
 
     async def _apply_upload_result(
         self,

@@ -7,12 +7,14 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
 
+from homesec.models.enums import VLMRunMode
 from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
 from homesec.plugins.analyzers import load_analyzer
 from homesec.plugins.filters import load_filter
 from homesec.repository import ClipRepository
 from homesec.retention import build_local_retention_pruner
+from homesec.runtime.disabled_vlm import DisabledVLMAnalyzer
 from homesec.runtime.models import RuntimeBundle, config_signature
 
 if TYPE_CHECKING:
@@ -76,7 +78,11 @@ class RuntimeAssembler:
             await self._notifier_health_logger(notifier_entries)
 
             filter_plugin = load_filter(config.filter)
-            vlm_plugin = load_analyzer(config.vlm)
+            if config.vlm.run_mode == VLMRunMode.NEVER:
+                logger.info("VLM run_mode=never; runtime will use disabled analyzer")
+                vlm_plugin = DisabledVLMAnalyzer()
+            else:
+                vlm_plugin = load_analyzer(config.vlm)
             alert_policy = self._alert_policy_factory(config)
 
             sources, sources_by_camera = self._source_factory(config)
