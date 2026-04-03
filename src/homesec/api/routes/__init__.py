@@ -10,7 +10,18 @@ from homesec.api.dependencies import (
     verify_api_key,
     verify_media_access,
 )
-from homesec.api.routes import cameras, clips, config, health, media, onvif, runtime, setup, stats, storage
+from homesec.api.routes import (
+    cameras,
+    clips,
+    config,
+    health,
+    media,
+    onvif,
+    runtime,
+    setup,
+    stats,
+    storage,
+)
 
 
 def register_routes(app: FastAPI) -> None:

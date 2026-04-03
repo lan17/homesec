@@ -1122,7 +1122,10 @@ def test_get_storage_redacts_sensitive_url_credentials(tmp_path) -> None:
         "state_store": {"dsn": "postgresql://user:pass@localhost/db"},
         "notifiers": [{"backend": "mqtt", "config": {"host": "localhost"}}],
         "filter": {"backend": "yolo", "config": {}},
-        "vlm": {"backend": "openai", "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"}},
+        "vlm": {
+            "backend": "openai",
+            "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
+        },
         "alert_policy": {"backend": "default", "config": {}},
     }
     path = tmp_path / "config.yaml"

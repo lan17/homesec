@@ -146,11 +146,7 @@ def _backend_metadata(backend: str) -> StorageBackendMetadata:
     properties_raw = schema.get("properties", {})
     properties = properties_raw if isinstance(properties_raw, dict) else {}
     required_raw = schema.get("required", [])
-    required = {
-        item
-        for item in required_raw
-        if isinstance(item, str)
-    }
+    required = {item for item in required_raw if isinstance(item, str)}
 
     fields: list[StorageFieldMetadata] = []
     for field_name, field_schema in properties.items():

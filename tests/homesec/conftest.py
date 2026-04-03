@@ -1,5 +1,8 @@
 """Shared pytest fixtures for HomeSec tests."""
 
+import os
+import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -76,12 +79,26 @@ def sample_clip() -> Clip:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def postgres_dsn() -> str:
-    """Return test Postgres DSN (requires local DB running)."""
-    import os
+    """Return test Postgres DSN or skip integration tests when unavailable."""
+    dsn = os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
+    psql = shutil.which("psql")
+    if psql is None:
+        pytest.skip("Postgres integration tests require psql and a reachable TEST_DB_DSN target")
 
-    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
+    result = subprocess.run(
+        [psql, dsn, "-Atqc", "SELECT 1"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0 or result.stdout.strip() != "1":
+        pytest.skip(
+            f"Postgres integration tests require a reachable TEST_DB_DSN target (current: {dsn})"
+        )
+
+    return dsn
 
 
 @pytest.fixture
