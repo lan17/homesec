@@ -112,16 +112,35 @@ function buildConfigPatch(
   return patch
 }
 
+function buildSecretPatch(secretInputs: Record<string, string>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(secretInputs)) {
+    if (value.trim().length === 0) {
+      continue
+    }
+    patch[key] = value
+  }
+
+  return patch
+}
+
 function isSupportedStorageBackend(backend: string): backend is StorageBackend {
   return Object.prototype.hasOwnProperty.call(STORAGE_BACKENDS, backend)
 }
 
-function defaultConfigForBackend(metadata: StorageBackendMetadata | null): Record<string, unknown> {
+function defaultConfigForBackend(
+  backend: string,
+  metadata: StorageBackendMetadata | null,
+): Record<string, unknown> {
+  const defaults: Record<string, unknown> = isSupportedStorageBackend(backend)
+    ? cloneConfig(STORAGE_BACKENDS[backend].defaultConfig)
+    : {}
+
   if (!metadata) {
-    return {}
+    return defaults
   }
 
-  const defaults: Record<string, unknown> = {}
   for (const field of metadata.fields) {
     if (field.default === null || field.default === undefined) {
       continue
@@ -209,6 +228,16 @@ export function StoragePage() {
     return selectedMetadata.secret_fields
   }, [selectedMetadata])
 
+  const validationConfig = useMemo(() => {
+    if (!draft) {
+      return null
+    }
+    return {
+      ...draft.config,
+      ...buildSecretPatch(secretInputs),
+    }
+  }, [draft, secretInputs])
+
   const unauthorized =
     isUnauthorizedAPIError(storageQuery.error)
     || isUnauthorizedAPIError(storageBackendsQuery.error)
@@ -249,12 +278,12 @@ export function StoragePage() {
     setTestResult(null)
   }
 
-  const selectedBackendOption = useMemo(() => {
-    if (!draft) {
+  const activeBackendOption = useMemo(() => {
+    if (!storageQuery.data) {
       return null
     }
-    return backendOptions.find((option) => option.backend === draft.backend) ?? null
-  }, [backendOptions, draft])
+    return backendOptions.find((option) => option.backend === storageQuery.data.backend) ?? null
+  }, [backendOptions, storageQuery.data])
   const selectedBackendForm = useMemo(() => {
     if (!draft) {
       return null
@@ -323,13 +352,7 @@ export function StoragePage() {
     }
 
     const nextMetadata = backendMetadataByName.get(nextBackend) ?? null
-    const defaultFromMetadata = defaultConfigForBackend(nextMetadata)
-    const nextConfig =
-      Object.keys(defaultFromMetadata).length > 0
-        ? defaultFromMetadata
-        : isSupportedStorageBackend(nextBackend)
-          ? STORAGE_BACKENDS[nextBackend].defaultConfig
-          : {}
+    const nextConfig = defaultConfigForBackend(nextBackend, nextMetadata)
 
     setStorageDraft({
       backend: nextBackend,
@@ -367,14 +390,7 @@ export function StoragePage() {
       ? cloneConfig(draft.config)
       : buildConfigPatch(baseConfig, draft.config)
 
-    const secretPatch: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(secretInputs)) {
-      const trimmed = value.trim()
-      if (trimmed.length === 0) {
-        continue
-      }
-      secretPatch[key] = value
-    }
+    const secretPatch = buildSecretPatch(secretInputs)
 
     const nextConfigPatch: Record<string, unknown> = {
       ...nonSecretPatch,
@@ -481,7 +497,7 @@ export function StoragePage() {
           <div className="inline-form">
             <div className="inline-form__actions">
               <StatusBadge tone="unknown">
-                {selectedBackendOption?.label ?? storageQuery.data.backend}
+                {activeBackendOption?.label ?? storageQuery.data.backend}
               </StatusBadge>
               <p className="subtle">Backend id: {storageQuery.data.backend}</p>
             </div>
@@ -549,6 +565,7 @@ export function StoragePage() {
                           [field]: event.target.value,
                         }))
                         setActionFeedback(null)
+                        setTestResult(null)
                       }}
                     />
                   </label>
@@ -574,7 +591,7 @@ export function StoragePage() {
               request={{
                 type: 'storage',
                 backend: draft.backend,
-                config: draft.config,
+                config: validationConfig ?? draft.config,
               }}
               result={testResult}
               onResult={(result) => {

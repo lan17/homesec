@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import type { RuntimeStatusSnapshot } from '../../api/client'
@@ -292,6 +292,79 @@ describe('StoragePage', () => {
     ).toBeTruthy()
   })
 
+  it('preserves built-in backend defaults when metadata omits schema defaults', async () => {
+    // Given: Dropbox metadata omits a default for a required root field
+    const harness = setupPage({
+      backends: [
+        {
+          backend: 'local',
+          label: 'Local FS',
+          description: 'Store on local disk',
+          config_schema: {},
+          fields: [
+            {
+              name: 'root',
+              type: 'string',
+              required: true,
+              description: 'Root path',
+              default: './storage',
+              secret: false,
+            },
+          ],
+          secret_fields: [],
+        },
+        {
+          backend: 'dropbox',
+          label: 'Dropbox',
+          description: 'Upload to Dropbox',
+          config_schema: {},
+          fields: [
+            {
+              name: 'root',
+              type: 'string',
+              required: true,
+              description: 'Dropbox root',
+              default: null,
+              secret: false,
+            },
+            {
+              name: 'token_env',
+              type: 'string',
+              required: true,
+              description: 'Token env var',
+              default: 'DROPBOX_TOKEN',
+              secret: false,
+            },
+          ],
+          secret_fields: [],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    Object.defineProperty(window, 'confirm', {
+      configurable: true,
+      value: vi.fn(() => true),
+    })
+
+    // When: Operator switches to Dropbox and saves without manually retyping root
+    await user.click(screen.getByRole('button', { name: 'Dropbox' }))
+    await user.click(screen.getByRole('button', { name: 'Save storage settings' }))
+
+    // Then: Payload still carries the built-in root default instead of an empty config
+    expect(harness.updateMutateAsync).toHaveBeenCalledTimes(1)
+    expect(harness.updateMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          backend: 'dropbox',
+          config: expect.objectContaining({
+            root: '/homesec',
+            token_env: 'DROPBOX_TOKEN',
+          }),
+        }),
+      }),
+    )
+  })
+
   it('passes applyChanges=true and handles immediate runtime reload response', async () => {
     // Given: Storage update responds with runtime reload acceptance and apply-immediately enabled
     const harness = setupPage({
@@ -396,5 +469,73 @@ describe('StoragePage', () => {
         }),
       }),
     )
+  })
+
+  it('includes pending secret inputs in storage validation requests', async () => {
+    // Given: Backend metadata exposes a write-only secret field
+    setupPage({
+      backends: [
+        {
+          backend: 'local',
+          label: 'Local FS',
+          description: 'Store on local disk',
+          config_schema: {},
+          fields: [
+            {
+              name: 'root',
+              type: 'string',
+              required: true,
+              description: 'Root path',
+              default: './storage',
+              secret: false,
+            },
+            {
+              name: 'access_token',
+              type: 'string',
+              required: false,
+              description: 'Optional token',
+              default: null,
+              secret: true,
+            },
+          ],
+          secret_fields: ['access_token'],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+
+    // When: Operator enters a replacement secret and validates storage
+    await user.type(screen.getByLabelText('access_token'), 'replace-me')
+    await user.click(screen.getByRole('button', { name: 'Validate storage' }))
+
+    // Then: Validation uses the pending secret overlay instead of the stale persisted config
+    expect(setupTestConnectionMutateAsyncMock).toHaveBeenCalledTimes(1)
+    expect(setupTestConnectionMutateAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'storage',
+        config: expect.objectContaining({
+          root: './storage',
+          access_token: 'replace-me',
+        }),
+      }),
+    )
+  })
+
+  it('keeps the active-backend badge pinned to persisted state until save', async () => {
+    // Given: Local storage is persisted as the active backend
+    setupPage()
+    const user = userEvent.setup()
+    const activeCard = screen.getByRole('heading', { name: 'Active backend' }).closest('section')
+
+    if (!activeCard) {
+      throw new Error('Active backend card not found')
+    }
+
+    // When: Operator selects Dropbox but does not save
+    await user.click(screen.getByRole('button', { name: 'Dropbox' }))
+
+    // Then: The active-backend summary still reflects persisted local storage
+    expect(within(activeCard).getByText('Local FS')).toBeTruthy()
+    expect(within(activeCard).getByText('Backend id: local')).toBeTruthy()
   })
 })
