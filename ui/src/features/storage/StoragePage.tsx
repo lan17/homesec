@@ -25,7 +25,10 @@ import {
   STORAGE_BACKENDS,
   STORAGE_BACKEND_ORDER,
 } from '../settings/storage/backends'
-import type { StorageBackend } from '../settings/storage/types'
+import {
+  defaultConfigForBackend,
+  isSupportedStorageBackend,
+} from '../settings/storage/editorModel'
 
 const REDACTED_PLACEHOLDER = '***redacted***'
 
@@ -123,31 +126,6 @@ function buildSecretPatch(secretInputs: Record<string, string>): Record<string, 
   }
 
   return patch
-}
-
-function isSupportedStorageBackend(backend: string): backend is StorageBackend {
-  return Object.prototype.hasOwnProperty.call(STORAGE_BACKENDS, backend)
-}
-
-function defaultConfigForBackend(
-  backend: string,
-  metadata: StorageBackendMetadata | null,
-): Record<string, unknown> {
-  const defaults: Record<string, unknown> = isSupportedStorageBackend(backend)
-    ? cloneConfig(STORAGE_BACKENDS[backend].defaultConfig)
-    : {}
-
-  if (!metadata) {
-    return defaults
-  }
-
-  for (const field of metadata.fields) {
-    if (field.default === null || field.default === undefined) {
-      continue
-    }
-    defaults[field.name] = field.default
-  }
-  return defaults
 }
 
 function runtimeStatusLabel(state: 'idle' | 'reloading' | 'failed'): string {
@@ -347,7 +325,7 @@ export function StoragePage() {
   }
 
   function handleSelectBackend(nextBackend: string): void {
-    if (!draft || nextBackend === draft.backend) {
+    if (!draft || nextBackend === draft.backend || !isSupportedStorageBackend(nextBackend)) {
       return
     }
 

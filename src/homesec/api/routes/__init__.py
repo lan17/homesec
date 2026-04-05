@@ -34,7 +34,7 @@ def register_routes(app: FastAPI) -> None:
     )
     app.include_router(
         storage.router,
-        dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
+        dependencies=[Depends(verify_api_key)],
     )
     app.include_router(
         cameras.router,

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import get_homesec_app, require_normal_mode
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import is_sensitive_key, redact_config
 from homesec.config.errors import StorageConfigInvalidError, StorageMutationError
@@ -175,14 +175,22 @@ def _backend_metadata(backend: str) -> StorageBackendMetadata:
     )
 
 
-@router.get("/api/v1/storage", response_model=StorageResponse)
+@router.get(
+    "/api/v1/storage",
+    response_model=StorageResponse,
+    dependencies=[Depends(require_normal_mode)],
+)
 async def get_storage(app: Application = Depends(get_homesec_app)) -> StorageResponse:
     """Get active storage backend config with redacted secret values."""
     config = await asyncio.to_thread(app.config_manager.get_config)
     return _storage_response(config.storage)
 
 
-@router.patch("/api/v1/storage", response_model=StorageChangeResponse)
+@router.patch(
+    "/api/v1/storage",
+    response_model=StorageChangeResponse,
+    dependencies=[Depends(require_normal_mode)],
+)
 async def patch_storage(
     payload: StorageUpdate,
     apply_changes: bool = False,

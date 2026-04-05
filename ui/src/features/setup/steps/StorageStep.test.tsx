@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import type { useStorageBackendsQuery } from '../../../api/hooks/useStorageBackendsQuery'
 import { StorageStep } from './StorageStep'
 
 const testConnectionButtonPropsSpy = vi.fn()
+const useStorageBackendsQueryMock = vi.fn()
 
 vi.mock('../../shared/TestConnectionButton', () => ({
   TestConnectionButton: (props: unknown) => {
@@ -15,9 +17,21 @@ vi.mock('../../shared/TestConnectionButton', () => ({
   },
 }))
 
+vi.mock('../../../api/hooks/useStorageBackendsQuery', () => ({
+  useStorageBackendsQuery: () => useStorageBackendsQueryMock(),
+}))
+
 describe('StorageStep', () => {
   beforeEach(() => {
     testConnectionButtonPropsSpy.mockReset()
+    useStorageBackendsQueryMock.mockReset()
+    useStorageBackendsQueryMock.mockReturnValue({
+      data: null,
+      error: null,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useStorageBackendsQuery>)
   })
 
   afterEach(() => {
@@ -70,8 +84,58 @@ describe('StorageStep', () => {
   })
 
   it('builds storage test request from active backend selection', async () => {
-    // Given: Storage step initially targeting local backend
+    // Given: Storage step initially targeting local backend with metadata-driven labels/defaults
     const user = userEvent.setup()
+    useStorageBackendsQueryMock.mockReturnValue({
+      data: [
+        {
+          backend: 'local',
+          label: 'Local FS',
+          description: 'Store on local disk',
+          config_schema: {},
+          fields: [
+            {
+              name: 'root',
+              type: 'string',
+              required: true,
+              description: 'Root path',
+              default: './storage',
+              secret: false,
+            },
+          ],
+          secret_fields: [],
+        },
+        {
+          backend: 'dropbox',
+          label: 'Dropbox Cloud',
+          description: 'Upload to Dropbox',
+          config_schema: {},
+          fields: [
+            {
+              name: 'root',
+              type: 'string',
+              required: true,
+              description: 'Dropbox root',
+              default: null,
+              secret: false,
+            },
+            {
+              name: 'token_env',
+              type: 'string',
+              required: true,
+              description: 'Token env var',
+              default: 'DROPBOX_TOKEN',
+              secret: false,
+            },
+          ],
+          secret_fields: [],
+        },
+      ],
+      error: null,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useStorageBackendsQuery>)
     render(
       <StorageStep
         initialData={null}
@@ -82,9 +146,9 @@ describe('StorageStep', () => {
     )
 
     // When: Operator switches to Dropbox backend
-    await user.click(screen.getByRole('button', { name: 'Dropbox' }))
+    await user.click(screen.getByRole('button', { name: 'Dropbox Cloud' }))
 
-    // Then: Test-connection request uses storage type + dropbox backend/config
+    // Then: Test-connection request uses storage type + metadata-driven dropbox defaults
     expect(testConnectionButtonPropsSpy).toHaveBeenCalled()
     expect(testConnectionButtonPropsSpy.mock.calls.at(-1)?.[0]).toMatchObject({
       request: {
