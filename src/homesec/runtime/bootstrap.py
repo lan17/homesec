@@ -104,24 +104,31 @@ async def build_runtime_persistence_stack(
 ) -> RuntimePersistenceStack:
     """Build shared storage and persistence components for a runtime."""
     storage = create_storage_backend(config, loader=storage_loader)
-    state_store = await create_state_store(
-        config.state_store,
-        resolve_env=resolve_env,
-        state_store_factory=state_store_factory,
-        missing_dsn_message=missing_dsn_message,
-    )
-    event_store = create_event_store(
-        state_store,
-        unavailable_warning=event_store_unavailable_warning,
-    )
-    repository = create_repository(
-        state_store=state_store,
-        event_store=event_store,
-        config=config,
-    )
-    return RuntimePersistenceStack(
-        storage=storage,
-        state_store=state_store,
-        event_store=event_store,
-        repository=repository,
-    )
+    state_store: StateStore | None = None
+    try:
+        state_store = await create_state_store(
+            config.state_store,
+            resolve_env=resolve_env,
+            state_store_factory=state_store_factory,
+            missing_dsn_message=missing_dsn_message,
+        )
+        event_store = create_event_store(
+            state_store,
+            unavailable_warning=event_store_unavailable_warning,
+        )
+        repository = create_repository(
+            state_store=state_store,
+            event_store=event_store,
+            config=config,
+        )
+        return RuntimePersistenceStack(
+            storage=storage,
+            state_store=state_store,
+            event_store=event_store,
+            repository=repository,
+        )
+    except Exception:
+        if state_store is not None:
+            await state_store.shutdown()
+        await storage.shutdown()
+        raise
