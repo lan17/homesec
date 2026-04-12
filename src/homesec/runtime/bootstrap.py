@@ -42,7 +42,7 @@ class RuntimePersistenceStack:
 def _create_storage_backend(
     config: Config,
     *,
-    loader: Callable[[StorageConfig], StorageBackend] = load_storage_plugin,
+    loader: Callable[[StorageConfig], StorageBackend],
 ) -> StorageBackend:
     """Create the configured storage backend."""
     return loader(config.storage)
@@ -52,7 +52,7 @@ async def _create_state_store(
     config: StateStoreConfig,
     *,
     resolve_env: Callable[[str], str | None],
-    state_store_factory: Callable[[str], _InitializableStateStore] = PostgresStateStore,
+    state_store_factory: Callable[[str], _InitializableStateStore],
     missing_dsn_message: str,
 ) -> StateStore:
     """Create and initialize the configured state store."""
