@@ -407,6 +407,7 @@ async def test_record_notification_sent(
     ("initial_status", "expected_status"),
     [
         (ClipStatus.QUEUED_LOCAL, ClipStatus.UPLOADED),
+        (ClipStatus.UPLOADED, ClipStatus.UPLOADED),
         (ClipStatus.ANALYZED, ClipStatus.ANALYZED),
         (ClipStatus.DONE, ClipStatus.DONE),
         (ClipStatus.ERROR, ClipStatus.ERROR),
@@ -556,6 +557,35 @@ async def test_record_notification_sent_applies_explicit_status_transition_rules
     persisted = await state_store.get(clip_id)
     assert persisted is not None
     assert persisted.status == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_status", list(ClipStatus))
+async def test_record_clip_deleted_applies_explicit_status_transition_rules(
+    initial_status: ClipStatus,
+) -> None:
+    # Given: A repository with a clip already in a known status
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_id = f"delete-{initial_status.value}"
+    await state_store.upsert(clip_id, _build_state(status=initial_status))
+
+    # When: Clip deletion is recorded
+    state = await repository.record_clip_deleted(
+        clip_id,
+        reason="cleanup",
+        run_id="run-123",
+        deleted_local=True,
+        deleted_storage=True,
+    )
+
+    # Then: Delete always wins regardless of the prior status
+    assert state is not None
+    assert state.status == ClipStatus.DELETED
+    persisted = await state_store.get(clip_id)
+    assert persisted is not None
+    assert persisted.status == ClipStatus.DELETED
 
 
 @pytest.mark.asyncio

@@ -460,6 +460,8 @@ class ClipRepository:
         state = await self._load_state(clip_id, action="clip recheck")
         if state is None:
             return None
+        # Rechecks do not change clip status; deleted clips keep their terminal
+        # status and ignore filter_result mutations.
         if state.status == ClipStatus.DELETED:
             return state
 
@@ -710,6 +712,12 @@ class ClipRepository:
 
     @staticmethod
     def _apply_status_transition(state: ClipStateData, transition_name: TransitionName) -> bool:
+        """Apply a declared status transition to mutable clip state in place.
+
+        This helper is intentionally limited to status-to-status transitions.
+        Status-sensitive guards for other state mutations, such as clip recheck
+        behavior, remain local to the calling method.
+        """
         transition = _STATUS_TRANSITIONS[transition_name]
         if state.status in transition.blocked_from:
             return False
