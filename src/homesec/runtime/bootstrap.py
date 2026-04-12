@@ -129,6 +129,17 @@ async def build_runtime_persistence_stack(
         )
     except Exception:
         if state_store is not None:
-            await state_store.shutdown()
-        await storage.shutdown()
+            await _safe_shutdown(state_store, label="state store")
+        await _safe_shutdown(storage, label="storage backend")
         raise
+
+
+async def _safe_shutdown(component: object, *, label: str) -> None:
+    """Best-effort shutdown for partially built bootstrap components."""
+    shutdown = getattr(component, "shutdown", None)
+    if shutdown is None:
+        return
+    try:
+        await shutdown()
+    except Exception as exc:
+        logger.warning("Failed to shut down partial %s during bootstrap cleanup: %s", label, exc)

@@ -118,3 +118,42 @@ async def test_build_runtime_persistence_stack_shuts_down_partial_state_when_eve
     # Then: Both initialized resources are shut down on partial-build failure
     assert store.shutdown_called is True
     assert storage.shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_persistence_stack_preserves_primary_failure_when_cleanup_raises() -> (
+    None
+):
+    # Given: Partial-bootstrap cleanup that fails while handling the primary bootstrap error
+    config = _make_config()
+
+    class _FailingStorage:
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+            raise RuntimeError("cleanup failed")
+
+    class _FailingStateStore:
+        def __init__(self, dsn: str) -> None:
+            self.dsn = dsn
+
+        async def initialize(self) -> bool:
+            raise RuntimeError("primary failure")
+
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+
+        def create_event_store(self) -> object:
+            raise AssertionError("create_event_store should not be reached")
+
+    # When: Building the shared runtime persistence stack
+    with pytest.raises(RuntimeError, match="primary failure"):
+        await build_runtime_persistence_stack(
+            config,
+            resolve_env=lambda env: env,
+            missing_dsn_message="missing dsn",
+            event_store_unavailable_warning="events unavailable",
+            storage_loader=lambda _cfg: _FailingStorage(),
+            state_store_factory=_FailingStateStore,
+        )
+
+    # Then: Cleanup errors do not replace the original bootstrap failure
