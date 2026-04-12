@@ -307,11 +307,13 @@ class ClipRepository:
         if state is None:
             return None
 
+        now = self._now_utc()
         state.alert_decision = decision
+        state.alert_decision_at = now
 
         event = AlertDecisionMadeEvent(
             clip_id=clip_id,
-            timestamp=self._now_utc(),
+            timestamp=now,
             should_notify=decision.notify,
             reason=decision.notify_reason,
             detected_classes=detected_classes,

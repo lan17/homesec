@@ -57,6 +57,11 @@ from homesec.models.events import (
 logger = logging.getLogger(__name__)
 _BATCH_STATE_LOOKUP_SIZE = 1000
 
+
+def _jsonb_datetime_expr(column: Any, *path: str):
+    """Build a timestamp expression from a JSONB path."""
+    return sa_cast(func.jsonb_extract_path_text(column, *path), DateTime(timezone=True))
+
 # Map EventType enum to event model classes
 # Using enum values ensures consistency with event models
 _EVENT_TYPE_MAP: dict[str, type[ClipEventModel]] = {
@@ -450,17 +455,19 @@ class PostgresStateStore(StateStore):
             return 0
 
     async def count_alerts_since(self, since: datetime) -> int:
-        """Count alert events (notification_sent) since the given timestamp."""
+        """Count triggered alerts since the given timestamp."""
         if self._engine is None:
             return 0
 
+        alerted_at_expr = _jsonb_datetime_expr(ClipState.data, "alert_decision_at")
         query = (
             select(func.count())
-            .select_from(ClipEvent)
+            .select_from(ClipState)
             .where(
                 and_(
-                    ClipEvent.event_type == EventType.NOTIFICATION_SENT,
-                    ClipEvent.timestamp >= since,
+                    func.jsonb_extract_path_text(ClipState.data, "alert_decision", "notify")
+                    == "true",
+                    alerted_at_expr >= since,
                 )
             )
         )

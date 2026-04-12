@@ -198,7 +198,7 @@ class StateStore(Shutdownable, ABC):
 
     @abstractmethod
     async def count_alerts_since(self, since: datetime) -> int:
-        """Count alert events since the given timestamp."""
+        """Count triggered alerts since the given timestamp."""
         raise NotImplementedError
 
     @abstractmethod

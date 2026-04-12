@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from homesec.models.alert import AlertDecision
 from homesec.models.clip import Clip, ClipStateData
 from homesec.models.enums import RiskLevel
 from homesec.models.events import ClipRecheckedEvent
@@ -291,6 +292,47 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
 
     # Cleanup
     await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_record_alert_decision_persists_timestamp(tmp_path: Path) -> None:
+    # Given: A repository using in-memory mock stores
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+
+    clip = Clip(
+        clip_id="test-clip-004a",
+        camera_name="front_door",
+        local_path=tmp_path / "test.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now() + timedelta(seconds=10),
+        duration_s=10.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip)
+
+    decision = AlertDecision(notify=True, notify_reason="risk_level=high")
+
+    # When: An alert decision is recorded
+    await repository.record_alert_decision(
+        clip.clip_id,
+        decision,
+        detected_classes=["person"],
+        vlm_risk=RiskLevel.HIGH,
+    )
+
+    # Then: State records the decision and timestamp
+    state = await state_store.get(clip.clip_id)
+    assert state is not None
+    assert state.alert_decision == decision
+    assert state.alert_decision_at is not None
+    assert state.alert_decision_at.tzinfo is not None
+
+    # And: Event is recorded
+    events = event_store.events
+    assert len(events) == 2
+    assert events[1].event_type == "alert_decision_made"
 
 
 @pytest.mark.asyncio

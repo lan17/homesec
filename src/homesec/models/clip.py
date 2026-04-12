@@ -48,6 +48,7 @@ class ClipStateData(BaseModel):
     filter_result: FilterResult | None = None
     analysis_result: AnalysisResult | None = None
     alert_decision: AlertDecision | None = None
+    alert_decision_at: datetime | None = None
     created_at: datetime | None = None
 
     @property
