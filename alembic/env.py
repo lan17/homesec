@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from alembic import context
-from sqlalchemy import text
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,13 +20,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from sqlalchemy import MetaData  # noqa: E402
+
 from homesec.postgres_support import (  # noqa: E402
     build_async_engine_kwargs,
     resolve_test_db_schema,
     schema_ddl_identifier,
 )
-from homesec.telemetry.db.log_table import metadata as telemetry_metadata  # noqa: E402
 from homesec.state.postgres import Base as StateBase  # noqa: E402
+from homesec.telemetry.db.log_table import metadata as telemetry_metadata  # noqa: E402
 
 # Combine all metadata into one for alembic
 target_metadata = MetaData()
