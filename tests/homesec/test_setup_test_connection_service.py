@@ -734,6 +734,43 @@ async def test_test_connection_camera_onvif_success(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_camera_onvif_uses_requested_timeout_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera onvif test should not inherit the shorter generic plugin timeout."""
+
+    # Given: An ONVIF probe that outlives the generic plugin timeout but stays within request budget
+    class _SlowSuccessfulOnvifService:
+        def __init__(self, *, discover_fn: object, client_factory: object) -> None:
+            _ = (discover_fn, client_factory)
+
+        async def probe(self, options: setup_service.OnvifProbeOptions) -> object:
+            assert options.timeout_s == 0.05
+            await asyncio.sleep(0.02)
+            return SimpleNamespace(profiles=[object()], streams=[object()])
+
+    monkeypatch.setattr(setup_service, "_PLUGIN_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "OnvifService", _SlowSuccessfulOnvifService)
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="onvif",
+        config={
+            "host": "192.168.1.10",
+            "username": "admin",
+            "password": "secret",
+            "timeout_s": 0.05,
+        },
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The setup-specific ONVIF timeout governs the registered probe
+    assert response.success is True
+    assert response.message == "ONVIF probe succeeded."
+
+
+@pytest.mark.asyncio
 async def test_test_connection_camera_onvif_validation_failure() -> None:
     """Camera onvif test should fail when required config fields are missing."""
     # Given: An ONVIF request missing required host/username/password fields

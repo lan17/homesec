@@ -45,3 +45,19 @@ def test_setup_probe_registry_rejects_duplicate_registration() -> None:
     # When / Then: Registering the same target/backend again raises a clear error
     with pytest.raises(ValueError, match="already registered"):
         registry.register("storage", "local")(_probe_two)
+
+
+def test_setup_probe_registry_tracks_custom_timeout_budget() -> None:
+    """Registry should preserve explicit timeout metadata for registered probes."""
+    # Given: A probe registered with a non-default timeout budget
+    registry = SetupProbeRegistry()
+
+    async def _probe(*, config: dict[str, object]) -> SetupTestConnectionResponse:
+        _ = config
+        return SetupTestConnectionResponse(success=True, message="ok")
+
+    registry.register("camera", "rtsp", timeout_s=11.0)(_probe)
+
+    # When / Then: Lookup returns the probe and its configured timeout budget
+    assert registry.get("camera", "rtsp") is _probe
+    assert registry.get_timeout("camera", "rtsp") == 11.0

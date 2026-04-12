@@ -50,6 +50,7 @@ from homesec.services.setup_probes import (
     SetupProbeTarget,
     get_setup_probe,
     get_setup_probe_backends,
+    get_setup_probe_timeout,
     setup_probe,
 )
 from homesec.sources.ftp import FtpSourceConfig
@@ -260,7 +261,7 @@ async def _test_analyzer_connection(
     )
 
 
-@setup_probe("camera", "rtsp")
+@setup_probe("camera", "rtsp", timeout_s=_RTSP_TEST_CONNECTION_TIMEOUT_S + 1.0)
 async def _test_rtsp_camera_connection(
     *,
     config: dict[str, object],
@@ -354,7 +355,7 @@ async def _test_rtsp_camera_connection(
     )
 
 
-@setup_probe("camera", "ftp")
+@setup_probe("camera", "ftp", timeout_s=_FTP_TEST_CONNECTION_TIMEOUT_S + 1.0)
 async def _test_ftp_camera_connection(
     *,
     config: dict[str, object],
@@ -465,7 +466,7 @@ async def _test_local_folder_camera_connection(
     )
 
 
-@setup_probe("camera", "onvif")
+@setup_probe("camera", "onvif", timeout_s=_ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S + 1.0)
 async def _test_onvif_camera_connection(
     *,
     config: dict[str, object],
@@ -718,11 +719,11 @@ async def _run_registered_setup_probe(
     probe = get_setup_probe(target, backend)
     if probe is None:
         return None
+    timeout_s = get_setup_probe_timeout(target, backend)
     try:
-        return await asyncio.wait_for(
-            probe(config=config),
-            timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S,
-        )
+        if timeout_s is None:
+            return await probe(config=config)
+        return await asyncio.wait_for(probe(config=config), timeout=timeout_s)
     except SetupTestConnectionRequestError:
         raise
     except ValidationError as exc:
@@ -740,7 +741,7 @@ async def _run_registered_setup_probe(
         )
         return _result(
             success=False,
-            message=(f"{target} probe timed out after {_PLUGIN_TEST_CONNECTION_TIMEOUT_S:.1f}s."),
+            message=f"{target} probe timed out after {timeout_s:.1f}s.",
             start=start,
         )
     except Exception:
