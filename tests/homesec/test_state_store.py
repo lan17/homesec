@@ -718,54 +718,47 @@ async def test_list_clips_keyset_cursor_uses_created_at_and_clip_id(
 
 
 @pytest.mark.asyncio
-async def test_count_alerts_since_counts_alert_decision_at() -> None:
-    """count_alerts_since should filter on alert_decision_at, not notification events."""
+async def test_count_alerts_since_counts_alert_decision_at(
+    state_store: PostgresStateStore,
+) -> None:
+    """count_alerts_since should count alert decisions from clip state timestamps."""
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(minutes=5)
 
-    class _FakeResult:
-        def __init__(self, value: int) -> None:
-            self._value = value
+    # Given: Clip states with recent, stale, and suppressed alert decisions
+    await state_store.upsert(
+        "test_alert_count_recent",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/recent.mp4",
+            alert_decision=AlertDecision(notify=True, notify_reason="risk=high"),
+            alert_decision_at=now - timedelta(minutes=1),
+        ),
+    )
+    await state_store.upsert(
+        "test_alert_count_old",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/old.mp4",
+            alert_decision=AlertDecision(notify=True, notify_reason="risk=high"),
+            alert_decision_at=now - timedelta(hours=2),
+        ),
+    )
+    await state_store.upsert(
+        "test_alert_count_suppressed",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/suppressed.mp4",
+            alert_decision=AlertDecision(notify=False, notify_reason="risk=low"),
+            alert_decision_at=now - timedelta(minutes=1),
+        ),
+    )
 
-        def scalar(self) -> int:
-            return self._value
+    # When: Counting recent triggered alerts
+    count = await state_store.count_alerts_since(since)
 
-    class _FakeConnection:
-        def __init__(self) -> None:
-            self.queries: list[object] = []
-
-        async def __aenter__(self) -> "_FakeConnection":
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb) -> None:
-            _ = exc_type
-            _ = exc
-            _ = tb
-            return None
-
-        async def execute(self, query: object) -> _FakeResult:
-            self.queries.append(query)
-            return _FakeResult(1)
-
-    class _FakeEngine:
-        def __init__(self) -> None:
-            self.connection = _FakeConnection()
-
-        def connect(self) -> _FakeConnection:
-            return self.connection
-
-    # Given: A store backed by a fake engine
-    store = PostgresStateStore("postgresql://unused")
-    fake_engine = _FakeEngine()
-    store._engine = fake_engine  # type: ignore[assignment]
-    since = datetime.now(timezone.utc) - timedelta(minutes=5)
-
-    # When: Counting alerts
-    count = await store.count_alerts_since(since)
-
-    # Then: The query is based on alert_decision_at and returns the database result
+    # Then: Only recent notifying decisions are counted
     assert count == 1
-    assert len(fake_engine.connection.queries) == 1
-    sql = str(fake_engine.connection.queries[0].compile(compile_kwargs={"literal_binds": True}))
-    assert "alert_decision_at" in sql
-    assert "alert_decision" in sql
-    assert "notify" in sql
-    assert "notification_sent" not in sql

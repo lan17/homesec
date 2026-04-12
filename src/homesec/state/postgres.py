@@ -29,7 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from homesec.interfaces import EventStore, StateStore
-from homesec.models.clip import ClipListCursor, ClipListPage, ClipStateData
+from homesec.models.clip import (
+    ClipListCursor,
+    ClipListPage,
+    ClipStateData,
+    format_clip_state_timestamp,
+)
 from homesec.models.enums import ClipStatus, EventType
 from homesec.models.events import (
     AlertDecisionMadeEvent,
@@ -117,6 +122,10 @@ class ClipState(Base):
         Index(
             "idx_clip_states_activity_type",
             func.jsonb_extract_path_text(data, "analysis_result", "activity_type"),
+        ),
+        Index(
+            "idx_clip_states_alert_decision_at",
+            func.jsonb_extract_path_text(data, "alert_decision_at"),
         ),
     )
 
@@ -454,10 +463,8 @@ class PostgresStateStore(StateStore):
         if self._engine is None:
             return 0
 
-        alerted_at_expr = sa_cast(
-            func.jsonb_extract_path_text(ClipState.data, "alert_decision_at"),
-            DateTime(timezone=True),
-        )
+        since_text = format_clip_state_timestamp(since)
+        alerted_at_expr = func.jsonb_extract_path_text(ClipState.data, "alert_decision_at")
         query = (
             select(func.count())
             .select_from(ClipState)
@@ -465,7 +472,7 @@ class PostgresStateStore(StateStore):
                 and_(
                     func.jsonb_extract_path_text(ClipState.data, "alert_decision", "notify")
                     == "true",
-                    alerted_at_expr >= since,
+                    alerted_at_expr >= since_text,
                 )
             )
         )

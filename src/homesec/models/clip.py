@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 from homesec.models.enums import ClipStatus
 
@@ -15,6 +15,14 @@ if TYPE_CHECKING:
     from homesec.models.alert import AlertDecision
     from homesec.models.filter import FilterResult
     from homesec.models.vlm import AnalysisResult
+
+
+def format_clip_state_timestamp(value: datetime) -> str:
+    """Format a clip-state timestamp in a stable UTC representation for JSONB storage."""
+    normalized = (
+        value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    )
+    return normalized.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 class Clip(BaseModel):
@@ -50,6 +58,13 @@ class ClipStateData(BaseModel):
     alert_decision: AlertDecision | None = None
     alert_decision_at: datetime | None = None
     created_at: datetime | None = None
+
+    @field_serializer("alert_decision_at", when_used="json")
+    def _serialize_alert_decision_at(self, value: datetime | None) -> str | None:
+        """Serialize alert timestamps in a fixed-width UTC format for JSONB queries."""
+        if value is None:
+            return None
+        return format_clip_state_timestamp(value)
 
     @property
     def upload_completed(self) -> bool:
