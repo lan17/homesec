@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from homesec.models.clip import Clip, ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.config import RetryConfig
@@ -41,6 +42,52 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TResult = TypeVar("TResult")
+TransitionName = Literal[
+    "upload_completed",
+    "filter_failed",
+    "vlm_completed",
+    "notification_sent",
+    "clip_deleted",
+    "mark_done",
+]
+
+
+@dataclass(frozen=True)
+class _StatusTransition:
+    target: ClipStatus
+    blocked_from: frozenset[ClipStatus] = frozenset()
+
+
+_STATUS_TRANSITIONS: dict[TransitionName, _StatusTransition] = {
+    "upload_completed": _StatusTransition(
+        target=ClipStatus.UPLOADED,
+        blocked_from=frozenset(
+            (
+                ClipStatus.ANALYZED,
+                ClipStatus.DONE,
+                ClipStatus.ERROR,
+                ClipStatus.DELETED,
+            )
+        ),
+    ),
+    "filter_failed": _StatusTransition(
+        target=ClipStatus.ERROR,
+        blocked_from=frozenset((ClipStatus.DELETED,)),
+    ),
+    "vlm_completed": _StatusTransition(
+        target=ClipStatus.ANALYZED,
+        blocked_from=frozenset((ClipStatus.DELETED,)),
+    ),
+    "notification_sent": _StatusTransition(
+        target=ClipStatus.DONE,
+        blocked_from=frozenset((ClipStatus.DELETED,)),
+    ),
+    "clip_deleted": _StatusTransition(target=ClipStatus.DELETED),
+    "mark_done": _StatusTransition(
+        target=ClipStatus.DONE,
+        blocked_from=frozenset((ClipStatus.DONE, ClipStatus.DELETED)),
+    ),
+}
 
 
 class ClipRepository:
@@ -111,13 +158,7 @@ class ClipRepository:
 
         state.storage_uri = storage_uri
         state.view_url = view_url
-        if state.status not in (
-            ClipStatus.ANALYZED,
-            ClipStatus.DONE,
-            ClipStatus.ERROR,
-            ClipStatus.DELETED,
-        ):
-            state.status = ClipStatus.UPLOADED
+        self._apply_status_transition(state, "upload_completed")
 
         event = UploadCompletedEvent(
             clip_id=clip_id,
@@ -219,8 +260,7 @@ class ClipRepository:
         if state is None:
             return None
 
-        if state.status != ClipStatus.DELETED:
-            state.status = ClipStatus.ERROR
+        self._apply_status_transition(state, "filter_failed")
         await self._safe_upsert(clip_id, state)
         return state
 
@@ -249,8 +289,7 @@ class ClipRepository:
             return None
 
         state.analysis_result = result
-        if state.status != ClipStatus.DELETED:
-            state.status = ClipStatus.ANALYZED
+        self._apply_status_transition(state, "vlm_completed")
 
         event = VLMCompletedEvent(
             clip_id=clip_id,
@@ -339,8 +378,7 @@ class ClipRepository:
         if state is None:
             return None
 
-        if state.status != ClipStatus.DELETED:
-            state.status = ClipStatus.DONE
+        self._apply_status_transition(state, "notification_sent")
 
         event = NotificationSentEvent(
             clip_id=clip_id,
@@ -391,7 +429,7 @@ class ClipRepository:
         if state is None:
             return None
 
-        state.status = ClipStatus.DELETED
+        self._apply_status_transition(state, "clip_deleted")
 
         event = ClipDeletedEvent(
             clip_id=clip_id,
@@ -422,6 +460,8 @@ class ClipRepository:
         state = await self._load_state(clip_id, action="clip recheck")
         if state is None:
             return None
+        # Rechecks do not change clip status; deleted clips keep their terminal
+        # status and ignore filter_result mutations.
         if state.status == ClipStatus.DELETED:
             return state
 
@@ -475,10 +515,9 @@ class ClipRepository:
         if state is None:
             return None
 
-        if state.status in (ClipStatus.DONE, ClipStatus.DELETED):
+        if not self._apply_status_transition(state, "mark_done"):
             return state
 
-        state.status = ClipStatus.DONE
         await self._safe_upsert(clip_id, state)
         return state
 
@@ -670,3 +709,17 @@ class ClipRepository:
     @staticmethod
     def _now_utc() -> datetime:
         return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _apply_status_transition(state: ClipStateData, transition_name: TransitionName) -> bool:
+        """Apply a declared status transition to mutable clip state in place.
+
+        This helper is intentionally limited to status-to-status transitions.
+        Status-sensitive guards for other state mutations, such as clip recheck
+        behavior, remain local to the calling method.
+        """
+        transition = _STATUS_TRANSITIONS[transition_name]
+        if state.status in transition.blocked_from:
+            return False
+        state.status = transition.target
+        return True
