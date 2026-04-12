@@ -450,16 +450,17 @@ class PostgresStateStore(StateStore):
             return 0
 
     async def count_alerts_since(self, since: datetime) -> int:
-        """Count alert events (notification_sent) since the given timestamp."""
+        """Count clip-level triggered alerts since the given timestamp."""
         if self._engine is None:
             return 0
 
         query = (
-            select(func.count())
+            select(func.count(func.distinct(ClipEvent.clip_id)))
             .select_from(ClipEvent)
             .where(
                 and_(
-                    ClipEvent.event_type == EventType.NOTIFICATION_SENT,
+                    ClipEvent.event_type == EventType.ALERT_DECISION_MADE,
+                    func.jsonb_extract_path_text(ClipEvent.event_data, "should_notify") == "true",
                     ClipEvent.timestamp >= since,
                 )
             )

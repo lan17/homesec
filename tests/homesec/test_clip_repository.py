@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from homesec.models.alert import AlertDecision
 from homesec.models.clip import Clip, ClipStateData
 from homesec.models.enums import RiskLevel
 from homesec.models.events import ClipRecheckedEvent
@@ -294,6 +295,67 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
 
 
 @pytest.mark.asyncio
+async def test_record_alert_decision_records_state_and_event(tmp_path: Path) -> None:
+    # Given: A repository using in-memory mock stores
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+
+    clip = Clip(
+        clip_id="test-clip-004a",
+        camera_name="front_door",
+        local_path=tmp_path / "test.mp4",
+        start_ts=datetime.now(),
+        end_ts=datetime.now() + timedelta(seconds=10),
+        duration_s=10.0,
+        source_backend="test",
+    )
+    await repository.initialize_clip(clip)
+
+    decision = AlertDecision(notify=True, notify_reason="risk_level=high")
+
+    # When: An alert decision is recorded
+    await repository.record_alert_decision(
+        clip.clip_id,
+        decision,
+        detected_classes=["person"],
+        vlm_risk=RiskLevel.HIGH,
+    )
+
+    # Then: State records the alert decision
+    state = await state_store.get(clip.clip_id)
+    assert state is not None
+    assert state.alert_decision == decision
+
+    # And: Event is recorded
+    events = event_store.events
+    assert len(events) == 2
+    assert events[1].event_type == "alert_decision_made"
+
+
+@pytest.mark.asyncio
+async def test_record_alert_decision_returns_none_for_missing_clip() -> None:
+    # Given: A repository with no stored clip state
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    decision = AlertDecision(notify=True, notify_reason="risk_level=high")
+
+    # When: Recording an alert decision for an unknown clip
+    result = await repository.record_alert_decision(
+        "missing-clip",
+        decision,
+        detected_classes=["person"],
+        vlm_risk=RiskLevel.HIGH,
+    )
+
+    # Then: No state or event is recorded and None is returned
+    assert result is None
+    assert event_store.events == []
+    assert state_store.states == {}
+
+
+@pytest.mark.asyncio
 async def test_record_notification_sent(
     postgres_dsn: str, tmp_path: Path, clean_test_db: None
 ) -> None:
@@ -372,3 +434,22 @@ async def test_get_clip_states_with_created_at_uses_batch_lookup() -> None:
     assert state_b.created_at == created_at_b
     assert state_store.get_many_count == 1
     assert state_store.get_count == 0
+
+
+@pytest.mark.asyncio
+async def test_count_alerts_since_returns_zero_when_state_store_count_fails() -> None:
+    class FailingAlertCountStateStore(MockStateStore):
+        async def count_alerts_since(self, since: datetime) -> int:
+            _ = since
+            raise RuntimeError("Simulated alert count failure")
+
+    # Given: A repository whose state store raises during alert counting
+    state_store = FailingAlertCountStateStore()
+    repository = ClipRepository(state_store, MockEventStore())
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    # When: Counting alerts through the repository
+    count = await repository.count_alerts_since(since)
+
+    # Then: The repository degrades to zero instead of raising
+    assert count == 0

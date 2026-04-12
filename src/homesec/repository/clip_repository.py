@@ -44,7 +44,12 @@ TResult = TypeVar("TResult")
 
 
 class ClipRepository:
-    """Coordinates state + event writes with best-effort retries."""
+    """Coordinates state + event writes with best-effort retries.
+
+    State is the authoritative product-facing record when Postgres is available.
+    Events are best-effort history/telemetry and may be missing if append retries
+    are exhausted after state has already advanced.
+    """
 
     def __init__(
         self,
@@ -558,7 +563,7 @@ class ClipRepository:
             return 0
 
     async def count_alerts_since(self, since: datetime) -> int:
-        """Count alert events since the given timestamp."""
+        """Count clip-level triggered alerts since the given timestamp."""
         try:
             return await self._run_with_retries(
                 label="State store count alerts",
