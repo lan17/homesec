@@ -10,7 +10,7 @@ import homesec.state.postgres as state_postgres
 from homesec.models.alert import AlertDecision
 from homesec.models.clip import ClipListCursor, ClipStateData
 from homesec.models.enums import ClipStatus
-from homesec.models.events import AlertDecisionMadeEvent
+from homesec.models.events import AlertDecisionMadeEvent, NotificationSentEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.state import PostgresStateStore
@@ -797,3 +797,67 @@ async def test_count_alerts_since_counts_notifying_alert_decision_events(
 
     # Then: Only recent notifying clip-level alert decisions are counted once per clip
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_count_alerts_since_ignores_notification_sent_events(
+    state_store: PostgresStateStore,
+) -> None:
+    # Given: A clip with one alert decision and multiple notification delivery events
+    clip_id = "test_alert_count_delivery"
+    now = datetime.now(timezone.utc)
+    await state_store.upsert(
+        clip_id,
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.DONE,
+            local_path="/tmp/delivery.mp4",
+        ),
+    )
+    event_store = state_store.create_event_store()
+    await event_store.append(
+        AlertDecisionMadeEvent(
+            clip_id=clip_id,
+            timestamp=now - timedelta(minutes=1),
+            should_notify=True,
+            reason="risk=high",
+            detected_classes=["person"],
+            vlm_risk="high",
+        )
+    )
+    await event_store.append(
+        NotificationSentEvent(
+            clip_id=clip_id,
+            timestamp=now - timedelta(seconds=30),
+            notifier_name="mqtt",
+            dedupe_key=clip_id,
+            attempt=1,
+        )
+    )
+    await event_store.append(
+        NotificationSentEvent(
+            clip_id=clip_id,
+            timestamp=now - timedelta(seconds=20),
+            notifier_name="email",
+            dedupe_key=clip_id,
+            attempt=1,
+        )
+    )
+
+    # When: Counting recent triggered alerts
+    count = await state_store.count_alerts_since(now - timedelta(minutes=5))
+
+    # Then: Delivery events do not inflate the clip-level alert count
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_count_alerts_since_returns_zero_when_uninitialized() -> None:
+    # Given: A state store that has not been initialized
+    store = PostgresStateStore(get_test_dsn())
+
+    # When: Counting alerts without a database engine
+    count = await store.count_alerts_since(datetime.now(timezone.utc) - timedelta(hours=1))
+
+    # Then: The uninitialized store degrades to zero
+    assert count == 0
