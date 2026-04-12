@@ -12,8 +12,19 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+import homesec.onvif.setup_probe as onvif_setup_probe
+import homesec.plugins.storage.local_setup_probe as local_storage_setup_probe
+import homesec.sources.ftp_setup_probe as ftp_setup_probe
+import homesec.sources.local_folder_setup_probe as local_folder_setup_probe
+import homesec.sources.rtsp.setup_probe as rtsp_setup_probe
 from homesec.models.setup import TestConnectionRequest as SetupTestConnectionRequest
+from homesec.onvif.service import OnvifProbeError, OnvifProbeOptions, OnvifProbeTimeoutError
+from homesec.plugins.storage.local import LocalStorageConfig
 from homesec.services import setup as setup_service
+from homesec.sources.ftp import FtpSourceConfig
+from homesec.sources.local_folder import LocalFolderSourceConfig
+from homesec.sources.rtsp.core import RTSPSourceConfig
+from homesec.sources.rtsp.preflight import PreflightError
 
 
 @dataclass
@@ -65,9 +76,9 @@ async def test_test_connection_camera_local_folder_success(
     ) -> object:
         _ = (plugin_type, config, runtime_context)
         assert backend == "local_folder"
-        return setup_service.LocalFolderSourceConfig(watch_dir=str(watch_dir))
+        return LocalFolderSourceConfig(watch_dir=str(watch_dir))
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_folder_setup_probe, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -104,9 +115,9 @@ async def test_test_connection_camera_local_folder_missing_directory(
     ) -> object:
         _ = (plugin_type, config, runtime_context)
         assert backend == "local_folder"
-        return setup_service.LocalFolderSourceConfig(watch_dir=str(watch_dir))
+        return LocalFolderSourceConfig(watch_dir=str(watch_dir))
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_folder_setup_probe, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -354,7 +365,7 @@ async def test_test_connection_camera_rtsp_success(
     ) -> object:
         _ = (plugin_type, config, runtime_context)
         assert backend == "rtsp"
-        return setup_service.RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
+        return RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
 
     class _FakeStartupPreflight:
         def __init__(
@@ -383,8 +394,8 @@ async def test_test_connection_camera_rtsp_success(
                 )
             )
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "RTSPStartupPreflight", _FakeStartupPreflight)
+    monkeypatch.setattr(rtsp_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(rtsp_setup_probe, "RTSPStartupPreflight", _FakeStartupPreflight)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -417,9 +428,9 @@ async def test_test_connection_camera_rtsp_validation_failure(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.RTSPSourceConfig.model_validate({})
+        return RTSPSourceConfig.model_validate({})
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(rtsp_setup_probe, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -449,10 +460,10 @@ async def test_test_connection_camera_rtsp_env_url_missing_returns_failure(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.RTSPSourceConfig(rtsp_url_env="HOMESEC_RTSP_MISSING")
+        return RTSPSourceConfig(rtsp_url_env="HOMESEC_RTSP_MISSING")
 
     monkeypatch.delenv("HOMESEC_RTSP_MISSING", raising=False)
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(rtsp_setup_probe, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -482,7 +493,7 @@ async def test_test_connection_camera_rtsp_timeout_returns_failure(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
+        return RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
 
     class _SlowStartupPreflight:
         def __init__(
@@ -512,9 +523,9 @@ async def test_test_connection_camera_rtsp_timeout_returns_failure(
                 )
             )
 
-    monkeypatch.setattr(setup_service, "_RTSP_TEST_CONNECTION_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "RTSPStartupPreflight", _SlowStartupPreflight)
+    monkeypatch.setattr(rtsp_setup_probe, "RTSP_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(rtsp_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(rtsp_setup_probe, "RTSPStartupPreflight", _SlowStartupPreflight)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -544,7 +555,7 @@ async def test_test_connection_camera_rtsp_preflight_error_details(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
+        return RTSPSourceConfig(rtsp_url="rtsp://example.local/stream")
 
     class _FailingStartupPreflight:
         def __init__(
@@ -565,14 +576,14 @@ async def test_test_connection_camera_rtsp_preflight_error_details(
             detect_rtsp_url: str,
         ) -> object:
             _ = (camera_name, primary_rtsp_url, detect_rtsp_url)
-            return setup_service.PreflightError(
+            return PreflightError(
                 camera_key="front-door",
                 stage="selection",
                 message="No compatible streams found",
             )
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "RTSPStartupPreflight", _FailingStartupPreflight)
+    monkeypatch.setattr(rtsp_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(rtsp_setup_probe, "RTSPStartupPreflight", _FailingStartupPreflight)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -603,10 +614,10 @@ async def test_test_connection_camera_ftp_success(
     ) -> object:
         _ = (plugin_type, config, runtime_context)
         assert backend == "ftp"
-        return setup_service.FtpSourceConfig(host="127.0.0.1", port=0)
+        return FtpSourceConfig(host="127.0.0.1", port=0)
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "_probe_tcp_bind", lambda *_args: 42424)
+    monkeypatch.setattr(ftp_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(ftp_setup_probe, "probe_tcp_bind", lambda *_args: 42424)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -637,15 +648,15 @@ async def test_test_connection_camera_ftp_timeout_returns_failure(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.FtpSourceConfig(host="127.0.0.1", port=0)
+        return FtpSourceConfig(host="127.0.0.1", port=0)
 
     def _slow_probe(*_args: object, **_kwargs: object) -> int:
         time.sleep(0.05)
         return 42424
 
-    monkeypatch.setattr(setup_service, "_FTP_TEST_CONNECTION_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "_probe_tcp_bind", _slow_probe)
+    monkeypatch.setattr(ftp_setup_probe, "FTP_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(ftp_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(ftp_setup_probe, "probe_tcp_bind", _slow_probe)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -675,13 +686,13 @@ async def test_test_connection_camera_ftp_bind_oserror_returns_failure(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.FtpSourceConfig(host="127.0.0.1", port=2121)
+        return FtpSourceConfig(host="127.0.0.1", port=2121)
 
     def _failing_probe(*_args: object, **_kwargs: object) -> int:
         raise OSError("Address already in use")
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "_probe_tcp_bind", _failing_probe)
+    monkeypatch.setattr(ftp_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(ftp_setup_probe, "probe_tcp_bind", _failing_probe)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -712,7 +723,7 @@ async def test_test_connection_camera_onvif_success(
             _ = options
             return SimpleNamespace(profiles=[object(), object()], streams=[object()])
 
-    monkeypatch.setattr(setup_service, "OnvifService", _FakeOnvifService)
+    monkeypatch.setattr(onvif_setup_probe, "OnvifService", _FakeOnvifService)
     request = SetupTestConnectionRequest(
         type="camera",
         backend="onvif",
@@ -744,13 +755,13 @@ async def test_test_connection_camera_onvif_uses_requested_timeout_budget(
         def __init__(self, *, discover_fn: object, client_factory: object) -> None:
             _ = (discover_fn, client_factory)
 
-        async def probe(self, options: setup_service.OnvifProbeOptions) -> object:
+        async def probe(self, options: OnvifProbeOptions) -> object:
             assert options.timeout_s == 0.05
             await asyncio.sleep(0.02)
             return SimpleNamespace(profiles=[object()], streams=[object()])
 
     monkeypatch.setattr(setup_service, "_PLUGIN_TEST_CONNECTION_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(setup_service, "OnvifService", _SlowSuccessfulOnvifService)
+    monkeypatch.setattr(onvif_setup_probe, "OnvifService", _SlowSuccessfulOnvifService)
     request = SetupTestConnectionRequest(
         type="camera",
         backend="onvif",
@@ -797,9 +808,9 @@ async def test_test_connection_camera_onvif_timeout_returns_failure(
 
         async def probe(self, options: object) -> object:
             _ = options
-            raise setup_service.OnvifProbeTimeoutError(1.0, cause=TimeoutError())
+            raise OnvifProbeTimeoutError(1.0, cause=TimeoutError())
 
-    monkeypatch.setattr(setup_service, "OnvifService", _TimeoutOnvifService)
+    monkeypatch.setattr(onvif_setup_probe, "OnvifService", _TimeoutOnvifService)
     request = SetupTestConnectionRequest(
         type="camera",
         backend="onvif",
@@ -831,9 +842,9 @@ async def test_test_connection_camera_onvif_probe_error_returns_failure(
 
         async def probe(self, options: object) -> object:
             _ = options
-            raise setup_service.OnvifProbeError("Authentication failed", cause=RuntimeError())
+            raise OnvifProbeError("Authentication failed", cause=RuntimeError())
 
-    monkeypatch.setattr(setup_service, "OnvifService", _FailingOnvifService)
+    monkeypatch.setattr(onvif_setup_probe, "OnvifService", _FailingOnvifService)
     request = SetupTestConnectionRequest(
         type="camera",
         backend="onvif",
@@ -870,9 +881,9 @@ async def test_test_connection_storage_local_success(
     ) -> object:
         _ = (plugin_type, config, runtime_context)
         assert backend == "local"
-        return setup_service.LocalStorageConfig(root=str(root))
+        return LocalStorageConfig(root=str(root))
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_storage_setup_probe, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -906,9 +917,9 @@ async def test_test_connection_storage_local_rejects_file_path(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.LocalStorageConfig(root=str(file_root))
+        return LocalStorageConfig(root=str(file_root))
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_storage_setup_probe, "validate_plugin", _fake_validate_plugin)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -941,19 +952,21 @@ async def test_test_connection_storage_local_rejects_unwritable_existing_directo
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.LocalStorageConfig(root=str(root))
+        return LocalStorageConfig(root=str(root))
 
-    original_access = setup_service.os.access
+    original_access = local_storage_setup_probe.os.access
 
     def _fake_access(path: object, mode: int) -> bool:
         if Path(str(path)) == root and mode == (
-            setup_service.os.R_OK | setup_service.os.W_OK | setup_service.os.X_OK
+            local_storage_setup_probe.os.R_OK
+            | local_storage_setup_probe.os.W_OK
+            | local_storage_setup_probe.os.X_OK
         ):
             return False
         return original_access(path, mode)
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service.os, "access", _fake_access)
+    monkeypatch.setattr(local_storage_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_storage_setup_probe.os, "access", _fake_access)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -987,17 +1000,19 @@ async def test_test_connection_storage_local_rejects_unwritable_parent(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.LocalStorageConfig(root=str(missing_root))
+        return LocalStorageConfig(root=str(missing_root))
 
-    original_access = setup_service.os.access
+    original_access = local_storage_setup_probe.os.access
 
     def _fake_access(path: object, mode: int) -> bool:
-        if Path(str(path)) == parent and mode == (setup_service.os.W_OK | setup_service.os.X_OK):
+        if Path(str(path)) == parent and mode == (
+            local_storage_setup_probe.os.W_OK | local_storage_setup_probe.os.X_OK
+        ):
             return False
         return original_access(path, mode)
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service.os, "access", _fake_access)
+    monkeypatch.setattr(local_storage_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_storage_setup_probe.os, "access", _fake_access)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",
@@ -1027,10 +1042,10 @@ async def test_test_connection_storage_local_rejects_missing_parent_chain(
         **runtime_context: object,
     ) -> object:
         _ = (plugin_type, backend, config, runtime_context)
-        return setup_service.LocalStorageConfig(root="/nonexistent/root/dir")
+        return LocalStorageConfig(root="/nonexistent/root/dir")
 
-    monkeypatch.setattr(setup_service, "validate_plugin", _fake_validate_plugin)
-    monkeypatch.setattr(setup_service, "_nearest_existing_parent", lambda _path: None)
+    monkeypatch.setattr(local_storage_setup_probe, "validate_plugin", _fake_validate_plugin)
+    monkeypatch.setattr(local_storage_setup_probe, "nearest_existing_parent", lambda _path: None)
     monkeypatch.setattr(
         setup_service,
         "get_plugin_names",

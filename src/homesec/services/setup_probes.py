@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -76,6 +77,24 @@ class SetupProbeRegistry:
 
 
 _SETUP_PROBE_REGISTRY = SetupProbeRegistry()
+_BUILTIN_SETUP_PROBE_MODULES = (
+    "homesec.sources.rtsp.setup_probe",
+    "homesec.sources.ftp_setup_probe",
+    "homesec.sources.local_folder_setup_probe",
+    "homesec.onvif.setup_probe",
+    "homesec.plugins.storage.local_setup_probe",
+)
+_builtin_setup_probes_loaded = False
+
+
+def load_builtin_setup_probes() -> None:
+    """Import built-in setup-probe modules once so decorators can register handlers."""
+    global _builtin_setup_probes_loaded
+    if _builtin_setup_probes_loaded:
+        return
+    for module_name in _BUILTIN_SETUP_PROBE_MODULES:
+        importlib.import_module(module_name)
+    _builtin_setup_probes_loaded = True
 
 
 def setup_probe(
@@ -90,14 +109,17 @@ def setup_probe(
 
 def get_setup_probe(target: SetupProbeTarget, backend: str) -> SetupProbeFn | None:
     """Look up a setup-only probe handler."""
+    load_builtin_setup_probes()
     return _SETUP_PROBE_REGISTRY.get(target, backend)
 
 
 def get_setup_probe_timeout(target: SetupProbeTarget, backend: str) -> float | None:
     """Look up the registered timeout budget for a setup-only probe handler."""
+    load_builtin_setup_probes()
     return _SETUP_PROBE_REGISTRY.get_timeout(target, backend)
 
 
 def get_setup_probe_backends(target: SetupProbeTarget) -> list[str]:
     """List special-case backends registered for a setup target."""
+    load_builtin_setup_probes()
     return _SETUP_PROBE_REGISTRY.get_backends(target)
