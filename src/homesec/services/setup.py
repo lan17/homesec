@@ -714,10 +714,50 @@ async def _run_registered_setup_probe(
     backend: str,
     config: dict[str, object],
 ) -> TestConnectionResponse | None:
+    start = time.perf_counter()
     probe = get_setup_probe(target, backend)
     if probe is None:
         return None
-    return await probe(config=config)
+    try:
+        return await asyncio.wait_for(
+            probe(config=config),
+            timeout=_PLUGIN_TEST_CONNECTION_TIMEOUT_S,
+        )
+    except SetupTestConnectionRequestError:
+        raise
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Setup registered probe timed out for %s backend=%s",
+            target,
+            backend,
+            exc_info=True,
+        )
+        return _result(
+            success=False,
+            message=(f"{target} probe timed out after {_PLUGIN_TEST_CONNECTION_TIMEOUT_S:.1f}s."),
+            start=start,
+        )
+    except Exception:
+        logger.warning(
+            "Setup registered probe failed for %s backend=%s",
+            target,
+            backend,
+            exc_info=True,
+        )
+        return _result(
+            success=False,
+            message=(
+                f"{target} probe failed during connectivity test. "
+                "Check backend configuration and connectivity."
+            ),
+            start=start,
+        )
 
 
 def _resolve_rtsp_primary_url(config: RTSPSourceConfig) -> str | None:

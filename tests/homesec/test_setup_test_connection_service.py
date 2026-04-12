@@ -308,6 +308,38 @@ async def test_test_connection_camera_uses_registered_setup_probe(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_camera_registered_probe_failure_returns_failed_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registered setup probe failures should return a failed probe response."""
+
+    # Given: A registered camera probe that raises during connectivity testing
+    async def _failing_probe(*, config: dict[str, object]) -> setup_service.TestConnectionResponse:
+        _ = config
+        raise RuntimeError("socket connect failed")
+
+    monkeypatch.setattr(
+        setup_service,
+        "get_setup_probe",
+        lambda target, backend: _failing_probe
+        if target == "camera" and backend == "custom"
+        else None,
+    )
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="custom",
+        config={"host": "192.168.1.10"},
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The API returns a failed probe response instead of raising
+    assert response.success is False
+    assert "failed during connectivity test" in response.message
+
+
+@pytest.mark.asyncio
 async def test_test_connection_camera_rtsp_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
