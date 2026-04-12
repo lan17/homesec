@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from homesec.models.setup import TestConnectionResponse as SetupTestConnectionResponse
+from homesec.services import setup_probes
 from homesec.services.setup_probes import SetupProbeRegistry
 
 
@@ -61,3 +62,18 @@ def test_setup_probe_registry_tracks_custom_timeout_budget() -> None:
     # When / Then: Lookup returns the probe and its configured timeout budget
     assert registry.get("camera", "rtsp") is _probe
     assert registry.get_timeout("camera", "rtsp") == 11.0
+
+
+def test_load_builtin_setup_probes_registers_backend_adjacent_modules() -> None:
+    """Builtin loader should expose built-in camera and storage probe backends."""
+    # Given / When: Loading the builtin setup probes through the shared loader
+    setup_probes.load_builtin_setup_probes()
+
+    # Then: The registry reports backend-adjacent builtins without setup.py-owned decorators
+    assert setup_probes.get_setup_probe_backends("camera") == [
+        "ftp",
+        "local_folder",
+        "onvif",
+        "rtsp",
+    ]
+    assert setup_probes.get_setup_probe_backends("storage") == ["local"]
