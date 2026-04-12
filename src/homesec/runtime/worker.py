@@ -21,8 +21,6 @@ from homesec.plugins import discover_all_plugins
 from homesec.plugins.alert_policies import load_alert_policy
 from homesec.plugins.notifiers import load_notifier_plugin
 from homesec.plugins.sources import load_source_plugin
-from homesec.plugins.storage import load_storage_plugin
-from homesec.repository import ClipRepository
 from homesec.runtime.assembly import RuntimeAssembler
 from homesec.runtime.bootstrap import (
     RuntimePersistenceStack,
@@ -35,7 +33,6 @@ from homesec.runtime.subprocess_protocol import (
     WorkerEvent,
     WorkerEventType,
 )
-from homesec.state import PostgresStateStore
 
 if TYPE_CHECKING:
     from homesec.interfaces import (
@@ -46,6 +43,7 @@ if TYPE_CHECKING:
         StorageBackend,
     )
     from homesec.models.config import Config
+    from homesec.repository import ClipRepository
 
 logger = logging.getLogger(__name__)
 
@@ -187,8 +185,6 @@ class _RuntimeWorkerService:
             event_store_unavailable_warning=(
                 "Runtime worker event store unavailable (NoopEventStore returned); events dropped"
             ),
-            storage_loader=load_storage_plugin,
-            state_store_factory=PostgresStateStore,
         )
 
     def _create_notifier(self, config: Config) -> tuple[Notifier, list[NotifierEntry]]:

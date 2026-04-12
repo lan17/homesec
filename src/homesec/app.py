@@ -14,11 +14,8 @@ from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
-from homesec.interfaces import EventStore
 from homesec.models.config import FastAPIServerConfig
 from homesec.plugins.registry import PluginType, get_plugin_names
-from homesec.plugins.storage import load_storage_plugin
-from homesec.repository import ClipRepository
 from homesec.runtime.bootstrap import (
     RuntimePersistenceStack,
     build_runtime_persistence_stack,
@@ -38,14 +35,12 @@ from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
     SubprocessRuntimeHandle,
 )
-from homesec.state import NoopEventStore, NoopStateStore, PostgresStateStore
+from homesec.state import NoopEventStore, NoopStateStore
 
 if TYPE_CHECKING:
-    from homesec.interfaces import (
-        StateStore,
-        StorageBackend,
-    )
+    from homesec.interfaces import EventStore, StateStore, StorageBackend
     from homesec.models.config import Config
+    from homesec.repository import ClipRepository
 
 logger = logging.getLogger(__name__)
 RESTART_EXIT_CODE = 42
@@ -256,8 +251,6 @@ class Application:
             event_store_unavailable_warning=(
                 "Event store unavailable (NoopEventStore returned); events will be dropped"
             ),
-            storage_loader=load_storage_plugin,
-            state_store_factory=PostgresStateStore,
         )
 
     def _create_runtime_controller(self) -> RuntimeController:

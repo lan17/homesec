@@ -39,7 +39,7 @@ class RuntimePersistenceStack:
     repository: ClipRepository
 
 
-def create_storage_backend(
+def _create_storage_backend(
     config: Config,
     *,
     loader: Callable[[StorageConfig], StorageBackend] = load_storage_plugin,
@@ -48,7 +48,7 @@ def create_storage_backend(
     return loader(config.storage)
 
 
-async def create_state_store(
+async def _create_state_store(
     config: StateStoreConfig,
     *,
     resolve_env: Callable[[str], str | None],
@@ -67,7 +67,7 @@ async def create_state_store(
     return cast("StateStore", store)
 
 
-def create_event_store(
+def _create_event_store(
     state_store: StateStore,
     *,
     unavailable_warning: str,
@@ -79,7 +79,7 @@ def create_event_store(
     return event_store
 
 
-def create_repository(
+def _create_repository(
     *,
     state_store: StateStore,
     event_store: EventStore,
@@ -99,24 +99,27 @@ async def build_runtime_persistence_stack(
     resolve_env: Callable[[str], str | None],
     missing_dsn_message: str,
     event_store_unavailable_warning: str,
-    storage_loader: Callable[[StorageConfig], StorageBackend] = load_storage_plugin,
-    state_store_factory: Callable[[str], _InitializableStateStore] = PostgresStateStore,
+    storage_loader: Callable[[StorageConfig], StorageBackend] | None = None,
+    state_store_factory: Callable[[str], _InitializableStateStore] | None = None,
 ) -> RuntimePersistenceStack:
     """Build shared storage and persistence components for a runtime."""
-    storage = create_storage_backend(config, loader=storage_loader)
+    loader = load_storage_plugin if storage_loader is None else storage_loader
+    factory = PostgresStateStore if state_store_factory is None else state_store_factory
+
+    storage = _create_storage_backend(config, loader=loader)
     state_store: StateStore | None = None
     try:
-        state_store = await create_state_store(
+        state_store = await _create_state_store(
             config.state_store,
             resolve_env=resolve_env,
-            state_store_factory=state_store_factory,
+            state_store_factory=factory,
             missing_dsn_message=missing_dsn_message,
         )
-        event_store = create_event_store(
+        event_store = _create_event_store(
             state_store,
             unavailable_warning=event_store_unavailable_warning,
         )
-        repository = create_repository(
+        repository = _create_repository(
             state_store=state_store,
             event_store=event_store,
             config=config,

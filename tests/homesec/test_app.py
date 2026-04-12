@@ -190,8 +190,10 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
     """Mock runtime environment and return controller stub."""
     # Given: Runtime dependencies mocked for deterministic tests
     controller = _StubRuntimeController()
-    monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
-    monkeypatch.setattr("homesec.app.PostgresStateStore", _StubStateStore)
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
+    )
+    monkeypatch.setattr("homesec.runtime.bootstrap.PostgresStateStore", _StubStateStore)
     monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
     monkeypatch.setattr("homesec.app.validate_plugin_names", lambda *args, **kwargs: None)
     monkeypatch.setattr("homesec.app.validate_config", lambda *args, **kwargs: None)
@@ -533,8 +535,10 @@ async def test_build_runtime_persistence_stack_prefers_env_dsn(
 
     app = Application(config_path=Path(__file__))
     monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "postgresql://from-env")
-    monkeypatch.setattr("homesec.app.PostgresStateStore", _RecordingStateStore)
-    monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
+    monkeypatch.setattr("homesec.runtime.bootstrap.PostgresStateStore", _RecordingStateStore)
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
+    )
 
     # When: Building shared runtime persistence
     persistence = await app._build_runtime_persistence_stack(config)
@@ -555,7 +559,9 @@ async def test_build_runtime_persistence_stack_raises_when_env_resolution_return
     config.state_store = StateStoreConfig(dsn="postgresql://ignored-inline", dsn_env="HOMESEC_DSN")
     app = Application(config_path=Path(__file__))
     monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "")
-    monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
+    )
 
     # When: Building shared runtime persistence without a resolved DSN
     with pytest.raises(RuntimeError, match="Postgres DSN is required"):
