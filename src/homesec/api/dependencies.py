@@ -236,7 +236,12 @@ class StatsRoutesApp(Protocol):
     def uptime_seconds(self) -> float: ...
 
 
-def _get_database_probe_cache(app: object) -> _DatabaseProbeCache:
+def _get_database_probe_cache(app: DatabaseDependencyApp) -> _DatabaseProbeCache:
+    """Return the per-app cache used to throttle repository ping checks.
+
+    The cache is attached dynamically because these dependency helpers operate on
+    protocol-typed app surfaces rather than a concrete Application subclass.
+    """
     cache = cast(_DatabaseProbeCache | None, getattr(app, "_db_probe_cache", None))
     if cache is None:
         cache = _DatabaseProbeCache()

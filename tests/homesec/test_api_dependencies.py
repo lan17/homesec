@@ -62,6 +62,23 @@ async def test_require_database_accepts_minimal_protocol_app() -> None:
 
 
 @pytest.mark.asyncio
+async def test_require_database_short_circuits_in_bootstrap_mode() -> None:
+    """require_database should reject bootstrap mode without probing the DB."""
+    # Given: A minimal app-shaped object in bootstrap mode with a repository stub
+    repository = _StubRepository(ok=True)
+    app = _MinimalDatabaseApp(bootstrap_mode=True, repository=repository)
+
+    # When: Enforcing database availability during bootstrap mode
+    with pytest.raises(APIError) as exc_info:
+        await require_database(app)
+
+    # Then: The route is rejected before repository.ping is called
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.error_code == "SETUP_REQUIRED"
+    assert repository.ping_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_require_normal_mode_accepts_minimal_protocol_app() -> None:
     """require_normal_mode should only need the bootstrap flag."""
     # Given: A minimal app-shaped object in normal mode
