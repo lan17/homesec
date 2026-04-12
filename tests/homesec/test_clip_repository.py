@@ -9,7 +9,7 @@ import pytest
 
 from homesec.models.alert import AlertDecision
 from homesec.models.clip import Clip, ClipStateData
-from homesec.models.enums import RiskLevel
+from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.events import ClipRecheckedEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import (
@@ -19,6 +19,14 @@ from homesec.models.vlm import (
 from homesec.repository import ClipRepository
 from homesec.state.postgres import PostgresEventStore, PostgresStateStore
 from tests.homesec.mocks import MockEventStore, MockStateStore
+
+
+def _build_state(*, status: ClipStatus) -> ClipStateData:
+    return ClipStateData(
+        camera_name="front_door",
+        status=status,
+        local_path="/tmp/test.mp4",
+    )
 
 
 @pytest.mark.asyncio
@@ -392,6 +400,193 @@ async def test_record_notification_sent(
 
     # Cleanup
     await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "expected_status"),
+    [
+        (ClipStatus.QUEUED_LOCAL, ClipStatus.UPLOADED),
+        (ClipStatus.ANALYZED, ClipStatus.ANALYZED),
+        (ClipStatus.DONE, ClipStatus.DONE),
+        (ClipStatus.ERROR, ClipStatus.ERROR),
+        (ClipStatus.DELETED, ClipStatus.DELETED),
+    ],
+)
+async def test_record_upload_completed_applies_explicit_status_transition_rules(
+    initial_status: ClipStatus,
+    expected_status: ClipStatus,
+) -> None:
+    # Given: A repository with a clip already in a known status
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_id = f"upload-{initial_status.value}"
+    await state_store.upsert(clip_id, _build_state(status=initial_status))
+
+    # When: Upload completion is recorded
+    state = await repository.record_upload_completed(
+        clip_id,
+        "dropbox://test.mp4",
+        "https://example.com/test.mp4",
+        5000,
+    )
+
+    # Then: The centralized transition rule preserves the existing semantics
+    assert state is not None
+    assert state.status == expected_status
+    persisted = await state_store.get(clip_id)
+    assert persisted is not None
+    assert persisted.status == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "will_retry", "expected_status"),
+    [
+        (ClipStatus.QUEUED_LOCAL, False, ClipStatus.ERROR),
+        (ClipStatus.DELETED, False, ClipStatus.DELETED),
+        (ClipStatus.UPLOADED, True, ClipStatus.UPLOADED),
+    ],
+)
+async def test_record_filter_failed_applies_explicit_status_transition_rules(
+    initial_status: ClipStatus,
+    will_retry: bool,
+    expected_status: ClipStatus,
+) -> None:
+    # Given: A repository with a clip already in a known status
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_id = f"filter-failed-{initial_status.value}-{will_retry}"
+    await state_store.upsert(clip_id, _build_state(status=initial_status))
+
+    # When: A filter failure is recorded
+    state = await repository.record_filter_failed(
+        clip_id,
+        "boom",
+        "RuntimeError",
+        will_retry=will_retry,
+    )
+
+    # Then: The centralized transition rule preserves the existing semantics
+    if will_retry:
+        assert state is None
+    else:
+        assert state is not None
+        assert state.status == expected_status
+    persisted = await state_store.get(clip_id)
+    assert persisted is not None
+    assert persisted.status == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "expected_status"),
+    [
+        (ClipStatus.UPLOADED, ClipStatus.ANALYZED),
+        (ClipStatus.ERROR, ClipStatus.ANALYZED),
+        (ClipStatus.DELETED, ClipStatus.DELETED),
+    ],
+)
+async def test_record_vlm_completed_applies_explicit_status_transition_rules(
+    initial_status: ClipStatus,
+    expected_status: ClipStatus,
+) -> None:
+    # Given: A repository with a clip already in a known status
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_id = f"vlm-{initial_status.value}"
+    await state_store.upsert(clip_id, _build_state(status=initial_status))
+    result = AnalysisResult(
+        risk_level="low",
+        activity_type="person_walking",
+        summary="Person walking past camera",
+        analysis=SequenceAnalysis(
+            sequence_description="Person walks by",
+            primary_activity="passerby",
+            max_risk_level="low",
+            entities_timeline=[],
+            observations=[],
+            requires_review=False,
+            frame_count=10,
+            video_start_time="00:00:00",
+            video_end_time="00:00:10",
+        ),
+    )
+
+    # When: VLM completion is recorded
+    state = await repository.record_vlm_completed(clip_id, result, 100, 50, 1000)
+
+    # Then: The centralized transition rule preserves the existing semantics
+    assert state is not None
+    assert state.status == expected_status
+    persisted = await state_store.get(clip_id)
+    assert persisted is not None
+    assert persisted.status == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "expected_status"),
+    [
+        (ClipStatus.ANALYZED, ClipStatus.DONE),
+        (ClipStatus.ERROR, ClipStatus.DONE),
+        (ClipStatus.DELETED, ClipStatus.DELETED),
+    ],
+)
+async def test_record_notification_sent_applies_explicit_status_transition_rules(
+    initial_status: ClipStatus,
+    expected_status: ClipStatus,
+) -> None:
+    # Given: A repository with a clip already in a known status
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_id = f"notify-{initial_status.value}"
+    await state_store.upsert(clip_id, _build_state(status=initial_status))
+
+    # When: Notification delivery is recorded
+    state = await repository.record_notification_sent(clip_id, "mqtt", clip_id)
+
+    # Then: The centralized transition rule preserves the existing semantics
+    assert state is not None
+    assert state.status == expected_status
+    persisted = await state_store.get(clip_id)
+    assert persisted is not None
+    assert persisted.status == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "expected_status"),
+    [
+        (ClipStatus.ANALYZED, ClipStatus.DONE),
+        (ClipStatus.DONE, ClipStatus.DONE),
+        (ClipStatus.DELETED, ClipStatus.DELETED),
+    ],
+)
+async def test_mark_done_applies_explicit_status_transition_rules(
+    initial_status: ClipStatus,
+    expected_status: ClipStatus,
+) -> None:
+    # Given: A repository with a clip already in a known status
+    state_store = MockStateStore()
+    event_store = MockEventStore()
+    repository = ClipRepository(state_store, event_store)
+    clip_id = f"done-{initial_status.value}"
+    await state_store.upsert(clip_id, _build_state(status=initial_status))
+
+    # When: Completion is recorded without an event
+    state = await repository.mark_done(clip_id)
+
+    # Then: The centralized transition rule preserves the existing semantics
+    assert state is not None
+    assert state.status == expected_status
+    persisted = await state_store.get(clip_id)
+    assert persisted is not None
+    assert persisted.status == expected_status
 
 
 @pytest.mark.asyncio
