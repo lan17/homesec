@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from homesec.api.dependencies import get_homesec_app, require_normal_mode
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import is_sensitive_key, redact_config
-from homesec.config.errors import StorageConfigInvalidError, StorageMutationError
+from homesec.config.errors import StorageMutationError
 from homesec.models.config import StorageConfig
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.registry import PluginType, get_plugin_config_model, get_plugin_names
@@ -77,12 +77,6 @@ def _storage_response(storage: StorageConfig) -> StorageResponse:
 
 
 def _map_storage_config_error(exc: StorageMutationError) -> APIError:
-    if isinstance(exc, StorageConfigInvalidError):
-        return APIError(
-            str(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
-            error_code=APIErrorCode.STORAGE_CONFIG_INVALID,
-        )
     return APIError(
         str(exc),
         status_code=status.HTTP_400_BAD_REQUEST,

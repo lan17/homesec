@@ -24,6 +24,10 @@ export function sameJsonValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export function getStorageBackendMetadata(
   backends: StorageBackendsResponse | null | undefined,
   backend: string,
@@ -52,6 +56,57 @@ export function defaultConfigForBackend(
   }
 
   return defaults
+}
+
+export function buildStorageConfigPatch(
+  base: Record<string, unknown>,
+  next: Record<string, unknown>,
+  redactedPlaceholder: string,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+  const keys = new Set([...Object.keys(base), ...Object.keys(next)])
+
+  for (const key of keys) {
+    if (!(key in next)) {
+      patch[key] = null
+      continue
+    }
+
+    const nextValue = next[key]
+    if (nextValue === redactedPlaceholder) {
+      continue
+    }
+
+    const baseValue = base[key]
+    if (isRecord(baseValue) && isRecord(nextValue)) {
+      const nestedPatch = buildStorageConfigPatch(baseValue, nextValue, redactedPlaceholder)
+      if (Object.keys(nestedPatch).length > 0) {
+        patch[key] = nestedPatch
+      }
+      continue
+    }
+
+    if (!sameJsonValue(baseValue, nextValue)) {
+      patch[key] = nextValue
+    }
+  }
+
+  return patch
+}
+
+export function buildStorageSecretPatch(
+  secretInputs: Record<string, string>,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(secretInputs)) {
+    if (value.trim().length === 0) {
+      continue
+    }
+    patch[key] = value
+  }
+
+  return patch
 }
 
 export function buildSupportedStorageBackendOptions(

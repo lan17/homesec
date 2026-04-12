@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import metadata
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -195,3 +196,36 @@ class TestLoadPluginFromEntryPoint:
         # Then: The subclass instance is accepted
         assert isinstance(result, DummyPlugin)
         assert result.name == "factory_subclass"
+
+
+def test_discover_all_plugins_only_runs_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated discovery calls should no-op after the first successful pass."""
+    import homesec.plugins as plugins_module
+
+    import_calls: list[str] = []
+
+    def fake_import_module(name: str) -> object:
+        import_calls.append(name)
+        if name.startswith("homesec.plugins.") and name.count(".") == 2:
+            return SimpleNamespace(__path__=[])
+        return object()
+
+    monkeypatch.setattr(plugins_module, "_DISCOVERY_COMPLETED", False)
+    monkeypatch.setattr("homesec.plugins.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("homesec.plugins.pkgutil.iter_modules", lambda path: [])
+    monkeypatch.setattr("homesec.plugins.iter_entry_points", lambda group: [])
+
+    # Given: Plugin discovery has not yet run in this process
+    # When: Discovery is requested twice
+    plugins_module.discover_all_plugins()
+    plugins_module.discover_all_plugins()
+
+    # Then: The second call is a no-op and does not repeat package imports
+    assert import_calls == [
+        "homesec.plugins.filters",
+        "homesec.plugins.analyzers",
+        "homesec.plugins.storage",
+        "homesec.plugins.notifiers",
+        "homesec.plugins.alert_policies",
+        "homesec.plugins.sources",
+    ]

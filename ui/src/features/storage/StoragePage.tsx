@@ -26,6 +26,9 @@ import {
   STORAGE_BACKEND_ORDER,
 } from '../settings/storage/backends'
 import {
+  buildStorageConfigPatch,
+  buildStorageSecretPatch,
+  cloneStorageConfig,
   defaultConfigForBackend,
   isSupportedStorageBackend,
 } from '../settings/storage/editorModel'
@@ -68,66 +71,6 @@ function formatRuntimeTimestamp(value: string | null): string {
   return parsed.toLocaleString()
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function cloneConfig(config: Record<string, unknown>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(config)) as Record<string, unknown>
-}
-
-function sameJsonValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
-}
-
-function buildConfigPatch(
-  base: Record<string, unknown>,
-  next: Record<string, unknown>,
-): Record<string, unknown> {
-  const patch: Record<string, unknown> = {}
-  const keys = new Set([...Object.keys(base), ...Object.keys(next)])
-
-  for (const key of keys) {
-    if (!(key in next)) {
-      patch[key] = null
-      continue
-    }
-
-    const nextValue = next[key]
-    if (nextValue === REDACTED_PLACEHOLDER) {
-      continue
-    }
-
-    const baseValue = base[key]
-    if (isRecord(baseValue) && isRecord(nextValue)) {
-      const nestedPatch = buildConfigPatch(baseValue, nextValue)
-      if (Object.keys(nestedPatch).length > 0) {
-        patch[key] = nestedPatch
-      }
-      continue
-    }
-
-    if (!sameJsonValue(baseValue, nextValue)) {
-      patch[key] = nextValue
-    }
-  }
-
-  return patch
-}
-
-function buildSecretPatch(secretInputs: Record<string, string>): Record<string, unknown> {
-  const patch: Record<string, unknown> = {}
-
-  for (const [key, value] of Object.entries(secretInputs)) {
-    if (value.trim().length === 0) {
-      continue
-    }
-    patch[key] = value
-  }
-
-  return patch
-}
-
 function runtimeStatusLabel(state: 'idle' | 'reloading' | 'failed'): string {
   if (state === 'failed') {
     return 'Failed'
@@ -160,7 +103,7 @@ export function StoragePage() {
     }
     return {
       backend: storageQuery.data.backend,
-      config: cloneConfig(storageQuery.data.config),
+      config: cloneStorageConfig(storageQuery.data.config),
     }
   }, [storageQuery.data])
 
@@ -212,7 +155,7 @@ export function StoragePage() {
     }
     return {
       ...draft.config,
-      ...buildSecretPatch(secretInputs),
+      ...buildStorageSecretPatch(secretInputs),
     }
   }, [draft, secretInputs])
 
@@ -334,7 +277,7 @@ export function StoragePage() {
 
     setStorageDraft({
       backend: nextBackend,
-      config: cloneConfig(nextConfig),
+      config: cloneStorageConfig(nextConfig),
     })
     setSecretInputs({})
   }
@@ -365,10 +308,10 @@ export function StoragePage() {
 
     const baseConfig = baseline?.config ?? {}
     const nonSecretPatch = isBackendSwitch
-      ? cloneConfig(draft.config)
-      : buildConfigPatch(baseConfig, draft.config)
+      ? cloneStorageConfig(draft.config)
+      : buildStorageConfigPatch(baseConfig, draft.config, REDACTED_PLACEHOLDER)
 
-    const secretPatch = buildSecretPatch(secretInputs)
+    const secretPatch = buildStorageSecretPatch(secretInputs)
 
     const nextConfigPatch: Record<string, unknown> = {
       ...nonSecretPatch,

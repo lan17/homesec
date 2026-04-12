@@ -64,14 +64,7 @@ class ConfigManager:
         return load_config(self._config_path)
 
     @staticmethod
-    def _to_source_config_dict(config: dict[str, object] | BaseModel) -> dict[str, object]:
-        if isinstance(config, BaseModel):
-            payload = config.model_dump(mode="json")
-            return cast(dict[str, object], payload)
-        return dict(config)
-
-    @staticmethod
-    def _to_storage_config_dict(config: dict[str, object] | BaseModel) -> dict[str, object]:
+    def _to_config_dict(config: dict[str, object] | BaseModel) -> dict[str, object]:
         if isinstance(config, BaseModel):
             payload = config.model_dump(mode="json")
             return cast(dict[str, object], payload)
@@ -167,7 +160,7 @@ class ConfigManager:
                         "omit unchanged fields or provide replacement values"
                     )
 
-                current_source_config = self._to_source_config_dict(camera.source.config)
+                current_source_config = self._to_config_dict(camera.source.config)
                 next_backend = (
                     source_backend if source_backend is not None else camera.source.backend
                 )
@@ -217,7 +210,7 @@ class ConfigManager:
                     "omit unchanged fields or provide replacement values"
                 )
 
-            current_storage_config = self._to_storage_config_dict(config.storage.config)
+            current_storage_config = self._to_config_dict(config.storage.config)
             next_backend = (
                 storage_backend if storage_backend is not None else config.storage.backend
             )
