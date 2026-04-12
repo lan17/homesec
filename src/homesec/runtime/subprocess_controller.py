@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homesec.runtime.controller import RuntimeController
+from homesec.runtime.errors import sanitize_runtime_error
 from homesec.runtime.models import ManagedRuntime, RuntimeCameraStatus, config_signature
 from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
 
@@ -189,12 +190,12 @@ class SubprocessRuntimeController(RuntimeController):
                 try:
                     await self._spawn_and_wait_started(previous)
                 except Exception as rollback_exc:
-                    previous.last_error = self._sanitize_error(rollback_exc)
+                    previous.last_error = sanitize_runtime_error(rollback_exc)
                     await self._finalize_handle(previous)
                     self._active_runtime = None
                     raise RuntimeError(
                         "Runtime candidate start failed and rollback failed: "
-                        f"{self._sanitize_error(rollback_exc)}"
+                        f"{sanitize_runtime_error(rollback_exc)}"
                     ) from exc
                 self._active_runtime = previous
             raise
@@ -222,7 +223,7 @@ class SubprocessRuntimeController(RuntimeController):
                     context="shutdown-all",
                 )
             except Exception as exc:
-                errors.append(f"generation={handle.generation} error={self._sanitize_error(exc)}")
+                errors.append(f"generation={handle.generation} error={sanitize_runtime_error(exc)}")
 
         self._active_runtime = None
         if errors:
@@ -475,13 +476,6 @@ class SubprocessRuntimeController(RuntimeController):
     def _drain_queue(queue: asyncio.Queue[WorkerEvent]) -> None:
         while not queue.empty():
             queue.get_nowait()
-
-    @staticmethod
-    def _sanitize_error(exc: Exception) -> str:
-        value = str(exc).strip()
-        if not value:
-            value = type(exc).__name__
-        return value[:512]
 
     def _track_handle(self, handle: SubprocessRuntimeHandle) -> None:
         self._tracked_handles[id(handle)] = handle

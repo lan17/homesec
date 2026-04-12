@@ -18,8 +18,10 @@ from homesec.models.config import (
     StateStoreConfig,
     StorageConfig,
 )
+from homesec.models.enums import VLMRunMode
 from homesec.models.filter import FilterConfig
 from homesec.models.vlm import VLMConfig
+from homesec.runtime.bootstrap import RuntimePersistenceStack
 
 
 class _StubEmitter:
@@ -30,7 +32,11 @@ class _StubEmitter:
         return None
 
 
-def _make_config(*, notifiers: list[NotifierConfig], run_mode: str = "trigger_only") -> Config:
+def _make_config(
+    *,
+    notifiers: list[NotifierConfig],
+    run_mode: VLMRunMode = VLMRunMode.TRIGGER_ONLY,
+) -> Config:
     return Config(
         cameras=[
             CameraConfig(
@@ -71,7 +77,7 @@ def test_worker_main_uses_shared_logging_configuration(monkeypatch) -> None:
         calls["log_level"] = log_level
         calls["camera_name"] = camera_name
 
-    def _fake_asyncio_run(coro: object) -> None:
+    def _fake_asyncio_run(coro: Any) -> None:
         calls["ran"] = True
         # Avoid un-awaited coroutine warnings in tests.
         coro.close()
@@ -133,7 +139,7 @@ async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_neve
 ) -> None:
     """run_mode=never should avoid analyzer plugin loading in worker startup."""
     # Given: Runtime worker with VLM disabled and analyzer loader guarded
-    config = _make_config(notifiers=[], run_mode="never")
+    config = _make_config(notifiers=[], run_mode=VLMRunMode.NEVER)
     service = _make_service(config)
     stop_event = asyncio.Event()
     stop_event.set()
@@ -154,13 +160,19 @@ async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_neve
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
 
-    async def _fake_create_state_store(_config: Config) -> _StubStateStore:
-        return _StubStateStore()
-
     monkeypatch.setattr(worker_module, "discover_all_plugins", lambda: None)
-    monkeypatch.setattr(worker_module, "load_storage_plugin", lambda _cfg: _StubStorage())
-    monkeypatch.setattr(service, "_create_state_store", _fake_create_state_store)
-    monkeypatch.setattr(service, "_create_event_store", lambda _state: _StubEventStore())
+
+    async def _fake_build_runtime_persistence_stack() -> RuntimePersistenceStack:
+        return RuntimePersistenceStack(
+            storage=cast(Any, _StubStorage()),
+            state_store=cast(Any, _StubStateStore()),
+            event_store=cast(Any, _StubEventStore()),
+            repository=cast(Any, object()),
+        )
+
+    monkeypatch.setattr(
+        service, "_build_runtime_persistence_stack", _fake_build_runtime_persistence_stack
+    )
     monkeypatch.setattr(service, "_create_alert_policy", lambda _cfg: cast(Any, object()))
     monkeypatch.setattr(service, "_create_sources", lambda _cfg: ([], {}))
     monkeypatch.setattr("homesec.runtime.assembly.load_filter", lambda _cfg: _StubFilter())

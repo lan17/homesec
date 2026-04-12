@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from homesec.runtime.controller import RuntimeController
+from homesec.runtime.errors import sanitize_runtime_error
 from homesec.runtime.models import (
     ManagedRuntime,
     RuntimeReloadRequest,
@@ -81,7 +82,7 @@ class RuntimeManager:
         except Exception as exc:
             await self._safe_shutdown(candidate, context="initial runtime cleanup")
             self._status.state = RuntimeState.FAILED
-            self._status.last_reload_error = self._sanitize_error(exc)
+            self._status.last_reload_error = sanitize_runtime_error(exc)
             self._status.last_reload_at = self._now_utc()
             raise
 
@@ -96,7 +97,7 @@ class RuntimeManager:
                 self._on_runtime_activated(candidate)
             except Exception as exc:
                 await self._safe_shutdown(candidate, context="initial runtime activation cleanup")
-                error = self._sanitize_error(exc)
+                error = sanitize_runtime_error(exc)
                 self._rollback_to_previous_runtime(
                     old_runtime=None,
                     old_generation=0,
@@ -211,7 +212,7 @@ class RuntimeManager:
         except Exception as exc:
             if candidate is not None:
                 await self._safe_shutdown(candidate, context="failed candidate runtime cleanup")
-            error = self._sanitize_error(exc)
+            error = sanitize_runtime_error(exc)
             self._rollback_to_previous_runtime(
                 old_runtime=old_runtime,
                 old_generation=old_generation,
@@ -234,7 +235,7 @@ class RuntimeManager:
             try:
                 self._on_runtime_activated(candidate)
             except Exception as exc:
-                error = self._sanitize_error(exc)
+                error = sanitize_runtime_error(exc)
                 await self._safe_shutdown(candidate, context="failed candidate runtime cleanup")
                 self._rollback_to_previous_runtime(
                     old_runtime=old_runtime,
@@ -277,13 +278,6 @@ class RuntimeManager:
         self._status.active_config_version = old_config_version
         self._status.last_reload_error = error
         self._status.last_reload_at = self._now_utc()
-
-    @staticmethod
-    def _sanitize_error(exc: Exception) -> str:
-        value = str(exc).strip()
-        if not value:
-            value = type(exc).__name__
-        return value[:512]
 
     @staticmethod
     def _now_utc() -> datetime:
