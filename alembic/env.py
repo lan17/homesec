@@ -23,6 +23,7 @@ from sqlalchemy import MetaData  # noqa: E402
 
 from homesec.postgres_support import (  # noqa: E402
     build_async_engine_kwargs,
+    normalize_async_dsn,
     resolve_test_db_schema,
     schema_ddl_identifier,
 )
@@ -46,7 +47,7 @@ def _get_url() -> str:
     url = os.getenv("DB_DSN") or os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
     if not url:
         raise RuntimeError("Missing DB_DSN (or DATABASE_URL) for alembic migration.")
-    return url
+    return normalize_async_dsn(url)
 
 
 def run_migrations_offline() -> None:
