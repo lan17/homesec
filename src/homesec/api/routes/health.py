@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app, require_normal_mode, verify_api_key
-
-if TYPE_CHECKING:
-    from homesec.app import Application
+from homesec.api.dependencies import (
+    HealthRoutesApp,
+    get_health_routes_app,
+    require_normal_mode,
+    verify_api_key,
+)
 
 router = APIRouter(tags=["health"])
 
@@ -47,7 +49,7 @@ class DiagnosticsResponse(BaseModel):
 
 
 async def _compute_health_response(
-    app: Application,
+    app: HealthRoutesApp,
 ) -> HealthResponse | JSONResponse:
     """Compute shared health payload for public and versioned health endpoints."""
     if app.bootstrap_mode:
@@ -85,14 +87,16 @@ async def _compute_health_response(
 
 @router.get("/health", response_model=HealthResponse, include_in_schema=False)
 async def get_root_health(
-    app: Application = Depends(get_homesec_app),
+    app: HealthRoutesApp = Depends(get_health_routes_app),
 ) -> HealthResponse | JSONResponse:
     """Public liveness/readiness health check for ops probes."""
     return await _compute_health_response(app)
 
 
 @router.get("/api/v1/health", response_model=HealthResponse)
-async def get_health(app: Application = Depends(get_homesec_app)) -> HealthResponse | JSONResponse:
+async def get_health(
+    app: HealthRoutesApp = Depends(get_health_routes_app),
+) -> HealthResponse | JSONResponse:
     """Versioned health check endpoint."""
     return await _compute_health_response(app)
 
@@ -102,7 +106,9 @@ async def get_health(app: Application = Depends(get_homesec_app)) -> HealthRespo
     response_model=DiagnosticsResponse,
     dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
 )
-async def get_diagnostics(app: Application = Depends(get_homesec_app)) -> DiagnosticsResponse:
+async def get_diagnostics(
+    app: HealthRoutesApp = Depends(get_health_routes_app),
+) -> DiagnosticsResponse:
     """Detailed component diagnostics."""
     pipeline_running = app.pipeline_running
 

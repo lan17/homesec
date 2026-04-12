@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import ClipRoutesApp, get_clip_routes_app
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.media_tokens import issue_clip_media_token
 from homesec.api.pagination import CursorDecodeError, decode_clip_cursor, encode_clip_cursor
-
-if TYPE_CHECKING:
-    from homesec.app import Application
 from homesec.models.clip import ClipStateData
 from homesec.models.enums import ClipStatus
 
@@ -91,7 +87,7 @@ async def list_clips(
     until: datetime | None = None,
     limit: int = Query(50, ge=1, le=100),
     cursor: str | None = None,
-    app: Application = Depends(get_homesec_app),
+    app: ClipRoutesApp = Depends(get_clip_routes_app),
 ) -> ClipListResponse:
     """List clips with filtering and keyset pagination."""
 
@@ -139,7 +135,10 @@ async def list_clips(
 
 
 @router.get("/api/v1/clips/{clip_id}", response_model=ClipResponse)
-async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) -> ClipResponse:
+async def get_clip(
+    clip_id: str,
+    app: ClipRoutesApp = Depends(get_clip_routes_app),
+) -> ClipResponse:
     """Get a single clip."""
     state = await app.repository.get_clip(clip_id)
     if state is None:
@@ -154,7 +153,7 @@ async def get_clip(clip_id: str, app: Application = Depends(get_homesec_app)) ->
 @router.post("/api/v1/clips/{clip_id}/media-token", response_model=ClipMediaTokenResponse)
 async def create_clip_media_token(
     clip_id: str,
-    app: Application = Depends(get_homesec_app),
+    app: ClipRoutesApp = Depends(get_clip_routes_app),
 ) -> ClipMediaTokenResponse:
     """Create media playback URL.
 
@@ -197,7 +196,10 @@ async def create_clip_media_token(
 
 
 @router.delete("/api/v1/clips/{clip_id}", response_model=ClipResponse)
-async def delete_clip(clip_id: str, app: Application = Depends(get_homesec_app)) -> ClipResponse:
+async def delete_clip(
+    clip_id: str,
+    app: ClipRoutesApp = Depends(get_clip_routes_app),
+) -> ClipResponse:
     """Delete a clip and its storage object."""
     state = await app.repository.get_clip(clip_id)
     if state is None:

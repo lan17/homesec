@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import RuntimeRoutesApp, get_runtime_routes_app
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.models import RuntimeState
-
-if TYPE_CHECKING:
-    from homesec.app import Application
 
 router = APIRouter(tags=["runtime"])
 
@@ -35,7 +31,9 @@ class RuntimeReloadResponse(BaseModel):
 
 
 @router.get("/api/v1/runtime/status", response_model=RuntimeStatusResponse)
-async def get_runtime_status(app: Application = Depends(get_homesec_app)) -> RuntimeStatusResponse:
+async def get_runtime_status(
+    app: RuntimeRoutesApp = Depends(get_runtime_routes_app),
+) -> RuntimeStatusResponse:
     """Return runtime-manager status."""
     status = app.get_runtime_status()
     return RuntimeStatusResponse(
@@ -50,7 +48,7 @@ async def get_runtime_status(app: Application = Depends(get_homesec_app)) -> Run
 
 @router.post("/api/v1/runtime/reload", response_model=RuntimeReloadResponse, status_code=202)
 async def reload_runtime(
-    app: Application = Depends(get_homesec_app),
+    app: RuntimeRoutesApp = Depends(get_runtime_routes_app),
 ) -> RuntimeReloadResponse:
     """Trigger runtime reload and return async acceptance outcome."""
     try:

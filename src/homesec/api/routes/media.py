@@ -7,24 +7,23 @@ import mimetypes
 import shutil
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import ClipRoutesApp, get_clip_routes_app
 from homesec.api.errors import APIError, APIErrorCode
-
-if TYPE_CHECKING:
-    from homesec.app import Application
 
 router = APIRouter(tags=["clips"])
 logger = logging.getLogger(__name__)
 
 
 @router.get("/api/v1/clips/{clip_id}/media")
-async def get_clip_media(clip_id: str, app: Application = Depends(get_homesec_app)) -> FileResponse:
+async def get_clip_media(
+    clip_id: str,
+    app: ClipRoutesApp = Depends(get_clip_routes_app),
+) -> FileResponse:
     """Stream clip media through HomeSec for in-app playback."""
     state = await app.repository.get_clip(clip_id)
     if state is None:

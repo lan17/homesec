@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import CameraRoutesApp, get_camera_routes_app
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import redact_config
 from homesec.config.errors import (
@@ -19,9 +19,6 @@ from homesec.config.errors import (
 )
 from homesec.models.config import CameraConfig
 from homesec.runtime.errors import RuntimeReloadConfigError
-
-if TYPE_CHECKING:
-    from homesec.app import Application
 
 router = APIRouter(tags=["cameras"])
 
@@ -67,7 +64,7 @@ def _source_config_to_dict(camera: CameraConfig) -> dict[str, object]:
     return dict(config)
 
 
-def _camera_response(app: Application, camera: CameraConfig) -> CameraResponse:
+def _camera_response(app: CameraRoutesApp, camera: CameraConfig) -> CameraResponse:
     source = app.get_source(camera.name)
     if camera.enabled and source is not None:
         healthy = source.is_healthy()
@@ -119,7 +116,7 @@ def _map_camera_config_error(exc: CameraMutationError) -> APIError:
 async def _reload_runtime_if_requested(
     *,
     apply_changes: bool,
-    app: Application,
+    app: CameraRoutesApp,
 ) -> RuntimeReloadResponse | None:
     if not apply_changes:
         return None
@@ -149,14 +146,19 @@ async def _reload_runtime_if_requested(
 
 
 @router.get("/api/v1/cameras", response_model=list[CameraResponse])
-async def list_cameras(app: Application = Depends(get_homesec_app)) -> list[CameraResponse]:
+async def list_cameras(
+    app: CameraRoutesApp = Depends(get_camera_routes_app),
+) -> list[CameraResponse]:
     """List all cameras."""
     config = await asyncio.to_thread(app.config_manager.get_config)
     return [_camera_response(app, camera) for camera in config.cameras]
 
 
 @router.get("/api/v1/cameras/{name}", response_model=CameraResponse)
-async def get_camera(name: str, app: Application = Depends(get_homesec_app)) -> CameraResponse:
+async def get_camera(
+    name: str,
+    app: CameraRoutesApp = Depends(get_camera_routes_app),
+) -> CameraResponse:
     """Get a single camera."""
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == name), None)
@@ -173,7 +175,7 @@ async def get_camera(name: str, app: Application = Depends(get_homesec_app)) -> 
 async def create_camera(
     payload: CameraCreate,
     apply_changes: bool = False,
-    app: Application = Depends(get_homesec_app),
+    app: CameraRoutesApp = Depends(get_camera_routes_app),
 ) -> ConfigChangeResponse:
     """Create a new camera."""
     try:
@@ -201,7 +203,7 @@ async def update_camera(
     name: str,
     payload: CameraUpdate,
     apply_changes: bool = False,
-    app: Application = Depends(get_homesec_app),
+    app: CameraRoutesApp = Depends(get_camera_routes_app),
 ) -> ConfigChangeResponse:
     """Partially update a camera."""
     try:
@@ -235,7 +237,7 @@ async def update_camera(
 async def delete_camera(
     name: str,
     apply_changes: bool = False,
-    app: Application = Depends(get_homesec_app),
+    app: CameraRoutesApp = Depends(get_camera_routes_app),
 ) -> ConfigChangeResponse:
     """Delete a camera."""
     try:

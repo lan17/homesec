@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app
-
-if TYPE_CHECKING:
-    from homesec.app import Application
+from homesec.api.dependencies import StatsRoutesApp, get_stats_routes_app
 
 router = APIRouter(tags=["stats"])
 
@@ -25,7 +21,7 @@ class StatsResponse(BaseModel):
 
 
 @router.get("/api/v1/stats", response_model=StatsResponse)
-async def get_stats(app: Application = Depends(get_homesec_app)) -> StatsResponse:
+async def get_stats(app: StatsRoutesApp = Depends(get_stats_routes_app)) -> StatsResponse:
     """Return system statistics."""
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     clips_today = await app.repository.count_clips_since(today_start)
