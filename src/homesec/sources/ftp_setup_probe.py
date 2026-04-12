@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
 
 from pydantic import ValidationError
@@ -11,16 +12,25 @@ from pydantic import ValidationError
 from homesec.models.setup import TestConnectionResponse
 from homesec.plugins.registry import PluginType, validate_plugin
 from homesec.services.setup_probe_support import (
-    FTP_TEST_CONNECTION_TIMEOUT_S,
     SETUP_TEST_CAMERA_NAME,
     build_test_connection_response,
     format_validation_error,
-    probe_tcp_bind,
 )
 from homesec.services.setup_probes import setup_probe
 from homesec.sources.ftp import FtpSourceConfig
 
 logger = logging.getLogger(__name__)
+
+FTP_TEST_CONNECTION_TIMEOUT_S = 5.0
+
+
+def probe_tcp_bind(host: str, port: int) -> int:
+    """Bind a temporary TCP socket and return the bound port."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        return int(sock.getsockname()[1])
 
 
 @setup_probe("camera", "ftp", timeout_s=FTP_TEST_CONNECTION_TIMEOUT_S + 1.0)

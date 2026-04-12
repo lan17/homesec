@@ -166,13 +166,11 @@ async def _test_camera_connection(
             available_backends=available_backends,
         )
 
-    match backend:
-        case _:
-            # Defensive fallback for known-but-not-yet-probed camera source plugins.
-            return build_test_connection_response(
-                success=False,
-                message=f"Camera backend {backend!r} does not implement connection testing yet.",
-            )
+    # Defensive fallback for known-but-not-yet-probed camera source plugins.
+    return build_test_connection_response(
+        success=False,
+        message=f"Camera backend {backend!r} does not implement connection testing yet.",
+    )
 
 
 async def _test_storage_connection(

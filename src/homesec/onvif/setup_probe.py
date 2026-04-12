@@ -5,26 +5,42 @@ from __future__ import annotations
 import logging
 import time
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from homesec.models.setup import TestConnectionResponse
 from homesec.onvif.client import OnvifCameraClient
 from homesec.onvif.discovery import discover_cameras
 from homesec.onvif.service import (
+    DEFAULT_ONVIF_PORT,
     OnvifProbeError,
     OnvifProbeOptions,
     OnvifProbeTimeoutError,
     OnvifService,
 )
 from homesec.services.setup_probe_support import (
-    ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S,
-    OnvifSetupProbeConfig,
     build_test_connection_response,
     format_validation_error,
 )
 from homesec.services.setup_probes import setup_probe
 
 logger = logging.getLogger(__name__)
+
+ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S = 30.0
+ONVIF_TEST_CONNECTION_TIMEOUT_S = 15.0
+
+
+class OnvifSetupProbeConfig(BaseModel):
+    """Validated payload for setup-time ONVIF connectivity probes."""
+
+    host: str = Field(min_length=1)
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    port: int = Field(default=DEFAULT_ONVIF_PORT, ge=1, le=65535)
+    timeout_s: float = Field(
+        default=ONVIF_TEST_CONNECTION_TIMEOUT_S,
+        gt=0.0,
+        le=ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S,
+    )
 
 
 @setup_probe("camera", "onvif", timeout_s=ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S + 1.0)

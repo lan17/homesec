@@ -15,9 +15,18 @@ from homesec.plugins.storage.local import LocalStorageConfig
 from homesec.services.setup_probe_support import (
     build_test_connection_response,
     format_validation_error,
-    nearest_existing_parent,
 )
 from homesec.services.setup_probes import setup_probe
+
+
+def nearest_existing_parent(path: Path) -> Path | None:
+    """Return the closest existing ancestor for a path, if any."""
+    current = path
+    while not current.exists():
+        if current == current.parent:
+            return None
+        current = current.parent
+    return current
 
 
 @setup_probe("storage", "local")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -13,19 +14,42 @@ from pydantic import ValidationError
 from homesec.models.setup import TestConnectionResponse
 from homesec.plugins.registry import PluginType, validate_plugin
 from homesec.services.setup_probe_support import (
-    RTSP_PREFLIGHT_COMMAND_TIMEOUT_CAP_S,
-    RTSP_TEST_CONNECTION_TIMEOUT_S,
     SETUP_TEST_CAMERA_NAME,
     build_test_connection_response,
     format_validation_error,
-    resolve_rtsp_detect_url,
-    resolve_rtsp_primary_url,
 )
 from homesec.services.setup_probes import setup_probe
 from homesec.sources.rtsp.core import RTSPSourceConfig
 from homesec.sources.rtsp.preflight import PreflightError, RTSPStartupPreflight
+from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 
 logger = logging.getLogger(__name__)
+
+RTSP_TEST_CONNECTION_TIMEOUT_S = 10.0
+RTSP_PREFLIGHT_COMMAND_TIMEOUT_CAP_S = 8.0
+
+
+def resolve_rtsp_primary_url(config: RTSPSourceConfig) -> str | None:
+    """Resolve the primary RTSP URL from config or env indirection."""
+    if config.rtsp_url_env:
+        env_url = os.getenv(config.rtsp_url_env)
+        if env_url:
+            return env_url
+    return config.rtsp_url
+
+
+def resolve_rtsp_detect_url(config: RTSPSourceConfig, primary_url: str) -> str:
+    """Resolve or derive the RTSP URL used for motion-stream detection."""
+    if config.detect_rtsp_url_env:
+        env_url = os.getenv(config.detect_rtsp_url_env)
+        if env_url:
+            return env_url
+    if config.detect_rtsp_url:
+        return config.detect_rtsp_url
+    derived = derive_detect_rtsp_url(primary_url)
+    if derived is not None:
+        return derived.url
+    return primary_url
 
 
 @setup_probe("camera", "rtsp", timeout_s=RTSP_TEST_CONNECTION_TIMEOUT_S + 1.0)
