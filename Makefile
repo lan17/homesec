@@ -34,6 +34,7 @@ help:
 # Config
 HOMESEC_CONFIG ?= config/config.yaml
 HOMESEC_LOG_LEVEL ?= INFO
+DB_DSN ?= postgresql+asyncpg://homesec:homesec@localhost:5432/homesec
 DOCKER_IMAGE ?= homesec
 DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
@@ -61,8 +62,8 @@ docker-push: docker-build
 # Local dev
 run:
 	@echo "Running database migrations..."
-	@uv run alembic -c alembic.ini upgrade head
-	uv run python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
+	@DB_DSN=$(DB_DSN) uv run alembic -c alembic.ini upgrade head
+	DB_DSN=$(DB_DSN) uv run python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
 
 db:
 	docker compose up -d postgres
