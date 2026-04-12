@@ -10,6 +10,7 @@ import homesec.state.postgres as state_postgres
 from homesec.models.alert import AlertDecision
 from homesec.models.clip import ClipListCursor, ClipStateData
 from homesec.models.enums import ClipStatus
+from homesec.models.events import AlertDecisionMadeEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.state import PostgresStateStore
@@ -718,22 +719,27 @@ async def test_list_clips_keyset_cursor_uses_created_at_and_clip_id(
 
 
 @pytest.mark.asyncio
-async def test_count_alerts_since_counts_alert_decision_at(
+async def test_count_alerts_since_counts_notifying_alert_decision_events(
     state_store: PostgresStateStore,
 ) -> None:
-    """count_alerts_since should count alert decisions from clip state timestamps."""
+    """count_alerts_since should count clip-level alert decisions that notify."""
     now = datetime.now(timezone.utc)
-    since = now - timedelta(minutes=5)
 
-    # Given: Clip states with recent, stale, and suppressed alert decisions
+    # Given: A stored clip and alert-decision events with different notify flags/timestamps
     await state_store.upsert(
-        "test_alert_count_recent",
+        "test_alert_count_yes",
         ClipStateData(
             camera_name="front_door",
             status=ClipStatus.ANALYZED,
-            local_path="/tmp/recent.mp4",
-            alert_decision=AlertDecision(notify=True, notify_reason="risk=high"),
-            alert_decision_at=now - timedelta(minutes=1),
+            local_path="/tmp/yes.mp4",
+        ),
+    )
+    await state_store.upsert(
+        "test_alert_count_no",
+        ClipStateData(
+            camera_name="front_door",
+            status=ClipStatus.ANALYZED,
+            local_path="/tmp/no.mp4",
         ),
     )
     await state_store.upsert(
@@ -742,23 +748,42 @@ async def test_count_alerts_since_counts_alert_decision_at(
             camera_name="front_door",
             status=ClipStatus.ANALYZED,
             local_path="/tmp/old.mp4",
-            alert_decision=AlertDecision(notify=True, notify_reason="risk=high"),
-            alert_decision_at=now - timedelta(hours=2),
         ),
     )
-    await state_store.upsert(
-        "test_alert_count_suppressed",
-        ClipStateData(
-            camera_name="front_door",
-            status=ClipStatus.ANALYZED,
-            local_path="/tmp/suppressed.mp4",
-            alert_decision=AlertDecision(notify=False, notify_reason="risk=low"),
-            alert_decision_at=now - timedelta(minutes=1),
-        ),
+    event_store = state_store.create_event_store()
+    await event_store.append(
+        AlertDecisionMadeEvent(
+            clip_id="test_alert_count_yes",
+            timestamp=now - timedelta(minutes=1),
+            should_notify=True,
+            reason="risk=high",
+            detected_classes=["person"],
+            vlm_risk="high",
+        )
+    )
+    await event_store.append(
+        AlertDecisionMadeEvent(
+            clip_id="test_alert_count_no",
+            timestamp=now - timedelta(minutes=1),
+            should_notify=False,
+            reason="risk=low",
+            detected_classes=["person"],
+            vlm_risk="low",
+        )
+    )
+    await event_store.append(
+        AlertDecisionMadeEvent(
+            clip_id="test_alert_count_old",
+            timestamp=now - timedelta(hours=2),
+            should_notify=True,
+            reason="risk=high",
+            detected_classes=["person"],
+            vlm_risk="high",
+        )
     )
 
     # When: Counting recent triggered alerts
-    count = await state_store.count_alerts_since(since)
+    count = await state_store.count_alerts_since(now - timedelta(minutes=5))
 
-    # Then: Only recent notifying decisions are counted
+    # Then: Only recent notifying clip-level alert decisions are counted
     assert count == 1

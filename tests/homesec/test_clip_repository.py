@@ -295,7 +295,7 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
 
 
 @pytest.mark.asyncio
-async def test_record_alert_decision_persists_timestamp(tmp_path: Path) -> None:
+async def test_record_alert_decision_records_state_and_event(tmp_path: Path) -> None:
     # Given: A repository using in-memory mock stores
     state_store = MockStateStore()
     event_store = MockEventStore()
@@ -322,12 +322,10 @@ async def test_record_alert_decision_persists_timestamp(tmp_path: Path) -> None:
         vlm_risk=RiskLevel.HIGH,
     )
 
-    # Then: State records the decision and timestamp
+    # Then: State records the alert decision
     state = await state_store.get(clip.clip_id)
     assert state is not None
     assert state.alert_decision == decision
-    assert state.alert_decision_at is not None
-    assert state.alert_decision_at.tzinfo is not None
 
     # And: Event is recorded
     events = event_store.events
