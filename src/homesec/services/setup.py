@@ -46,6 +46,13 @@ from homesec.onvif.service import (
 )
 from homesec.plugins.registry import PluginType, get_plugin_names, load_plugin, validate_plugin
 from homesec.plugins.storage.local import LocalStorageConfig
+from homesec.services.setup_probes import (
+    SetupProbeTarget,
+    get_setup_probe,
+    get_setup_probe_backends,
+    get_setup_probe_timeout,
+    setup_probe,
+)
 from homesec.sources.ftp import FtpSourceConfig
 from homesec.sources.local_folder import LocalFolderSourceConfig
 from homesec.sources.rtsp.core import RTSPSourceConfig
@@ -176,6 +183,10 @@ async def _test_camera_connection(
     backend: str,
     config: dict[str, object],
 ) -> TestConnectionResponse:
+    probe_result = await _run_registered_setup_probe("camera", backend, config)
+    if probe_result is not None:
+        return probe_result
+
     available_backends = _camera_backend_names()
     if backend not in available_backends:
         raise SetupTestConnectionRequestError(
@@ -208,8 +219,9 @@ async def _test_storage_connection(
     backend: str,
     config: dict[str, object],
 ) -> TestConnectionResponse:
-    if backend == "local":
-        return await _test_local_storage_connection(config=config)
+    probe_result = await _run_registered_setup_probe("storage", backend, config)
+    if probe_result is not None:
+        return probe_result
     return await _test_plugin_ping_connection(
         plugin_type=PluginType.STORAGE,
         backend=backend,
@@ -222,6 +234,10 @@ async def _test_notifier_connection(
     backend: str,
     config: dict[str, object],
 ) -> TestConnectionResponse:
+    probe_result = await _run_registered_setup_probe("notifier", backend, config)
+    if probe_result is not None:
+        return probe_result
+
     return await _test_plugin_ping_connection(
         plugin_type=PluginType.NOTIFIER,
         backend=backend,
@@ -234,6 +250,10 @@ async def _test_analyzer_connection(
     backend: str,
     config: dict[str, object],
 ) -> TestConnectionResponse:
+    probe_result = await _run_registered_setup_probe("analyzer", backend, config)
+    if probe_result is not None:
+        return probe_result
+
     return await _test_plugin_ping_connection(
         plugin_type=PluginType.ANALYZER,
         backend=backend,
@@ -241,6 +261,7 @@ async def _test_analyzer_connection(
     )
 
 
+@setup_probe("camera", "rtsp", timeout_s=_RTSP_TEST_CONNECTION_TIMEOUT_S + 1.0)
 async def _test_rtsp_camera_connection(
     *,
     config: dict[str, object],
@@ -334,6 +355,7 @@ async def _test_rtsp_camera_connection(
     )
 
 
+@setup_probe("camera", "ftp", timeout_s=_FTP_TEST_CONNECTION_TIMEOUT_S + 1.0)
 async def _test_ftp_camera_connection(
     *,
     config: dict[str, object],
@@ -387,6 +409,7 @@ async def _test_ftp_camera_connection(
     )
 
 
+@setup_probe("camera", "local_folder")
 async def _test_local_folder_camera_connection(
     *,
     config: dict[str, object],
@@ -443,6 +466,7 @@ async def _test_local_folder_camera_connection(
     )
 
 
+@setup_probe("camera", "onvif", timeout_s=_ONVIF_TEST_CONNECTION_TIMEOUT_CAP_S + 1.0)
 async def _test_onvif_camera_connection(
     *,
     config: dict[str, object],
@@ -497,6 +521,7 @@ async def _test_onvif_camera_connection(
     )
 
 
+@setup_probe("storage", "local")
 async def _test_local_storage_connection(*, config: dict[str, object]) -> TestConnectionResponse:
     start = time.perf_counter()
     _ensure_known_backend(PluginType.STORAGE, "local")
@@ -681,8 +706,59 @@ def _ensure_known_backend(plugin_type: PluginType, backend: str) -> None:
 
 def _camera_backend_names() -> list[str]:
     available = set(get_plugin_names(PluginType.SOURCE))
-    available.add("onvif")
+    available.update(get_setup_probe_backends("camera"))
     return sorted(available)
+
+
+async def _run_registered_setup_probe(
+    target: SetupProbeTarget,
+    backend: str,
+    config: dict[str, object],
+) -> TestConnectionResponse | None:
+    start = time.perf_counter()
+    probe = get_setup_probe(target, backend)
+    if probe is None:
+        return None
+    timeout_s = get_setup_probe_timeout(target, backend)
+    try:
+        if timeout_s is None:
+            return await probe(config=config)
+        return await asyncio.wait_for(probe(config=config), timeout=timeout_s)
+    except SetupTestConnectionRequestError:
+        raise
+    except ValidationError as exc:
+        return _result(
+            success=False,
+            message=_format_validation_error(exc),
+            start=start,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Setup registered probe timed out for %s backend=%s",
+            target,
+            backend,
+            exc_info=True,
+        )
+        return _result(
+            success=False,
+            message=f"{target} probe timed out after {timeout_s:.1f}s.",
+            start=start,
+        )
+    except Exception:
+        logger.warning(
+            "Setup registered probe failed for %s backend=%s",
+            target,
+            backend,
+            exc_info=True,
+        )
+        return _result(
+            success=False,
+            message=(
+                f"{target} probe failed during connectivity test. "
+                "Check backend configuration and connectivity."
+            ),
+            start=start,
+        )
 
 
 def _resolve_rtsp_primary_url(config: RTSPSourceConfig) -> str | None:

@@ -268,6 +268,78 @@ async def test_test_connection_notifier_normalizes_backend_name(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_camera_uses_registered_setup_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera test-connection should prefer registered setup probes over generic ping."""
+
+    # Given: A registry-backed camera probe for a backend without generic plugin wiring
+    async def _fake_probe(*, config: dict[str, object]) -> setup_service.TestConnectionResponse:
+        assert config == {"host": "192.168.1.10"}
+        return setup_service.TestConnectionResponse(
+            success=True,
+            message="camera probe ok",
+            details={"backend": "custom"},
+        )
+
+    monkeypatch.setattr(
+        setup_service,
+        "get_setup_probe",
+        lambda target, backend: _fake_probe if target == "camera" and backend == "custom" else None,
+    )
+    monkeypatch.setattr(
+        setup_service,
+        "_test_plugin_ping_connection",
+        lambda *_args, **_kwargs: pytest.fail("generic ping fallback should not be used"),
+    )
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="custom",
+        config={"host": "192.168.1.10"},
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The registered probe handles the request without falling back to plugin ping
+    assert response.success is True
+    assert response.message == "camera probe ok"
+    assert response.details == {"backend": "custom"}
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_registered_probe_failure_returns_failed_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registered setup probe failures should return a failed probe response."""
+
+    # Given: A registered camera probe that raises during connectivity testing
+    async def _failing_probe(*, config: dict[str, object]) -> setup_service.TestConnectionResponse:
+        _ = config
+        raise RuntimeError("socket connect failed")
+
+    monkeypatch.setattr(
+        setup_service,
+        "get_setup_probe",
+        lambda target, backend: _failing_probe
+        if target == "camera" and backend == "custom"
+        else None,
+    )
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="custom",
+        config={"host": "192.168.1.10"},
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The API returns a failed probe response instead of raising
+    assert response.success is False
+    assert "failed during connectivity test" in response.message
+
+
+@pytest.mark.asyncio
 async def test_test_connection_camera_rtsp_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -659,6 +731,43 @@ async def test_test_connection_camera_onvif_success(
     assert response.details is not None
     assert response.details["profiles"] == 2
     assert response.details["streams"] == 1
+
+
+@pytest.mark.asyncio
+async def test_test_connection_camera_onvif_uses_requested_timeout_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera onvif test should not inherit the shorter generic plugin timeout."""
+
+    # Given: An ONVIF probe that outlives the generic plugin timeout but stays within request budget
+    class _SlowSuccessfulOnvifService:
+        def __init__(self, *, discover_fn: object, client_factory: object) -> None:
+            _ = (discover_fn, client_factory)
+
+        async def probe(self, options: setup_service.OnvifProbeOptions) -> object:
+            assert options.timeout_s == 0.05
+            await asyncio.sleep(0.02)
+            return SimpleNamespace(profiles=[object()], streams=[object()])
+
+    monkeypatch.setattr(setup_service, "_PLUGIN_TEST_CONNECTION_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(setup_service, "OnvifService", _SlowSuccessfulOnvifService)
+    request = SetupTestConnectionRequest(
+        type="camera",
+        backend="onvif",
+        config={
+            "host": "192.168.1.10",
+            "username": "admin",
+            "password": "secret",
+            "timeout_s": 0.05,
+        },
+    )
+
+    # When: Running the setup test-connection service
+    response = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The setup-specific ONVIF timeout governs the registered probe
+    assert response.success is True
+    assert response.message == "ONVIF probe succeeded."
 
 
 @pytest.mark.asyncio
@@ -1134,7 +1243,7 @@ async def test_test_connection_camera_unknown_backend_includes_onvif_hint(
         await setup_service.test_connection(request, _StubApp())
 
     assert "Unknown camera backend" in str(exc_info.value)
-    assert exc_info.value.available_backends == ["ftp", "onvif", "rtsp"]
+    assert exc_info.value.available_backends == ["ftp", "local_folder", "onvif", "rtsp"]
 
 
 @pytest.mark.asyncio
