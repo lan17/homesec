@@ -1195,6 +1195,67 @@ def test_patch_storage_apply_changes_triggers_runtime_reload(tmp_path) -> None:
     assert app.runtime_reload_calls == 1
 
 
+def test_patch_storage_apply_changes_returns_409_when_reload_not_accepted(tmp_path) -> None:
+    """PATCH /storage should surface reload-in-progress conflicts from runtime control."""
+    # Given: A storage update that succeeds but runtime reload is currently busy
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_request=RuntimeReloadRequest(
+            accepted=False,
+            message="Reload already in progress",
+            target_generation=12,
+        ),
+    )
+    client = _client(app)
+
+    # When: Patching storage with apply_changes enabled
+    response = client.patch(
+        "/api/v1/storage?apply_changes=true",
+        json={"config": {"root": "/apply-later"}},
+    )
+
+    # Then: Route returns canonical reload conflict details from the runtime layer
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"] == "Reload already in progress"
+    assert payload["error_code"] == "RELOAD_IN_PROGRESS"
+    assert payload["target_generation"] == 12
+    assert app.runtime_reload_calls == 1
+
+
+def test_patch_storage_apply_changes_surfaces_runtime_reload_config_errors(tmp_path) -> None:
+    """PATCH /storage should map runtime reload config failures into API errors."""
+    # Given: A storage update that reaches a runtime reload config error
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        runtime_reload_error=RuntimeReloadConfigError(
+            "Runtime reload configuration is invalid",
+            status_code=422,
+            error_code="STORAGE_CONFIG_INVALID",
+        ),
+    )
+    client = _client(app)
+
+    # When: Patching storage with apply_changes enabled
+    response = client.patch(
+        "/api/v1/storage?apply_changes=true",
+        json={"config": {"root": "/reload-invalid"}},
+    )
+
+    # Then: Route preserves the status code and canonical error code from the runtime error
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"] == "Runtime reload configuration is invalid"
+    assert payload["error_code"] == "STORAGE_CONFIG_INVALID"
+    assert app.runtime_reload_calls == 1
+
+
 def test_patch_storage_invalid_backend_returns_400(tmp_path) -> None:
     """PATCH /storage should return canonical 400 for invalid backend updates."""
     # Given: A config with valid initial storage settings

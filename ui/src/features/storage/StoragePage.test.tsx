@@ -292,6 +292,39 @@ describe('StoragePage', () => {
     ).toBeTruthy()
   })
 
+  it('applies deferred runtime reload after a save that leaves changes pending', async () => {
+    // Given: A storage edit that saves successfully but still requires runtime reload
+    const harness = setupPage({
+      updateResponse: {
+        restart_required: true,
+        storage: {
+          backend: 'local',
+          config: {
+            root: '/var/lib/homesec',
+          },
+          paths: {
+            clips_dir: 'clips',
+            backups_dir: 'backups',
+            artifacts_dir: 'artifacts',
+          },
+        },
+        runtime_reload: null,
+      },
+    })
+    const user = userEvent.setup()
+
+    // When: Operator saves changes, then applies the pending runtime reload
+    await user.clear(screen.getByLabelText('Storage root directory'))
+    await user.type(screen.getByLabelText('Storage root directory'), '/var/lib/homesec')
+    await user.click(screen.getByRole('button', { name: 'Save storage settings' }))
+    await screen.findByText('Storage configuration updated. Apply runtime reload to activate changes.')
+    await user.click(screen.getByRole('button', { name: 'Apply runtime reload' }))
+
+    // Then: Deferred runtime reload is triggered and success feedback is surfaced
+    expect(harness.reloadMutateAsync).toHaveBeenCalledTimes(1)
+    await screen.findByText('Runtime reload accepted')
+  })
+
   it('preserves built-in backend defaults when metadata omits schema defaults', async () => {
     // Given: Dropbox metadata omits a default for a required root field
     const harness = setupPage({

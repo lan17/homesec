@@ -14,6 +14,7 @@ from homesec.config.errors import (
     CameraConfigInvalidError,
     CameraConfigRedactedPlaceholderError,
     CameraNotFoundError,
+    StorageConfigInvalidError,
     StorageConfigRedactedPlaceholderError,
 )
 from homesec.config.loader import load_config_from_dict
@@ -434,6 +435,35 @@ async def test_config_manager_update_storage_supports_backend_switch_with_new_co
     assert config.storage.backend == "local"
     assert config.storage.config["root"] == "./storage"
     assert "token_env" not in config.storage.config
+
+
+@pytest.mark.asyncio
+async def test_config_manager_update_storage_rejects_invalid_backend_config_on_switch(
+    tmp_path: Path,
+) -> None:
+    """Storage updates should fail when backend-specific validation rejects the new config."""
+    # Given: A config currently using local storage
+    config_path = tmp_path / "config.yaml"
+    _ = _write_config(config_path, cameras=[])
+    raw = yaml.safe_load(config_path.read_text())
+    raw["storage"] = {
+        "backend": "local",
+        "config": {"root": "./storage"},
+    }
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    manager = ConfigManager(config_path)
+
+    # When: Switching to Dropbox without providing the required root field
+    with pytest.raises(StorageConfigInvalidError):
+        await manager.update_storage(
+            storage_backend="dropbox",
+            storage_config={"token_env": "DROPBOX_TOKEN"},
+        )
+
+    # Then: Persisted storage remains unchanged
+    config = manager.get_config()
+    assert config.storage.backend == "local"
+    assert config.storage.config["root"] == "./storage"
 
 
 @pytest.mark.asyncio
