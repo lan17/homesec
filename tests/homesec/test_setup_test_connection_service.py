@@ -285,9 +285,7 @@ async def test_test_connection_camera_uses_registered_setup_probe(
     monkeypatch.setattr(
         setup_service,
         "get_setup_probe",
-        lambda target, backend: _fake_probe
-        if target == "camera" and backend == "custom"
-        else None,
+        lambda target, backend: _fake_probe if target == "camera" and backend == "custom" else None,
     )
     monkeypatch.setattr(
         setup_service,

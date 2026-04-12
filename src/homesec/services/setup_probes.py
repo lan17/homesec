@@ -58,13 +58,7 @@ class SetupProbeRegistry:
 
     def get_backends(self, target: SetupProbeTarget) -> list[str]:
         """Return known special-case backends for a target."""
-        return sorted(
-            {
-                entry.backend
-                for entry in self._probes.values()
-                if entry.target == target
-            }
-        )
+        return sorted({entry.backend for entry in self._probes.values() if entry.target == target})
 
 
 _SETUP_PROBE_REGISTRY = SetupProbeRegistry()
