@@ -1,6 +1,9 @@
 """Shared pytest fixtures for HomeSec tests."""
 
+import asyncio
+import os
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +15,11 @@ if str(src_path.resolve()) not in sys.path:
 import pytest
 
 from homesec.models.clip import Clip
+from homesec.postgres_support import (
+    TEST_DB_SCHEMA_ENV,
+    create_schema_if_missing,
+    drop_schema_cascade,
+)
 from homesec.sources.rtsp.capabilities import get_global_rtsp_timeout_capabilities
 from tests.homesec.mocks import (
     MockFilter,
@@ -20,6 +28,36 @@ from tests.homesec.mocks import (
     MockStorage,
     MockVLM,
 )
+
+
+def _default_test_dsn() -> str:
+    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
+
+
+def _generate_test_schema_name() -> str:
+    token = uuid.uuid4().hex[:8]
+    return f"hs_pytest_{os.getpid()}_{token}"
+
+
+@pytest.fixture(scope="session")
+def isolated_postgres_schema() -> str:
+    """Provision a per-run schema so parallel test runs can share one Postgres instance."""
+    dsn = _default_test_dsn()
+    schema = os.getenv(TEST_DB_SCHEMA_ENV, _generate_test_schema_name())
+    previous = os.environ.get(TEST_DB_SCHEMA_ENV)
+
+    asyncio.run(create_schema_if_missing(dsn, schema))
+    os.environ[TEST_DB_SCHEMA_ENV] = schema
+    try:
+        yield schema
+    finally:
+        try:
+            asyncio.run(drop_schema_cascade(dsn, schema))
+        finally:
+            if previous is None:
+                os.environ.pop(TEST_DB_SCHEMA_ENV, None)
+            else:
+                os.environ[TEST_DB_SCHEMA_ENV] = previous
 
 
 @pytest.fixture(autouse=True)
@@ -77,11 +115,10 @@ def sample_clip() -> Clip:
 
 
 @pytest.fixture
-def postgres_dsn() -> str:
+def postgres_dsn(isolated_postgres_schema: str) -> str:
     """Return test Postgres DSN (requires local DB running)."""
-    import os
-
-    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
+    _ = isolated_postgres_schema
+    return _default_test_dsn()
 
 
 @pytest.fixture

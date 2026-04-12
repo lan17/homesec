@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from alembic import context
+from sqlalchemy import text
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -20,6 +21,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from sqlalchemy import MetaData  # noqa: E402
+from homesec.postgres_support import (  # noqa: E402
+    build_async_engine_kwargs,
+    resolve_test_db_schema,
+    schema_ddl_identifier,
+)
 from homesec.telemetry.db.log_table import metadata as telemetry_metadata  # noqa: E402
 from homesec.state.postgres import Base as StateBase  # noqa: E402
 
@@ -56,8 +62,13 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+def do_run_migrations(connection, schema: str | None) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        version_table_schema=schema,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
@@ -66,11 +77,23 @@ def do_run_migrations(connection) -> None:
 async def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = _get_url()
+    schema = resolve_test_db_schema()
+    engine_kwargs = build_async_engine_kwargs(schema=schema)
 
-    connectable = async_engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = async_engine_from_config(
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+        **engine_kwargs,
+    )
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    async with connectable.begin() as connection:
+        if schema is not None:
+            await connection.execute(
+                text(f"CREATE SCHEMA IF NOT EXISTS {schema_ddl_identifier(schema)}")
+            )
+            await connection.execute(text(f"SET search_path TO {schema_ddl_identifier(schema)}"))
+        await connection.run_sync(do_run_migrations, schema)
 
     await connectable.dispose()
 

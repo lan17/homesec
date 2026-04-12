@@ -25,7 +25,7 @@ from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from homesec.interfaces import EventStore, StateStore
@@ -53,6 +53,7 @@ from homesec.models.events import (
 from homesec.models.events import (
     ClipEvent as ClipEventModel,
 )
+from homesec.postgres_support import create_scoped_async_engine, normalize_async_dsn
 
 logger = logging.getLogger(__name__)
 _BATCH_STATE_LOOKUP_SIZE = 1000
@@ -148,13 +149,7 @@ class ClipEvent(Base):
 
 
 def _normalize_async_dsn(dsn: str) -> str:
-    if "+asyncpg" in dsn:
-        return dsn
-    if dsn.startswith("postgresql://"):
-        return dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if dsn.startswith("postgres://"):
-        return dsn.replace("postgres://", "postgresql+asyncpg://", 1)
-    return dsn
+    return normalize_async_dsn(dsn)
 
 
 class PostgresStateStore(StateStore):
@@ -164,13 +159,14 @@ class PostgresStateStore(StateStore):
     instead of raising when DB is unavailable.
     """
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, *, schema: str | None = None) -> None:
         """Initialize state store.
 
         Args:
             dsn: Postgres connection string (e.g., "postgresql+asyncpg://user:pass@host/db")
         """
         self._dsn = _normalize_async_dsn(dsn)
+        self._schema = schema
         self._engine: AsyncEngine | None = None
 
     async def initialize(self) -> bool:
@@ -182,8 +178,9 @@ class PostgresStateStore(StateStore):
             True if initialization succeeded, False otherwise
         """
         try:
-            self._engine = create_async_engine(
+            self._engine = create_scoped_async_engine(
                 self._dsn,
+                schema=self._schema,
                 pool_pre_ping=True,
                 pool_size=5,
                 max_overflow=0,

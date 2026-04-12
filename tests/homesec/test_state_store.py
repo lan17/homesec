@@ -1,6 +1,7 @@
 """Tests for PostgresStateStore."""
 
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,6 +14,7 @@ from homesec.models.enums import ClipStatus
 from homesec.models.events import AlertDecisionMadeEvent, NotificationSentEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
+from homesec.postgres_support import create_schema_if_missing, drop_schema_cascade
 from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
@@ -26,11 +28,9 @@ def get_test_dsn() -> str:
 
 
 @pytest.fixture
-async def state_store() -> PostgresStateStore:
+async def state_store(postgres_dsn: str) -> PostgresStateStore:
     """Create and initialize a PostgresStateStore for testing."""
-    dsn = get_test_dsn()
-    assert dsn is not None
-    store = PostgresStateStore(dsn)
+    store = PostgresStateStore(postgres_dsn)
     initialized = await store.initialize()
     assert initialized, "Failed to initialize state store"
     if store._engine is not None:
@@ -118,6 +118,65 @@ async def test_upsert_and_get_roundtrip(state_store: PostgresStateStore) -> None
     assert retrieved is not None
     assert retrieved.camera_name == "front_door"
     assert retrieved.status == "queued_local"
+
+
+@pytest.mark.asyncio
+async def test_state_stores_with_distinct_schemas_do_not_interfere(postgres_dsn: str) -> None:
+    """State stores using separate schemas on one Postgres instance should remain isolated."""
+    # Given: Two state stores pointed at the same database with distinct schemas
+    token = uuid.uuid4().hex[:8]
+    schema_a = f"hs_parallel_a_{token}"
+    schema_b = f"hs_parallel_b_{token}"
+    await create_schema_if_missing(postgres_dsn, schema_a)
+    await create_schema_if_missing(postgres_dsn, schema_b)
+    store_a = PostgresStateStore(postgres_dsn, schema=schema_a)
+    store_b = PostgresStateStore(postgres_dsn, schema=schema_b)
+    assert await store_a.initialize() is True
+    assert await store_b.initialize() is True
+
+    try:
+        assert store_a._engine is not None
+        assert store_b._engine is not None
+        async with store_a._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        async with store_b._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+
+        # When: Each schema stores a clip with the same id
+        clip_id = "test_parallel_schema_001"
+        await store_a.upsert(
+            clip_id,
+            ClipStateData(
+                camera_name="front_door",
+                status=ClipStatus.UPLOADED,
+                local_path="/tmp/a.mp4",
+            ),
+        )
+        await store_b.upsert(
+            clip_id,
+            ClipStateData(
+                camera_name="garage",
+                status=ClipStatus.ANALYZED,
+                local_path="/tmp/b.mp4",
+            ),
+        )
+
+        # Then: Each store reads only its own schema-local row
+        state_a = await store_a.get(clip_id)
+        state_b = await store_b.get(clip_id)
+        assert state_a is not None
+        assert state_b is not None
+        assert state_a.camera_name == "front_door"
+        assert state_b.camera_name == "garage"
+        assert state_a.status == ClipStatus.UPLOADED
+        assert state_b.status == ClipStatus.ANALYZED
+    finally:
+        await store_a.shutdown()
+        await store_b.shutdown()
+        await drop_schema_cascade(postgres_dsn, schema_a)
+        await drop_schema_cascade(postgres_dsn, schema_b)
 
 
 @pytest.mark.asyncio
