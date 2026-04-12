@@ -455,7 +455,7 @@ class PostgresStateStore(StateStore):
             return 0
 
         query = (
-            select(func.count())
+            select(func.count(func.distinct(ClipEvent.clip_id)))
             .select_from(ClipEvent)
             .where(
                 and_(

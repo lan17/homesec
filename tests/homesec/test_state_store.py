@@ -763,6 +763,16 @@ async def test_count_alerts_since_counts_notifying_alert_decision_events(
     )
     await event_store.append(
         AlertDecisionMadeEvent(
+            clip_id="test_alert_count_yes",
+            timestamp=now - timedelta(seconds=30),
+            should_notify=True,
+            reason="duplicate-retry",
+            detected_classes=["person"],
+            vlm_risk="high",
+        )
+    )
+    await event_store.append(
+        AlertDecisionMadeEvent(
             clip_id="test_alert_count_no",
             timestamp=now - timedelta(minutes=1),
             should_notify=False,
@@ -785,5 +795,5 @@ async def test_count_alerts_since_counts_notifying_alert_decision_events(
     # When: Counting recent triggered alerts
     count = await state_store.count_alerts_since(now - timedelta(minutes=5))
 
-    # Then: Only recent notifying clip-level alert decisions are counted
+    # Then: Only recent notifying clip-level alert decisions are counted once per clip
     assert count == 1
