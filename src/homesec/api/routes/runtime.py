@@ -5,12 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from homesec.api.dependencies import get_homesec_app
-from homesec.api.errors import APIError, APIErrorCode
-from homesec.runtime.errors import RuntimeReloadConfigError
+from homesec.api.runtime_reload import RuntimeReloadResponse, request_runtime_reload
 from homesec.runtime.models import RuntimeState
 
 if TYPE_CHECKING:
@@ -26,12 +25,6 @@ class RuntimeStatusResponse(BaseModel):
     active_config_version: str | None
     last_reload_at: datetime | None
     last_reload_error: str | None
-
-
-class RuntimeReloadResponse(BaseModel):
-    accepted: bool
-    message: str
-    target_generation: int
 
 
 @router.get("/api/v1/runtime/status", response_model=RuntimeStatusResponse)
@@ -53,25 +46,4 @@ async def reload_runtime(
     app: Application = Depends(get_homesec_app),
 ) -> RuntimeReloadResponse:
     """Trigger runtime reload and return async acceptance outcome."""
-    try:
-        request = await app.request_runtime_reload()
-    except RuntimeReloadConfigError as exc:
-        raise APIError(
-            str(exc),
-            status_code=exc.status_code,
-            error_code=exc.error_code,
-        ) from exc
-
-    if not request.accepted:
-        raise APIError(
-            request.message,
-            status_code=status.HTTP_409_CONFLICT,
-            error_code=APIErrorCode.RELOAD_IN_PROGRESS,
-            extra={"target_generation": request.target_generation},
-        )
-
-    return RuntimeReloadResponse(
-        accepted=True,
-        message="Runtime reload accepted",
-        target_generation=request.target_generation,
-    )
+    return await request_runtime_reload(app)

@@ -5,17 +5,17 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, cast
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from homesec.api.dependencies import get_homesec_app, require_normal_mode
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import is_sensitive_key, redact_config
+from homesec.api.runtime_reload import RuntimeReloadResponse, reload_runtime_if_requested
 from homesec.config.errors import StorageMutationError
 from homesec.models.config import StorageConfig
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.registry import PluginType, get_plugin_config_model, get_plugin_names
-from homesec.runtime.errors import RuntimeReloadConfigError
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -52,12 +52,6 @@ class StorageBackendMetadata(BaseModel):
     secret_fields: list[str]
 
 
-class RuntimeReloadResponse(BaseModel):
-    accepted: bool
-    message: str
-    target_generation: int
-
-
 class StorageChangeResponse(BaseModel):
     restart_required: bool = True
     storage: StorageResponse | None = None
@@ -73,46 +67,6 @@ def _storage_response(storage: StorageConfig) -> StorageResponse:
         backend=storage.backend,
         config=cast(dict[str, object], redacted_storage),
         paths=cast(dict[str, object], paths_payload),
-    )
-
-
-def _map_storage_config_error(exc: StorageMutationError) -> APIError:
-    return APIError(
-        str(exc),
-        status_code=status.HTTP_400_BAD_REQUEST,
-        error_code=APIErrorCode.STORAGE_CONFIG_INVALID,
-    )
-
-
-async def _reload_runtime_if_requested(
-    *,
-    apply_changes: bool,
-    app: Application,
-) -> RuntimeReloadResponse | None:
-    if not apply_changes:
-        return None
-
-    try:
-        request = await app.request_runtime_reload()
-    except RuntimeReloadConfigError as exc:
-        raise APIError(
-            str(exc),
-            status_code=exc.status_code,
-            error_code=exc.error_code,
-        ) from exc
-
-    if not request.accepted:
-        raise APIError(
-            request.message,
-            status_code=status.HTTP_409_CONFLICT,
-            error_code=APIErrorCode.RELOAD_IN_PROGRESS,
-            extra={"target_generation": request.target_generation},
-        )
-
-    return RuntimeReloadResponse(
-        accepted=True,
-        message="Runtime reload accepted",
-        target_generation=request.target_generation,
     )
 
 
@@ -197,10 +151,14 @@ async def patch_storage(
             storage_config=payload.config,
         )
     except StorageMutationError as exc:
-        raise _map_storage_config_error(exc) from exc
+        raise APIError(
+            str(exc),
+            status_code=400,
+            error_code=APIErrorCode.STORAGE_CONFIG_INVALID,
+        ) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = await reload_runtime_if_requested(apply_changes=apply_changes, app=app)
     return StorageChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         storage=_storage_response(config.storage),
