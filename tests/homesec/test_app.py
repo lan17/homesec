@@ -503,8 +503,10 @@ async def test_application_run_enters_bootstrap_mode_when_config_missing(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_create_state_store_prefers_env_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_create_state_store should resolve DSN from dsn_env when configured."""
+async def test_build_runtime_persistence_stack_prefers_env_dsn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared runtime bootstrap should resolve DSN from dsn_env when configured."""
     # Given: State store config with both inline DSN and dsn_env override
     config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
     config.state_store = StateStoreConfig(
@@ -521,33 +523,43 @@ async def test_create_state_store_prefers_env_dsn(monkeypatch: pytest.MonkeyPatc
             created["initialized"] = True
             return True
 
+        async def ping(self) -> bool:
+            return True
+
+        def create_event_store(self) -> object:
+            from homesec.state import NoopEventStore
+
+            return NoopEventStore()
+
     app = Application(config_path=Path(__file__))
     monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "postgresql://from-env")
     monkeypatch.setattr("homesec.app.PostgresStateStore", _RecordingStateStore)
+    monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
 
-    # When: Creating the state store
-    store = await app._create_state_store(config)
+    # When: Building shared runtime persistence
+    persistence = await app._build_runtime_persistence_stack(config)
 
     # Then: The environment DSN is used and initialization is awaited
     assert created["dsn"] == "postgresql://from-env"
     assert created["initialized"] is True
-    assert isinstance(store, _RecordingStateStore)
+    assert isinstance(persistence.state_store, _RecordingStateStore)
 
 
 @pytest.mark.asyncio
-async def test_create_state_store_raises_when_env_resolution_returns_empty(
+async def test_build_runtime_persistence_stack_raises_when_env_resolution_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_create_state_store should fail fast when env DSN resolution yields no value."""
+    """Shared runtime bootstrap should fail fast when env DSN resolution yields no value."""
     # Given: State store config that relies on env resolution for DSN
     config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
     config.state_store = StateStoreConfig(dsn="postgresql://ignored-inline", dsn_env="HOMESEC_DSN")
     app = Application(config_path=Path(__file__))
     monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "")
+    monkeypatch.setattr("homesec.app.load_storage_plugin", lambda cfg: _StubStorage(cfg))
 
-    # When: Creating the state store without DSN
+    # When: Building shared runtime persistence without a resolved DSN
     with pytest.raises(RuntimeError, match="Postgres DSN is required"):
-        await app._create_state_store(config)
+        await app._build_runtime_persistence_stack(config)
 
 
 def test_get_runtime_status_uses_worker_exit_code_for_stale_runtime() -> None:

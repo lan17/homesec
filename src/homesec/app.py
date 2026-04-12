@@ -19,6 +19,10 @@ from homesec.models.config import FastAPIServerConfig
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository import ClipRepository
+from homesec.runtime.bootstrap import (
+    RuntimePersistenceStack,
+    build_runtime_persistence_stack,
+)
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.manager import RuntimeManager
@@ -193,14 +197,7 @@ class Application:
         self._validate_config(config)
 
         # Build components locally first so partial failures do not leak mutable app state.
-        storage = self._create_storage(config)
-        state_store = await self._create_state_store(config)
-        event_store = self._create_event_store(state_store)
-        repository = ClipRepository(
-            state_store,
-            event_store,
-            retry=config.retry,
-        )
+        persistence = await self._build_runtime_persistence_stack(config)
         runtime_manager = RuntimeManager(
             self._create_runtime_controller(),
             on_runtime_activated=self._bind_active_runtime,
@@ -209,8 +206,8 @@ class Application:
             await runtime_manager.start_initial_runtime(config)
         except Exception:
             await runtime_manager.shutdown()
-            await state_store.shutdown()
-            await storage.shutdown()
+            await persistence.state_store.shutdown()
+            await persistence.storage.shutdown()
             raise
 
         api_server = self._api_server
@@ -226,10 +223,10 @@ class Application:
             else:
                 api_server = None
 
-        self._storage = storage
-        self._state_store = state_store
-        self._event_store = event_store
-        self._repository = repository
+        self._storage = persistence.storage
+        self._state_store = persistence.state_store
+        self._event_store = persistence.event_store
+        self._repository = persistence.repository
         self._runtime_manager = runtime_manager
         self._api_server = api_server
 
@@ -250,30 +247,18 @@ class Application:
         self._bootstrap = False
         logger.info("Setup finalized; runtime activated in-process without API restart")
 
-    def _create_storage(self, config: Config) -> StorageBackend:
-        """Create storage backend based on config."""
-        return load_storage_plugin(config.storage)
-
-    async def _create_state_store(self, config: Config) -> StateStore:
-        """Create state store based on config."""
-        state_cfg = config.state_store
-        dsn = state_cfg.dsn
-        if state_cfg.dsn_env:
-            dsn = resolve_env_var(state_cfg.dsn_env)
-        if not dsn:
-            raise RuntimeError("Postgres DSN is required for state_store backend")
-        store = PostgresStateStore(dsn)
-        await store.initialize()
-        return store
-
-    def _create_event_store(self, state_store: StateStore) -> EventStore:
-        """Create event store based on state store backend."""
-        event_store = state_store.create_event_store()
-        if isinstance(event_store, NoopEventStore):
-            logger.warning(
+    async def _build_runtime_persistence_stack(self, config: Config) -> RuntimePersistenceStack:
+        """Build shared storage and persistence components for the app runtime."""
+        return await build_runtime_persistence_stack(
+            config,
+            resolve_env=resolve_env_var,
+            missing_dsn_message="Postgres DSN is required for state_store backend",
+            event_store_unavailable_warning=(
                 "Event store unavailable (NoopEventStore returned); events will be dropped"
-            )
-        return event_store
+            ),
+            storage_loader=load_storage_plugin,
+            state_store_factory=PostgresStateStore,
+        )
 
     def _create_runtime_controller(self) -> RuntimeController:
         controller = SubprocessRuntimeController()

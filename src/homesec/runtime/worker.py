@@ -24,13 +24,18 @@ from homesec.plugins.sources import load_source_plugin
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository import ClipRepository
 from homesec.runtime.assembly import RuntimeAssembler
+from homesec.runtime.bootstrap import (
+    RuntimePersistenceStack,
+    build_runtime_persistence_stack,
+)
+from homesec.runtime.errors import sanitize_runtime_error
 from homesec.runtime.models import RuntimeBundle
 from homesec.runtime.subprocess_protocol import (
     WorkerCameraStatusPayload,
     WorkerEvent,
     WorkerEventType,
 )
-from homesec.state import NoopEventStore, PostgresStateStore
+from homesec.state import PostgresStateStore
 
 if TYPE_CHECKING:
     from homesec.interfaces import (
@@ -106,17 +111,13 @@ class _RuntimeWorkerService:
         try:
             discover_all_plugins()
 
-            storage = load_storage_plugin(self._config.storage)
-            self._storage = storage
-            self._state_store = await self._create_state_store(self._config)
-            self._event_store = self._create_event_store(self._state_store)
-            self._repository = ClipRepository(
-                self._state_store,
-                self._event_store,
-                retry=self._config.retry,
-            )
+            persistence = await self._build_runtime_persistence_stack()
+            self._storage = persistence.storage
+            self._state_store = persistence.state_store
+            self._event_store = persistence.event_store
+            self._repository = persistence.repository
             self._assembler = RuntimeAssembler(
-                storage=storage,
+                storage=persistence.storage,
                 repository=self._repository,
                 notifier_factory=self._create_notifier,
                 notifier_health_logger=self._log_notifier_health,
@@ -150,7 +151,7 @@ class _RuntimeWorkerService:
     def emit_error(self, exc: Exception) -> None:
         self._emit_event(
             WorkerEventType.ERROR,
-            message=self._sanitize_error(exc),
+            message=sanitize_runtime_error(exc),
         )
 
     async def _heartbeat_loop(self, stop_event: asyncio.Event) -> None:
@@ -177,24 +178,18 @@ class _RuntimeWorkerService:
             await self._storage.shutdown()
             self._storage = None
 
-    async def _create_state_store(self, config: Config) -> StateStore:
-        state_cfg = config.state_store
-        dsn = state_cfg.dsn
-        if state_cfg.dsn_env:
-            dsn = resolve_env_var(state_cfg.dsn_env)
-        if not dsn:
-            raise RuntimeError("Postgres DSN is required for runtime worker state_store backend")
-        store = PostgresStateStore(dsn)
-        await store.initialize()
-        return store
-
-    def _create_event_store(self, state_store: StateStore) -> EventStore:
-        event_store = state_store.create_event_store()
-        if isinstance(event_store, NoopEventStore):
-            logger.warning(
+    async def _build_runtime_persistence_stack(self) -> RuntimePersistenceStack:
+        """Build shared storage and persistence components for the worker runtime."""
+        return await build_runtime_persistence_stack(
+            self._config,
+            resolve_env=resolve_env_var,
+            missing_dsn_message=("Postgres DSN is required for runtime worker state_store backend"),
+            event_store_unavailable_warning=(
                 "Runtime worker event store unavailable (NoopEventStore returned); events dropped"
-            )
-        return event_store
+            ),
+            storage_loader=load_storage_plugin,
+            state_store_factory=PostgresStateStore,
+        )
 
     def _create_notifier(self, config: Config) -> tuple[Notifier, list[NotifierEntry]]:
         entries: list[NotifierEntry] = []
@@ -298,13 +293,6 @@ class _RuntimeWorkerService:
                 )
 
         return statuses
-
-    @staticmethod
-    def _sanitize_error(exc: Exception) -> str:
-        value = str(exc).strip()
-        if not value:
-            value = type(exc).__name__
-        return value[:512]
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
