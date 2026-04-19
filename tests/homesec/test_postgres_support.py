@@ -6,6 +6,7 @@ import pytest
 
 from homesec.postgres_support import (
     build_async_engine_kwargs,
+    is_test_db_schema_enabled,
     resolve_test_db_schema,
     validate_schema_name,
 )
@@ -53,6 +54,38 @@ def test_resolve_test_db_schema_returns_none_for_empty_string() -> None:
 
     # Then: No schema override is returned
     assert schema is None
+
+
+def test_build_async_engine_kwargs_ignores_test_env_without_explicit_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_async_engine_kwargs should ignore the test env unless schema is passed explicitly."""
+    # Given: A test-schema env var that should remain test-harness-only
+    monkeypatch.setenv("HOMESEC_TEST_DB_SCHEMA", "hs_pytest_abc12345")
+
+    # When: Building engine kwargs without an explicit schema
+    kwargs = build_async_engine_kwargs()
+
+    # Then: No search_path override is added implicitly
+    assert kwargs == {}
+
+
+def test_test_db_schema_enabled_requires_explicit_opt_in() -> None:
+    """is_test_db_schema_enabled should only turn on when the harness opts in."""
+    # Given: Environments with and without the explicit enable flag
+    disabled_env = {"HOMESEC_TEST_DB_SCHEMA": "hs_pytest_abc12345"}
+    enabled_env = {
+        "HOMESEC_TEST_DB_SCHEMA": "hs_pytest_abc12345",
+        "HOMESEC_ENABLE_TEST_DB_SCHEMA": "1",
+    }
+
+    # When: Evaluating whether test schema scoping is enabled
+    disabled = is_test_db_schema_enabled(disabled_env)
+    enabled = is_test_db_schema_enabled(enabled_env)
+
+    # Then: Schema scoping stays off unless the harness explicitly enables it
+    assert disabled is False
+    assert enabled is True
 
 
 def test_build_async_engine_kwargs_sets_search_path_for_schema() -> None:

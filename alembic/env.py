@@ -23,6 +23,7 @@ from sqlalchemy import MetaData  # noqa: E402
 
 from homesec.postgres_support import (  # noqa: E402
     build_async_engine_kwargs,
+    is_test_db_schema_enabled,
     normalize_async_dsn,
     resolve_test_db_schema,
     schema_ddl_identifier,
@@ -78,7 +79,7 @@ def do_run_migrations(connection, schema: str | None) -> None:
 async def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = _get_url()
-    schema = resolve_test_db_schema()
+    schema = resolve_test_db_schema() if is_test_db_schema_enabled() else None
     engine_kwargs = build_async_engine_kwargs(schema=schema)
 
     connectable = async_engine_from_config(

@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 TEST_DB_SCHEMA_ENV = "HOMESEC_TEST_DB_SCHEMA"
+TEST_DB_SCHEMA_ENABLE_ENV = "HOMESEC_ENABLE_TEST_DB_SCHEMA"
 _SCHEMA_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 
@@ -33,6 +34,12 @@ def resolve_test_db_schema(env: Mapping[str, str] | None = None) -> str | None:
     return validate_schema_name(configured)
 
 
+def is_test_db_schema_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Return whether test-only schema scoping is explicitly enabled."""
+    configured = (os.environ if env is None else env).get(TEST_DB_SCHEMA_ENABLE_ENV, "")
+    return configured.lower() in {"1", "true", "yes", "on"}
+
+
 def validate_schema_name(schema: str) -> str:
     """Validate a Postgres schema identifier used for test isolation."""
     if not _SCHEMA_PATTERN.fullmatch(schema):
@@ -47,9 +54,9 @@ def build_async_engine_kwargs(
     schema: str | None = None,
     engine_kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build SQLAlchemy engine kwargs with an optional schema search path."""
+    """Build SQLAlchemy engine kwargs with an optional explicit schema search path."""
     kwargs = dict(engine_kwargs or {})
-    target_schema = resolve_test_db_schema() if schema is None else validate_schema_name(schema)
+    target_schema = None if schema is None else validate_schema_name(schema)
     if target_schema is None:
         return kwargs
 
@@ -72,7 +79,7 @@ def create_scoped_async_engine(
     schema: str | None = None,
     **engine_kwargs: Any,
 ) -> AsyncEngine:
-    """Create an async engine scoped to the configured schema when present."""
+    """Create an async engine scoped to the explicit schema when present."""
     return create_async_engine(
         normalize_async_dsn(dsn),
         **build_async_engine_kwargs(schema=schema, engine_kwargs=engine_kwargs),
