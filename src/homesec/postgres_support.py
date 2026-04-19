@@ -1,4 +1,4 @@
-"""Shared Postgres engine helpers."""
+"""Shared Postgres helpers for async engines and test schema isolation."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 TEST_DB_SCHEMA_ENV = "HOMESEC_TEST_DB_SCHEMA"
-_SCHEMA_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+_SCHEMA_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 
 def normalize_async_dsn(dsn: str) -> str:
@@ -55,7 +55,12 @@ def build_async_engine_kwargs(
 
     connect_args = dict(kwargs.get("connect_args", {}))
     server_settings = dict(connect_args.get("server_settings", {}))
-    server_settings.setdefault("search_path", target_schema)
+    existing_search_path = server_settings.get("search_path")
+    if existing_search_path is not None and existing_search_path != target_schema:
+        raise ValueError(
+            "engine_kwargs.connect_args.server_settings.search_path conflicts with schema"
+        )
+    server_settings["search_path"] = target_schema
     connect_args["server_settings"] = server_settings
     kwargs["connect_args"] = connect_args
     return kwargs

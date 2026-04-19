@@ -19,6 +19,7 @@ from homesec.postgres_support import (
     TEST_DB_SCHEMA_ENV,
     create_schema_if_missing,
     drop_schema_cascade,
+    resolve_test_db_schema,
 )
 from homesec.sources.rtsp.capabilities import get_global_rtsp_timeout_capabilities
 from tests.homesec.mocks import (
@@ -43,8 +44,10 @@ def _generate_test_schema_name() -> str:
 def isolated_postgres_schema() -> str:
     """Provision a per-run schema so parallel test runs can share one Postgres instance."""
     dsn = _default_test_dsn()
-    schema = os.getenv(TEST_DB_SCHEMA_ENV, _generate_test_schema_name())
-    previous = os.environ.get(TEST_DB_SCHEMA_ENV)
+    previous_raw = os.environ.get(TEST_DB_SCHEMA_ENV)
+    configured_schema = resolve_test_db_schema()
+    created_by_fixture = configured_schema is None
+    schema = _generate_test_schema_name() if created_by_fixture else configured_schema
 
     asyncio.run(create_schema_if_missing(dsn, schema))
     os.environ[TEST_DB_SCHEMA_ENV] = schema
@@ -52,12 +55,13 @@ def isolated_postgres_schema() -> str:
         yield schema
     finally:
         try:
-            asyncio.run(drop_schema_cascade(dsn, schema))
+            if created_by_fixture:
+                asyncio.run(drop_schema_cascade(dsn, schema))
         finally:
-            if previous is None:
+            if previous_raw is None:
                 os.environ.pop(TEST_DB_SCHEMA_ENV, None)
             else:
-                os.environ[TEST_DB_SCHEMA_ENV] = previous
+                os.environ[TEST_DB_SCHEMA_ENV] = previous_raw
 
 
 @pytest.fixture(autouse=True)
