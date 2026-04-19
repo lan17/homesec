@@ -1,6 +1,5 @@
 """Tests for PostgresStateStore."""
 
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -14,17 +13,14 @@ from homesec.models.enums import ClipStatus
 from homesec.models.events import AlertDecisionMadeEvent, NotificationSentEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
-from homesec.postgres_support import create_schema_if_missing, drop_schema_cascade
+from homesec.postgres_support import (
+    create_schema_if_missing,
+    drop_schema_cascade,
+    normalize_async_dsn,
+)
 from homesec.state import PostgresStateStore
-from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
-
-# Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://homesec:homesec@localhost:5432/homesec"
-
-
-def get_test_dsn() -> str:
-    """Get test database DSN from environment or use default."""
-    return os.environ.get("TEST_DB_DSN", DEFAULT_DSN)
+from homesec.state.postgres import ClipState
+from tests.homesec.postgres_test_support import default_test_dsn, reset_store_tables
 
 
 @pytest.fixture
@@ -34,9 +30,7 @@ async def state_store(postgres_dsn: str) -> PostgresStateStore:
     initialized = await store.initialize()
     assert initialized, "Failed to initialize state store"
     if store._engine is not None:
-        async with store._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
+        await reset_store_tables(store)
     yield store
     # Cleanup: drop test data
     if store._engine is not None:
@@ -93,9 +87,9 @@ def test_normalize_async_dsn() -> None:
     dsn_async = "postgresql+asyncpg://user:pass@localhost/db"
 
     # When normalizing DSNs
-    norm_plain = _normalize_async_dsn(dsn_plain)
-    norm_short = _normalize_async_dsn(dsn_short)
-    norm_async = _normalize_async_dsn(dsn_async)
+    norm_plain = normalize_async_dsn(dsn_plain)
+    norm_short = normalize_async_dsn(dsn_short)
+    norm_async = normalize_async_dsn(dsn_async)
 
     # Then asyncpg is used
     assert norm_plain.startswith("postgresql+asyncpg://")
@@ -135,14 +129,8 @@ async def test_state_stores_with_distinct_schemas_do_not_interfere(postgres_dsn:
     assert await store_b.initialize() is True
 
     try:
-        assert store_a._engine is not None
-        assert store_b._engine is not None
-        async with store_a._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-        async with store_b._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
+        await reset_store_tables(store_a)
+        await reset_store_tables(store_b)
 
         # When: Each schema stores a clip with the same id
         clip_id = "test_parallel_schema_001"
@@ -913,7 +901,7 @@ async def test_count_alerts_since_ignores_notification_sent_events(
 @pytest.mark.asyncio
 async def test_count_alerts_since_returns_zero_when_uninitialized() -> None:
     # Given: A state store that has not been initialized
-    store = PostgresStateStore(get_test_dsn())
+    store = PostgresStateStore(default_test_dsn())
 
     # When: Counting alerts without a database engine
     count = await store.count_alerts_since(datetime.now(timezone.utc) - timedelta(hours=1))

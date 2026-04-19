@@ -28,6 +28,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+import homesec.postgres_support as postgres_support
 from homesec.interfaces import EventStore, StateStore
 from homesec.models.clip import ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.enums import ClipStatus, EventType
@@ -53,7 +54,6 @@ from homesec.models.events import (
 from homesec.models.events import (
     ClipEvent as ClipEventModel,
 )
-from homesec.postgres_support import create_scoped_async_engine, normalize_async_dsn
 
 logger = logging.getLogger(__name__)
 _BATCH_STATE_LOOKUP_SIZE = 1000
@@ -148,11 +148,6 @@ class ClipEvent(Base):
     )
 
 
-def _normalize_async_dsn(dsn: str) -> str:
-    """Kept as a shim for tests importing DSN normalization from this module."""
-    return normalize_async_dsn(dsn)
-
-
 class PostgresStateStore(StateStore):
     """Postgres implementation of StateStore interface.
 
@@ -166,7 +161,7 @@ class PostgresStateStore(StateStore):
         Args:
             dsn: Postgres connection string (e.g., "postgresql+asyncpg://user:pass@host/db")
         """
-        self._dsn = _normalize_async_dsn(dsn)
+        self._dsn = dsn
         self._schema = schema
         self._engine: AsyncEngine | None = None
 
@@ -179,7 +174,7 @@ class PostgresStateStore(StateStore):
             True if initialization succeeded, False otherwise
         """
         try:
-            self._engine = create_scoped_async_engine(
+            self._engine = postgres_support.create_scoped_async_engine(
                 self._dsn,
                 schema=self._schema,
                 pool_pre_ping=True,

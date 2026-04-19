@@ -19,8 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 import homesec.postgres_support as postgres_support
 from homesec.models.clip import Clip
 from homesec.postgres_support import (
-    TEST_DB_SCHEMA_ENABLE_ENV,
-    TEST_DB_SCHEMA_ENV,
     create_schema_if_missing,
     drop_schema_cascade,
     resolve_test_db_schema,
@@ -33,10 +31,7 @@ from tests.homesec.mocks import (
     MockStorage,
     MockVLM,
 )
-
-
-def _default_test_dsn() -> str:
-    return os.getenv("TEST_DB_DSN", "postgresql://homesec:homesec@localhost:5432/homesec")
+from tests.homesec.postgres_test_support import default_test_dsn, reset_store_tables
 
 
 def _generate_test_schema_name() -> str:
@@ -47,31 +42,17 @@ def _generate_test_schema_name() -> str:
 @pytest.fixture(scope="session")
 def isolated_postgres_schema() -> str:
     """Provision a per-run schema so parallel test runs can share one Postgres instance."""
-    dsn = _default_test_dsn()
-    previous_raw = os.environ.get(TEST_DB_SCHEMA_ENV)
-    previous_enabled_raw = os.environ.get(TEST_DB_SCHEMA_ENABLE_ENV)
+    dsn = default_test_dsn()
     configured_schema = resolve_test_db_schema()
     created_by_fixture = configured_schema is None
     schema = _generate_test_schema_name() if created_by_fixture else configured_schema
 
     asyncio.run(create_schema_if_missing(dsn, schema))
-    os.environ[TEST_DB_SCHEMA_ENV] = schema
-    os.environ[TEST_DB_SCHEMA_ENABLE_ENV] = "1"
     try:
         yield schema
     finally:
-        try:
-            if created_by_fixture:
-                asyncio.run(drop_schema_cascade(dsn, schema))
-        finally:
-            if previous_raw is None:
-                os.environ.pop(TEST_DB_SCHEMA_ENV, None)
-            else:
-                os.environ[TEST_DB_SCHEMA_ENV] = previous_raw
-            if previous_enabled_raw is None:
-                os.environ.pop(TEST_DB_SCHEMA_ENABLE_ENV, None)
-            else:
-                os.environ[TEST_DB_SCHEMA_ENABLE_ENV] = previous_enabled_raw
+        if created_by_fixture:
+            asyncio.run(drop_schema_cascade(dsn, schema))
 
 
 @pytest.fixture(autouse=True)
@@ -88,22 +69,21 @@ def scope_postgres_test_schema(
     monkeypatch: pytest.MonkeyPatch, isolated_postgres_schema: str
 ) -> None:
     """Scope in-process Postgres engines to the session's isolated schema."""
+    base_create_scoped_engine = postgres_support.create_scoped_async_engine
 
     def _create_scoped_engine(
         dsn: str, *, schema: str | None = None, **engine_kwargs: Any
     ) -> AsyncEngine:
         target_schema = isolated_postgres_schema if schema is None else schema
-        return postgres_support.create_scoped_async_engine(
+        return base_create_scoped_engine(
             dsn,
             schema=target_schema,
             **engine_kwargs,
         )
 
-    monkeypatch.setattr("homesec.state.postgres.create_scoped_async_engine", _create_scoped_engine)
-    monkeypatch.setattr(
-        "homesec.telemetry.db_log_handler.create_scoped_async_engine",
-        _create_scoped_engine,
-    )
+    # Keep runtime callers going through homesec.postgres_support so this fixture
+    # remains the single in-process test isolation seam.
+    monkeypatch.setattr(postgres_support, "create_scoped_async_engine", _create_scoped_engine)
 
 
 @pytest.fixture
@@ -154,7 +134,7 @@ def sample_clip() -> Clip:
 @pytest.fixture
 def postgres_dsn(scope_postgres_test_schema: None) -> str:
     """Return test Postgres DSN (requires local DB running)."""
-    return _default_test_dsn()
+    return default_test_dsn()
 
 
 @pytest.fixture
@@ -162,14 +142,12 @@ async def clean_test_db(postgres_dsn: str) -> None:
     """Clean up test data after each test."""
     from sqlalchemy import delete
 
-    from homesec.state.postgres import Base, ClipEvent, ClipState, PostgresStateStore
+    from homesec.state.postgres import ClipEvent, ClipState, PostgresStateStore
 
     store = PostgresStateStore(postgres_dsn)
     await store.initialize()
     if store._engine is not None:
-        async with store._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
+        await reset_store_tables(store)
 
     yield  # Run the test first
 

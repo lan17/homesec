@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from homesec.postgres_support import create_scoped_async_engine
+import homesec.postgres_support as postgres_support
 from homesec.telemetry.db.log_table import logs
 from homesec.telemetry.db.log_table import metadata as db_metadata
 from homesec.telemetry.postgres_settings import PostgresConfig
@@ -202,7 +202,7 @@ class AsyncPostgresJsonLogHandler(logging.Handler):
         backoff = float(self.config.db_log_backoff_initial_s)
         backoff_max = float(self.config.db_log_backoff_max_s)
 
-        engine = create_scoped_async_engine(self.config.db_dsn, pool_pre_ping=True)
+        engine = postgres_support.create_scoped_async_engine(self.config.db_dsn, pool_pre_ping=True)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
