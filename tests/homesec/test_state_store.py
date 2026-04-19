@@ -1,6 +1,6 @@
 """Tests for PostgresStateStore."""
 
-import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,30 +13,24 @@ from homesec.models.enums import ClipStatus
 from homesec.models.events import AlertDecisionMadeEvent, NotificationSentEvent
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
+from homesec.postgres_support import (
+    create_schema_if_missing,
+    drop_schema_cascade,
+    normalize_async_dsn,
+)
 from homesec.state import PostgresStateStore
-from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
-
-# Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://homesec:homesec@localhost:5432/homesec"
-
-
-def get_test_dsn() -> str:
-    """Get test database DSN from environment or use default."""
-    return os.environ.get("TEST_DB_DSN", DEFAULT_DSN)
+from homesec.state.postgres import ClipState
+from tests.homesec.postgres_test_support import default_test_dsn, reset_store_tables
 
 
 @pytest.fixture
-async def state_store() -> PostgresStateStore:
+async def state_store(postgres_dsn: str) -> PostgresStateStore:
     """Create and initialize a PostgresStateStore for testing."""
-    dsn = get_test_dsn()
-    assert dsn is not None
-    store = PostgresStateStore(dsn)
+    store = PostgresStateStore(postgres_dsn)
     initialized = await store.initialize()
     assert initialized, "Failed to initialize state store"
     if store._engine is not None:
-        async with store._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
+        await reset_store_tables(store)
     yield store
     # Cleanup: drop test data
     if store._engine is not None:
@@ -93,9 +87,9 @@ def test_normalize_async_dsn() -> None:
     dsn_async = "postgresql+asyncpg://user:pass@localhost/db"
 
     # When normalizing DSNs
-    norm_plain = _normalize_async_dsn(dsn_plain)
-    norm_short = _normalize_async_dsn(dsn_short)
-    norm_async = _normalize_async_dsn(dsn_async)
+    norm_plain = normalize_async_dsn(dsn_plain)
+    norm_short = normalize_async_dsn(dsn_short)
+    norm_async = normalize_async_dsn(dsn_async)
 
     # Then asyncpg is used
     assert norm_plain.startswith("postgresql+asyncpg://")
@@ -118,6 +112,59 @@ async def test_upsert_and_get_roundtrip(state_store: PostgresStateStore) -> None
     assert retrieved is not None
     assert retrieved.camera_name == "front_door"
     assert retrieved.status == "queued_local"
+
+
+@pytest.mark.asyncio
+async def test_state_stores_with_distinct_schemas_do_not_interfere(postgres_dsn: str) -> None:
+    """State stores using separate schemas on one Postgres instance should remain isolated."""
+    # Given: Two state stores pointed at the same database with distinct schemas
+    token = uuid.uuid4().hex[:8]
+    schema_a = f"hs_parallel_a_{token}"
+    schema_b = f"hs_parallel_b_{token}"
+    await create_schema_if_missing(postgres_dsn, schema_a)
+    await create_schema_if_missing(postgres_dsn, schema_b)
+    store_a = PostgresStateStore(postgres_dsn, schema=schema_a)
+    store_b = PostgresStateStore(postgres_dsn, schema=schema_b)
+    assert await store_a.initialize() is True
+    assert await store_b.initialize() is True
+
+    try:
+        await reset_store_tables(store_a)
+        await reset_store_tables(store_b)
+
+        # When: Each schema stores a clip with the same id
+        clip_id = "test_parallel_schema_001"
+        await store_a.upsert(
+            clip_id,
+            ClipStateData(
+                camera_name="front_door",
+                status=ClipStatus.UPLOADED,
+                local_path="/tmp/a.mp4",
+            ),
+        )
+        await store_b.upsert(
+            clip_id,
+            ClipStateData(
+                camera_name="garage",
+                status=ClipStatus.ANALYZED,
+                local_path="/tmp/b.mp4",
+            ),
+        )
+
+        # Then: Each store reads only its own schema-local row
+        state_a = await store_a.get(clip_id)
+        state_b = await store_b.get(clip_id)
+        assert state_a is not None
+        assert state_b is not None
+        assert state_a.camera_name == "front_door"
+        assert state_b.camera_name == "garage"
+        assert state_a.status == ClipStatus.UPLOADED
+        assert state_b.status == ClipStatus.ANALYZED
+    finally:
+        await store_a.shutdown()
+        await store_b.shutdown()
+        await drop_schema_cascade(postgres_dsn, schema_a)
+        await drop_schema_cascade(postgres_dsn, schema_b)
 
 
 @pytest.mark.asyncio
@@ -854,7 +901,7 @@ async def test_count_alerts_since_ignores_notification_sent_events(
 @pytest.mark.asyncio
 async def test_count_alerts_since_returns_zero_when_uninitialized() -> None:
     # Given: A state store that has not been initialized
-    store = PostgresStateStore(get_test_dsn())
+    store = PostgresStateStore(default_test_dsn())
 
     # When: Counting alerts without a database engine
     count = await store.count_alerts_since(datetime.now(timezone.utc) - timedelta(hours=1))

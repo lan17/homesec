@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -20,8 +20,16 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from sqlalchemy import MetaData  # noqa: E402
-from homesec.telemetry.db.log_table import metadata as telemetry_metadata  # noqa: E402
+
+from homesec.postgres_support import (  # noqa: E402
+    build_async_engine_kwargs,
+    is_test_db_schema_enabled,
+    normalize_async_dsn,
+    resolve_test_db_schema,
+    schema_ddl_identifier,
+)
 from homesec.state.postgres import Base as StateBase  # noqa: E402
+from homesec.telemetry.db.log_table import metadata as telemetry_metadata  # noqa: E402
 
 # Combine all metadata into one for alembic
 target_metadata = MetaData()
@@ -40,7 +48,7 @@ def _get_url() -> str:
     url = os.getenv("DB_DSN") or os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
     if not url:
         raise RuntimeError("Missing DB_DSN (or DATABASE_URL) for alembic migration.")
-    return url
+    return normalize_async_dsn(url)
 
 
 def run_migrations_offline() -> None:
@@ -56,8 +64,13 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+def do_run_migrations(connection, schema: str | None) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        version_table_schema=schema,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
@@ -66,11 +79,24 @@ def do_run_migrations(connection) -> None:
 async def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = _get_url()
+    schema = resolve_test_db_schema() if is_test_db_schema_enabled() else None
+    engine_kwargs = build_async_engine_kwargs(schema=schema)
 
-    connectable = async_engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = async_engine_from_config(
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+        **engine_kwargs,
+    )
+
+    if schema is not None:
+        async with connectable.begin() as connection:
+            await connection.execute(
+                text(f"CREATE SCHEMA IF NOT EXISTS {schema_ddl_identifier(schema)}")
+            )
 
     async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+        await connection.run_sync(do_run_migrations, schema)
 
     await connectable.dispose()
 
