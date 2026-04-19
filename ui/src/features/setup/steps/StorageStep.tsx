@@ -1,8 +1,15 @@
 import { useMemo, useState } from 'react'
 
+import { useStorageBackendsQuery } from '../../../api/hooks/useStorageBackendsQuery'
 import { Button } from '../../../components/ui/Button'
 import { StorageConfigForm } from '../../settings/storage/StorageConfigForm'
 import { STORAGE_BACKENDS } from '../../settings/storage/backends'
+import {
+  cloneStorageConfig,
+  defaultConfigForBackend,
+  getStorageBackendMetadata,
+  sameJsonValue,
+} from '../../settings/storage/editorModel'
 import type { StorageFormState } from '../../settings/storage/types'
 import { buildStorageTestRequest } from '../../settings/storage/types'
 import { TestConnectionButton } from '../../shared/TestConnectionButton'
@@ -17,7 +24,7 @@ interface StorageStepProps {
 
 const DEFAULT_STORAGE_FORM_STATE: StorageFormState = {
   backend: 'local',
-  config: STORAGE_BACKENDS.local.defaultConfig,
+  config: cloneStorageConfig(STORAGE_BACKENDS.local.defaultConfig),
 }
 
 function normalizeStorageFormState(value: StorageFormState | null): StorageFormState {
@@ -37,28 +44,50 @@ export function StorageStep({
   onUpdateData,
   onSkip,
 }: StorageStepProps) {
+  const storageBackendsQuery = useStorageBackendsQuery()
   const [value, setValue] = useState<StorageFormState>(() => normalizeStorageFormState(initialData))
   const [result, setResult] = useState<TestConnectionResponse | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const effectiveValue = useMemo(() => {
+    if (initialData !== null) {
+      return value
+    }
 
-  const backendDef = STORAGE_BACKENDS[value.backend]
-  const testRequest = useMemo(() => buildStorageTestRequest(value), [value])
+    const metadata = getStorageBackendMetadata(storageBackendsQuery.data, value.backend)
+    if (!metadata) {
+      return value
+    }
+
+    const builtInDefaults = defaultConfigForBackend(value.backend, null)
+    if (!sameJsonValue(value.config, builtInDefaults)) {
+      return value
+    }
+
+    return {
+      ...value,
+      config: defaultConfigForBackend(value.backend, metadata),
+    }
+  }, [initialData, storageBackendsQuery.data, value])
+
+  const backendDef = STORAGE_BACKENDS[effectiveValue.backend]
+  const testRequest = useMemo(() => buildStorageTestRequest(effectiveValue), [effectiveValue])
 
   function handleSaveAndContinue(): void {
-    const maybeError = backendDef.validate(value.config)
+    const maybeError = backendDef.validate(effectiveValue.config)
     if (maybeError) {
       setValidationError(maybeError)
       return
     }
     setValidationError(null)
-    onUpdateData(value)
+    onUpdateData(effectiveValue)
     onComplete()
   }
 
   return (
     <section className="wizard-step-card">
       <StorageConfigForm
-        value={value}
+        value={effectiveValue}
+        backends={storageBackendsQuery.data}
         onChange={(nextValue) => {
           setValue(nextValue)
           setResult(null)

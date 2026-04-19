@@ -383,6 +383,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Storage
+         * @description Get active storage backend config with redacted secret values.
+         */
+        get: operations["get_storage_api_v1_storage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Storage
+         * @description Partially update storage config and optionally trigger runtime reload.
+         */
+        patch: operations["patch_storage_api_v1_storage_patch"];
+        trace?: never;
+    };
+    "/api/v1/storage/backends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Storage Backends
+         * @description List available storage backends and their config schema metadata.
+         */
+        get: operations["list_storage_backends_api_v1_storage_backends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -899,6 +943,33 @@ export interface components {
             /** Uptime Seconds */
             uptime_seconds: number;
         };
+        /** StorageBackendMetadata */
+        StorageBackendMetadata: {
+            /** Backend */
+            backend: string;
+            /** Config Schema */
+            config_schema: {
+                [key: string]: unknown;
+            };
+            /** Description */
+            description: string;
+            /** Fields */
+            fields: components["schemas"]["StorageFieldMetadata"][];
+            /** Label */
+            label: string;
+            /** Secret Fields */
+            secret_fields: string[];
+        };
+        /** StorageChangeResponse */
+        StorageChangeResponse: {
+            /**
+             * Restart Required
+             * @default true
+             */
+            restart_required: boolean;
+            runtime_reload?: components["schemas"]["RuntimeReloadResponse"] | null;
+            storage?: components["schemas"]["StorageResponse"] | null;
+        };
         /**
          * StorageConfig
          * @description Storage backend configuration.
@@ -914,6 +985,24 @@ export interface components {
                 [key: string]: unknown;
             } | components["schemas"]["BaseModel"];
             paths?: components["schemas"]["StoragePathsConfig"];
+        };
+        /** StorageFieldMetadata */
+        StorageFieldMetadata: {
+            /** Default */
+            default?: unknown | null;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Required */
+            required: boolean;
+            /**
+             * Secret
+             * @default false
+             */
+            secret: boolean;
+            /** Type */
+            type: string;
         };
         /**
          * StoragePathsConfig
@@ -935,6 +1024,28 @@ export interface components {
              * @default clips
              */
             clips_dir: string;
+        };
+        /** StorageResponse */
+        StorageResponse: {
+            /** Backend */
+            backend: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Paths */
+            paths: {
+                [key: string]: unknown;
+            };
+        };
+        /** StorageUpdate */
+        StorageUpdate: {
+            /** Backend */
+            backend?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * TestConnectionRequest
@@ -1652,6 +1763,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatsResponse"];
+                };
+            };
+        };
+    };
+    get_storage_api_v1_storage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageResponse"];
+                };
+            };
+        };
+    };
+    patch_storage_api_v1_storage_patch: {
+        parameters: {
+            query?: {
+                apply_changes?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageChangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_storage_backends_api_v1_storage_backends_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageBackendMetadata"][];
                 };
             };
         };

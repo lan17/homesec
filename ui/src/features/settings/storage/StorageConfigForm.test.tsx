@@ -14,7 +14,7 @@ describe('StorageConfigForm', () => {
   })
 
   it('switches backend and resets config to backend defaults', async () => {
-    // Given: Form starts on local backend
+    // Given: Form starts on local backend with metadata-driven backend labels/defaults
     const onChange = vi.fn()
     const user = userEvent.setup()
 
@@ -26,6 +26,50 @@ describe('StorageConfigForm', () => {
       return (
         <StorageConfigForm
           value={value}
+          backends={[
+            {
+              backend: 'local',
+              label: 'Local FS',
+              description: 'Store on local disk',
+              config_schema: {},
+              fields: [
+                {
+                  name: 'root',
+                  type: 'string',
+                  required: true,
+                  description: 'Root path',
+                  default: './storage',
+                  secret: false,
+                },
+              ],
+              secret_fields: [],
+            },
+            {
+              backend: 'dropbox',
+              label: 'Dropbox Cloud',
+              description: 'Upload to Dropbox',
+              config_schema: {},
+              fields: [
+                {
+                  name: 'root',
+                  type: 'string',
+                  required: true,
+                  description: 'Dropbox root',
+                  default: null,
+                  secret: false,
+                },
+                {
+                  name: 'token_env',
+                  type: 'string',
+                  required: true,
+                  description: 'Token env var',
+                  default: 'DROPBOX_TOKEN',
+                  secret: false,
+                },
+              ],
+              secret_fields: [],
+            },
+          ]}
           onChange={(nextValue) => {
             onChange(nextValue)
             setValue(nextValue)
@@ -37,9 +81,9 @@ describe('StorageConfigForm', () => {
     render(<Harness />)
 
     // When: Operator switches to Dropbox backend
-    await user.click(screen.getByRole('button', { name: 'Dropbox' }))
+    await user.click(screen.getByRole('button', { name: 'Dropbox Cloud' }))
 
-    // Then: Form switches backend and applies dropbox defaults
+    // Then: Form switches backend and applies metadata-aware defaults
     expect(onChange).toHaveBeenCalled()
     expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({
       backend: 'dropbox',
@@ -61,6 +105,7 @@ describe('StorageConfigForm', () => {
       return (
         <StorageConfigForm
           value={value}
+          backends={null}
           onChange={(nextValue) => {
             onChange(nextValue)
             setValue(nextValue)

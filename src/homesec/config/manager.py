@@ -16,9 +16,11 @@ from homesec.config.errors import (
     CameraConfigInvalidError,
     CameraConfigRedactedPlaceholderError,
     CameraNotFoundError,
+    StorageConfigInvalidError,
+    StorageConfigRedactedPlaceholderError,
 )
 from homesec.config.loader import ConfigError, load_config, load_config_from_dict
-from homesec.models.config import CameraConfig, CameraSourceConfig, Config
+from homesec.models.config import CameraConfig, CameraSourceConfig, Config, StorageConfig
 
 _SENSITIVE_CONFIG_FILE_MODE = 0o600
 _REDACTED_PLACEHOLDER = "***redacted***"
@@ -62,7 +64,7 @@ class ConfigManager:
         return load_config(self._config_path)
 
     @staticmethod
-    def _to_source_config_dict(config: dict[str, object] | BaseModel) -> dict[str, object]:
+    def _to_config_dict(config: dict[str, object] | BaseModel) -> dict[str, object]:
         if isinstance(config, BaseModel):
             payload = config.model_dump(mode="json")
             return cast(dict[str, object], payload)
@@ -158,7 +160,7 @@ class ConfigManager:
                         "omit unchanged fields or provide replacement values"
                     )
 
-                current_source_config = self._to_source_config_dict(camera.source.config)
+                current_source_config = self._to_config_dict(camera.source.config)
                 next_backend = (
                     source_backend if source_backend is not None else camera.source.backend
                 )
@@ -185,6 +187,62 @@ class ConfigManager:
                     ) from exc
 
             validated = await self._validate_config(config)
+            await self._save_config(validated)
+            return ConfigUpdateResult()
+
+    async def update_storage(
+        self,
+        *,
+        storage_backend: str | None,
+        storage_config: dict[str, object] | None,
+    ) -> ConfigUpdateResult:
+        """Partially update storage backend/config in the persisted config."""
+        async with self._mutation_lock():
+            config = await asyncio.to_thread(self.get_config)
+
+            should_update_storage = storage_backend is not None or storage_config is not None
+            if not should_update_storage:
+                return ConfigUpdateResult()
+
+            if storage_config is not None and self._contains_redacted_placeholder(storage_config):
+                raise StorageConfigRedactedPlaceholderError(
+                    "storage config patch contains redacted placeholders; "
+                    "omit unchanged fields or provide replacement values"
+                )
+
+            current_storage_config = self._to_config_dict(config.storage.config)
+            next_backend = (
+                storage_backend if storage_backend is not None else config.storage.backend
+            )
+            base_storage_config = (
+                {}
+                if storage_backend is not None and storage_backend != config.storage.backend
+                else current_storage_config
+            )
+            next_storage_config = (
+                self._merge_source_config(base_storage_config, storage_config)
+                if storage_config is not None
+                else base_storage_config
+            )
+
+            try:
+                config.storage = StorageConfig(
+                    backend=next_backend,
+                    config=next_storage_config,
+                    paths=config.storage.paths,
+                )
+            except (ValidationError, ValueError, TypeError) as exc:
+                raise StorageConfigInvalidError(
+                    "Invalid storage configuration",
+                    cause=exc,
+                ) from exc
+
+            payload = config.model_dump(mode="json")
+            try:
+                validated = await asyncio.to_thread(load_config_from_dict, payload)
+            except ConfigError as exc:
+                raise StorageConfigInvalidError(str(exc), cause=exc) from exc
+
             await self._save_config(validated)
             return ConfigUpdateResult()
 

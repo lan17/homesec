@@ -1,6 +1,5 @@
 """Tests for PostgresStateStore."""
 
-import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -16,21 +15,11 @@ from homesec.models.vlm import AnalysisResult
 from homesec.state import PostgresStateStore
 from homesec.state.postgres import Base, ClipState, _normalize_async_dsn
 
-# Default DSN for local Docker Postgres (matches docker-compose.postgres.yml)
-DEFAULT_DSN = "postgresql://homesec:homesec@localhost:5432/homesec"
-
-
-def get_test_dsn() -> str:
-    """Get test database DSN from environment or use default."""
-    return os.environ.get("TEST_DB_DSN", DEFAULT_DSN)
-
 
 @pytest.fixture
-async def state_store() -> PostgresStateStore:
+async def state_store(postgres_dsn: str) -> PostgresStateStore:
     """Create and initialize a PostgresStateStore for testing."""
-    dsn = get_test_dsn()
-    assert dsn is not None
-    store = PostgresStateStore(dsn)
+    store = PostgresStateStore(postgres_dsn)
     initialized = await store.initialize()
     assert initialized, "Failed to initialize state store"
     if store._engine is not None:

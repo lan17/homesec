@@ -1,20 +1,27 @@
+import type { StorageBackendsResponse } from '../../../api/generated/types'
 import { STORAGE_BACKENDS, STORAGE_BACKEND_ORDER } from './backends'
+import {
+  buildSupportedStorageBackendOptions,
+  defaultConfigForBackend,
+} from './editorModel'
 import type { StorageBackend, StorageFormState } from './types'
 
 interface StorageConfigFormProps {
   value: StorageFormState
+  backends?: StorageBackendsResponse | null
   onChange: (value: StorageFormState) => void
 }
 
-export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
+export function StorageConfigForm({ value, backends = null, onChange }: StorageConfigFormProps) {
   const backendDef = STORAGE_BACKENDS[value.backend]
   const BackendComponent = backendDef.component
+  const backendOptions = buildSupportedStorageBackendOptions(backends)
 
   function handleSelectBackend(backend: StorageBackend): void {
-    const selected = STORAGE_BACKENDS[backend]
+    const selected = backendOptions.find((option) => option.backend === backend)
     onChange({
       backend,
-      config: selected.defaultConfig,
+      config: defaultConfigForBackend(backend, selected?.metadata ?? null),
     })
   }
 
@@ -25,17 +32,24 @@ export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
 
       <div className="backend-picker__grid">
         {STORAGE_BACKEND_ORDER.map((backendId) => {
-          const backend = STORAGE_BACKENDS[backendId]
+          const backend =
+            backendOptions.find((option) => option.backend === backendId)
+            ?? {
+              backend: backendId,
+              label: STORAGE_BACKENDS[backendId].label,
+              description: STORAGE_BACKENDS[backendId].description,
+              metadata: null,
+            }
           const selected = backendId === value.backend
           return (
             <button
-              key={backend.id}
+              key={backend.backend}
               type="button"
               className="backend-picker__card"
               aria-label={backend.label}
               aria-pressed={selected}
               onClick={() => {
-                handleSelectBackend(backend.id)
+                handleSelectBackend(backend.backend)
               }}
             >
               <p className="backend-picker__title-text">

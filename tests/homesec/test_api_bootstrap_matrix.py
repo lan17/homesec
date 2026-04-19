@@ -317,6 +317,18 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_error_code="SETUP_REQUIRED",
         ),
         _MatrixCase(
+            name="storage_backends_remain_available_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/storage/backends",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=200,
+            bootstrap_mode=True,
+        ),
+        _MatrixCase(
             name="cameras_requires_api_key_when_auth_enabled",
             method="GET",
             path="/api/v1/cameras",

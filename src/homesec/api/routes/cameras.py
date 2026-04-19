@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import redact_config
+from homesec.api.runtime_reload import RuntimeReloadResponse, reload_runtime_if_requested
 from homesec.config.errors import (
     CameraAlreadyExistsError,
     CameraConfigInvalidError,
@@ -18,7 +19,6 @@ from homesec.config.errors import (
     CameraNotFoundError,
 )
 from homesec.models.config import CameraConfig
-from homesec.runtime.errors import RuntimeReloadConfigError
 
 if TYPE_CHECKING:
     from homesec.app import Application
@@ -46,12 +46,6 @@ class CameraResponse(BaseModel):
     healthy: bool
     last_heartbeat: float | None
     source_config: dict[str, object]
-
-
-class RuntimeReloadResponse(BaseModel):
-    accepted: bool
-    message: str
-    target_generation: int
 
 
 class ConfigChangeResponse(BaseModel):
@@ -116,38 +110,6 @@ def _map_camera_config_error(exc: CameraMutationError) -> APIError:
     )
 
 
-async def _reload_runtime_if_requested(
-    *,
-    apply_changes: bool,
-    app: Application,
-) -> RuntimeReloadResponse | None:
-    if not apply_changes:
-        return None
-
-    try:
-        request = await app.request_runtime_reload()
-    except RuntimeReloadConfigError as exc:
-        raise APIError(
-            str(exc),
-            status_code=exc.status_code,
-            error_code=exc.error_code,
-        ) from exc
-
-    if not request.accepted:
-        raise APIError(
-            request.message,
-            status_code=status.HTTP_409_CONFLICT,
-            error_code=APIErrorCode.RELOAD_IN_PROGRESS,
-            extra={"target_generation": request.target_generation},
-        )
-
-    return RuntimeReloadResponse(
-        accepted=True,
-        message="Runtime reload accepted",
-        target_generation=request.target_generation,
-    )
-
-
 @router.get("/api/v1/cameras", response_model=list[CameraResponse])
 async def list_cameras(app: Application = Depends(get_homesec_app)) -> list[CameraResponse]:
     """List all cameras."""
@@ -188,7 +150,7 @@ async def create_camera(
 
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == payload.name), None)
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = await reload_runtime_if_requested(apply_changes=apply_changes, app=app)
     return ConfigChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         camera=_camera_response(app, camera) if camera else None,
@@ -223,7 +185,7 @@ async def update_camera(
             error_code=APIErrorCode.CAMERA_NOT_FOUND,
         )
 
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = await reload_runtime_if_requested(apply_changes=apply_changes, app=app)
     return ConfigChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         camera=_camera_response(app, camera),
@@ -243,7 +205,7 @@ async def delete_camera(
     except CameraMutationError as exc:
         raise _map_camera_config_error(exc) from exc
 
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = await reload_runtime_if_requested(apply_changes=apply_changes, app=app)
     return ConfigChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         camera=None,

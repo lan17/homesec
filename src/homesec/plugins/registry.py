@@ -185,3 +185,14 @@ def validate_plugin(
 def get_plugin_names(plugin_type: PluginType) -> list[str]:
     """Get list of registered plugin names for a given type."""
     return sorted(_REGISTRIES[plugin_type].get_all().keys())
+
+
+def get_plugin_config_model(plugin_type: PluginType, name: str) -> type[BaseModel]:
+    """Get the config model class registered for a plugin."""
+    registry = _REGISTRIES[plugin_type]
+    plugins = registry.get_all()
+    if name not in plugins:
+        available = ", ".join(sorted(plugins.keys()))
+        raise ValueError(f"Unknown {plugin_type} plugin: '{name}'. Available: {available}")
+    plugin_cls = plugins[name]
+    return plugin_cls.config_cls

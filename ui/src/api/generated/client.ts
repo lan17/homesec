@@ -11,6 +11,10 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  StorageBackendsResponse,
+  StorageChangeResponse,
+  StorageResponse,
+  StorageUpdate,
   DiagnosticsResponse,
   DiscoverRequest,
   DiscoveredCameraResponse,
@@ -38,6 +42,10 @@ export interface CameraMutationOptions extends ApiRequestOptions {
   applyChanges?: boolean
 }
 
+export interface StorageMutationOptions extends ApiRequestOptions {
+  applyChanges?: boolean
+}
+
 export type ApiResponseWithStatus<TPayload extends object> = TPayload & { httpStatus: number }
 
 export interface GeneratedHomeSecClient {
@@ -56,6 +64,12 @@ export interface GeneratedHomeSecClient {
     name: string,
     options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
+  getStorage(options?: ApiRequestOptions): Promise<StorageResponse>
+  listStorageBackends(options?: ApiRequestOptions): Promise<StorageBackendsResponse>
+  updateStorage(
+    payload: StorageUpdate,
+    options?: StorageMutationOptions,
+  ): Promise<ApiResponseWithStatus<StorageChangeResponse>>
   getSetupStatus(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<SetupStatusResponse>>
   finalizeSetup(
     payload: FinalizeRequest,

@@ -4,6 +4,10 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  StorageBackendsResponse,
+  StorageBackendMetadata,
+  StorageChangeResponse,
+  StorageResponse,
   DeviceInfoResponse,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
@@ -209,6 +213,119 @@ export function parseConfigChangeResponse(payload: unknown): ConfigChangeRespons
   return {
     restart_required: expectBoolean(payload.restart_required, 'restart_required'),
     camera: camera === null || camera === undefined ? null : parseCameraResponse(payload.camera),
+    runtime_reload:
+      runtimeReload === null || runtimeReload === undefined
+        ? null
+        : parseRuntimeReloadResponse(runtimeReload),
+  }
+}
+
+function parseStorageFieldMetadata(
+  payload: unknown,
+  fieldName: string,
+): StorageBackendMetadata['fields'][number] {
+  if (!isJsonObject(payload)) {
+    throw new Error(`${fieldName} must be an object`)
+  }
+
+  const defaultValue = payload.default
+  if (
+    defaultValue !== null
+    && defaultValue !== undefined
+    && typeof defaultValue !== 'string'
+    && typeof defaultValue !== 'number'
+    && typeof defaultValue !== 'boolean'
+    && !Array.isArray(defaultValue)
+    && !isJsonObject(defaultValue)
+  ) {
+    throw new Error(`${fieldName}.default must be a JSON-serializable value`)
+  }
+
+  return {
+    name: expectString(payload.name, `${fieldName}.name`),
+    type: expectString(payload.type, `${fieldName}.type`),
+    required: expectBoolean(payload.required, `${fieldName}.required`),
+    description: expectNullableString(payload.description, `${fieldName}.description`),
+    default: (defaultValue ?? null) as StorageBackendMetadata['fields'][number]['default'],
+    secret: expectBoolean(payload.secret, `${fieldName}.secret`),
+  }
+}
+
+export function parseStorageBackendMetadata(payload: unknown): StorageBackendMetadata {
+  if (!isJsonObject(payload)) {
+    throw new Error('Storage backend metadata must be a JSON object')
+  }
+
+  const schema = payload.config_schema
+  if (!isJsonObject(schema)) {
+    throw new Error('config_schema must be an object')
+  }
+  const fields = payload.fields
+  if (!Array.isArray(fields)) {
+    throw new Error('fields must be an array')
+  }
+  const secretFields = expectStringArray(payload.secret_fields, 'secret_fields')
+
+  return {
+    backend: expectString(payload.backend, 'backend'),
+    label: expectString(payload.label, 'label'),
+    description: expectString(payload.description, 'description'),
+    config_schema: schema,
+    fields: fields.map((field, index) => {
+      try {
+        return parseStorageFieldMetadata(field, `fields[${index}]`)
+      } catch (error) {
+        throw new Error(`fields[${index}] invalid: ${(error as Error).message}`)
+      }
+    }),
+    secret_fields: secretFields,
+  }
+}
+
+export function parseStorageBackendsResponse(payload: unknown): StorageBackendsResponse {
+  if (!Array.isArray(payload)) {
+    throw new Error('Storage backends response must be an array')
+  }
+
+  return payload.map((item, index) => {
+    try {
+      return parseStorageBackendMetadata(item)
+    } catch (error) {
+      throw new Error(`backends[${index}] invalid: ${(error as Error).message}`)
+    }
+  })
+}
+
+export function parseStorageResponse(payload: unknown): StorageResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Storage response is not a JSON object')
+  }
+  const config = payload.config
+  if (!isJsonObject(config)) {
+    throw new Error('config must be an object')
+  }
+  const paths = payload.paths
+  if (!isJsonObject(paths)) {
+    throw new Error('paths must be an object')
+  }
+
+  return {
+    backend: expectString(payload.backend, 'backend'),
+    config,
+    paths,
+  }
+}
+
+export function parseStorageChangeResponse(payload: unknown): StorageChangeResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Storage change response is not a JSON object')
+  }
+
+  const storage = payload.storage
+  const runtimeReload = payload.runtime_reload
+  return {
+    restart_required: expectBoolean(payload.restart_required, 'restart_required'),
+    storage: storage === null || storage === undefined ? null : parseStorageResponse(storage),
     runtime_reload:
       runtimeReload === null || runtimeReload === undefined
         ? null

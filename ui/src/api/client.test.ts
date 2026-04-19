@@ -913,6 +913,139 @@ describe('HomeSecApiClient camera mutation methods', () => {
   })
 })
 
+describe('HomeSecApiClient storage methods', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('fetches storage config and parses typed payload', async () => {
+    // Given: A storage endpoint returns backend/config payload
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          backend: 'local',
+          config: {
+            root: './storage',
+          },
+          paths: {
+            clips_dir: 'clips',
+            backups_dir: 'backups',
+            artifacts_dir: 'artifacts',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting active storage configuration
+    const result = await client.getStorage()
+
+    // Then: Client should call storage route and parse backend/config payload
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/storage')
+    expect(result.backend).toBe('local')
+    expect(result.config).toMatchObject({ root: './storage' })
+  })
+
+  it('requests storage backend metadata and parses response list', async () => {
+    // Given: Storage backends endpoint returns backend schema metadata
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            backend: 'local',
+            label: 'Local',
+            description: 'Store clips on local disk.',
+            config_schema: {},
+            fields: [
+              {
+                name: 'root',
+                type: 'string',
+                required: true,
+                description: 'Root path',
+                default: './storage',
+                secret: false,
+              },
+            ],
+            secret_fields: [],
+          },
+        ]),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting metadata for storage backend selector/forms
+    const result = await client.listStorageBackends()
+
+    // Then: Client should parse metadata array and preserve field hints
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/storage/backends')
+    expect(result).toHaveLength(1)
+    expect(result[0]?.backend).toBe('local')
+    expect(result[0]?.fields[0]?.name).toBe('root')
+  })
+
+  it('patches storage settings and passes apply_changes query parameter', async () => {
+    // Given: Storage update endpoint returns restart+reload metadata
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          restart_required: false,
+          storage: {
+            backend: 'dropbox',
+            config: {
+              root: '/homesec',
+              token_env: 'DROPBOX_TOKEN',
+            },
+            paths: {
+              clips_dir: 'clips',
+              backups_dir: 'backups',
+              artifacts_dir: 'artifacts',
+            },
+          },
+          runtime_reload: {
+            accepted: true,
+            message: 'Runtime reload accepted',
+            target_generation: 12,
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Patching storage config with immediate apply enabled
+    const result = await client.updateStorage(
+      {
+        backend: 'dropbox',
+        config: { root: '/homesec', token_env: 'DROPBOX_TOKEN' },
+      },
+      { applyChanges: true },
+    )
+
+    // Then: Request contains apply_changes and parsed response includes runtime reload metadata
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/storage?apply_changes=true')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
+      method: 'PATCH',
+    })
+    expect(result.restart_required).toBe(false)
+    expect(result.storage?.backend).toBe('dropbox')
+    expect(result.runtime_reload?.target_generation).toBe(12)
+  })
+})
+
 describe('HomeSecApiClient runtime methods', () => {
   afterEach(() => {
     vi.restoreAllMocks()

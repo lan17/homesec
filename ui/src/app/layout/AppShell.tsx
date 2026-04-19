@@ -5,6 +5,7 @@ import { useTheme } from '../providers/theme-context'
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard' },
   { to: '/cameras', label: 'Cameras' },
+  { to: '/storage', label: 'Storage' },
   { to: '/clips', label: 'Clips' },
   { to: '/setup', label: 'Setup' },
 ]

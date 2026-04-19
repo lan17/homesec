@@ -3,10 +3,13 @@
 import importlib
 import logging
 import pkgutil
+import threading
 
 from homesec.plugins.utils import iter_entry_points
 
 logger = logging.getLogger(__name__)
+_DISCOVERY_COMPLETED = False
+_DISCOVERY_LOCK = threading.Lock()
 
 
 def discover_all_plugins() -> None:
@@ -18,19 +21,30 @@ def discover_all_plugins() -> None:
     All plugins use decorators for registration, so importing modules
     triggers registration automatically.
     """
-    # 1. Discover built-in plugins by importing all modules
-    plugin_types = ["filters", "analyzers", "storage", "notifiers", "alert_policies", "sources"]
+    global _DISCOVERY_COMPLETED
 
-    for plugin_type in plugin_types:
-        package = importlib.import_module(f"homesec.plugins.{plugin_type}")
-        for _, module_name, _ in pkgutil.iter_modules(package.__path__):
-            if module_name.startswith("_"):
-                continue  # Skip private modules
-            importlib.import_module(f"homesec.plugins.{plugin_type}.{module_name}")
+    if _DISCOVERY_COMPLETED:
+        return
 
-    # 2. Discover external plugins via entry points
-    for point in iter_entry_points("homesec.plugins"):
-        importlib.import_module(point.module)
+    with _DISCOVERY_LOCK:
+        if _DISCOVERY_COMPLETED:
+            return
+
+        # 1. Discover built-in plugins by importing all modules
+        plugin_types = ["filters", "analyzers", "storage", "notifiers", "alert_policies", "sources"]
+
+        for plugin_type in plugin_types:
+            package = importlib.import_module(f"homesec.plugins.{plugin_type}")
+            for _, module_name, _ in pkgutil.iter_modules(package.__path__):
+                if module_name.startswith("_"):
+                    continue  # Skip private modules
+                importlib.import_module(f"homesec.plugins.{plugin_type}.{module_name}")
+
+        # 2. Discover external plugins via entry points
+        for point in iter_entry_points("homesec.plugins"):
+            importlib.import_module(point.module)
+
+        _DISCOVERY_COMPLETED = True
 
 
 __all__ = ["discover_all_plugins"]
