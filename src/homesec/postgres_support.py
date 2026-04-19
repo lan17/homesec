@@ -1,4 +1,8 @@
-"""Shared Postgres helpers for async engines and test schema isolation."""
+"""Shared Postgres helpers for async engines and test schema isolation.
+
+The separate enable flag exists so production code never honors a stray test
+schema env var unless the test harness opts in explicitly.
+"""
 
 from __future__ import annotations
 

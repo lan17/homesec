@@ -14,6 +14,7 @@ if str(src_path.resolve()) not in sys.path:
     sys.path.insert(0, str(src_path.resolve()))
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 import homesec.postgres_support as postgres_support
 from homesec.models.clip import Clip
@@ -88,7 +89,9 @@ def scope_postgres_test_schema(
 ) -> None:
     """Scope in-process Postgres engines to the session's isolated schema."""
 
-    def _create_scoped_engine(dsn: str, *, schema: str | None = None, **engine_kwargs: Any):
+    def _create_scoped_engine(
+        dsn: str, *, schema: str | None = None, **engine_kwargs: Any
+    ) -> AsyncEngine:
         target_schema = isolated_postgres_schema if schema is None else schema
         return postgres_support.create_scoped_async_engine(
             dsn,
@@ -149,9 +152,8 @@ def sample_clip() -> Clip:
 
 
 @pytest.fixture
-def postgres_dsn(scope_postgres_test_schema: None, isolated_postgres_schema: str) -> str:
+def postgres_dsn(scope_postgres_test_schema: None) -> str:
     """Return test Postgres DSN (requires local DB running)."""
-    _ = isolated_postgres_schema
     return _default_test_dsn()
 
 

@@ -89,12 +89,13 @@ async def run_migrations_online() -> None:
         **engine_kwargs,
     )
 
-    async with connectable.begin() as connection:
-        if schema is not None:
+    if schema is not None:
+        async with connectable.begin() as connection:
             await connection.execute(
                 text(f"CREATE SCHEMA IF NOT EXISTS {schema_ddl_identifier(schema)}")
             )
-            await connection.execute(text(f"SET search_path TO {schema_ddl_identifier(schema)}"))
+
+    async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations, schema)
 
     await connectable.dispose()

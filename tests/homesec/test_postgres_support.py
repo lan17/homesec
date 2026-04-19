@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from homesec.postgres_support import (
+    TEST_DB_SCHEMA_ENABLE_ENV,
+    TEST_DB_SCHEMA_ENV,
     build_async_engine_kwargs,
     is_test_db_schema_enabled,
     resolve_test_db_schema,
@@ -56,6 +58,17 @@ def test_resolve_test_db_schema_returns_none_for_empty_string() -> None:
     assert schema is None
 
 
+@pytest.mark.parametrize("invalid_schema", ["Uppercase", "1schema", "has-dash"])
+def test_resolve_test_db_schema_rejects_invalid_values(invalid_schema: str) -> None:
+    """resolve_test_db_schema should validate non-empty env values."""
+    # Given: An environment mapping with an invalid schema override
+    env = {TEST_DB_SCHEMA_ENV: invalid_schema}
+
+    # When/Then: Resolving the schema fails with ValueError
+    with pytest.raises(ValueError, match="Invalid Postgres schema"):
+        resolve_test_db_schema(env)
+
+
 def test_build_async_engine_kwargs_ignores_test_env_without_explicit_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -70,22 +83,36 @@ def test_build_async_engine_kwargs_ignores_test_env_without_explicit_schema(
     assert kwargs == {}
 
 
-def test_test_db_schema_enabled_requires_explicit_opt_in() -> None:
-    """is_test_db_schema_enabled should only turn on when the harness opts in."""
-    # Given: Environments with and without the explicit enable flag
-    disabled_env = {"HOMESEC_TEST_DB_SCHEMA": "hs_pytest_abc12345"}
-    enabled_env = {
-        "HOMESEC_TEST_DB_SCHEMA": "hs_pytest_abc12345",
-        "HOMESEC_ENABLE_TEST_DB_SCHEMA": "1",
+@pytest.mark.parametrize("enabled_value", ["1", "true", "TRUE", "yes", "on"])
+def test_test_db_schema_enabled_accepts_truthy_values(enabled_value: str) -> None:
+    """is_test_db_schema_enabled should accept the documented truthy enable values."""
+    # Given: An environment mapping with an explicit enable flag
+    env = {
+        TEST_DB_SCHEMA_ENV: "hs_pytest_abc12345",
+        TEST_DB_SCHEMA_ENABLE_ENV: enabled_value,
     }
 
     # When: Evaluating whether test schema scoping is enabled
-    disabled = is_test_db_schema_enabled(disabled_env)
-    enabled = is_test_db_schema_enabled(enabled_env)
+    enabled = is_test_db_schema_enabled(env)
 
-    # Then: Schema scoping stays off unless the harness explicitly enables it
-    assert disabled is False
+    # Then: The harness opt-in is recognized as enabled
     assert enabled is True
+
+
+@pytest.mark.parametrize("disabled_value", ["", "0", "false", "FALSE", "no", "off"])
+def test_test_db_schema_enabled_rejects_falsy_values(disabled_value: str) -> None:
+    """is_test_db_schema_enabled should stay off for missing or falsy values."""
+    # Given: An environment mapping without a truthy enable flag
+    env = {
+        TEST_DB_SCHEMA_ENV: "hs_pytest_abc12345",
+        TEST_DB_SCHEMA_ENABLE_ENV: disabled_value,
+    }
+
+    # When: Evaluating whether test schema scoping is enabled
+    enabled = is_test_db_schema_enabled(env)
+
+    # Then: Schema scoping remains disabled
+    assert enabled is False
 
 
 def test_build_async_engine_kwargs_sets_search_path_for_schema() -> None:

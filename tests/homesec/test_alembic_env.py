@@ -11,7 +11,12 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
-from homesec.postgres_support import create_scoped_async_engine, drop_schema_cascade
+from homesec.postgres_support import (
+    TEST_DB_SCHEMA_ENABLE_ENV,
+    TEST_DB_SCHEMA_ENV,
+    create_scoped_async_engine,
+    drop_schema_cascade,
+)
 
 
 def _plain_postgres_dsn(dsn: str) -> str:
@@ -29,7 +34,8 @@ async def test_alembic_upgrade_accepts_plain_postgres_dsn(postgres_dsn: str) -> 
     schema = f"hs_alembic_{uuid.uuid4().hex[:8]}"
     env = os.environ.copy()
     env["DB_DSN"] = _plain_postgres_dsn(postgres_dsn)
-    env["HOMESEC_TEST_DB_SCHEMA"] = schema
+    env[TEST_DB_SCHEMA_ENV] = schema
+    env[TEST_DB_SCHEMA_ENABLE_ENV] = "1"
 
     try:
         # When: Running alembic upgrade head in that schema

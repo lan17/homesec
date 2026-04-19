@@ -149,6 +149,7 @@ class ClipEvent(Base):
 
 
 def _normalize_async_dsn(dsn: str) -> str:
+    """Kept as a shim for tests importing DSN normalization from this module."""
     return normalize_async_dsn(dsn)
 
 
