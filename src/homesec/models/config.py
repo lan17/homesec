@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -107,6 +108,72 @@ class RetryConfig(BaseModel):
     backoff_s: float = Field(default=1.0, ge=0.0)
 
 
+class HLSPreviewConfig(BaseModel):
+    """Backend-specific HLS preview configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    segment_duration_ms: int = Field(
+        default=1000,
+        ge=1,
+        description="HLS segment duration in milliseconds.",
+    )
+    live_window_segments: int = Field(
+        default=4,
+        ge=1,
+        description="Number of segments retained in the live window.",
+    )
+    storage_dir: Path = Field(
+        default=Path("/tmp/homesec-preview"),
+        description="Directory used for live HLS segments and playlists.",
+    )
+    audio_enabled: bool = Field(
+        default=True,
+        description="Include audio in preview output when the source provides it.",
+    )
+    audio_codec: Literal["auto", "copy", "aac"] = Field(
+        default="auto",
+        description="Preview audio handling mode.",
+    )
+    video_codec: Literal["auto", "copy", "h264"] = Field(
+        default="auto",
+        description="Preview video handling mode.",
+    )
+
+
+class PreviewConfig(BaseModel):
+    """Top-level live preview configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    backend: str = "hls"
+    token_ttl_s: int = Field(
+        default=60,
+        ge=1,
+        description="Lifetime for camera-scoped preview tokens.",
+    )
+    idle_timeout_s: float = Field(
+        default=30.0,
+        ge=0.0,
+        description="How long to keep the preview publisher alive without viewers.",
+    )
+    config: HLSPreviewConfig = Field(default_factory=HLSPreviewConfig)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
+
+    @model_validator(mode="after")
+    def _validate_backend(self) -> PreviewConfig:
+        if self.backend != "hls":
+            raise ValueError("preview.backend must be 'hls' in config contract v1")
+        return self
+
+
 class FastAPIServerConfig(BaseModel):
     """Configuration for the FastAPI server."""
 
@@ -186,6 +253,7 @@ class Config(BaseModel):
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     server: FastAPIServerConfig = Field(default_factory=FastAPIServerConfig)
+    preview: PreviewConfig = Field(default_factory=PreviewConfig)
     filter: FilterConfig
     vlm: VLMConfig
     alert_policy: AlertPolicyConfig
