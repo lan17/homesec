@@ -28,6 +28,12 @@ from homesec.sources.rtsp.capabilities import (
 from homesec.sources.rtsp.clock import Clock, SystemClock
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
+from homesec.sources.rtsp.live_publisher import (
+    LivePublisher,
+    LivePublisherStartRefusal,
+    LivePublisherStatus,
+    NoopLivePublisher,
+)
 from homesec.sources.rtsp.motion import MotionDetector
 from homesec.sources.rtsp.preflight import (
     CameraPreflightDiagnostics,
@@ -228,6 +234,7 @@ class RTSPSource(ThreadedClipSource):
         camera_name: str,
         *,
         frame_pipeline: FramePipeline | None = None,
+        live_publisher: LivePublisher | None = None,
         recorder: Recorder | None = None,
         clock: Clock | None = None,
         timeout_capabilities: RTSPTimeoutCapabilities | None = None,
@@ -321,6 +328,7 @@ class RTSPSource(ThreadedClipSource):
             debug=self.debug_motion,
         )
         self._owns_frame_pipeline = frame_pipeline is None
+        self._live_publisher: LivePublisher = live_publisher or NoopLivePublisher()
         self._owns_recorder = recorder is None
 
         self._frame_pipeline: FramePipeline = frame_pipeline or FfmpegFramePipeline(
@@ -371,6 +379,22 @@ class RTSPSource(ThreadedClipSource):
 
         age = self._clock.now() - self.last_successful_frame
         return age < (self.frame_timeout_s * 3)
+
+    def preview_status(self) -> LivePublisherStatus:
+        """Return the current preview publisher status for this camera."""
+        return self._live_publisher.status()
+
+    def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+        """Ensure the preview publisher is active for this camera."""
+        return self._live_publisher.ensure_active()
+
+    def stop_preview(self) -> None:
+        """Request preview shutdown for this camera."""
+        self._live_publisher.request_stop()
+
+    def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+        """Record viewer activity for preview idle-timeout decisions."""
+        self._live_publisher.note_viewer_activity(viewer_id=viewer_id)
 
     def _touch_heartbeat(self) -> None:
         self.last_successful_frame = self._clock.now()
@@ -524,6 +548,7 @@ class RTSPSource(ThreadedClipSource):
         self.recording_start_time = start_mono
         self.recording_start_wall = start_wall
         self._recording_id = output_file.name
+        self._sync_live_publisher_recording_state()
 
     def _clear_recording_state(
         self,
@@ -543,7 +568,11 @@ class RTSPSource(ThreadedClipSource):
         self.recording_start_time = None
         self.recording_start_wall = None
         self._recording_id = None
+        self._sync_live_publisher_recording_state()
         return proc, output_file, start_mono, start_wall
+
+    def _sync_live_publisher_recording_state(self) -> None:
+        self._live_publisher.sync_recording_active(self.recording_process is not None)
 
     def _telemetry_common_fields(self) -> dict[str, object]:
         return {
@@ -1256,6 +1285,10 @@ class RTSPSource(ThreadedClipSource):
             self._stop_frame_pipeline()
         except Exception:
             logger.exception("Error stopping frame pipeline")
+        try:
+            self._live_publisher.shutdown()
+        except Exception:
+            logger.exception("Error stopping live publisher")
 
     def _finalize_clip(
         self,
