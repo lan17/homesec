@@ -390,7 +390,7 @@ class RTSPSource(ThreadedClipSource):
             logger.warning("Preview status lookup failed: %s", exc, exc_info=True)
             return LivePublisherStatus(
                 state=LivePublisherState.ERROR,
-                last_error=str(exc),
+                last_error="Preview publisher status unavailable",
             )
 
     def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
@@ -401,7 +401,7 @@ class RTSPSource(ThreadedClipSource):
             logger.warning("Preview activation failed: %s", exc, exc_info=True)
             return LivePublisherStartRefusal(
                 reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                message=f"Preview publisher activation failed: {exc}",
+                message="Preview publisher activation failed",
             )
 
     def stop_preview(self) -> None:

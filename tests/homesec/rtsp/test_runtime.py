@@ -470,10 +470,10 @@ def test_preview_failures_degrade_without_raising(tmp_path: Path) -> None:
 
     # Then: The source reports preview failure without raising
     assert status.state == LivePublisherState.ERROR
-    assert status.last_error == "status boom"
+    assert status.last_error == "Preview publisher status unavailable"
     assert isinstance(ensure_result, LivePublisherStartRefusal)
     assert ensure_result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
-    assert ensure_result.message == "Preview publisher activation failed: ensure_active boom"
+    assert ensure_result.message == "Preview publisher activation failed"
 
 
 def test_recording_lifecycle_tolerates_live_publisher_sync_failures(tmp_path: Path) -> None:
