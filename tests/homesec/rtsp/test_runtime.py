@@ -148,6 +148,37 @@ class FakeLivePublisher:
         self.shutdown_calls += 1
 
 
+class RaisingLivePublisher:
+    def __init__(self, *, methods: set[str]) -> None:
+        self._methods = methods
+
+    def _raise_if_configured(self, method: str) -> None:
+        if method in self._methods:
+            raise RuntimeError(f"{method} boom")
+
+    def status(self) -> LivePublisherStatus:
+        self._raise_if_configured("status")
+        return LivePublisherStatus(state=LivePublisherState.READY)
+
+    def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+        self._raise_if_configured("ensure_active")
+        return LivePublisherStatus(state=LivePublisherState.READY)
+
+    def request_stop(self) -> None:
+        self._raise_if_configured("request_stop")
+
+    def note_viewer_activity(self, viewer_id: str | None = None) -> None:
+        _ = viewer_id
+        self._raise_if_configured("note_viewer_activity")
+
+    def sync_recording_active(self, recording_active: bool) -> None:
+        _ = recording_active
+        self._raise_if_configured("sync_recording_active")
+
+    def shutdown(self) -> None:
+        self._raise_if_configured("shutdown")
+
+
 def _make_config(tmp_path: Path, **overrides: object) -> RTSPSourceConfig:
     data: dict[str, object] = {
         "rtsp_url": "rtsp://host/stream",
@@ -420,6 +451,54 @@ def test_cleanup_shuts_down_live_publisher(tmp_path: Path) -> None:
 
     # Then: The live publisher is shut down
     assert publisher.shutdown_calls == 1
+
+
+def test_preview_failures_degrade_without_raising(tmp_path: Path) -> None:
+    """Preview control APIs should fail closed when the live publisher raises."""
+    # Given: An RTSP source whose live publisher raises for preview methods
+    publisher = RaisingLivePublisher(
+        methods={"status", "ensure_active", "request_stop", "note_viewer_activity"}
+    )
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+
+    # When: Querying and controlling preview
+    status = source.preview_status()
+    ensure_result = source.ensure_preview_active()
+    source.note_preview_viewer_activity("viewer-1")
+    source.stop_preview()
+
+    # Then: The source reports preview failure without raising
+    assert status.state == LivePublisherState.ERROR
+    assert status.last_error == "status boom"
+    assert isinstance(ensure_result, LivePublisherStartRefusal)
+    assert ensure_result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert ensure_result.message == "Preview publisher activation failed: ensure_active boom"
+
+
+def test_recording_lifecycle_tolerates_live_publisher_sync_failures(tmp_path: Path) -> None:
+    """Recording start/stop should still work if preview state sync fails."""
+    # Given: An RTSP source whose live publisher raises during recording-state sync
+    publisher = RaisingLivePublisher(methods={"sync_recording_active"})
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        recorder=recorder,
+        live_publisher=publisher,
+        clock=clock,
+    )
+
+    # When: Starting and then stopping a recording
+    source.start_recording()
+    source.stop_recording()
+
+    # Then: Recording lifecycle still completes
+    assert len(recorder.started) == 1
+    assert len(recorder.stopped) == 1
+    assert source.recording_process is None
 
 
 def test_reconnect_retries_until_success(tmp_path: Path) -> None:

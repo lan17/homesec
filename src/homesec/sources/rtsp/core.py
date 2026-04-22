@@ -30,7 +30,9 @@ from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeli
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
 from homesec.sources.rtsp.live_publisher import (
     LivePublisher,
+    LivePublisherRefusalReason,
     LivePublisherStartRefusal,
+    LivePublisherState,
     LivePublisherStatus,
     NoopLivePublisher,
 )
@@ -382,19 +384,39 @@ class RTSPSource(ThreadedClipSource):
 
     def preview_status(self) -> LivePublisherStatus:
         """Return the current preview publisher status for this camera."""
-        return self._live_publisher.status()
+        try:
+            return self._live_publisher.status()
+        except Exception as exc:
+            logger.warning("Preview status lookup failed: %s", exc, exc_info=True)
+            return LivePublisherStatus(
+                state=LivePublisherState.ERROR,
+                last_error=str(exc),
+            )
 
     def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         """Ensure the preview publisher is active for this camera."""
-        return self._live_publisher.ensure_active()
+        try:
+            return self._live_publisher.ensure_active()
+        except Exception as exc:
+            logger.warning("Preview activation failed: %s", exc, exc_info=True)
+            return LivePublisherStartRefusal(
+                reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message=f"Preview publisher activation failed: {exc}",
+            )
 
     def stop_preview(self) -> None:
         """Request preview shutdown for this camera."""
-        self._live_publisher.request_stop()
+        try:
+            self._live_publisher.request_stop()
+        except Exception as exc:
+            logger.warning("Preview stop failed: %s", exc, exc_info=True)
 
     def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
         """Record viewer activity for preview idle-timeout decisions."""
-        self._live_publisher.note_viewer_activity(viewer_id=viewer_id)
+        try:
+            self._live_publisher.note_viewer_activity(viewer_id=viewer_id)
+        except Exception as exc:
+            logger.warning("Preview viewer activity update failed: %s", exc, exc_info=True)
 
     def _touch_heartbeat(self) -> None:
         self.last_successful_frame = self._clock.now()
@@ -572,7 +594,10 @@ class RTSPSource(ThreadedClipSource):
         return proc, output_file, start_mono, start_wall
 
     def _sync_live_publisher_recording_state(self) -> None:
-        self._live_publisher.sync_recording_active(self.recording_process is not None)
+        try:
+            self._live_publisher.sync_recording_active(self.recording_process is not None)
+        except Exception as exc:
+            logger.warning("Preview recording-state sync failed: %s", exc, exc_info=True)
 
     def _telemetry_common_fields(self) -> dict[str, object]:
         return {
