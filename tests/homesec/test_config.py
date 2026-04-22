@@ -765,18 +765,13 @@ def test_preview_hls_config_parses_explicit_values() -> None:
 
 def test_preview_rejects_unsupported_backend() -> None:
     """Preview config should reject deferred backends in the v1 contract."""
-    # Given a config payload using the deferred MediaMTX backend
+    # Given a config payload using the deferred MediaMTX backend and its native field
     data = minimal_config()
     data["preview"] = {
         "enabled": True,
         "backend": "mediamtx",
         "config": {
-            "segment_duration_ms": 1000,
-            "live_window_segments": 4,
-            "storage_dir": "/tmp/homesec-preview",
-            "audio_enabled": True,
-            "audio_codec": "auto",
-            "video_codec": "auto",
+            "publish_rtsp_base_url": "rtsp://mediamtx:8554",
         },
     }
 
@@ -784,10 +779,11 @@ def test_preview_rejects_unsupported_backend() -> None:
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)
 
-    # Then validation rejects the unsupported backend
+    # Then validation rejects the backend before HLS-only config validation noise
     assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
     assert "preview.backend" in str(exc_info.value) or "preview -> backend" in str(exc_info.value)
     assert "hls" in str(exc_info.value)
+    assert "publish_rtsp_base_url" not in str(exc_info.value)
 
 
 def test_preview_rejects_v2_and_legacy_extra_fields() -> None:

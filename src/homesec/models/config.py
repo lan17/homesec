@@ -160,18 +160,29 @@ class PreviewConfig(BaseModel):
     )
     config: HLSPreviewConfig = Field(default_factory=HLSPreviewConfig)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_and_validate_backend(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        config = dict(value)
+        backend = config.get("backend", "hls")
+        if isinstance(backend, str):
+            backend = backend.lower()
+            config["backend"] = backend
+
+        if backend != "hls":
+            raise ValueError("preview.backend must be 'hls' in config contract v1")
+
+        return config
+
     @field_validator("backend", mode="before")
     @classmethod
     def _normalize_backend(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower()
         return value
-
-    @model_validator(mode="after")
-    def _validate_backend(self) -> PreviewConfig:
-        if self.backend != "hls":
-            raise ValueError("preview.backend must be 'hls' in config contract v1")
-        return self
 
 
 class FastAPIServerConfig(BaseModel):
