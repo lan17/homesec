@@ -453,6 +453,21 @@ def test_cleanup_shuts_down_live_publisher(tmp_path: Path) -> None:
     assert publisher.shutdown_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_shutdown_shuts_down_live_publisher_even_before_start(tmp_path: Path) -> None:
+    """RTSP shutdown should release preview resources for unstarted sources."""
+    # Given: An RTSP source with an injected live publisher that has not started
+    publisher = FakeLivePublisher()
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+
+    # When: Shutting down the source before its worker thread starts
+    await source.shutdown()
+
+    # Then: The live publisher is still shut down
+    assert publisher.shutdown_calls == 1
+
+
 def test_preview_failures_degrade_without_raising(tmp_path: Path) -> None:
     """Preview control APIs should fail closed when the live publisher raises."""
     # Given: An RTSP source whose live publisher raises for preview methods

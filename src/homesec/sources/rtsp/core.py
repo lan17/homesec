@@ -331,6 +331,7 @@ class RTSPSource(ThreadedClipSource):
         )
         self._owns_frame_pipeline = frame_pipeline is None
         self._live_publisher: LivePublisher = live_publisher or NoopLivePublisher()
+        self._live_publisher_shutdown = False
         self._owns_recorder = recorder is None
 
         self._frame_pipeline: FramePipeline = frame_pipeline or FfmpegFramePipeline(
@@ -417,6 +418,13 @@ class RTSPSource(ThreadedClipSource):
             self._live_publisher.note_viewer_activity(viewer_id=viewer_id)
         except Exception as exc:
             logger.warning("Preview viewer activity update failed: %s", exc, exc_info=True)
+
+    def stop(self, timeout: float | None = None) -> None:
+        """Stop the source and release preview resources even if start never ran."""
+        if self._thread is None:
+            self._shutdown_live_publisher_once()
+            return
+        super().stop(timeout)
 
     def _touch_heartbeat(self) -> None:
         self.last_successful_frame = self._clock.now()
@@ -1310,10 +1318,17 @@ class RTSPSource(ThreadedClipSource):
             self._stop_frame_pipeline()
         except Exception:
             logger.exception("Error stopping frame pipeline")
+        self._shutdown_live_publisher_once()
+
+    def _shutdown_live_publisher_once(self) -> None:
+        if self._live_publisher_shutdown:
+            return
         try:
             self._live_publisher.shutdown()
         except Exception:
             logger.exception("Error stopping live publisher")
+        finally:
+            self._live_publisher_shutdown = True
 
     def _finalize_clip(
         self,
