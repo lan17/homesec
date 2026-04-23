@@ -171,6 +171,10 @@ class HLSLivePublisher(LivePublisher):
         self._last_cancellation_result: LivePublisherStatus | LivePublisherStartRefusal = (
             self._status
         )
+        self._last_completed_start_token = 0
+        self._last_completed_start_result: LivePublisherStatus | LivePublisherStartRefusal = (
+            self._status
+        )
         self._start_in_progress = False
         self._active_start_token = 0
         self._cancelled_start_token = 0
@@ -212,6 +216,9 @@ class HLSLivePublisher(LivePublisher):
                     self._ensure_maintenance_thread_started_locked()
                     return self._status
 
+                if queued_start_token and self._last_completed_start_token == queued_start_token:
+                    return self._last_completed_start_result
+
                 if self._start_in_progress:
                     queued_start_token = self._active_start_token
                     self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
@@ -223,11 +230,16 @@ class HLSLivePublisher(LivePublisher):
                 start_token = self._active_start_token
                 break
 
+        start_result: LivePublisherStatus | LivePublisherStartRefusal | None = None
         try:
-            return self._start(start_token=start_token)
+            start_result = self._start(start_token=start_token)
+            return start_result
         finally:
             with self._lock:
                 self._start_in_progress = False
+                if start_result is not None:
+                    self._last_completed_start_token = start_token
+                    self._last_completed_start_result = start_result
 
     def request_stop(self) -> None:
         with self._lock:

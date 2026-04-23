@@ -1186,6 +1186,63 @@ def test_request_stop_keeps_cancelled_queue_from_observing_later_restart(tmp_pat
     assert publisher.status() == third_result
 
 
+def test_waiting_activation_inherits_failed_start_result(tmp_path: Path) -> None:
+    """Queued activation callers should share the failed start they were waiting on."""
+
+    # Given: One preview activation probing slowly while a second caller waits behind it
+    class _ThreadClock:
+        def __init__(self) -> None:
+            self.wait_started = Event()
+
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            self.wait_started.set()
+            time.sleep(seconds)
+
+    clock = _ThreadClock()
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=clock, discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_results: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def run_ensure_active(name: str) -> None:
+        start_results[name] = publisher.ensure_active()
+
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            make_output=False,
+            returncode=1,
+            stderr_text="Too many clients already connected.\n",
+        ),
+    ):
+        first_thread = Thread(target=run_ensure_active, args=("first",))
+        second_thread = Thread(target=run_ensure_active, args=("second",))
+        first_thread.start()
+        assert discovery.started.wait(timeout=0.2)
+        second_thread.start()
+        assert clock.wait_started.wait(timeout=0.2)
+
+        # When: The in-flight activation fails with a session-budget refusal
+        discovery.release.set()
+        first_thread.join(timeout=1.0)
+        second_thread.join(timeout=1.0)
+
+    # Then: The waiting caller receives the same refusal without starting ffmpeg again
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    first_result = start_results["first"]
+    second_result = start_results["second"]
+    assert isinstance(first_result, LivePublisherStartRefusal)
+    assert first_result.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert second_result == first_result
+    assert len(calls) == 1
+    assert publisher.status().state == LivePublisherState.ERROR
+
+
 def test_recording_priority_preempts_slow_probe_before_spawn(tmp_path: Path) -> None:
     """Recording activation should interrupt startup before ffmpeg spawn when probing is slow."""
 
