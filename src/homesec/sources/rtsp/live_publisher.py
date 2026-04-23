@@ -168,7 +168,9 @@ class HLSLivePublisher(LivePublisher):
         self._maintenance_stop = Event()
         self._maintenance_thread: Thread | None = None
         self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
-        self._last_stop_status = self._status
+        self._last_cancellation_result: LivePublisherStatus | LivePublisherStartRefusal = (
+            self._status
+        )
         self._start_in_progress = False
         self._active_start_token = 0
         self._cancelled_start_token = 0
@@ -194,14 +196,11 @@ class HLSLivePublisher(LivePublisher):
                 now = self._clock.now()
                 self._refresh_locked(now=now)
                 if queued_start_token and self._start_was_cancelled_locked(queued_start_token):
-                    return self._last_stop_status
+                    return self._last_cancellation_result
                 if self._stop_requested_since_locked(stop_request_token):
-                    return self._last_stop_status
+                    return self._last_cancellation_result
                 if self._recording_active:
-                    return LivePublisherStartRefusal(
-                        reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
-                        message="Preview is unavailable while recording is active for this camera",
-                    )
+                    return self._recording_priority_refusal()
 
                 if self._is_process_running_locked():
                     self._mark_activity_locked(now=now)
@@ -235,7 +234,7 @@ class HLSLivePublisher(LivePublisher):
             self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
-            self._last_stop_status = self._status
+            self._last_cancellation_result = self._status
 
     def note_viewer_activity(self, viewer_id: str | None = None) -> None:
         with self._lock:
@@ -262,7 +261,9 @@ class HLSLivePublisher(LivePublisher):
                 self._refresh_locked(now=self._clock.now())
                 return
 
+            self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
+            self._last_cancellation_result = self._recording_priority_refusal()
 
     def shutdown(self) -> None:
         maintenance_thread: Thread | None = None
@@ -270,7 +271,7 @@ class HLSLivePublisher(LivePublisher):
             self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
-            self._last_stop_status = self._status
+            self._last_cancellation_result = self._status
             self._maintenance_stop.set()
             maintenance_thread = self._maintenance_thread
             self._maintenance_thread = None
@@ -300,13 +301,10 @@ class HLSLivePublisher(LivePublisher):
             with self._lock:
                 if self._start_was_cancelled_locked(start_token):
                     self._stop_locked(clear_error=True)
-                    return self._status
+                    return self._last_cancellation_result
 
                 if self._recording_active:
-                    return LivePublisherStartRefusal(
-                        reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
-                        message="Preview is unavailable while recording is active for this camera",
-                    )
+                    return self._recording_priority_refusal()
 
                 if not self._prepare_live_dir_locked():
                     return self._set_error_locked(
@@ -372,14 +370,11 @@ class HLSLivePublisher(LivePublisher):
 
                 if self._start_was_cancelled_locked(start_token):
                     self._stop_locked(clear_error=True)
-                    return self._status
+                    return self._last_cancellation_result
 
                 if self._recording_active:
                     self._stop_locked(clear_error=True)
-                    return LivePublisherStartRefusal(
-                        reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
-                        message="Preview is unavailable while recording is active for this camera",
-                    )
+                    return self._recording_priority_refusal()
 
                 stderr_tail = self._read_stderr_tail_locked()
                 timeout_option_error = (
@@ -826,6 +821,12 @@ class HLSLivePublisher(LivePublisher):
             last_error=last_error,
         )
         return LivePublisherStartRefusal(reason=reason, message=message)
+
+    def _recording_priority_refusal(self) -> LivePublisherStartRefusal:
+        return LivePublisherStartRefusal(
+            reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+            message="Preview is unavailable while recording is active for this camera",
+        )
 
     def _ensure_maintenance_thread_started_locked(self) -> None:
         if not self._background_maintenance:

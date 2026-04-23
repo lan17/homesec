@@ -1236,3 +1236,107 @@ def test_recording_priority_preempts_slow_probe_before_spawn(tmp_path: Path) -> 
     assert result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
     assert calls == []
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
+def test_recording_priority_cancels_stale_probe_when_recording_ends_before_release(
+    tmp_path: Path,
+) -> None:
+    """Recording preemption should fence a slow probe even if recording ends before it returns."""
+
+    # Given: A publisher whose codec probe is still in flight
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock(), discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_result: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def run_ensure_active() -> None:
+        with patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(calls),
+        ):
+            start_result["result"] = publisher.ensure_active()
+
+    ensure_thread = Thread(target=run_ensure_active)
+    ensure_thread.start()
+    assert discovery.started.wait(timeout=0.2)
+
+    # When: Recording briefly preempts preview before the slow probe returns
+    publisher.sync_recording_active(True)
+    publisher.sync_recording_active(False)
+    discovery.release.set()
+    ensure_thread.join(timeout=0.3)
+
+    # Then: The stale activation stays cancelled and does not restart preview
+    assert not ensure_thread.is_alive()
+    result = start_result["result"]
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert calls == []
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
+def test_recording_priority_cancels_waiting_activation_after_recording_window(
+    tmp_path: Path,
+) -> None:
+    """Recording preemption should fence queued activations after recording has ended."""
+
+    # Given: One preview activation probing slowly while a second caller waits behind it
+    class _ThreadClock:
+        def __init__(self) -> None:
+            self.wait_started = Event()
+            self.release_wait = Event()
+
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            _ = seconds
+            self.wait_started.set()
+            self.release_wait.wait(timeout=1.0)
+
+    clock = _ThreadClock()
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=clock, discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_results: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def run_ensure_active(name: str) -> None:
+        start_results[name] = publisher.ensure_active()
+
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        first_thread = Thread(target=run_ensure_active, args=("first",))
+        second_thread = Thread(target=run_ensure_active, args=("second",))
+        first_thread.start()
+        assert discovery.started.wait(timeout=0.2)
+        second_thread.start()
+        assert clock.wait_started.wait(timeout=0.2)
+
+        # When: Recording briefly preempts preview before the waiting caller can wake
+        publisher.sync_recording_active(True)
+        publisher.sync_recording_active(False)
+        discovery.release.set()
+        first_thread.join(timeout=1.0)
+        clock.release_wait.set()
+        second_thread.join(timeout=1.0)
+
+    # Then: Both stale activation attempts resolve as recording-priority refusals
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    first_result = start_results["first"]
+    second_result = start_results["second"]
+    assert isinstance(first_result, LivePublisherStartRefusal)
+    assert first_result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert isinstance(second_result, LivePublisherStartRefusal)
+    assert second_result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert calls == []
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
