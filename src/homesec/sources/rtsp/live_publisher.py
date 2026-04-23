@@ -292,9 +292,10 @@ class HLSLivePublisher(LivePublisher):
                     )
 
                 if not self._prepare_live_dir_locked():
-                    return LivePublisherStartRefusal(
+                    return self._set_error_locked(
                         reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
                         message="Preview storage directory is unavailable",
+                        last_error="Preview storage directory could not be prepared",
                     )
 
                 cmd = self._build_ffmpeg_cmd(
@@ -655,7 +656,8 @@ class HLSLivePublisher(LivePublisher):
 
     def _prepare_live_dir_locked(self) -> bool:
         try:
-            self._cleanup_live_dir_locked()
+            if not self._cleanup_live_dir_locked():
+                return False
             self._camera_dir.mkdir(parents=True, exist_ok=True)
             return True
         except Exception:
@@ -666,17 +668,19 @@ class HLSLivePublisher(LivePublisher):
             )
             return False
 
-    def _cleanup_live_dir_locked(self) -> None:
+    def _cleanup_live_dir_locked(self) -> bool:
         if not self._camera_dir.exists():
-            return
+            return True
         try:
             shutil.rmtree(self._camera_dir)
+            return True
         except Exception:
             logger.exception(
                 "Failed to clean preview directory: camera=%s dir=%s",
                 self._camera_name,
                 self._camera_dir,
             )
+            return False
 
     def _close_process_handles_locked(self) -> None:
         if self._stderr_handle is None:

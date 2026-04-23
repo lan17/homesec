@@ -256,6 +256,41 @@ def test_ensure_active_is_idempotent_and_cleans_stale_window(tmp_path: Path) -> 
     assert "delete_segments+append_list+omit_endlist+program_date_time+temp_file" in cmd
 
 
+def test_ensure_active_refuses_when_stale_window_cannot_be_cleaned(tmp_path: Path) -> None:
+    """Startup should fail closed when stale preview output cannot be removed."""
+    # Given: A publisher with stale HLS files that cannot be cleaned before restart
+    publisher = _make_publisher(tmp_path)
+    stale_dir = tmp_path / "homesec" / "Front_Door_1"
+    _write_live_output(
+        playlist_path=stale_dir / "playlist.m3u8",
+        segment_pattern=stale_dir / "segment_%06d.ts",
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: Activation is attempted while directory cleanup fails
+    with (
+        patch(
+            "homesec.sources.rtsp.live_publisher.shutil.rmtree",
+            side_effect=OSError("device busy"),
+        ),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(calls, make_output=False),
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: Startup is refused before ffmpeg spawn instead of reusing stale readiness signals
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert calls == []
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        last_error="Preview storage directory could not be prepared",
+    )
+
+
 def test_auto_codec_prefers_copy_for_h264_and_aac(tmp_path: Path) -> None:
     """auto codec mode should copy browser-safe source codecs."""
     # Given: A publisher whose source probe reports H.264 video and AAC audio
