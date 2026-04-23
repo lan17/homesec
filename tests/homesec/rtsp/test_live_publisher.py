@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import Event, Thread
 from typing import Literal, Protocol, cast
 from unittest.mock import patch
 
@@ -506,3 +508,66 @@ def test_startup_requires_running_process_when_ready_deadline_expires(tmp_path: 
     assert status.state == LivePublisherState.ERROR
     assert status.last_error == "Preview publisher exited before producing HLS output"
     assert not (tmp_path / "homesec" / "Front_Door_1").exists()
+
+
+def test_recording_priority_preempts_slow_startup(tmp_path: Path) -> None:
+    """Recording activation should preempt a slow preview startup without blocking."""
+
+    # Given: A publisher whose ffmpeg process stays alive but never produces HLS output
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock())
+    publisher._startup_timeout_s = 0.5
+    calls: list[dict[str, object]] = []
+    spawned = Event()
+    start_result: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        _ = proc
+        _ = cmd
+        spawned.set()
+
+    def run_ensure_active() -> None:
+        with patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(
+                calls,
+                make_output=False,
+                on_spawn=on_spawn,
+            ),
+        ):
+            start_result["result"] = publisher.ensure_active()
+
+    ensure_thread = Thread(target=run_ensure_active)
+    ensure_thread.start()
+    assert spawned.wait(timeout=0.2)
+
+    sync_completed = Event()
+
+    # When: Recording becomes active while startup is still waiting for HLS readiness
+    def run_sync_recording_active() -> None:
+        publisher.sync_recording_active(True)
+        sync_completed.set()
+
+    sync_thread = Thread(target=run_sync_recording_active)
+    sync_thread.start()
+
+    # Then: Recording-priority preemption does not block on the startup wait loop
+    sync_thread.join(timeout=0.3)
+    ensure_thread.join(timeout=0.3)
+
+    assert sync_completed.is_set()
+    assert not sync_thread.is_alive()
+    assert not ensure_thread.is_alive()
+    result = start_result["result"]
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    proc = calls[0]["proc"]
+    assert isinstance(proc, FakeProc)
+    assert proc.terminate_calls == 1
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)

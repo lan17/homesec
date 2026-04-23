@@ -315,6 +315,13 @@ class HLSLivePublisher(LivePublisher):
                 )
                 return self._status
 
+            if self._recording_active:
+                self._stop_locked(clear_error=True)
+                return LivePublisherStartRefusal(
+                    reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+                    message="Preview is unavailable while recording is active for this camera",
+                )
+
             stderr_tail = self._read_stderr_tail_locked()
             timeout_option_error = (
                 label == "timeouts" and bool(stderr_tail) and _is_timeout_option_error(stderr_tail)
@@ -358,7 +365,7 @@ class HLSLivePublisher(LivePublisher):
                 return False
             if self._output_ready_locked():
                 return self._is_process_running_locked()
-            self._clock.sleep(_READY_POLL_INTERVAL_S)
+            self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
         if not self._output_ready_locked():
             return False
         return self._is_process_running_locked()
@@ -639,6 +646,13 @@ class HLSLivePublisher(LivePublisher):
             )
         finally:
             self._stderr_handle = None
+
+    def _sleep_without_lock_locked(self, seconds: float) -> None:
+        self._lock.release()
+        try:
+            self._clock.sleep(seconds)
+        finally:
+            self._lock.acquire()
 
     def _mark_activity_locked(self, *, now: float) -> None:
         self._last_activity_at = now
