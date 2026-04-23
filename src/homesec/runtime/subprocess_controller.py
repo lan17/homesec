@@ -18,9 +18,31 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homesec.runtime.controller import RuntimeController
-from homesec.runtime.errors import sanitize_runtime_error
-from homesec.runtime.models import ManagedRuntime, RuntimeCameraStatus, config_signature
-from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
+from homesec.runtime.errors import (
+    PreviewCameraNotFoundError,
+    PreviewRuntimeUnavailableError,
+    sanitize_runtime_error,
+)
+from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    CameraPreviewStopResult,
+    ManagedRuntime,
+    PreviewRefusalReason,
+    PreviewState,
+    RuntimeCameraStatus,
+    config_signature,
+    preview_error_status,
+)
+from homesec.runtime.subprocess_protocol import (
+    WorkerCommand,
+    WorkerCommandErrorCode,
+    WorkerCommandResult,
+    WorkerCommandType,
+    WorkerEvent,
+    WorkerEventType,
+    WorkerPreviewStatusPayload,
+)
 
 if TYPE_CHECKING:
     from homesec.models.config import Config
@@ -78,6 +100,7 @@ class SubprocessRuntimeHandle:
     correlation_id: str
     temp_dir: Path = field(repr=False)
     control_socket_path: Path = field(repr=False)
+    command_socket_path: Path = field(repr=False)
     config_json_path: Path = field(repr=False)
     event_queue: asyncio.Queue[WorkerEvent] = field(default_factory=asyncio.Queue, repr=False)
     transport: asyncio.DatagramTransport | None = field(default=None, repr=False)
@@ -89,6 +112,7 @@ class SubprocessRuntimeHandle:
     last_heartbeat_at: datetime | None = None
     last_error: str | None = None
     camera_statuses: dict[str, RuntimeCameraStatus] = field(default_factory=dict)
+    camera_preview_statuses: dict[str, CameraPreviewStatus] = field(default_factory=dict)
 
     @property
     def is_running(self) -> bool:
@@ -113,6 +137,7 @@ class SubprocessRuntimeController(RuntimeController):
     kill_timeout_s: float = 5.0
     worker_heartbeat_interval_s: float = 2.0
     heartbeat_stale_s: float = 10.0
+    command_timeout_s: float = 5.0
     worker_module: str = "homesec.runtime.worker"
     worker_extra_args: tuple[str, ...] = ()
     _active_runtime: SubprocessRuntimeHandle | None = field(default=None, init=False, repr=False)
@@ -129,6 +154,7 @@ class SubprocessRuntimeController(RuntimeController):
 
         config_json_path = temp_dir / "runtime_config.json"
         control_socket_path = temp_dir / "events.sock"
+        command_socket_path = temp_dir / "commands.sock"
         correlation_id = uuid.uuid4().hex
         queue: asyncio.Queue[WorkerEvent] = asyncio.Queue()
         transport: asyncio.DatagramTransport | None = None
@@ -162,6 +188,7 @@ class SubprocessRuntimeController(RuntimeController):
             correlation_id=correlation_id,
             temp_dir=temp_dir,
             control_socket_path=control_socket_path,
+            command_socket_path=command_socket_path,
             config_json_path=config_json_path,
             event_queue=queue,
             transport=transport,
@@ -230,6 +257,143 @@ class SubprocessRuntimeController(RuntimeController):
             summary = "; ".join(errors)
             raise RuntimeError(f"Runtime shutdown_all completed with errors: {summary[:512]}")
 
+    async def get_preview_status(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+    ) -> CameraPreviewStatus:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise PreviewCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            return self._stale_preview_status(handle, camera_name)
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.PREVIEW_STATUS,
+                camera_name,
+            )
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            handle.last_error = message
+            enabled = self._preview_enabled(handle, camera_name)
+            if not enabled:
+                return CameraPreviewStatus(
+                    camera_name=camera_name,
+                    enabled=False,
+                    state=PreviewState.IDLE,
+                )
+            return preview_error_status(
+                camera_name,
+                enabled=enabled,
+                message=message,
+            )
+
+        if result.status is None:
+            enabled = self._preview_enabled(handle, camera_name)
+            if not enabled:
+                return CameraPreviewStatus(
+                    camera_name=camera_name,
+                    enabled=False,
+                    state=PreviewState.IDLE,
+                )
+            return preview_error_status(
+                camera_name,
+                enabled=enabled,
+                message="Runtime worker returned no preview status",
+            )
+        status = self._runtime_preview_status(camera_name, result.status)
+        handle.camera_preview_statuses[camera_name] = status
+        return status
+
+    async def ensure_preview_active(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+    ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise PreviewCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            return CameraPreviewStartRefusal(
+                camera_name=camera_name,
+                reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message=self._runtime_unavailable_message(handle),
+            )
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.PREVIEW_ENSURE_ACTIVE,
+                camera_name,
+            )
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            handle.last_error = message
+            return CameraPreviewStartRefusal(
+                camera_name=camera_name,
+                reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message=message,
+            )
+
+        if result.refusal is not None:
+            return CameraPreviewStartRefusal(
+                camera_name=camera_name,
+                reason=result.refusal.reason,
+                message=result.refusal.message,
+            )
+        if result.status is None:
+            return CameraPreviewStartRefusal(
+                camera_name=camera_name,
+                reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="Runtime worker returned no preview status",
+            )
+
+        status = self._runtime_preview_status(camera_name, result.status)
+        handle.camera_preview_statuses[camera_name] = status
+        return status
+
+    async def force_stop_preview(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+    ) -> CameraPreviewStopResult:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise PreviewCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            raise PreviewRuntimeUnavailableError(self._runtime_unavailable_message(handle))
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.PREVIEW_FORCE_STOP,
+                camera_name,
+            )
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            handle.last_error = message
+            raise PreviewRuntimeUnavailableError(message) from exc
+
+        if result.stop_result is None:
+            raise PreviewRuntimeUnavailableError("Runtime worker returned no preview stop result")
+
+        preview_status = CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=self._preview_enabled(handle, camera_name),
+            state=result.stop_result.state,
+        )
+        handle.camera_preview_statuses[camera_name] = preview_status
+        return CameraPreviewStopResult(
+            camera_name=camera_name,
+            accepted=result.stop_result.accepted,
+            state=result.stop_result.state,
+        )
+
     @staticmethod
     def _ensure_posix_support() -> None:
         if os.name != "posix":
@@ -250,6 +414,7 @@ class SubprocessRuntimeController(RuntimeController):
         self._drain_queue(handle.event_queue)
         handle.last_error = None
         handle.camera_statuses = {}
+        handle.camera_preview_statuses = {}
         handle.last_heartbeat_at = None
 
         args = [
@@ -262,6 +427,8 @@ class SubprocessRuntimeController(RuntimeController):
             str(handle.config_json_path),
             "--control-socket-path",
             str(handle.control_socket_path),
+            "--command-socket-path",
+            str(handle.command_socket_path),
             "--correlation-id",
             handle.correlation_id,
             "--heartbeat-interval-s",
@@ -354,6 +521,7 @@ class SubprocessRuntimeController(RuntimeController):
         handle.worker_pid = event.pid
         if event.event in {WorkerEventType.STARTED, WorkerEventType.HEARTBEAT}:
             handle.last_heartbeat_at = event.sent_at
+        if event.cameras:
             handle.camera_statuses = {
                 camera: RuntimeCameraStatus(
                     healthy=status.healthy,
@@ -361,9 +529,135 @@ class SubprocessRuntimeController(RuntimeController):
                 )
                 for camera, status in event.cameras.items()
             }
-            return
+        if event.previews:
+            handle.camera_preview_statuses = {
+                camera: self._runtime_preview_status(camera, status)
+                for camera, status in event.previews.items()
+            }
         if event.event == WorkerEventType.ERROR:
             handle.last_error = event.message or "runtime worker reported an error"
+
+    async def _send_command(
+        self,
+        handle: SubprocessRuntimeHandle,
+        command_type: WorkerCommandType,
+        camera_name: str,
+    ) -> WorkerCommandResult:
+        command = WorkerCommand(
+            command=command_type,
+            command_id=uuid.uuid4().hex,
+            generation=handle.generation,
+            correlation_id=handle.correlation_id,
+            camera_name=camera_name,
+        )
+
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(handle.command_socket_path)),
+                timeout=self.command_timeout_s,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to connect to runtime worker preview command socket"
+            ) from exc
+
+        try:
+            writer.write(command.model_dump_json().encode("utf-8") + b"\n")
+            await asyncio.wait_for(writer.drain(), timeout=self.command_timeout_s)
+            raw_response = await asyncio.wait_for(
+                reader.readline(),
+                timeout=self.command_timeout_s,
+            )
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+        if not raw_response:
+            raise RuntimeError("Runtime worker closed preview command stream without a response")
+
+        try:
+            result = WorkerCommandResult.model_validate_json(raw_response.decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(
+                "Runtime worker returned an invalid preview command response"
+            ) from exc
+
+        if result.generation != command.generation:
+            raise RuntimeError("Runtime worker returned preview response for the wrong generation")
+        if result.correlation_id != command.correlation_id:
+            raise RuntimeError(
+                "Runtime worker returned preview response for the wrong correlation id"
+            )
+        if result.command_id != command.command_id:
+            raise RuntimeError("Runtime worker returned preview response for the wrong command")
+        if result.command != command.command:
+            raise RuntimeError(
+                "Runtime worker returned preview response for the wrong command type"
+            )
+        if result.camera_name != command.camera_name:
+            raise RuntimeError("Runtime worker returned preview response for the wrong camera")
+        if result.error_code == WorkerCommandErrorCode.CAMERA_NOT_FOUND:
+            raise PreviewCameraNotFoundError(camera_name)
+        if result.error_code is not None:
+            raise RuntimeError(
+                result.error_message or f"Runtime preview command failed: {result.error_code}"
+            )
+        return result
+
+    @staticmethod
+    def _runtime_preview_status(
+        camera_name: str,
+        payload: WorkerPreviewStatusPayload,
+    ) -> CameraPreviewStatus:
+        return CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=payload.enabled,
+            state=payload.state,
+            viewer_count=payload.viewer_count,
+            degraded_reason=payload.degraded_reason,
+            last_error=payload.last_error,
+            idle_shutdown_at=payload.idle_shutdown_at,
+        )
+
+    @staticmethod
+    def _camera_exists(handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
+        return any(camera.name == camera_name for camera in handle.config.cameras)
+
+    def _preview_enabled(self, handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
+        cached = handle.camera_preview_statuses.get(camera_name)
+        if cached is not None:
+            return cached.enabled
+
+        camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
+        if camera is None:
+            raise PreviewCameraNotFoundError(camera_name)
+        return handle.config.preview.enabled and camera.enabled and camera.source.backend == "rtsp"
+
+    def _stale_preview_status(
+        self,
+        handle: SubprocessRuntimeHandle,
+        camera_name: str,
+    ) -> CameraPreviewStatus:
+        enabled = self._preview_enabled(handle, camera_name)
+        if not enabled:
+            return CameraPreviewStatus(
+                camera_name=camera_name,
+                enabled=False,
+                state=PreviewState.IDLE,
+            )
+        return preview_error_status(
+            camera_name,
+            enabled=enabled,
+            message=self._runtime_unavailable_message(handle),
+        )
+
+    @staticmethod
+    def _runtime_unavailable_message(handle: SubprocessRuntimeHandle) -> str:
+        if handle.last_error is not None:
+            return handle.last_error
+        if handle.worker_exit_code is not None:
+            return f"runtime worker exited with code {handle.worker_exit_code}"
+        return "runtime worker heartbeat timed out"
 
     async def _stop_handle(
         self,
@@ -424,6 +718,8 @@ class SubprocessRuntimeController(RuntimeController):
 
         if handle.control_socket_path.exists():
             handle.control_socket_path.unlink(missing_ok=True)
+        if handle.command_socket_path.exists():
+            handle.command_socket_path.unlink(missing_ok=True)
         if handle.config_json_path.exists():
             handle.config_json_path.unlink(missing_ok=True)
         shutil.rmtree(handle.temp_dir, ignore_errors=True)

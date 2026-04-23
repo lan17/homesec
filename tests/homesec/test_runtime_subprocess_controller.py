@@ -6,6 +6,7 @@ import asyncio
 import signal
 import tempfile
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -25,7 +26,9 @@ from homesec.models.vlm import VLMConfig
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
+from homesec.runtime.errors import PreviewRuntimeUnavailableError
 from homesec.runtime.manager import RuntimeManager
+from homesec.runtime.models import CameraPreviewStatus, PreviewState
 from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
     SubprocessRuntimeHandle,
@@ -35,14 +38,23 @@ from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
-def _make_config(*, watch_dir: str) -> Config:
+def _make_config(
+    *,
+    watch_dir: str,
+    source_backend: str = "local_folder",
+    preview_enabled: bool = False,
+) -> Config:
     return Config(
         cameras=[
             CameraConfig(
                 name="front",
                 source=CameraSourceConfig(
-                    backend="local_folder",
-                    config=LocalFolderSourceConfig(watch_dir=watch_dir, poll_interval=1.0),
+                    backend=source_backend,
+                    config=(
+                        LocalFolderSourceConfig(watch_dir=watch_dir, poll_interval=1.0)
+                        if source_backend == "local_folder"
+                        else {}
+                    ),
                 ),
             )
         ],
@@ -62,6 +74,7 @@ def _make_config(*, watch_dir: str) -> Config:
             trigger_classes=["person"],
         ),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
+        preview={"enabled": preview_enabled},
     )
 
 
@@ -93,6 +106,88 @@ async def test_subprocess_controller_starts_and_stops_test_worker() -> None:
     assert runtime.is_running is False
     assert "front" in runtime.camera_statuses
     assert runtime.camera_statuses["front"].healthy is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.subprocess
+async def test_subprocess_controller_preview_commands_round_trip_to_worker() -> None:
+    """Preview control should round-trip through worker command plumbing."""
+    # Given: A preview-enabled RTSP camera supervised by the harness worker
+    controller = SubprocessRuntimeController(
+        startup_timeout_s=3.0,
+        shutdown_timeout_s=1.0,
+        kill_timeout_s=1.0,
+        worker_heartbeat_interval_s=0.05,
+        heartbeat_stale_s=1.0,
+        worker_module="homesec.runtime.test_worker_harness",
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+
+    try:
+        await controller.start_runtime(runtime)
+
+        # When: Reading preview status, ensuring preview, and force-stopping preview
+        status = await controller.get_preview_status(runtime, "front")
+        ensured = await controller.ensure_preview_active(runtime, "front")
+        stopped = await controller.force_stop_preview(runtime, "front")
+
+        # Then: The runtime preview contract is returned from the worker
+        assert status.enabled is True
+        assert status.state == PreviewState.IDLE
+        assert isinstance(ensured, CameraPreviewStatus)
+        assert ensured.state == PreviewState.READY
+        assert stopped.accepted is True
+        assert stopped.state == PreviewState.STOPPING
+        assert runtime.camera_preview_statuses["front"].state == PreviewState.STOPPING
+    finally:
+        await controller.shutdown_runtime(runtime)
+
+
+@pytest.mark.asyncio
+@pytest.mark.subprocess
+async def test_subprocess_controller_preview_stop_rejects_stale_worker() -> None:
+    """Force-stop should fail explicitly when the worker heartbeat is stale."""
+    # Given: A running worker whose cached heartbeat has gone stale
+    controller = SubprocessRuntimeController(
+        startup_timeout_s=3.0,
+        shutdown_timeout_s=1.0,
+        kill_timeout_s=1.0,
+        worker_heartbeat_interval_s=5.0,
+        heartbeat_stale_s=0.01,
+        worker_module="homesec.runtime.test_worker_harness",
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview-stale",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+
+    try:
+        await controller.start_runtime(runtime)
+        assert runtime.last_heartbeat_at is not None
+        runtime.last_heartbeat_at = runtime.last_heartbeat_at - timedelta(seconds=60)
+
+        # When/Then: Force-stop fails because the runtime can no longer accept preview commands
+        with pytest.raises(PreviewRuntimeUnavailableError, match="heartbeat timed out"):
+            await controller.force_stop_preview(runtime, "front")
+    finally:
+        await controller.shutdown_runtime(runtime)
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from argparse import Namespace
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -22,6 +24,17 @@ from homesec.models.enums import VLMRunMode
 from homesec.models.filter import FilterConfig
 from homesec.models.vlm import VLMConfig
 from homesec.runtime.bootstrap import RuntimePersistenceStack
+from homesec.runtime.models import PreviewRefusalReason, PreviewState
+from homesec.runtime.subprocess_protocol import (
+    WorkerCommand,
+    WorkerCommandType,
+)
+from homesec.sources.rtsp.live_publisher import (
+    LivePublisherRefusalReason,
+    LivePublisherStartRefusal,
+    LivePublisherState,
+    LivePublisherStatus,
+)
 
 
 class _StubEmitter:
@@ -36,12 +49,14 @@ def _make_config(
     *,
     notifiers: list[NotifierConfig],
     run_mode: VLMRunMode = VLMRunMode.TRIGGER_ONLY,
+    source_backend: str = "local_folder",
+    preview_enabled: bool = False,
 ) -> Config:
     return Config(
         cameras=[
             CameraConfig(
                 name="front",
-                source=CameraSourceConfig(backend="local_folder", config={}),
+                source=CameraSourceConfig(backend=source_backend, config={}),
             )
         ],
         storage=StorageConfig(backend="local", config={}),
@@ -50,6 +65,7 @@ def _make_config(
         filter=FilterConfig(backend="yolo", config={}),
         vlm=VLMConfig(backend="openai", run_mode=run_mode, config={}),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
+        preview={"enabled": preview_enabled},
     )
 
 
@@ -59,6 +75,7 @@ def _make_service(config: Config) -> worker_module._RuntimeWorkerService:
         generation=1,
         correlation_id="test-correlation-id",
         heartbeat_interval_s=1.0,
+        command_socket_path=Path("/tmp/homesec-worker-test.sock"),
         emitter=cast(Any, _StubEmitter()),
     )
 
@@ -187,3 +204,130 @@ async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_neve
 
     # Then: Worker completes lifecycle without invoking analyzer loader
     assert service._runtime_bundle is None
+
+
+def test_runtime_worker_preview_status_command_reports_runtime_preview_state() -> None:
+    """Preview status command should map source preview status into runtime fields."""
+
+    class _PreviewSource:
+        def preview_status(self) -> LivePublisherStatus:
+            return LivePublisherStatus(
+                state=LivePublisherState.DEGRADED,
+                viewer_count=None,
+                degraded_reason="viewer_count_unavailable",
+                last_error=None,
+                idle_shutdown_at=42.0,
+            )
+
+        def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+            raise AssertionError("status test should not call ensure_preview_active")
+
+        def stop_preview(self) -> None:
+            raise AssertionError("status test should not call stop_preview")
+
+    # Given: A preview-enabled RTSP camera with a preview-capable source in the runtime bundle
+    config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": _PreviewSource()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.PREVIEW_STATUS,
+        command_id="cmd-status",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+
+    # When: Handling a preview status command
+    result = service._handle_command(command)
+
+    # Then: The worker returns runtime preview status aligned with the contract
+    assert result.status is not None
+    assert result.status.enabled is True
+    assert result.status.state == PreviewState.DEGRADED
+    assert result.status.degraded_reason == "viewer_count_unavailable"
+    assert result.status.idle_shutdown_at == 42.0
+
+
+def test_runtime_worker_preview_ensure_command_returns_machine_readable_refusal() -> None:
+    """Preview ensure command should preserve refusal semantics as structured data."""
+
+    class _PreviewSource:
+        def preview_status(self) -> LivePublisherStatus:
+            return LivePublisherStatus(state=LivePublisherState.IDLE)
+
+        def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+            return LivePublisherStartRefusal(
+                reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+                message="Recording currently owns the session budget",
+            )
+
+        def stop_preview(self) -> None:
+            raise AssertionError("ensure test should not call stop_preview")
+
+    # Given: A preview-enabled RTSP camera whose source refuses preview startup
+    config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": _PreviewSource()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.PREVIEW_ENSURE_ACTIVE,
+        command_id="cmd-ensure",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+
+    # When: Handling a preview ensure command
+    result = service._handle_command(command)
+
+    # Then: The worker returns a machine-readable refusal reason and message
+    assert result.refusal is not None
+    assert result.refusal.reason == PreviewRefusalReason.RECORDING_PRIORITY
+    assert result.refusal.message == "Recording currently owns the session budget"
+
+
+def test_runtime_worker_preview_force_stop_command_returns_stopping_ack() -> None:
+    """Preview force-stop command should return the async stopping acknowledgement."""
+
+    class _PreviewSource:
+        def __init__(self) -> None:
+            self.stop_calls = 0
+
+        def preview_status(self) -> LivePublisherStatus:
+            return LivePublisherStatus(state=LivePublisherState.READY)
+
+        def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+            return LivePublisherStatus(state=LivePublisherState.READY)
+
+        def stop_preview(self) -> None:
+            self.stop_calls += 1
+
+    # Given: A preview-enabled RTSP camera with a preview-capable source
+    config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
+    service = _make_service(config)
+    source = _PreviewSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.PREVIEW_FORCE_STOP,
+        command_id="cmd-stop",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+
+    # When: Handling a preview force-stop command
+    result = service._handle_command(command)
+
+    # Then: The worker requests source shutdown and returns a stopping acknowledgement
+    assert result.stop_result is not None
+    assert result.stop_result.accepted is True
+    assert result.stop_result.state == PreviewState.STOPPING
+    assert source.stop_calls == 1
