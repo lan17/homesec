@@ -35,6 +35,12 @@ vi.mock('../../api/hooks/useSetupTestConnectionMutation', () => ({
   }),
 }))
 
+vi.mock('./components/CameraPreviewPanel', () => ({
+  CameraPreviewPanel: ({ cameraName }: { cameraName: string }) => (
+    <div data-testid={`camera-preview-${cameraName}`}>Live preview stub</div>
+  ),
+}))
+
 interface CamerasPageHarness {
   createCamera: ReturnType<typeof vi.fn>
   toggleCameraEnabled: ReturnType<typeof vi.fn>
