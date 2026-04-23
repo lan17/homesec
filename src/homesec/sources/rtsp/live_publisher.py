@@ -215,7 +215,7 @@ class HLSLivePublisher(LivePublisher):
                 break
 
         try:
-            return self._start(now=now, start_token=start_token)
+            return self._start(start_token=start_token)
         finally:
             with self._lock:
                 self._start_in_progress = False
@@ -267,7 +267,6 @@ class HLSLivePublisher(LivePublisher):
     def _start(
         self,
         *,
-        now: float,
         start_token: int,
     ) -> LivePublisherStatus | LivePublisherStartRefusal:
         codec_plan = self._build_codec_plan()
@@ -332,17 +331,19 @@ class HLSLivePublisher(LivePublisher):
 
                 self._process = process
                 self._stderr_handle = stderr_handle
-                self._mark_activity_locked(now=now)
+                started_now = self._clock.now()
+                self._mark_activity_locked(now=started_now)
                 self._status = LivePublisherStatus(
                     state=LivePublisherState.STARTING,
-                    viewer_count=self._viewer_count_locked(now=now),
-                    idle_shutdown_at=now + self._idle_timeout_s,
+                    viewer_count=self._viewer_count_locked(now=started_now),
+                    idle_shutdown_at=started_now + self._idle_timeout_s,
                 )
 
                 if self._wait_until_ready_locked():
                     if label == "timeouts":
                         self._timeout_capabilities.note_ffmpeg_timeout_success()
                     ready_now = self._clock.now()
+                    self._mark_activity_locked(now=ready_now)
                     self._ensure_maintenance_thread_started_locked()
                     self._status = self._build_running_status_locked(
                         now=ready_now,

@@ -561,6 +561,71 @@ def test_startup_requires_running_process_when_ready_deadline_expires(tmp_path: 
     assert not (tmp_path / "homesec" / "Front_Door_1").exists()
 
 
+def test_slow_startup_arms_idle_timeout_from_ready_time(tmp_path: Path) -> None:
+    """Slow startup should not age out the idle window before preview becomes ready."""
+    # Given: A publisher whose HLS output does not appear until the readiness deadline
+    calls: list[dict[str, object]] = []
+    spawn: dict[str, FakeProc | Path] = {}
+
+    def on_sleep(now: float) -> None:
+        playlist_path = spawn.get("playlist_path")
+        segment_pattern = spawn.get("segment_pattern")
+        if (
+            now < 6.0
+            or not isinstance(playlist_path, Path)
+            or not isinstance(segment_pattern, Path)
+            or playlist_path.exists()
+        ):
+            return
+
+        _write_live_output(
+            playlist_path=playlist_path,
+            segment_pattern=segment_pattern,
+        )
+
+    clock = FakeClock(on_sleep=on_sleep)
+    publisher = _make_publisher(tmp_path, clock=clock, idle_timeout_s=5.0)
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        spawn["proc"] = proc
+        spawn["playlist_path"] = Path(cmd[-1])
+        spawn["segment_pattern"] = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+
+    # When: Activating preview after a slow HLS startup
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            make_output=False,
+            on_spawn=on_spawn,
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The idle timeout starts from readiness instead of expiring during startup
+    assert result.state == LivePublisherState.READY
+    assert result.viewer_count == 0
+    assert result.idle_shutdown_at == clock.now() + 5.0
+
+    status_while_ready = publisher.status()
+    assert status_while_ready.state == LivePublisherState.READY
+    assert status_while_ready.viewer_count == 0
+    assert status_while_ready.idle_shutdown_at == result.idle_shutdown_at
+    proc = calls[0]["proc"]
+    assert isinstance(proc, FakeProc)
+    assert proc.terminate_calls == 0
+
+    clock.sleep(4.9)
+    assert publisher.status() == status_while_ready
+
+    clock.sleep(0.2)
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+    )
+    assert proc.terminate_calls == 1
+
+
 def test_request_stop_preempts_slow_startup_without_error(tmp_path: Path) -> None:
     """Explicit stop should cancel a slow startup instead of surfacing preview failure."""
 
