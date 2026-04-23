@@ -117,7 +117,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
                   Math.min(PREVIEW_TOKEN_REFRESH_LEEWAY_MS, remainingMs / 2),
                 ),
           )
-        : Math.max(0, Math.min(PREVIEW_TOKEN_REFRESH_RETRY_MS, remainingMs))
+        : remainingMs > 0
+          ? Math.min(PREVIEW_TOKEN_REFRESH_RETRY_MS, remainingMs)
+          : PREVIEW_TOKEN_REFRESH_RETRY_MS
 
     const timeoutId = window.setTimeout(() => {
       void refreshSession()

@@ -281,6 +281,92 @@ describe('useCameraPreview', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('keeps post-expiry token refresh retries bounded after a failed renewal', async () => {
+    // Given: A ready preview session whose renewal fails after the current token has expired
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-23T12:00:00.000Z'))
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    const ensurePreviewActive = vi
+      .spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date('2026-04-23T12:00:11.000Z'))
+        throw new Error('token refresh failed')
+      })
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-2',
+        token_expires_at: '2026-04-23T12:01:11.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-2',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+
+    // When: Starting preview and letting the scheduled renewal fail after expiry
+    await act(async () => {
+      await expect(result.current.start()).resolves.toBeUndefined()
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    // Then: The failed renewal stays bounded instead of immediately spinning another request
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
+    expect(result.current.error?.message).toBe('token refresh failed')
+    expect(result.current.session?.token).toBe('preview-token-1')
+
+    // When: Advancing almost the entire retry interval
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999)
+    })
+
+    // Then: No extra retry fires early
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
+
+    // When: Completing the bounded retry delay
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+
+    // Then: The next retry runs once and can recover the preview session
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(3)
+    expect(result.current.playlistUrl).toContain('preview-token-2')
+    expect(result.current.error).toBeNull()
+  })
+
   it('drops stale preview sessions after a newer terminal runtime status', async () => {
     // Given: A started preview session whose follow-up status says the runtime has already failed it
     vi.spyOn(apiClient, 'getCameraPreviewStatus')
