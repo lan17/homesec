@@ -65,6 +65,52 @@ describe('useCameraPreview', () => {
     })
   })
 
+  it('keeps a fresh preview session when the follow-up status refetch fails', async () => {
+    // Given: An idle camera whose preview start succeeds but the invalidated status refresh fails
+    vi.spyOn(apiClient, 'getCameraPreviewStatus')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'idle',
+        viewer_count: null,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      .mockRejectedValueOnce(new Error('status refresh failed'))
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front',
+      state: 'ready',
+      viewer_count: 1,
+      token: 'preview-token-1',
+      token_expires_at: '2026-04-23T12:00:10.000Z',
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+      idle_timeout_s: 30,
+      warning: null,
+      httpStatus: 200,
+    })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('idle')
+    })
+
+    // When: Starting preview and allowing the invalidated status refresh to fail
+    await act(async () => {
+      await expect(result.current.start()).resolves.toBeUndefined()
+    })
+
+    // Then: The hook keeps serving the fresh preview session instead of dropping it
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+      expect(result.current.playlistUrl).toContain('preview-token-1')
+    })
+  })
+
   it('refreshes preview sessions before short-lived playback tokens expire', async () => {
     // Given: A ready preview session with an expiring playback token
     const nowMs = Date.parse('2026-04-23T12:00:00.000Z')

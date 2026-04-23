@@ -27,10 +27,16 @@ export interface CameraPreviewState {
   refreshStatus: () => Promise<PreviewStatusSnapshot | null>
 }
 
+interface StoredPreviewSession {
+  snapshot: PreviewSessionSnapshot
+  receivedAtMs: number
+}
+
 export function useCameraPreview(cameraName: string): CameraPreviewState {
   const queryClient = useQueryClient()
-  const [session, setSession] = useState<PreviewSessionSnapshot | null>(null)
+  const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
+  const session = sessionState?.snapshot ?? null
 
   const statusQuery = useQuery<PreviewStatusSnapshot>({
     queryKey: QUERY_KEYS.cameraPreview(cameraName),
@@ -43,7 +49,10 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     mutationFn: () => apiClient.ensureCameraPreviewActive(cameraName),
     onSuccess: async (nextSession) => {
       setRefreshError(null)
-      setSession(nextSession)
+      setSessionState({
+        snapshot: nextSession,
+        receivedAtMs: Date.now(),
+      })
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
     },
   })
@@ -52,14 +61,16 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     mutationFn: () => apiClient.stopCameraPreview(cameraName),
     onSuccess: async () => {
       setRefreshError(null)
-      setSession(null)
+      setSessionState(null)
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
     },
   })
 
+  const statusIsNewerThanSession =
+    sessionState !== null && statusQuery.dataUpdatedAt >= sessionState.receivedAtMs
   const activeSession =
     statusQuery.data?.enabled === false
-    || (statusQuery.data?.state === 'idle' && !startMutation.isPending)
+    || (statusQuery.data?.state === 'idle' && !startMutation.isPending && statusIsNewerThanSession)
       ? null
       : session
 
@@ -67,7 +78,10 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     try {
       const nextSession = await apiClient.ensureCameraPreviewActive(cameraName)
       setRefreshError(null)
-      setSession(nextSession)
+      setSessionState({
+        snapshot: nextSession,
+        receivedAtMs: Date.now(),
+      })
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
     } catch (nextError) {
       setRefreshError(nextError as Error)
