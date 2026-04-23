@@ -16,7 +16,9 @@ from homesec.models.config import (
     CameraConfig,
     CameraSourceConfig,
     Config,
+    HLSPreviewConfig,
     NotifierConfig,
+    PreviewConfig,
     StateStoreConfig,
     StorageConfig,
 )
@@ -259,6 +261,91 @@ def test_runtime_worker_preview_status_command_reports_runtime_preview_state() -
     assert result.status.state == PreviewState.DEGRADED
     assert result.status.degraded_reason == "viewer_count_unavailable"
     assert result.status.idle_shutdown_at == 42.0
+
+
+def test_runtime_worker_create_sources_wires_rtsp_preview_publisher(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """RTSP source creation should inject the configured live preview publisher."""
+
+    class _FakeLivePublisher:
+        def status(self) -> LivePublisherStatus:
+            return LivePublisherStatus(state=LivePublisherState.READY, viewer_count=1)
+
+        def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+            return LivePublisherStatus(state=LivePublisherState.READY, viewer_count=1)
+
+        def request_stop(self) -> None:
+            return None
+
+        def note_viewer_activity(self, viewer_id: str | None = None) -> None:
+            _ = viewer_id
+
+        def sync_recording_active(self, recording_active: bool) -> None:
+            _ = recording_active
+
+        def shutdown(self) -> None:
+            return None
+
+    # Given: A preview-enabled RTSP runtime and a fake HLS publisher factory
+    worker_module.discover_all_plugins()
+    config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
+    config.preview = PreviewConfig(
+        enabled=True,
+        idle_timeout_s=12.5,
+        config=HLSPreviewConfig(
+            storage_dir=tmp_path / "preview",
+            segment_duration_ms=1500,
+            live_window_segments=6,
+            audio_enabled=False,
+            audio_codec="aac",
+            video_codec="h264",
+        ),
+    )
+    config.cameras[0].source = CameraSourceConfig(
+        backend="rtsp",
+        config={
+            "rtsp_url": "rtsp://camera/stream",
+            "output_dir": str(tmp_path / "recordings"),
+            "stream": {
+                "disable_hwaccel": True,
+                "connect_timeout_s": 4.0,
+                "io_timeout_s": 5.0,
+            },
+        },
+    )
+    service = _make_service(config)
+    captured_factory_args: dict[str, object] = {}
+
+    def _fake_hls_live_publisher(**kwargs: object) -> _FakeLivePublisher:
+        captured_factory_args.update(kwargs)
+        return _FakeLivePublisher()
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.HLSLivePublisher",
+        _fake_hls_live_publisher,
+    )
+
+    # When: Building sources through the runtime worker and ensuring preview is active
+    _sources, sources_by_camera = service._create_sources(config)
+    preview_result = sources_by_camera["front"].ensure_preview_active()
+
+    # Then: The RTSP source uses the injected preview config to build a live publisher
+    assert isinstance(preview_result, LivePublisherStatus)
+    assert preview_result.state == LivePublisherState.READY
+    assert preview_result.viewer_count == 1
+    assert captured_factory_args["camera_name"] == "front"
+    assert captured_factory_args["rtsp_url"] == "rtsp://camera/stream"
+    assert captured_factory_args["storage_dir"] == tmp_path / "preview"
+    assert captured_factory_args["segment_duration_ms"] == 1500
+    assert captured_factory_args["live_window_segments"] == 6
+    assert captured_factory_args["idle_timeout_s"] == 12.5
+    assert captured_factory_args["audio_enabled"] is False
+    assert captured_factory_args["audio_codec"] == "aac"
+    assert captured_factory_args["video_codec"] == "h264"
+    assert captured_factory_args["rtsp_connect_timeout_s"] == 4.0
+    assert captured_factory_args["rtsp_io_timeout_s"] == 5.0
 
 
 def test_runtime_worker_preview_status_collection_degrades_when_source_raises() -> None:

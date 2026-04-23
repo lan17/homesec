@@ -306,10 +306,14 @@ class _RuntimeWorkerService:
             if not camera.enabled:
                 continue
             source_cfg = camera.source
+            runtime_context: dict[str, object] = {}
+            if source_cfg.backend == "rtsp":
+                runtime_context["__runtime_preview__"] = config.preview
             source = load_source_plugin(
                 source_backend=source_cfg.backend,
                 config=source_cfg.config,
                 camera_name=camera.name,
+                **runtime_context,
             )
             sources.append(source)
             sources_by_camera[camera.name] = source
