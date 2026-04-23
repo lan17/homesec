@@ -171,6 +171,7 @@ class HLSLivePublisher(LivePublisher):
         self._start_in_progress = False
         self._active_start_token = 0
         self._cancelled_start_token = 0
+        self._stop_request_token = 0
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr_handle: TextIO | None = None
         self._recording_active = False
@@ -185,10 +186,13 @@ class HLSLivePublisher(LivePublisher):
 
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         start_token = 0
+        stop_request_token = self._stop_request_token
         while True:
             with self._lock:
                 now = self._clock.now()
                 self._refresh_locked(now=now)
+                if self._stop_requested_since_locked(stop_request_token):
+                    return self._status
                 if self._recording_active:
                     return LivePublisherStartRefusal(
                         reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
@@ -222,6 +226,7 @@ class HLSLivePublisher(LivePublisher):
 
     def request_stop(self) -> None:
         with self._lock:
+            self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
 
@@ -255,6 +260,7 @@ class HLSLivePublisher(LivePublisher):
     def shutdown(self) -> None:
         maintenance_thread: Thread | None = None
         with self._lock:
+            self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
             self._maintenance_stop.set()
@@ -733,6 +739,9 @@ class HLSLivePublisher(LivePublisher):
 
     def _start_was_cancelled_locked(self, start_token: int) -> bool:
         return self._cancelled_start_token >= start_token
+
+    def _stop_requested_since_locked(self, stop_request_token: int) -> bool:
+        return self._stop_request_token != stop_request_token
 
     def _sleep_without_lock_locked(self, seconds: float) -> None:
         self._lock.release()
