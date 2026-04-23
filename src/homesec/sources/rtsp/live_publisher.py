@@ -29,6 +29,11 @@ from homesec.sources.rtsp.discovery import (
     ProbeStreamInfo,
     build_camera_key,
 )
+from homesec.sources.rtsp.hardware import (
+    H264HardwareEncoder,
+    HardwareAccelConfig,
+    HardwareAccelDetector,
+)
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
     _format_cmd,
@@ -111,8 +116,11 @@ class StreamDiscovery(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _CodecPlan:
+    codec_name: str
+    ffmpeg_global_args: tuple[str, ...]
     video_args: tuple[str, ...]
     audio_args: tuple[str, ...]
+    uses_hardware_encoder: bool = False
 
 
 class HLSLivePublisher(LivePublisher):
@@ -132,6 +140,7 @@ class HLSLivePublisher(LivePublisher):
         video_codec: Literal["auto", "copy", "h264"] = "auto",
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
+        hwaccel_config: HardwareAccelConfig | None = None,
         clock: Clock | None = None,
         timeout_capabilities: RTSPTimeoutCapabilities | None = None,
         stream_discovery: StreamDiscovery | None = None,
@@ -156,6 +165,7 @@ class HLSLivePublisher(LivePublisher):
         self._audio_enabled = bool(audio_enabled)
         self._audio_codec = audio_codec
         self._video_codec = video_codec
+        self._hwaccel_config = hwaccel_config or HardwareAccelConfig(hwaccel=None)
         self._rtsp_connect_timeout_s = float(rtsp_connect_timeout_s)
         self._rtsp_io_timeout_s = float(rtsp_io_timeout_s)
         self._clock = clock or SystemClock()
@@ -326,7 +336,7 @@ class HLSLivePublisher(LivePublisher):
         *,
         start_token: int,
     ) -> LivePublisherStatus | LivePublisherStartRefusal:
-        codec_plan = self._build_codec_plan()
+        codec_plans = self._build_codec_plans()
         timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args_for_user_flags(
             connect_timeout_s=self._rtsp_connect_timeout_s,
             io_timeout_s=self._rtsp_io_timeout_s,
@@ -334,129 +344,147 @@ class HLSLivePublisher(LivePublisher):
         )
 
         attempts = _build_timeout_attempts(timeout_args)
-        last_refusal: LivePublisherStartRefusal | None = None
 
-        for label, timeout_attempt_args in attempts:
-            attempt_refusal: LivePublisherStartRefusal | None = None
-            timeout_option_error = False
-            stop_error: str | None = None
-            with self._lock:
-                if self._start_was_cancelled_locked(start_token):
-                    self._stop_locked(clear_error=True)
-                    return self._last_cancellation_result
+        for codec_plan in codec_plans:
+            codec_refusal: LivePublisherStartRefusal | None = None
+            codec_failure_error = ""
 
-                if self._recording_active:
-                    return self._recording_priority_refusal()
+            for label, timeout_attempt_args in attempts:
+                attempt_refusal: LivePublisherStartRefusal | None = None
+                timeout_option_error = False
+                stop_error: str | None = None
+                attempt_last_error = ""
+                with self._lock:
+                    if self._start_was_cancelled_locked(start_token):
+                        self._stop_locked(clear_error=True)
+                        return self._last_cancellation_result
 
-                if not self._prepare_live_dir_locked():
-                    return self._set_error_locked(
-                        reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                        message="Preview storage directory is unavailable",
-                        last_error="Preview storage directory could not be prepared",
+                    if self._recording_active:
+                        return self._recording_priority_refusal()
+
+                    if not self._prepare_live_dir_locked():
+                        return self._set_error_locked(
+                            reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                            message="Preview storage directory is unavailable",
+                            last_error="Preview storage directory could not be prepared",
+                        )
+
+                    cmd = self._build_ffmpeg_cmd(
+                        codec_plan=codec_plan,
+                        timeout_args=timeout_attempt_args,
+                    )
+                    self._log_ffmpeg_cmd(label=f"{codec_plan.codec_name}:{label}", cmd=cmd)
+
+                    try:
+                        stderr_handle = open(self._stderr_log_path, "w", encoding="utf-8")
+                    except Exception as exc:
+                        logger.warning("Failed to open preview stderr log: %s", exc, exc_info=True)
+                        return self._set_error_locked(
+                            reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                            message="Preview stderr log could not be created",
+                            last_error=f"Preview stderr log create failed: {type(exc).__name__}",
+                        )
+
+                    try:
+                        process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.DEVNULL,
+                            stderr=stderr_handle,
+                            start_new_session=True,
+                        )
+                    except Exception as exc:
+                        stderr_handle.close()
+                        logger.warning("Failed to start preview ffmpeg: %s", exc, exc_info=True)
+                        return self._set_error_locked(
+                            reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                            message="Preview ffmpeg could not be started",
+                            last_error=f"Preview ffmpeg start failed: {type(exc).__name__}",
+                        )
+
+                    self._process = process
+                    self._stderr_handle = stderr_handle
+                    started_now = self._clock.now()
+                    self._mark_activity_locked(now=started_now)
+                    self._status = LivePublisherStatus(
+                        state=LivePublisherState.STARTING,
+                        viewer_count=self._viewer_count_locked(now=started_now),
+                        idle_shutdown_at=started_now + self._idle_timeout_s,
                     )
 
-                cmd = self._build_ffmpeg_cmd(
-                    codec_plan=codec_plan,
-                    timeout_args=timeout_attempt_args,
-                )
-                self._log_ffmpeg_cmd(label=label, cmd=cmd)
+                    if self._wait_until_ready_locked():
+                        if label == "timeouts":
+                            self._timeout_capabilities.note_ffmpeg_timeout_success()
+                        ready_now = self._clock.now()
+                        self._mark_activity_locked(now=ready_now)
+                        self._ensure_maintenance_thread_started_locked()
+                        self._status = self._build_running_status_locked(
+                            now=ready_now,
+                            state=LivePublisherState.READY,
+                            degraded_reason=None,
+                        )
+                        return self._status
 
-                try:
-                    stderr_handle = open(self._stderr_log_path, "w", encoding="utf-8")
-                except Exception as exc:
-                    logger.warning("Failed to open preview stderr log: %s", exc, exc_info=True)
-                    return self._set_error_locked(
-                        reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                        message="Preview stderr log could not be created",
-                        last_error=f"Preview stderr log create failed: {type(exc).__name__}",
+                    if self._start_was_cancelled_locked(start_token):
+                        self._stop_locked(clear_error=True)
+                        return self._last_cancellation_result
+
+                    if self._recording_active:
+                        self._stop_locked(clear_error=True)
+                        return self._recording_priority_refusal()
+
+                    stderr_tail = self._read_stderr_tail_locked()
+                    timeout_option_error = (
+                        bool(stderr_tail)
+                        and label == "timeouts"
+                        and (_is_timeout_option_error(stderr_tail))
                     )
+                    stop_error = self._stop_locked(clear_error=False)
 
-                try:
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=stderr_handle,
-                        start_new_session=True,
-                    )
-                except Exception as exc:
-                    stderr_handle.close()
-                    logger.warning("Failed to start preview ffmpeg: %s", exc, exc_info=True)
-                    return self._set_error_locked(
-                        reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                        message="Preview ffmpeg could not be started",
-                        last_error=f"Preview ffmpeg start failed: {type(exc).__name__}",
-                    )
+                    if stop_error is not None:
+                        stderr_tail = f"{stderr_tail}; {stop_error}" if stderr_tail else stop_error
 
-                self._process = process
-                self._stderr_handle = stderr_handle
-                started_now = self._clock.now()
-                self._mark_activity_locked(now=started_now)
-                self._status = LivePublisherStatus(
-                    state=LivePublisherState.STARTING,
-                    viewer_count=self._viewer_count_locked(now=started_now),
-                    idle_shutdown_at=started_now + self._idle_timeout_s,
-                )
+                    if not timeout_option_error or stop_error is not None:
+                        refusal_reason = _classify_start_refusal(stderr_tail)
+                        message = (
+                            "Preview could not start because the camera session budget is exhausted"
+                            if refusal_reason is LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+                            else "Preview publisher failed to become ready"
+                        )
+                        attempt_last_error = (
+                            stderr_tail or "Preview publisher exited before producing HLS output"
+                        )
+                        attempt_refusal = self._set_error_locked(
+                            reason=refusal_reason,
+                            message=message,
+                            last_error=attempt_last_error,
+                        )
 
-                if self._wait_until_ready_locked():
-                    if label == "timeouts":
-                        self._timeout_capabilities.note_ffmpeg_timeout_success()
-                    ready_now = self._clock.now()
-                    self._mark_activity_locked(now=ready_now)
-                    self._ensure_maintenance_thread_started_locked()
-                    self._status = self._build_running_status_locked(
-                        now=ready_now,
-                        state=LivePublisherState.READY,
-                        degraded_reason=None,
-                    )
-                    return self._status
+                if timeout_option_error and stop_error is None:
+                    changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
+                    if changed:
+                        logger.warning(
+                            "Preview ffmpeg timeout options unsupported; retrying without timeout options"
+                        )
+                    continue
 
-                if self._start_was_cancelled_locked(start_token):
-                    self._stop_locked(clear_error=True)
-                    return self._last_cancellation_result
+                if attempt_refusal is not None:
+                    codec_refusal = attempt_refusal
+                    codec_failure_error = attempt_last_error
+                    break
 
-                if self._recording_active:
-                    self._stop_locked(clear_error=True)
-                    return self._recording_priority_refusal()
-
-                stderr_tail = self._read_stderr_tail_locked()
-                timeout_option_error = (
-                    bool(stderr_tail)
-                    and label == "timeouts"
-                    and (_is_timeout_option_error(stderr_tail))
-                )
-                stop_error = self._stop_locked(clear_error=False)
-
-                if stop_error is not None:
-                    stderr_tail = f"{stderr_tail}; {stop_error}" if stderr_tail else stop_error
-
-                if not timeout_option_error or stop_error is not None:
-                    refusal_reason = _classify_start_refusal(stderr_tail)
-                    message = (
-                        "Preview could not start because the camera session budget is exhausted"
-                        if refusal_reason is LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
-                        else "Preview publisher failed to become ready"
-                    )
-                    attempt_refusal = self._set_error_locked(
-                        reason=refusal_reason,
-                        message=message,
-                        last_error=stderr_tail
-                        or "Preview publisher exited before producing HLS output",
-                    )
-
-            if timeout_option_error and stop_error is None:
-                changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
-                if changed:
-                    logger.warning(
-                        "Preview ffmpeg timeout options unsupported; retrying without timeout options"
-                    )
+            if codec_refusal is None:
                 continue
 
-            if attempt_refusal is not None:
-                last_refusal = attempt_refusal
-                break
+            if _should_retry_with_software_codec(codec_plan, codec_refusal):
+                logger.warning(
+                    "Preview hardware encoder failed, retrying with software: camera=%s encoder=%s error=%s",
+                    self._camera_name,
+                    codec_plan.codec_name,
+                    codec_failure_error,
+                )
+                continue
 
-        if last_refusal is not None:
-            return last_refusal
+            return codec_refusal
 
         with self._lock:
             return self._set_error_locked(
@@ -518,34 +546,63 @@ class HLSLivePublisher(LivePublisher):
             degraded_reason=None,
         )
 
-    def _build_codec_plan(self) -> _CodecPlan:
+    def _build_codec_plans(self) -> tuple[_CodecPlan, ...]:
         stream_info = self._probe_stream_info()
-        video_args: tuple[str, ...]
-        audio_args: tuple[str, ...]
+        audio_args = _build_audio_codec_args(
+            audio_enabled=self._audio_enabled,
+            audio_codec=self._audio_codec,
+            stream_info=stream_info,
+        )
 
         if self._video_codec == "copy":
-            video_args = ("-c:v", "copy")
-        elif self._video_codec == "h264":
-            video_args = _h264_transcode_args(self._segment_duration_s)
-        elif stream_info is not None and (stream_info.video_codec or "").lower() == "h264":
-            video_args = ("-c:v", "copy")
-        else:
-            video_args = _h264_transcode_args(self._segment_duration_s)
+            return (
+                _CodecPlan(
+                    codec_name="copy",
+                    ffmpeg_global_args=(),
+                    video_args=("-c:v", "copy"),
+                    audio_args=audio_args,
+                ),
+            )
 
-        if not self._audio_enabled:
-            audio_args = ("-an",)
-        elif self._audio_codec == "copy":
-            audio_args = ("-map", "0:a:0?", "-c:a", "copy")
-        elif self._audio_codec == "aac":
-            audio_args = ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
-        elif stream_info is not None and _is_hls_browser_audio_copy_compatible(
-            stream_info.audio_codec
-        ):
-            audio_args = ("-map", "0:a:0?", "-c:a", "copy")
-        else:
-            audio_args = ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
+        if self._video_codec == "auto" and stream_info is not None:
+            if (stream_info.video_codec or "").strip().lower() == "h264":
+                return (
+                    _CodecPlan(
+                        codec_name="copy",
+                        ffmpeg_global_args=(),
+                        video_args=("-c:v", "copy"),
+                        audio_args=audio_args,
+                    ),
+                )
 
-        return _CodecPlan(video_args=video_args, audio_args=audio_args)
+        software_plan = _CodecPlan(
+            codec_name="libx264",
+            ffmpeg_global_args=(),
+            video_args=_software_h264_transcode_args(self._segment_duration_s),
+            audio_args=audio_args,
+        )
+        hardware_encoder = HardwareAccelDetector.select_h264_encoder(self._hwaccel_config)
+        if hardware_encoder is None:
+            return (software_plan,)
+
+        logger.info(
+            "Preview will try hardware H.264 encoder: camera=%s encoder=%s",
+            self._camera_name,
+            hardware_encoder.ffmpeg_encoder,
+        )
+        return (
+            _CodecPlan(
+                codec_name=hardware_encoder.ffmpeg_encoder,
+                ffmpeg_global_args=hardware_encoder.ffmpeg_global_args,
+                video_args=_hardware_h264_transcode_args(
+                    hardware_encoder,
+                    self._segment_duration_s,
+                ),
+                audio_args=audio_args,
+                uses_hardware_encoder=True,
+            ),
+            software_plan,
+        )
 
     def _probe_stream_info(self) -> ProbeStreamInfo | None:
         needs_probe = self._video_codec == "auto" or (
@@ -598,6 +655,7 @@ class HLSLivePublisher(LivePublisher):
             "-user_agent",
             "Lavf",
         ]
+        cmd.extend(codec_plan.ffmpeg_global_args)
         cmd.extend(timeout_args)
         cmd.extend(["-fflags", "+genpts+igndts", "-i", self._rtsp_url, "-map", "0:v:0"])
         cmd.extend(codec_plan.video_args)
@@ -956,7 +1014,24 @@ def _is_hls_browser_audio_copy_compatible(audio_codec: str | None) -> bool:
     return audio_codec.strip().lower() in _HLS_BROWSER_COPY_AUDIO_CODECS
 
 
-def _h264_transcode_args(segment_duration_s: float) -> tuple[str, ...]:
+def _build_audio_codec_args(
+    *,
+    audio_enabled: bool,
+    audio_codec: Literal["auto", "copy", "aac"],
+    stream_info: ProbeStreamInfo | None,
+) -> tuple[str, ...]:
+    if not audio_enabled:
+        return ("-an",)
+    if audio_codec == "copy":
+        return ("-map", "0:a:0?", "-c:a", "copy")
+    if audio_codec == "aac":
+        return ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
+    if stream_info is not None and _is_hls_browser_audio_copy_compatible(stream_info.audio_codec):
+        return ("-map", "0:a:0?", "-c:a", "copy")
+    return ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
+
+
+def _software_h264_transcode_args(segment_duration_s: float) -> tuple[str, ...]:
     return (
         "-c:v",
         "libx264",
@@ -971,3 +1046,30 @@ def _h264_transcode_args(segment_duration_s: float) -> tuple[str, ...]:
         "-force_key_frames",
         f"expr:gte(t,n_forced*{_format_segment_duration(segment_duration_s)})",
     )
+
+
+def _hardware_h264_transcode_args(
+    encoder: H264HardwareEncoder,
+    segment_duration_s: float,
+) -> tuple[str, ...]:
+    args: list[str] = []
+    if encoder.requires_hwupload:
+        args.extend(["-vf", "format=nv12,hwupload"])
+    args.extend(
+        [
+            "-c:v",
+            encoder.ffmpeg_encoder,
+            "-force_key_frames",
+            f"expr:gte(t,n_forced*{_format_segment_duration(segment_duration_s)})",
+        ]
+    )
+    return tuple(args)
+
+
+def _should_retry_with_software_codec(
+    codec_plan: _CodecPlan,
+    refusal: LivePublisherStartRefusal,
+) -> bool:
+    if not codec_plan.uses_hardware_encoder:
+        return False
+    return refusal.reason is not LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
