@@ -7,9 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from homesec.api.preview_tokens import validate_camera_preview_token
+from homesec.api.routes import preview as preview_routes
 from homesec.api.server import create_app
 from homesec.models.config import FastAPIServerConfig, HLSPreviewConfig, PreviewConfig
 from homesec.preview_paths import preview_camera_dir
@@ -340,6 +342,35 @@ def test_preview_tokenized_playlist_url_is_playable_end_to_end(
     assert segment_response.status_code == 200
     assert segment_response.content == b"segment-bytes"
     assert app.viewer_activity_calls == [("front door", create_payload["token"])]
+
+
+@pytest.mark.asyncio
+async def test_preview_segment_defers_viewer_activity_until_after_response_creation(
+    tmp_path: Path,
+) -> None:
+    """Segment responses should not block on viewer-activity bookkeeping."""
+    # Given: Active preview media and a viewer-activity callback that records successful playback
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+
+    # When: Building the segment response directly from the route handler
+    response = await preview_routes.get_preview_segment(
+        camera_name="front",
+        segment_name="segment_000000.ts",
+        preview_token="preview-token",
+        app=app,
+    )
+
+    # Then: The route returns immediately and defers viewer activity to the response background task
+    assert app.viewer_activity_calls == []
+    assert response.background is not None
+    await response.background()
+    assert app.viewer_activity_calls == [("front", "preview-token")]
 
 
 def test_preview_playlist_rejects_invalid_token(

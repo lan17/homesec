@@ -11,6 +11,7 @@ from urllib.parse import quote, urlencode
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from homesec.api.dependencies import get_homesec_app, verify_preview_access
 from homesec.api.errors import APIError, APIErrorCode
@@ -221,6 +222,38 @@ async def _ensure_preview_media_active(app: Application, camera_name: str) -> No
         )
 
 
+async def _note_preview_viewer_activity_best_effort(
+    app: Application,
+    camera_name: str,
+    *,
+    viewer_id: str | None = None,
+) -> None:
+    try:
+        await app.note_camera_preview_viewer_activity(
+            camera_name,
+            viewer_id=viewer_id,
+        )
+    except PreviewCameraNotFoundError as exc:
+        logger.warning(
+            "Preview viewer activity camera disappeared for camera=%s: %s",
+            camera_name,
+            exc,
+        )
+    except PreviewRuntimeUnavailableError as exc:
+        logger.warning(
+            "Preview viewer activity update skipped for camera=%s: %s",
+            camera_name,
+            exc,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Unexpected preview viewer activity failure for camera=%s: %s",
+            camera_name,
+            exc,
+            exc_info=True,
+        )
+
+
 @control_router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
 async def get_preview_status(
     camera_name: str,
@@ -359,29 +392,14 @@ async def get_preview_segment(
             error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
         )
 
-    try:
-        await app.note_camera_preview_viewer_activity(
-            camera_name,
-            viewer_id=preview_token,
-        )
-    except PreviewCameraNotFoundError as exc:
-        _raise_camera_not_found(exc)
-    except PreviewRuntimeUnavailableError as exc:
-        logger.warning(
-            "Preview viewer activity update skipped for camera=%s: %s",
-            camera_name,
-            exc,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "Unexpected preview viewer activity failure for camera=%s: %s",
-            camera_name,
-            exc,
-            exc_info=True,
-        )
-
     return FileResponse(
         path=segment_path,
         media_type="video/mp2t",
         headers=_PREVIEW_CACHE_HEADERS,
+        background=BackgroundTask(
+            _note_preview_viewer_activity_best_effort,
+            app,
+            camera_name,
+            viewer_id=preview_token,
+        ),
     )
