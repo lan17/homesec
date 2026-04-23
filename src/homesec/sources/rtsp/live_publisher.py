@@ -218,7 +218,8 @@ class HLSLivePublisher(LivePublisher):
         self._preview_ready_at: float | None = None
         self._recording_active = False
         self._concurrent_preview_downgrade_reason: str | None = None
-        self._consecutive_recording_preview_failures = 0
+        self._consecutive_recording_preview_start_failures = 0
+        self._consecutive_recording_preview_early_exits = 0
         self._viewer_activity: dict[str, float] = {}
         self._anonymous_viewer_last_seen: float | None = None
         self._last_activity_at: float | None = None
@@ -339,7 +340,7 @@ class HLSLivePublisher(LivePublisher):
             had_pending_start = self._start_in_progress
             self._recording_active = recording_active
             if not recording_active:
-                self._consecutive_recording_preview_failures = 0
+                self._reset_recording_preview_failure_streaks_locked()
                 self._refresh_locked(now=self._clock.now())
                 return
 
@@ -398,7 +399,10 @@ class HLSLivePublisher(LivePublisher):
         result = self._start_impl(start_token=start_token)
         if isinstance(result, LivePublisherStartRefusal):
             with self._lock:
-                return self._maybe_downgrade_after_recording_preview_failure_locked(result)
+                return self._maybe_downgrade_after_recording_preview_failure_locked(
+                    result,
+                    failure_kind="start",
+                )
         return result
 
     def _start_impl(
@@ -487,6 +491,7 @@ class HLSLivePublisher(LivePublisher):
                             self._timeout_capabilities.note_ffmpeg_timeout_success()
                         ready_now = self._clock.now()
                         self._preview_ready_at = ready_now
+                        self._consecutive_recording_preview_start_failures = 0
                         self._mark_activity_locked(now=ready_now)
                         self._ensure_maintenance_thread_started_locked()
                         self._status = self._build_running_status_locked(
@@ -598,10 +603,11 @@ class HLSLivePublisher(LivePublisher):
                         reason=_classify_start_refusal(last_error),
                         message="Preview publisher exited early while recording was active",
                     ),
+                    failure_kind="early_exit",
                     count_failure=True,
                 )
             else:
-                self._consecutive_recording_preview_failures = 0
+                self._reset_recording_preview_failure_streaks_locked()
             self._status = LivePublisherStatus(
                 state=(
                     LivePublisherState.DEGRADED
@@ -846,6 +852,7 @@ class HLSLivePublisher(LivePublisher):
         self,
         refusal: LivePublisherStartRefusal,
         *,
+        failure_kind: Literal["start", "early_exit"],
         count_failure: bool | None = None,
     ) -> LivePublisherStartRefusal:
         should_count = (
@@ -862,22 +869,33 @@ class HLSLivePublisher(LivePublisher):
         ):
             return refusal
 
-        self._consecutive_recording_preview_failures += 1
+        match failure_kind:
+            case "start":
+                self._consecutive_recording_preview_start_failures += 1
+                consecutive_failures = self._consecutive_recording_preview_start_failures
+            case "early_exit":
+                self._consecutive_recording_preview_early_exits += 1
+                consecutive_failures = self._consecutive_recording_preview_early_exits
         logger.warning(
             "Preview failed while recording is active: "
-            "camera=%s consecutive_failures=%s threshold=%s reason=%s",
+            "camera=%s failure_kind=%s consecutive_failures=%s threshold=%s reason=%s",
             self._camera_name,
-            self._consecutive_recording_preview_failures,
+            failure_kind,
+            consecutive_failures,
             CONCURRENT_PREVIEW_FAILURE_THRESHOLD,
             refusal.reason.value,
         )
-        if self._consecutive_recording_preview_failures < CONCURRENT_PREVIEW_FAILURE_THRESHOLD:
+        if consecutive_failures < CONCURRENT_PREVIEW_FAILURE_THRESHOLD:
             return refusal
 
         self._downgrade_concurrent_preview_locked(
             reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
         )
         return self._recording_priority_refusal()
+
+    def _reset_recording_preview_failure_streaks_locked(self) -> None:
+        self._consecutive_recording_preview_start_failures = 0
+        self._consecutive_recording_preview_early_exits = 0
 
     def _is_recording_preview_early_exit_locked(self, *, now: float) -> bool:
         if (
@@ -940,7 +958,7 @@ class HLSLivePublisher(LivePublisher):
                     last_error="; ".join(teardown_errors),
                 )
             else:
-                self._consecutive_recording_preview_failures = 0
+                self._reset_recording_preview_failure_streaks_locked()
                 self._status = self._idle_status_locked()
 
         if teardown_errors:

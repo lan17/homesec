@@ -1001,6 +1001,69 @@ def test_successful_start_resets_recording_failure_counter(tmp_path: Path) -> No
     assert len(calls) == 3
 
 
+def test_successful_start_separates_start_failure_from_early_exit(
+    tmp_path: Path,
+) -> None:
+    """A start failure followed by a successful preview should not combine with an early exit."""
+    # Given: A concurrent-preview publisher with one session-budget failure followed by success
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(
+            pid=915_000_000 + call_index,
+            returncode=1 if call_index == 0 else None,
+        )
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if call_index == 0 and hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write("Too many clients already connected.\n")
+            stderr_handle.flush()
+        elif call_index == 1:
+            playlist_path = Path(cmd[-1])
+            segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+            _write_live_output(
+                playlist_path=playlist_path,
+                segment_pattern=segment_pattern,
+            )
+        return proc
+
+    # When: The successful preview exits early after the initial start failure
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        status_after_exit = publisher.status()
+
+    # Then: The early exit starts its own streak instead of downgrading immediately
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert isinstance(second, LivePublisherStatus)
+    assert second.state == LivePublisherState.READY
+    assert status_after_exit.state == LivePublisherState.ERROR
+    assert status_after_exit.degraded_reason is None
+    assert len(calls) == 2
+
+
 def test_repeated_early_exits_while_recording_downgrade_concurrent_preview(
     tmp_path: Path,
 ) -> None:

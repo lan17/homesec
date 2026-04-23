@@ -6,6 +6,7 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Literal, Protocol
@@ -42,6 +43,23 @@ logger = logging.getLogger(__name__)
 _NON_MONOTONIC_DTS_RETRY_THRESHOLD = 5
 _QUEUE_BACKWARD_RETRY_THRESHOLD = 1
 _DTS_DISCONTINUITY_RETRY_THRESHOLD = 1
+_SESSION_LIMIT_HINTS: tuple[str, ...] = (
+    "too many clients",
+    "too many connections",
+    "too many sessions",
+    "max number of clients",
+    "maximum number of clients",
+    "maximum number of connections",
+    "session limit",
+    "max sessions",
+    "maximum sessions",
+)
+
+
+class ConcurrentStreamOpenResult(StrEnum):
+    SUPPORTED = "supported"
+    SESSION_LIMIT = "session_limit"
+    FAILED = "failed"
 
 
 class StreamDiscovery(Protocol):
@@ -343,14 +361,22 @@ class RTSPStartupPreflight:
         if preview_rtsp_url is None:
             return
 
-        if self._validate_concurrent_preview_session_limits(
+        validation_result = self._validate_concurrent_preview_session_limits(
             motion_profile.input_url,
             recording_profile.input_url,
             preview_rtsp_url,
-        ):
+        )
+        if validation_result is ConcurrentStreamOpenResult.SUPPORTED:
             diagnostics.concurrent_preview_supported = True
             diagnostics.notes.append(
                 "Concurrent preview while recording validated with motion, recording, and preview streams"
+            )
+            return
+
+        if validation_result is not ConcurrentStreamOpenResult.SESSION_LIMIT:
+            diagnostics.notes.append(
+                "Concurrent preview while recording could not be classified during startup; "
+                "runtime will continue best-effort behavior"
             )
             return
 
@@ -553,11 +579,14 @@ class RTSPStartupPreflight:
 
     def _validate_session_limits(self, motion_url: str, recording_url: str) -> bool:
         """Validate that motion and recording pipelines can open concurrently."""
-        return self._validate_concurrent_stream_opens(
-            [
-                _SessionOpenSpec(role="motion", input_url=motion_url),
-                _SessionOpenSpec(role="recording", input_url=recording_url),
-            ]
+        return (
+            self._validate_concurrent_stream_opens(
+                [
+                    _SessionOpenSpec(role="motion", input_url=motion_url),
+                    _SessionOpenSpec(role="recording", input_url=recording_url),
+                ]
+            )
+            is ConcurrentStreamOpenResult.SUPPORTED
         )
 
     def _validate_concurrent_preview_session_limits(
@@ -565,7 +594,7 @@ class RTSPStartupPreflight:
         motion_url: str,
         recording_url: str,
         preview_url: str,
-    ) -> bool:
+    ) -> ConcurrentStreamOpenResult:
         """Validate the current runtime topology for motion, recording, and preview."""
         return self._validate_concurrent_stream_opens(
             [
@@ -575,7 +604,9 @@ class RTSPStartupPreflight:
             ]
         )
 
-    def _validate_concurrent_stream_opens(self, specs: list[_SessionOpenSpec]) -> bool:
+    def _validate_concurrent_stream_opens(
+        self, specs: list[_SessionOpenSpec]
+    ) -> ConcurrentStreamOpenResult:
         """Validate that the requested RTSP consumers can open concurrently."""
         timeout_args = self._timeout_args()
         attempts = _build_timeout_attempts(timeout_args)
@@ -631,11 +662,14 @@ class RTSPStartupPreflight:
             if all(exit_code == 0 for exit_code, _err in exits_and_errors.values()):
                 if label == "timeouts":
                     self._timeout_capabilities.note_ffmpeg_timeout_success()
-                return True
+                return ConcurrentStreamOpenResult.SUPPORTED
 
             timeout_option_error = label == "timeouts" and any(
                 _is_timeout_option_error(err) for _exit_code, err in exits_and_errors.values()
             )
+            if any(_is_session_limit_error(err) for _exit_code, err in exits_and_errors.values()):
+                return ConcurrentStreamOpenResult.SESSION_LIMIT
+
             if timeout_option_error:
                 changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
                 if changed:
@@ -657,9 +691,9 @@ class RTSPStartupPreflight:
                 errors,
             )
             if label == "timeouts":
-                return False
+                return ConcurrentStreamOpenResult.FAILED
 
-        return False
+        return ConcurrentStreamOpenResult.FAILED
 
     def _build_recording_check_cmd(
         self,
@@ -823,6 +857,11 @@ def _sanitize_stderr(stderr_text: str, input_url: str) -> str:
     if not stderr_text:
         return ""
     return stderr_text.replace(input_url, _redact_rtsp_url(input_url)).strip()
+
+
+def _is_session_limit_error(stderr: str) -> bool:
+    lowered = stderr.lower()
+    return any(hint in lowered for hint in _SESSION_LIMIT_HINTS)
 
 
 def _collect_recording_stability_signals(stderr_text: str) -> RecordingValidationSignals:
