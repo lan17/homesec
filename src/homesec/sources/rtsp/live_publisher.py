@@ -214,6 +214,15 @@ class HLSLivePublisher(LivePublisher):
                     self._release_queued_start_waiter_locked(queued_start_token)
                     return completed_start_result
 
+                if self._start_in_progress:
+                    next_queued_start_token = self._active_start_token
+                    if queued_start_token != next_queued_start_token:
+                        self._release_queued_start_waiter_locked(queued_start_token)
+                        queued_start_token = next_queued_start_token
+                        self._register_queued_start_waiter_locked(queued_start_token)
+                    self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
+                    continue
+
                 if self._is_process_running_locked():
                     self._release_queued_start_waiter_locked(queued_start_token)
                     self._mark_activity_locked(now=now)
@@ -224,15 +233,6 @@ class HLSLivePublisher(LivePublisher):
                     )
                     self._ensure_maintenance_thread_started_locked()
                     return self._status
-
-                if self._start_in_progress:
-                    next_queued_start_token = self._active_start_token
-                    if queued_start_token != next_queued_start_token:
-                        self._release_queued_start_waiter_locked(queued_start_token)
-                        queued_start_token = next_queued_start_token
-                        self._register_queued_start_waiter_locked(queued_start_token)
-                    self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
-                    continue
 
                 self._release_queued_start_waiter_locked(queued_start_token)
                 queued_start_token = 0

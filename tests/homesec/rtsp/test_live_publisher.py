@@ -174,7 +174,8 @@ def _fake_popen_factory(
     stderr_text: str = "",
     on_spawn: Callable[[FakeProc, list[str]], None] | None = None,
 ) -> Callable[..., FakeProc]:
-    next_pid = 1000
+    # Use an implausibly high PID so test cleanup never risks signaling a real process group.
+    next_pid = 900_000_000
 
     def fake_popen(
         cmd: list[str],
@@ -766,6 +767,58 @@ def test_slow_startup_arms_idle_timeout_from_ready_time(tmp_path: Path) -> None:
         viewer_count=0,
     )
     assert proc.terminate_calls == 1
+
+
+def test_waiting_activation_does_not_return_ready_until_start_completes(tmp_path: Path) -> None:
+    """Concurrent callers should queue behind startup (even after spawn) and share its result."""
+
+    # Given: A publisher whose ffmpeg spawns but never produces HLS output
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock())
+    publisher._startup_timeout_s = 0.3
+    calls: list[dict[str, object]] = []
+    spawned = Event()
+    start_results: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        _ = proc
+        _ = cmd
+        spawned.set()
+
+    def run_ensure_active(name: str) -> None:
+        start_results[name] = publisher.ensure_active()
+
+    # When: A second caller arrives while the first startup is still waiting for readiness
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            make_output=False,
+            on_spawn=on_spawn,
+        ),
+    ):
+        first_thread = Thread(target=run_ensure_active, args=("first",))
+        second_thread = Thread(target=run_ensure_active, args=("second",))
+        first_thread.start()
+        assert spawned.wait(timeout=0.5)
+        second_thread.start()
+        first_thread.join(timeout=1.0)
+        second_thread.join(timeout=1.0)
+
+    # Then: Both callers share the eventual failed start instead of returning READY early
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert len(calls) == 1
+    first_result = start_results["first"]
+    second_result = start_results["second"]
+    assert isinstance(first_result, LivePublisherStartRefusal)
+    assert second_result == first_result
 
 
 def test_request_stop_preempts_slow_startup_without_error(tmp_path: Path) -> None:
