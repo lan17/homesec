@@ -282,6 +282,7 @@ class HLSLivePublisher(LivePublisher):
         for label, timeout_attempt_args in attempts:
             attempt_refusal: LivePublisherStartRefusal | None = None
             timeout_option_error = False
+            stop_error: str | None = None
             with self._lock:
                 if self._start_was_cancelled_locked(start_token):
                     self._stop_locked(clear_error=True)
@@ -372,9 +373,12 @@ class HLSLivePublisher(LivePublisher):
                     and label == "timeouts"
                     and (_is_timeout_option_error(stderr_tail))
                 )
-                self._stop_locked(clear_error=False)
+                stop_error = self._stop_locked(clear_error=False)
 
-                if not timeout_option_error:
+                if stop_error is not None:
+                    stderr_tail = f"{stderr_tail}; {stop_error}" if stderr_tail else stop_error
+
+                if not timeout_option_error or stop_error is not None:
                     refusal_reason = _classify_start_refusal(stderr_tail)
                     message = (
                         "Preview could not start because the camera session budget is exhausted"
@@ -388,7 +392,7 @@ class HLSLivePublisher(LivePublisher):
                         or "Preview publisher exited before producing HLS output",
                     )
 
-            if timeout_option_error:
+            if timeout_option_error and stop_error is None:
                 changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
                 if changed:
                     logger.warning(
@@ -613,27 +617,43 @@ class HLSLivePublisher(LivePublisher):
 
         return any(self._camera_dir.glob("segment_*.ts"))
 
-    def _stop_locked(self, *, clear_error: bool) -> None:
-        if self._process is None and self._stderr_handle is None:
+    def _stop_locked(self, *, clear_error: bool) -> str | None:
+        has_live_window = self._camera_dir.exists()
+        if self._process is None and self._stderr_handle is None and not has_live_window:
             if clear_error:
                 self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
-            return
+            return None
 
         self._status = LivePublisherStatus(state=LivePublisherState.STOPPING, viewer_count=0)
+        teardown_errors: list[str] = []
         process = self._process
         self._process = None
         if process is not None:
-            self._terminate_process(process)
+            stop_error = self._terminate_process(process)
+            if stop_error is not None:
+                teardown_errors.append(stop_error)
         self._close_process_handles_locked()
-        self._cleanup_live_dir_locked()
+        if not self._cleanup_live_dir_locked():
+            teardown_errors.append("Preview live output could not be removed")
         self._viewer_activity.clear()
         self._anonymous_viewer_last_seen = None
         self._last_activity_at = None
 
         if clear_error:
-            self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+            if teardown_errors:
+                self._status = LivePublisherStatus(
+                    state=LivePublisherState.ERROR,
+                    viewer_count=0,
+                    last_error="; ".join(teardown_errors),
+                )
+            else:
+                self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
 
-    def _terminate_process(self, process: subprocess.Popen[bytes]) -> None:
+        if teardown_errors:
+            return "; ".join(teardown_errors)
+        return None
+
+    def _terminate_process(self, process: subprocess.Popen[bytes]) -> str | None:
         try:
             if process.poll() is None:
                 if not _signal_process_group(process.pid, signal.SIGTERM):
@@ -661,6 +681,9 @@ class HLSLivePublisher(LivePublisher):
                 self._camera_name,
                 process.pid,
             )
+        if process.poll() is None:
+            return "Preview ffmpeg could not be stopped cleanly"
+        return None
 
     def _prepare_live_dir_locked(self) -> bool:
         try:

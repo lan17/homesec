@@ -402,6 +402,68 @@ def test_request_stop_terminates_process_and_removes_live_window(tmp_path: Path)
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
 
 
+def test_request_stop_reports_error_when_process_does_not_stop_cleanly(tmp_path: Path) -> None:
+    """Explicit stop should fail closed when ffmpeg teardown does not complete."""
+    # Given: An active preview publisher whose ffmpeg stop path reports failure
+    publisher = _make_publisher(tmp_path)
+    calls: list[dict[str, object]] = []
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        _ = publisher.ensure_active()
+
+    camera_dir = tmp_path / "homesec" / "Front_Door_1"
+
+    # When: Force-stopping preview while process teardown reports failure
+    with patch.object(
+        publisher,
+        "_terminate_process",
+        return_value="Preview ffmpeg could not be stopped cleanly",
+    ):
+        publisher.request_stop()
+
+    # Then: The publisher surfaces the stop failure instead of reporting a clean idle stop
+    assert not camera_dir.exists()
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        last_error="Preview ffmpeg could not be stopped cleanly",
+    )
+
+
+def test_request_stop_reports_error_when_live_window_cleanup_fails(tmp_path: Path) -> None:
+    """Explicit stop should fail closed when live HLS cleanup cannot finish."""
+    # Given: An active preview publisher whose live window cannot be removed
+    publisher = _make_publisher(tmp_path)
+    calls: list[dict[str, object]] = []
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        _ = publisher.ensure_active()
+
+    proc = calls[0]["proc"]
+    assert isinstance(proc, FakeProc)
+    camera_dir = tmp_path / "homesec" / "Front_Door_1"
+
+    # When: Force-stopping preview while live-window cleanup fails
+    with patch(
+        "homesec.sources.rtsp.live_publisher.shutil.rmtree",
+        side_effect=OSError("device busy"),
+    ):
+        publisher.request_stop()
+
+    # Then: The publisher preserves an error state instead of claiming preview is idle
+    assert proc.terminate_calls == 1
+    assert camera_dir.exists()
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        last_error="Preview live output could not be removed",
+    )
+
+
 def test_request_stop_allows_maintenance_thread_to_exit(tmp_path: Path) -> None:
     """Explicit stop should not leave a permanent maintenance thread behind."""
     # Given: An active preview publisher with background maintenance enabled
@@ -517,6 +579,51 @@ def test_start_failure_maps_session_budget_refusal_and_cleans_storage(tmp_path: 
     assert status.last_error is not None
     assert "Too many clients" in status.last_error
     assert not (tmp_path / "homesec" / "Front_Door_1").exists()
+
+
+def test_timeout_retry_aborts_when_failed_start_teardown_cannot_clean_up(tmp_path: Path) -> None:
+    """Timeout-option fallback should stop retrying when failed-start cleanup leaves stale state."""
+    # Given: A publisher whose failed start cannot fully clean its live window
+    publisher = _make_publisher(tmp_path)
+    calls: list[dict[str, object]] = []
+    cleanup_calls = 0
+    original_cleanup = publisher._cleanup_live_dir_locked
+
+    def cleanup_with_failed_stop() -> bool:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 2:
+            return False
+        return original_cleanup()
+
+    # When: Activating preview with ffmpeg rejecting timeout options
+    with (
+        patch.object(
+            publisher,
+            "_cleanup_live_dir_locked",
+            side_effect=cleanup_with_failed_stop,
+        ),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(
+                calls,
+                make_output=False,
+                returncode=1,
+                stderr_text="Unrecognized option 'rw_timeout'.\n",
+            ),
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: Startup fails closed instead of retrying a second ffmpeg launch
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert len(calls) == 1
+    status = publisher.status()
+    assert status.state == LivePublisherState.ERROR
+    assert status.last_error is not None
+    assert "rw_timeout" in status.last_error
+    assert "Preview live output could not be removed" in status.last_error
 
 
 def test_non_session_limit_failure_does_not_map_generic_too_many_text(tmp_path: Path) -> None:
