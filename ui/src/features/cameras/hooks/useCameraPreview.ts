@@ -12,6 +12,7 @@ import { QUERY_KEYS } from '../../../api/hooks/queryKeys'
 const PREVIEW_STATUS_REFRESH_MS = 5_000
 const PREVIEW_TOKEN_REFRESH_LEEWAY_MS = 5_000
 const PREVIEW_TOKEN_MIN_REFRESH_LEEWAY_MS = 250
+const PREVIEW_TOKEN_REFRESH_RETRY_MS = 1_000
 
 export interface CameraPreviewState {
   status: PreviewStatusSnapshot | null
@@ -99,11 +100,17 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     }
 
     const remainingMs = expiresAtMs - Date.now()
-    const refreshLeadMs = Math.max(
-      PREVIEW_TOKEN_MIN_REFRESH_LEEWAY_MS,
-      Math.min(PREVIEW_TOKEN_REFRESH_LEEWAY_MS, remainingMs / 2),
-    )
-    const refreshDelayMs = Math.max(0, remainingMs - refreshLeadMs)
+    const refreshDelayMs =
+      refreshError === null
+        ? Math.max(
+            0,
+            remainingMs
+              - Math.max(
+                  PREVIEW_TOKEN_MIN_REFRESH_LEEWAY_MS,
+                  Math.min(PREVIEW_TOKEN_REFRESH_LEEWAY_MS, remainingMs / 2),
+                ),
+          )
+        : Math.max(0, Math.min(PREVIEW_TOKEN_REFRESH_RETRY_MS, remainingMs))
 
     const timeoutId = window.setTimeout(() => {
       void refreshSession()
@@ -112,7 +119,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [activeSession?.token_expires_at, refreshSession, stopMutation.isPending])
+  }, [activeSession?.token_expires_at, refreshError, refreshSession, stopMutation.isPending])
 
   const warning =
     activeSession?.warning

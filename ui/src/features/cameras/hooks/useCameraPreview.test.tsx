@@ -203,4 +203,81 @@ describe('useCameraPreview', () => {
       expect(result.current.playlistUrl).toContain('preview-token-2')
     })
   })
+
+  it('retries preview token renewal after a transient refresh failure', async () => {
+    // Given: A ready preview session whose first renewal attempt fails transiently
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-23T12:00:00.000Z'))
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    const ensurePreviewActive = vi
+      .spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      .mockRejectedValueOnce(new Error('token refresh failed'))
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-2',
+        token_expires_at: '2026-04-23T12:01:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-2',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+
+    // When: Starting preview and running the scheduled token refresh twice
+    await act(async () => {
+      await expect(result.current.start()).resolves.toBeUndefined()
+    })
+
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
+    expect(result.current.playlistUrl).toContain('preview-token-1')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    // Then: A failed renewal schedules a short retry instead of abandoning the session
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
+    expect(result.current.error?.message).toBe('token refresh failed')
+    expect(result.current.session?.token).toBe('preview-token-1')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    // Then: A later retry can renew the token and update playback URL
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(3)
+    expect(result.current.playlistUrl).toContain('preview-token-2')
+    expect(result.current.error).toBeNull()
+  })
 })
