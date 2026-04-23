@@ -4,13 +4,11 @@
 (short-lived playlists and segments). It is not durable clip storage. Keep it
 separate from `recordings/` and any long-term storage backend.
 
-Current implementation status: HomeSec does not yet wire in a real HLS preview
-publisher. For RTSP sources, preview activation is currently refused as
-`preview_temporarily_unavailable`, and nothing will be written to this directory.
-
-Once a preview publisher is available and active, artifacts are only written while
-preview is active. If preview is disabled (or the source backend does not support
-preview yet), this directory will be unused.
+Current implementation status: RTSP sources can serve on-demand HLS preview when
+`preview.enabled` is true and the runtime can attach or start preview for the
+camera. Artifacts are only written while preview is active and are cleaned up on
+stop or runtime shutdown. If preview is disabled (or the source backend does not
+support preview), this directory remains unused.
 
 ## Recommended Storage
 

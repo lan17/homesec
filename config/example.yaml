@@ -96,7 +96,7 @@ state_store:
   dsn_env: DB_DSN  # e.g., postgresql+asyncpg://user:pass@localhost:5432/homesec
 
 # =============================================================================
-# Preview - Live preview config contract (v1 HLS; output is currently unavailable until a publisher backend is wired in)
+# Preview - Live preview config contract (v1 HLS; RTSP sources support on-demand preview)
 # =============================================================================
 preview:
   enabled: false
@@ -106,7 +106,7 @@ preview:
   config:
     segment_duration_ms: 1000  # Lower latency means more segment churn
     live_window_segments: 4    # Total window ~= segment_duration_ms * segment count
-    storage_dir: /tmp/homesec-preview  # Prefer tmpfs; keep separate from recordings (unused if preview is unavailable)
+    storage_dir: /tmp/homesec-preview  # Prefer tmpfs; keep separate from recordings and other durable storage
     audio_enabled: true
     audio_codec: auto
     video_codec: auto
