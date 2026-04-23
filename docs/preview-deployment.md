@@ -71,32 +71,48 @@ if you:
 
 ## Docker Guidance
 
-The bundled `docker-compose.yml` does not add a preview tmpfs mount yet. If you
-enable preview in Docker, add a tmpfs mount that matches `preview.config.storage_dir`.
-
-Example:
+The bundled `docker-compose.yml` now mounts the default preview scratch
+directory as tmpfs:
 
 ```yaml
 services:
   homesec:
     tmpfs:
-      - /tmp/homesec-preview:size=64m
+      - /tmp/homesec-preview:size=${HOMESEC_PREVIEW_TMPFS_SIZE:-256m}
 ```
 
-Note: the HomeSec Docker image runs as a non-root `homesec` user. If you hit
-permission errors (or you want to lock down access), set tmpfs ownership and mode
-explicitly:
+That matches the default `preview.config.storage_dir`. The bundled default is
+`256 MiB`, which is conservative headroom for a few simultaneous previews at the
+default segment/window settings without forcing operators to edit the Compose
+file on day one. If you change the path in config, change the tmpfs mount path
+too. If you know your expected concurrency, set `HOMESEC_PREVIEW_TMPFS_SIZE`
+explicitly in `.env` to match it.
+
+The HomeSec Docker image runs as a non-root `homesec` user created by:
+
+```dockerfile
+RUN useradd --create-home --shell /bin/bash homesec
+```
+
+On the current `python:3.14-slim-bookworm` base image, that resolves to
+`uid=1000,gid=1000`, but the Dockerfile does not pin numeric IDs. If you want
+to set tmpfs ownership and mode explicitly, inspect the image you deploy instead
+of assuming those numbers will stay fixed:
+
+```bash
+docker run --rm --entrypoint id leva/homesec:latest homesec
+```
+
+Example with explicit ownership and mode:
 
 ```yaml
 services:
   homesec:
     tmpfs:
-      - /tmp/homesec-preview:uid=1000,gid=1000,mode=1700,size=64m
+      - /tmp/homesec-preview:uid=1000,gid=1000,mode=1700,size=${HOMESEC_PREVIEW_TMPFS_SIZE:-256m}
 ```
 
-Replace `uid`/`gid` with the user/group running HomeSec inside the container.
-
-If you change the path in config, change the tmpfs mount path too.
+Replace `uid`/`gid` with the user/group reported for the image you actually run.
 
 ## Bare-Metal Guidance
 
