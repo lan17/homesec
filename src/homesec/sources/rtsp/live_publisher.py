@@ -614,7 +614,7 @@ class HLSLivePublisher(LivePublisher):
             self._status = LivePublisherStatus(
                 state=(
                     LivePublisherState.DEGRADED
-                    if self._preview_downgraded_locked()
+                    if early_exit_while_recording and self._preview_downgraded_locked()
                     else LivePublisherState.ERROR
                 ),
                 viewer_count=0,

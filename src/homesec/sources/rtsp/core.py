@@ -496,17 +496,7 @@ class RTSPSource(ThreadedClipSource):
                         "RTSP session-limit preflight failed for %s; falling back to single-stream defaults",
                         self.camera_name,
                     )
-                    fallback = self._build_fallback_preflight_outcome(
-                        err.camera_key,
-                        concurrent_preview_supported=(
-                            False if self._preview_concurrency_requested else None
-                        ),
-                        concurrent_preview_downgrade_reason=(
-                            "concurrent_preview_not_validated_after_session_limit_fallback"
-                            if self._preview_concurrency_requested
-                            else None
-                        ),
-                    )
+                    fallback = self._build_fallback_preflight_outcome(err.camera_key)
                     self._apply_preflight_outcome(fallback)
                 else:
                     logger.error(
@@ -525,13 +515,7 @@ class RTSPSource(ThreadedClipSource):
                     f"{type(result).__name__}"
                 )
 
-    def _build_fallback_preflight_outcome(
-        self,
-        camera_key: str,
-        *,
-        concurrent_preview_supported: bool | None = None,
-        concurrent_preview_downgrade_reason: str | None = None,
-    ) -> CameraPreflightOutcome:
+    def _build_fallback_preflight_outcome(self, camera_key: str) -> CameraPreflightOutcome:
         motion_profile = MotionProfile(input_url=self.rtsp_url, ffmpeg_input_args=[])
         recording_profile = build_default_recording_profile(self.rtsp_url)
         diagnostics = CameraPreflightDiagnostics(
@@ -539,26 +523,14 @@ class RTSPSource(ThreadedClipSource):
             probes=[],
             selected_motion_url=self.rtsp_url,
             selected_recording_url=self.rtsp_url,
-            selected_preview_url=(
-                self.rtsp_url if concurrent_preview_supported is not None else None
-            ),
-            selected_preview_probe_url=(
-                self.rtsp_url
-                if concurrent_preview_supported is not None and self._preview_startup_probe_required
-                else None
-            ),
             selected_recording_profile=recording_profile.profile_id(),
             session_mode="single_stream",
-            concurrent_preview_supported=concurrent_preview_supported,
-            concurrent_preview_downgrade_reason=concurrent_preview_downgrade_reason,
             notes=["Session-limit preflight failed; using single-stream fallback defaults"],
         )
         return CameraPreflightOutcome(
             camera_key=camera_key,
             motion_profile=motion_profile,
             recording_profile=recording_profile,
-            concurrent_preview_supported=concurrent_preview_supported,
-            concurrent_preview_downgrade_reason=concurrent_preview_downgrade_reason,
             diagnostics=diagnostics,
         )
 

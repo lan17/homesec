@@ -834,6 +834,39 @@ def test_concurrent_preview_downgrade_blocks_only_while_recording(tmp_path: Path
     )
 
 
+def test_downgraded_preview_crash_reports_error_when_not_recording(tmp_path: Path) -> None:
+    """A downgraded camera should still report local preview crashes as errors."""
+    # Given: A downgraded concurrent-preview publisher running outside a recording window
+    reason = "concurrent_preview_unsupported_by_startup_preflight"
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.downgrade_concurrent_preview(reason)
+
+    # When: Preview starts because recording is inactive, then ffmpeg exits unexpectedly
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            stderr_text="Encoder died after startup.\n",
+        ),
+    ):
+        started = publisher.ensure_active()
+        proc = calls[0]["proc"]
+        assert isinstance(proc, FakeProc)
+        proc.returncode = 1
+        status_after_exit = publisher.status()
+
+    # Then: The downgrade reason remains visible but the dead preview is not reported as playable
+    assert isinstance(started, LivePublisherStatus)
+    assert started.state == LivePublisherState.DEGRADED
+    assert status_after_exit == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        degraded_reason=reason,
+        last_error="Encoder died after startup.",
+    )
+
+
 def test_repeated_start_failures_while_recording_downgrade_concurrent_preview(
     tmp_path: Path,
     caplog,

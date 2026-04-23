@@ -23,6 +23,7 @@ from homesec.sources.rtsp.live_publisher import (
 from homesec.sources.rtsp.preflight import (
     CameraPreflightDiagnostics,
     CameraPreflightOutcome,
+    PreflightError,
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
@@ -422,6 +423,52 @@ def test_session_limit_fallback_uses_default_recording_profile(tmp_path: Path) -
     expected_profile = build_default_recording_profile(source.rtsp_url)
     assert outcome.recording_profile == expected_profile
     assert outcome.diagnostics.selected_recording_profile == expected_profile.profile_id()
+
+
+def test_startup_preflight_fallback_keeps_concurrent_preview_unclassified(
+    tmp_path: Path,
+) -> None:
+    """Session fallback should not force a process-local preview downgrade by itself."""
+
+    class _FailingPreflight:
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+            preview_rtsp_url: str | None = None,
+            preview_probe_rtsp_url: str | None = None,
+        ) -> PreflightError:
+            # Given: startup validation cannot classify the RTSP session topology
+            _ = camera_name, primary_rtsp_url, detect_rtsp_url
+            _ = preview_rtsp_url, preview_probe_rtsp_url
+            return PreflightError(
+                camera_key="cam-key",
+                stage="session_limit",
+                message="generic startup validation failure",
+            )
+
+    # Given: an RTSP source configured to request concurrent preview while recording
+    publisher = FakeLivePublisher()
+    config = _make_config(
+        tmp_path,
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+    source._preflight = _FailingPreflight()  # noqa: SLF001
+
+    # When: startup falls back to the default single-stream profile
+    source._run_startup_preflight()  # noqa: SLF001
+
+    # Then: concurrent preview remains unclassified instead of being downgraded
+    assert source._preflight_outcome is not None  # noqa: SLF001
+    assert source._preflight_outcome.concurrent_preview_supported is None  # noqa: SLF001
+    assert source._preflight_outcome.concurrent_preview_downgrade_reason is None  # noqa: SLF001
+    assert publisher.concurrent_preview_downgrades == []
 
 
 def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requested(
