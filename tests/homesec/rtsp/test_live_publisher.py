@@ -1186,19 +1186,34 @@ def test_repeated_early_exits_while_recording_downgrade_concurrent_preview(
         second_proc.returncode = 1
         second_status = publisher.status()
         after_downgrade = publisher.ensure_active()
+        publisher.sync_recording_active(False)
+        after_recording = publisher.status()
+        restarted = publisher.ensure_active()
 
-    # Then: The second early exit downgrades concurrent preview without reporting playable media
+    # Then: The second early exit downgrades concurrent preview without a sticky error state
     assert isinstance(first_start, LivePublisherStatus)
     assert first_start.state == LivePublisherState.READY
     assert first_status.state == LivePublisherState.ERROR
     assert first_status.degraded_reason is None
     assert isinstance(second_start, LivePublisherStatus)
     assert second_start.state == LivePublisherState.READY
-    assert second_status.state == LivePublisherState.ERROR
-    assert second_status.degraded_reason == CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
+    assert second_status == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+        last_error="Too many clients already connected.",
+    )
     assert isinstance(after_downgrade, LivePublisherStartRefusal)
     assert after_downgrade.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
-    assert len(calls) == 2
+    assert after_recording == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+    )
+    assert isinstance(restarted, LivePublisherStatus)
+    assert restarted.state == LivePublisherState.DEGRADED
+    assert restarted.degraded_reason == CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
+    assert len(calls) == 3
 
 
 def test_non_session_early_exits_while_recording_do_not_downgrade_concurrent_preview(
@@ -1370,8 +1385,12 @@ def test_recording_activation_starts_early_exit_window_for_existing_preview(
     assert first_status.degraded_reason is None
     assert isinstance(second_start, LivePublisherStatus)
     assert second_start.state == LivePublisherState.READY
-    assert second_status.state == LivePublisherState.ERROR
-    assert second_status.degraded_reason == CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
+    assert second_status == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+        last_error="Too many clients already connected.",
+    )
     assert len(calls) == 2
 
 

@@ -601,6 +601,7 @@ class HLSLivePublisher(LivePublisher):
             last_error = stderr_tail or f"Preview ffmpeg exited unexpectedly ({exit_code})"
             early_exit_while_recording = self._is_recording_preview_early_exit_locked(now=now)
             self._preview_ready_at = None
+            was_downgraded = self._preview_downgraded_locked()
             if early_exit_while_recording:
                 self._maybe_downgrade_after_recording_preview_failure_locked(
                     LivePublisherStartRefusal(
@@ -611,6 +612,9 @@ class HLSLivePublisher(LivePublisher):
                 )
             else:
                 self._reset_recording_preview_failure_streaks_locked()
+            if not was_downgraded and self._preview_downgraded_locked():
+                self._status = self._idle_status_locked(last_error=last_error)
+                return
             self._status = LivePublisherStatus(
                 state=LivePublisherState.ERROR,
                 viewer_count=0,

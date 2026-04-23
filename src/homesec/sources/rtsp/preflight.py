@@ -380,12 +380,12 @@ class RTSPStartupPreflight:
             if probe_validation_result is not ConcurrentStreamOpenResult.SUPPORTED:
                 diagnostics.notes.append(
                     "Concurrent preview startup probe could not be classified during startup; "
-                    "runtime will continue best-effort behavior"
+                    "continuing with preview stream validation"
                 )
-                return
-            diagnostics.notes.append(
-                "Concurrent preview startup probe validated with motion and recording streams"
-            )
+            else:
+                diagnostics.notes.append(
+                    "Concurrent preview startup probe validated with motion and recording streams"
+                )
 
         validation_result = self._validate_concurrent_preview_session_limits(
             motion_profile.input_url,
