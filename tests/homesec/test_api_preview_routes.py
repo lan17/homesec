@@ -36,6 +36,7 @@ class _StubPreviewApp:
         camera_names: list[str] | None = None,
         camera_configs: list[SimpleNamespace] | None = None,
         bootstrap_mode: bool = False,
+        pipeline_running: bool = True,
         status_error: Exception | None = None,
         ensure_error: Exception | None = None,
         stop_error: Exception | None = None,
@@ -43,6 +44,7 @@ class _StubPreviewApp:
         resolved_server = ensure_stub_ui_dist(server_config or FastAPIServerConfig())
         resolved_preview = preview_config or PreviewConfig(enabled=True)
         self._bootstrap_mode = bootstrap_mode
+        self._pipeline_running = pipeline_running
         self._status = status or CameraPreviewStatus(
             camera_name="front",
             enabled=True,
@@ -87,6 +89,10 @@ class _StubPreviewApp:
     @property
     def bootstrap_mode(self) -> bool:
         return self._bootstrap_mode
+
+    @property
+    def pipeline_running(self) -> bool:
+        return self._pipeline_running
 
     async def get_camera_preview_status(self, camera_name: str) -> CameraPreviewStatus:
         if self._status_error is not None:
@@ -398,6 +404,27 @@ def test_preview_playlist_rejects_stale_files_when_preview_disabled(tmp_path: Pa
     # Then: The route refuses playback instead of serving stale media
     assert response.status_code == 409
     assert response.json()["error_code"] == "PREVIEW_TEMPORARILY_UNAVAILABLE"
+
+
+def test_preview_playlist_rejects_stale_files_when_runtime_is_unavailable(tmp_path: Path) -> None:
+    """Preview playback should fail closed once the runtime is no longer healthy."""
+    # Given: Preview artifacts still exist on disk after the runtime has gone unavailable
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+        pipeline_running=False,
+    )
+    client = _client(app)
+
+    # When: Fetching the preview playlist directly
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: Playback is rejected with the canonical runtime-unavailable error
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
 
 
 def test_post_preview_returns_warning_when_degraded() -> None:

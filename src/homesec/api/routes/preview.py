@@ -190,6 +190,12 @@ async def _ensure_preview_playback_enabled(app: Application, camera_name: str) -
             status_code=status.HTTP_409_CONFLICT,
             error_code=APIErrorCode.PREVIEW_TEMPORARILY_UNAVAILABLE,
         )
+    if not app.pipeline_running:
+        raise APIError(
+            "Preview runtime unavailable",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code=APIErrorCode.PREVIEW_RUNTIME_UNAVAILABLE,
+        )
 
 
 @control_router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
