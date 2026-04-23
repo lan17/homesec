@@ -102,6 +102,8 @@ def _make_publisher(
     idle_timeout_s: float = 5.0,
     audio_codec: Literal["auto", "copy", "aac"] = "auto",
     video_codec: Literal["auto", "copy", "h264"] = "auto",
+    background_maintenance: bool = False,
+    maintenance_interval_s: float | None = None,
 ) -> HLSLivePublisher:
     return HLSLivePublisher(
         camera_name="Front Door #1",
@@ -118,7 +120,8 @@ def _make_publisher(
         clock=clock or FakeClock(),
         stream_discovery=discovery
         or FakeDiscovery(_probe_stream(video_codec="h264", audio_codec="aac")),
-        background_maintenance=False,
+        background_maintenance=background_maintenance,
+        maintenance_interval_s=maintenance_interval_s,
     )
 
 
@@ -290,6 +293,34 @@ def test_request_stop_terminates_process_and_removes_live_window(tmp_path: Path)
     assert proc.terminate_calls == 1
     assert not camera_dir.exists()
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
+def test_request_stop_allows_maintenance_thread_to_exit(tmp_path: Path) -> None:
+    """Explicit stop should not leave a permanent maintenance thread behind."""
+    # Given: An active preview publisher with background maintenance enabled
+    publisher = _make_publisher(
+        tmp_path,
+        background_maintenance=True,
+        maintenance_interval_s=0.01,
+    )
+    calls: list[dict[str, object]] = []
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        _ = publisher.ensure_active()
+
+    maintenance_thread = publisher._maintenance_thread
+    assert maintenance_thread is not None
+    assert maintenance_thread.is_alive()
+
+    # When: Force-stopping preview
+    publisher.request_stop()
+    maintenance_thread.join(timeout=0.5)
+
+    # Then: The maintenance thread exits once the publisher is idle
+    assert not maintenance_thread.is_alive()
+    assert publisher._maintenance_thread is None
 
 
 def test_idle_shutdown_stops_preview_after_viewers_go_inactive(tmp_path: Path) -> None:

@@ -300,12 +300,12 @@ class HLSLivePublisher(LivePublisher):
                 viewer_count=self._viewer_count_locked(now=now),
                 idle_shutdown_at=now + self._idle_timeout_s,
             )
-            self._ensure_maintenance_thread_started_locked()
 
             if self._wait_until_ready_locked():
                 if label == "timeouts":
                     self._timeout_capabilities.note_ffmpeg_timeout_success()
                 ready_now = self._clock.now()
+                self._ensure_maintenance_thread_started_locked()
                 self._status = self._build_running_status_locked(
                     now=ready_now,
                     state=LivePublisherState.READY,
@@ -723,6 +723,9 @@ class HLSLivePublisher(LivePublisher):
         while not self._maintenance_stop.wait(self._maintenance_interval_s):
             with self._lock:
                 self._refresh_locked(now=self._clock.now())
+                if not self._is_process_running_locked():
+                    self._maintenance_thread = None
+                    return
 
 
 class NoopLivePublisher(LivePublisher):
