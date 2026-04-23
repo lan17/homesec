@@ -1,19 +1,25 @@
 # Preview Deployment Notes
 
-HomeSec preview v1 writes a short HLS live window to `preview.config.storage_dir`.
-That directory is for ephemeral playlists and segments, not durable recordings. Keep
-it separate from `recordings/` and any long-term storage backend.
+`preview.config.storage_dir` is the scratch directory used by the HLS preview publisher
+for short-lived playlists and segments. It is not durable clip storage. Keep it
+separate from `recordings/` and any long-term storage backend.
+
+Preview artifacts are only written when a preview publisher is available and active.
+If preview is disabled (or the source backend does not support preview yet), this
+directory will be unused. When preview is unavailable, activation may be refused as
+`preview_temporarily_unavailable` and nothing will be written.
 
 ## Recommended Storage
 
-Use a tmpfs mount for `preview.config.storage_dir` when possible.
+Use a tmpfs mount for `preview.config.storage_dir` when possible, and cap its size.
 
 Why:
 
 - preview segments are short-lived scratch data
 - tmpfs avoids unnecessary disk churn
-- stale preview data disappears automatically on restart
 - preview I/O stays isolated from recording and upload paths
+- tmpfs data is disposable and cleared on host reboot
+- capping size prevents preview from consuming unbounded RAM
 
 The default preview storage path is:
 
@@ -42,6 +48,8 @@ encoded_bitrate_bytes_per_second
   * segment_duration_seconds
   * live_window_segments
 ```
+
+Plan extra headroom for muxing overhead, playlist files, and delete lag.
 
 The exact bitrate depends on source content and codec handling:
 

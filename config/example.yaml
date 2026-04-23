@@ -96,7 +96,7 @@ state_store:
   dsn_env: DB_DSN  # e.g., postgresql+asyncpg://user:pass@localhost:5432/homesec
 
 # =============================================================================
-# Preview - Optional live preview served directly by HomeSec (v1 HLS)
+# Preview - Live preview config contract (v1 HLS; output may be unavailable)
 # =============================================================================
 preview:
   enabled: false
