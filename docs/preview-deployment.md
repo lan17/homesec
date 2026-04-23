@@ -1,13 +1,16 @@
 # Preview Deployment Notes
 
-`preview.config.storage_dir` is the scratch directory used by the HLS preview publisher
-for short-lived playlists and segments. It is not durable clip storage. Keep it
+`preview.config.storage_dir` is a scratch directory intended for HLS preview output
+(short-lived playlists and segments). It is not durable clip storage. Keep it
 separate from `recordings/` and any long-term storage backend.
 
-Preview artifacts are only written when a preview publisher is available and active.
-If preview is disabled (or the source backend does not support preview yet), this
-directory will be unused. When preview is unavailable, activation may be refused as
-`preview_temporarily_unavailable` and nothing will be written.
+Current implementation status: HomeSec does not yet wire in a real HLS preview
+publisher. For RTSP sources, preview activation is currently refused as
+`preview_temporarily_unavailable`, and nothing will be written to this directory.
+
+Once a preview publisher is available and active, artifacts are only written while
+preview is active. If preview is disabled (or the source backend does not support
+preview yet), this directory will be unused.
 
 ## Recommended Storage
 
@@ -18,8 +21,9 @@ Why:
 - preview segments are short-lived scratch data
 - tmpfs avoids unnecessary disk churn
 - preview I/O stays isolated from recording and upload paths
-- tmpfs data is disposable and cleared on host reboot
-- capping size prevents preview from consuming unbounded RAM
+- tmpfs data is disposable and cleared on host reboot or container restart
+- tmpfs uses RAM (and may count against container memory limits)
+- capping size bounds preview RAM usage
 
 The default preview storage path is:
 
