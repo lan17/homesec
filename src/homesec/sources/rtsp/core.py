@@ -640,6 +640,7 @@ class RTSPSource(ThreadedClipSource):
             audio_enabled=hls_config.audio_enabled,
             audio_codec=hls_config.audio_codec,
             video_codec=hls_config.video_codec,
+            hwaccel_config=self.hwaccel_config,
             rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self.rtsp_io_timeout_s,
             clock=self._clock,

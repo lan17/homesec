@@ -189,7 +189,12 @@ class HardwareAccelDetector:
         except subprocess.TimeoutExpired:
             return True
         except Exception as exc:
-            logger.warning("VAAPI check failed: %s", exc, exc_info=True)
+            logger.warning(
+                "Hardware decode check failed for %s: %s",
+                config.hwaccel or "software",
+                exc,
+                exc_info=True,
+            )
             return False
 
     @staticmethod
