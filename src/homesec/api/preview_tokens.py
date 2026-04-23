@@ -48,11 +48,11 @@ def issue_camera_preview_token(
 ) -> tuple[str, datetime]:
     """Issue a signed short-lived token for camera preview playback."""
     issued_at = now or datetime.now(UTC)
-    expiry_dt = issued_at + timedelta(seconds=ttl_s)
+    expiry_ts = int((issued_at + timedelta(seconds=ttl_s)).timestamp())
     payload = PreviewTokenPayload(
         camera_name=camera_name,
         scope=TOKEN_SCOPE,
-        exp=int(expiry_dt.timestamp()),
+        exp=expiry_ts,
     )
 
     payload_json = json.dumps(
@@ -69,7 +69,7 @@ def issue_camera_preview_token(
     signing_input = _signing_input(payload_segment)
     signature = _base64url_encode(_sign(api_key, signing_input))
     token = f"{TOKEN_VERSION}.{payload_segment}.{signature}"
-    return token, expiry_dt
+    return token, datetime.fromtimestamp(expiry_ts, UTC)
 
 
 def validate_camera_preview_token(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -109,3 +109,37 @@ def test_validate_camera_preview_token_rejects_scope_mismatch() -> None:
 
     # Then: Validation fails with scope mismatch
     assert exc_info.value.code is PreviewTokenErrorCode.SCOPE_MISMATCH
+
+
+def test_issue_camera_preview_token_reports_actual_validation_expiry_boundary() -> None:
+    """Preview token expiry metadata should match the server-side validation cutoff."""
+    # Given: A sub-second issue time that would otherwise advertise extra token lifetime
+    issued_at = datetime(2026, 4, 22, 12, 0, 0, 900000, tzinfo=UTC)
+
+    # When: Issuing a one-second preview token
+    token, expires_at = issue_camera_preview_token(
+        api_key="secret-key",
+        camera_name="front-door",
+        ttl_s=1,
+        now=issued_at,
+    )
+
+    # Then: The advertised expiry matches the encoded exp boundary and stays valid until then
+    assert expires_at == datetime(2026, 4, 22, 12, 0, 1, tzinfo=UTC)
+    payload = validate_camera_preview_token(
+        api_key="secret-key",
+        token=token,
+        camera_name="front-door",
+        now=expires_at - timedelta(microseconds=1),
+    )
+    assert payload.exp == int(expires_at.timestamp())
+
+    with pytest.raises(PreviewTokenError) as exc_info:
+        validate_camera_preview_token(
+            api_key="secret-key",
+            token=token,
+            camera_name="front-door",
+            now=expires_at,
+        )
+
+    assert exc_info.value.code is PreviewTokenErrorCode.EXPIRED
