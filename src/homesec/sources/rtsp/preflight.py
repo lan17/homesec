@@ -33,6 +33,7 @@ from homesec.sources.rtsp.url_derivation import derive_probe_candidate_urls
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
     _format_cmd,
+    _is_rtsp_session_limit_error,
     _is_timeout_option_error,
     _redact_rtsp_url,
     _signal_process_group,
@@ -43,17 +44,6 @@ logger = logging.getLogger(__name__)
 _NON_MONOTONIC_DTS_RETRY_THRESHOLD = 5
 _QUEUE_BACKWARD_RETRY_THRESHOLD = 1
 _DTS_DISCONTINUITY_RETRY_THRESHOLD = 1
-_SESSION_LIMIT_HINTS: tuple[str, ...] = (
-    "too many clients",
-    "too many connections",
-    "too many sessions",
-    "max number of clients",
-    "maximum number of clients",
-    "maximum number of connections",
-    "session limit",
-    "max sessions",
-    "maximum sessions",
-)
 
 
 class ConcurrentStreamOpenResult(StrEnum):
@@ -1023,8 +1013,7 @@ def _sanitize_stderr(stderr_text: str, input_url: str) -> str:
 
 
 def _is_session_limit_error(stderr: str) -> bool:
-    lowered = stderr.lower()
-    return any(hint in lowered for hint in _SESSION_LIMIT_HINTS)
+    return _is_rtsp_session_limit_error(stderr)
 
 
 def _collect_recording_stability_signals(stderr_text: str) -> RecordingValidationSignals:

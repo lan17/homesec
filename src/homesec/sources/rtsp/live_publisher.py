@@ -37,6 +37,7 @@ from homesec.sources.rtsp.hardware import (
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
     _format_cmd,
+    _is_rtsp_session_limit_error,
     _is_timeout_option_error,
     _redact_rtsp_url,
     _signal_process_group,
@@ -48,17 +49,6 @@ _READY_POLL_INTERVAL_S = 0.1
 _DEFAULT_VIEWER_WINDOW_S = 2.0
 _START_FAILURE_MAX_BYTES = 4_000
 _HLS_BROWSER_COPY_AUDIO_CODECS: frozenset[str] = frozenset({"aac"})
-_SESSION_LIMIT_HINTS: tuple[str, ...] = (
-    "too many clients",
-    "too many connections",
-    "too many sessions",
-    "max number of clients",
-    "maximum number of clients",
-    "maximum number of connections",
-    "session limit",
-    "max sessions",
-    "maximum sessions",
-)
 CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON = (
     "concurrent_preview_downgraded_after_repeated_recording_failures"
 )
@@ -1245,10 +1235,8 @@ def _format_segment_duration(segment_duration_s: float) -> str:
 
 
 def _classify_start_refusal(stderr_tail: str) -> LivePublisherRefusalReason:
-    lowered = stderr_tail.lower()
-    for hint in _SESSION_LIMIT_HINTS:
-        if hint in lowered:
-            return LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    if _is_rtsp_session_limit_error(stderr_tail):
+        return LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
     return LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
 
 
