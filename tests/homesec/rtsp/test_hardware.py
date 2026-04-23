@@ -70,6 +70,28 @@ def test_test_decode_treats_timeout_as_success(
     assert ok
 
 
+def test_test_decode_logs_backend_name_on_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unexpected decode probe failures should log the active backend name."""
+
+    # Given: ffmpeg raises an unexpected runtime error during decode probing
+    def _boom(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr("homesec.sources.rtsp.hardware.subprocess.run", _boom)
+    config = HardwareAccelConfig(hwaccel="cuda")
+
+    # When: testing decode
+    with caplog.at_level("WARNING"):
+        ok = HardwareAccelDetector._test_decode("rtsp://host/stream", config)
+
+    # Then: decode fails closed and the backend name is preserved in logs
+    assert not ok
+    assert "Hardware decode check failed for cuda" in caplog.text
+
+
 def test_check_nvidia_returns_false_on_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
