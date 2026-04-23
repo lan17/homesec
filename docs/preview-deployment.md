@@ -78,11 +78,15 @@ directory as tmpfs:
 services:
   homesec:
     tmpfs:
-      - /tmp/homesec-preview:size=64m
+      - /tmp/homesec-preview:size=${HOMESEC_PREVIEW_TMPFS_SIZE:-256m}
 ```
 
-That matches the default `preview.config.storage_dir`. If you change the path in
-config, change the tmpfs mount path too.
+That matches the default `preview.config.storage_dir`. The bundled default is
+`256 MiB`, which is conservative headroom for a few simultaneous previews at the
+default segment/window settings without forcing operators to edit the Compose
+file on day one. If you change the path in config, change the tmpfs mount path
+too. If you know your expected concurrency, set `HOMESEC_PREVIEW_TMPFS_SIZE`
+explicitly in `.env` to match it.
 
 The HomeSec Docker image runs as a non-root `homesec` user created by:
 
@@ -105,7 +109,7 @@ Example with explicit ownership and mode:
 services:
   homesec:
     tmpfs:
-      - /tmp/homesec-preview:uid=1000,gid=1000,mode=1700,size=64m
+      - /tmp/homesec-preview:uid=1000,gid=1000,mode=1700,size=${HOMESEC_PREVIEW_TMPFS_SIZE:-256m}
 ```
 
 Replace `uid`/`gid` with the user/group reported for the image you actually run.
