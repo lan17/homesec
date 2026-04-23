@@ -528,6 +528,54 @@ def test_startup_preflight_downgrade_reaches_live_publisher(tmp_path: Path) -> N
     ]
 
 
+def test_startup_preflight_downgrade_failure_does_not_abort_source(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Preview downgrade sync errors should not take the RTSP source offline."""
+    # Given: a preflight outcome that marks concurrent preview unsupported
+    publisher = RaisingLivePublisher(methods={"downgrade_concurrent_preview"})
+    config = _make_config(
+        tmp_path,
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+    recording_profile = build_default_recording_profile(source.rtsp_url)
+    outcome = CameraPreflightOutcome(
+        camera_key="cam-key",
+        motion_profile=MotionProfile(input_url=source.detect_rtsp_url),
+        recording_profile=recording_profile,
+        concurrent_preview_supported=False,
+        concurrent_preview_downgrade_reason=("concurrent_preview_unsupported_by_startup_preflight"),
+        diagnostics=CameraPreflightDiagnostics(
+            attempted_urls=[source.rtsp_url],
+            probes=[],
+            selected_motion_url=source.detect_rtsp_url,
+            selected_recording_url=source.rtsp_url,
+            selected_preview_url=source.rtsp_url,
+            selected_recording_profile=recording_profile.profile_id(),
+            session_mode="dual_stream",
+            concurrent_preview_supported=False,
+            concurrent_preview_downgrade_reason=(
+                "concurrent_preview_unsupported_by_startup_preflight"
+            ),
+        ),
+    )
+
+    # When: applying startup preflight output while the live publisher raises
+    with caplog.at_level("WARNING", logger="homesec.sources.rtsp.core"):
+        source._apply_preflight_outcome(outcome)  # noqa: SLF001
+
+    # Then: the source keeps the preflight profiles and logs the preview-only sync failure
+    assert source._preflight_outcome == outcome  # noqa: SLF001
+    assert any(
+        "Preview concurrent downgrade sync failed" in record.message for record in caplog.records
+    )
+
+
 def test_default_preview_seam_refuses_until_backend_is_wired(tmp_path: Path) -> None:
     """RTSP preview seam should fail closed until a real publisher is configured."""
     # Given: An RTSP source with the default no-op live publisher seam

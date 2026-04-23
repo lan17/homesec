@@ -566,7 +566,14 @@ class RTSPSource(ThreadedClipSource):
                 self.camera_name,
                 reason,
             )
-            self._live_publisher.downgrade_concurrent_preview(reason)
+            try:
+                self._live_publisher.downgrade_concurrent_preview(reason)
+            except Exception as exc:
+                logger.warning(
+                    "Preview concurrent downgrade sync failed: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         if self._motion_rtsp_url != self.detect_rtsp_url:
             # Motion stream is pinned away from detect stream, so runtime fallback probing

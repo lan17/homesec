@@ -597,8 +597,11 @@ class HLSLivePublisher(LivePublisher):
                     LivePublisherStartRefusal(
                         reason=_classify_start_refusal(last_error),
                         message="Preview publisher exited early while recording was active",
-                    )
+                    ),
+                    count_failure=True,
                 )
+            else:
+                self._consecutive_recording_preview_failures = 0
             self._status = LivePublisherStatus(
                 state=(
                     LivePublisherState.DEGRADED
@@ -842,12 +845,20 @@ class HLSLivePublisher(LivePublisher):
     def _maybe_downgrade_after_recording_preview_failure_locked(
         self,
         refusal: LivePublisherStartRefusal,
+        *,
+        count_failure: bool | None = None,
     ) -> LivePublisherStartRefusal:
+        should_count = (
+            refusal.reason is LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+            if count_failure is None
+            else count_failure
+        )
         if (
             not self._recording_active
             or self._recording_policy != "allow_during_recording"
             or self._preview_downgraded_locked()
             or refusal.reason is LivePublisherRefusalReason.RECORDING_PRIORITY
+            or not should_count
         ):
             return refusal
 
@@ -929,6 +940,7 @@ class HLSLivePublisher(LivePublisher):
                     last_error="; ".join(teardown_errors),
                 )
             else:
+                self._consecutive_recording_preview_failures = 0
                 self._status = self._idle_status_locked()
 
         if teardown_errors:
