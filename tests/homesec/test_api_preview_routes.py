@@ -34,6 +34,7 @@ class _StubPreviewApp:
         server_config: FastAPIServerConfig | None = None,
         preview_config: PreviewConfig | None = None,
         camera_names: list[str] | None = None,
+        camera_configs: list[SimpleNamespace] | None = None,
         bootstrap_mode: bool = False,
         status_error: Exception | None = None,
         ensure_error: Exception | None = None,
@@ -58,11 +59,21 @@ class _StubPreviewApp:
         self._ensure_error = ensure_error
         self._stop_error = stop_error
         self.viewer_activity_calls: list[tuple[str, str | None]] = []
-        resolved_camera_names = camera_names or [self._status.camera_name]
+        resolved_cameras = camera_configs
+        if resolved_cameras is None:
+            resolved_camera_names = camera_names or [self._status.camera_name]
+            resolved_cameras = [
+                SimpleNamespace(
+                    name=name,
+                    enabled=True,
+                    source=SimpleNamespace(backend="rtsp"),
+                )
+                for name in resolved_camera_names
+            ]
         self._config = SimpleNamespace(
             server=resolved_server,
             preview=resolved_preview,
-            cameras=[SimpleNamespace(name=name) for name in resolved_camera_names],
+            cameras=resolved_cameras,
         )
 
     @property
@@ -353,6 +364,26 @@ def test_preview_playlist_returns_conflict_when_media_is_missing(tmp_path: Path)
     # Then: The route reports preview media unavailable instead of falling through to 404
     assert response.status_code == 409
     assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
+
+
+def test_preview_playlist_rejects_stale_files_when_preview_disabled(tmp_path: Path) -> None:
+    """Preview playback should stay unavailable when preview is disabled in config."""
+    # Given: Stale preview artifacts on disk while preview is disabled
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=False,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+    client = _client(app)
+
+    # When: Fetching a preview playlist directly
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: The route refuses playback instead of serving stale media
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "PREVIEW_TEMPORARILY_UNAVAILABLE"
 
 
 def test_post_preview_returns_warning_when_degraded() -> None:

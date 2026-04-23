@@ -7,6 +7,7 @@ from pydantic import BaseModel, ValidationError
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.models.config import Config
 from homesec.plugins.registry import PluginType, validate_plugin
+from homesec.preview_paths import sanitize_preview_camera_name
 
 
 def validate_camera_references(config: Config, camera_names: list[str] | None = None) -> None:
@@ -42,6 +43,31 @@ def validate_camera_references(config: Config, camera_names: list[str] | None = 
             "Invalid camera references:\n  " + "\n  ".join(errors),
             code=ConfigErrorCode.CAMERA_REFERENCES_INVALID,
         )
+
+
+def validate_preview_camera_names(config: Config) -> None:
+    """Validate preview-enabled configs do not alias camera artifact paths."""
+    if not config.preview.enabled:
+        return
+
+    slug_to_names: dict[str, list[str]] = {}
+    for camera in config.cameras:
+        slug = sanitize_preview_camera_name(camera.name)
+        slug_to_names.setdefault(slug, []).append(camera.name)
+
+    collisions = [names for names in slug_to_names.values() if len(names) > 1]
+    if not collisions:
+        return
+
+    details = [
+        "preview camera names share the same storage path "
+        f"({', '.join(repr(name) for name in names)} -> {sanitize_preview_camera_name(names[0])!r})"
+        for names in collisions
+    ]
+    raise ConfigError(
+        "Invalid camera references:\n  " + "\n  ".join(details),
+        code=ConfigErrorCode.CAMERA_REFERENCES_INVALID,
+    )
 
 
 def validate_plugin_names(
@@ -204,4 +230,5 @@ def validate_plugin_configs(config: Config) -> None:
 def validate_config(config: Config, camera_names: list[str] | None = None) -> None:
     """Validate config boundaries and plugin configs."""
     validate_camera_references(config, camera_names)
+    validate_preview_camera_names(config)
     validate_plugin_configs(config)

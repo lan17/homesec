@@ -175,6 +175,23 @@ async def _ensure_known_camera(app: Application, camera_name: str) -> None:
     _raise_camera_not_found(PreviewCameraNotFoundError(camera_name))
 
 
+async def _ensure_preview_playback_enabled(app: Application, camera_name: str) -> None:
+    await _ensure_known_camera(app, camera_name)
+
+    camera = next((item for item in app.config.cameras if item.name == camera_name), None)
+    if (
+        camera is None
+        or not app.config.preview.enabled
+        or not getattr(camera, "enabled", True)
+        or getattr(getattr(camera, "source", None), "backend", None) != "rtsp"
+    ):
+        raise APIError(
+            "Preview is not enabled for this camera",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_TEMPORARILY_UNAVAILABLE,
+        )
+
+
 @control_router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
 async def get_preview_status(
     camera_name: str,
@@ -266,7 +283,7 @@ async def get_preview_playlist(
     app: Application = Depends(get_homesec_app),
 ) -> Response:
     """Return the live HLS playlist for a camera preview session."""
-    await _ensure_known_camera(app, camera_name)
+    await _ensure_preview_playback_enabled(app, camera_name)
     playlist_text = _read_playlist_text(
         preview_playlist_path(_preview_storage_dir(app), camera_name)
     )
@@ -292,7 +309,7 @@ async def get_preview_segment(
             error_code=APIErrorCode.NOT_FOUND,
         )
 
-    await _ensure_known_camera(app, camera_name)
+    await _ensure_preview_playback_enabled(app, camera_name)
     try:
         segment_path = preview_segment_path(_preview_storage_dir(app), camera_name, segment_name)
     except ValueError as exc:

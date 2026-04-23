@@ -763,6 +763,44 @@ def test_preview_hls_config_parses_explicit_values() -> None:
     assert config.preview.config.video_codec == "h264"
 
 
+def test_preview_rejects_camera_names_that_alias_same_storage_path() -> None:
+    """Preview config should reject camera names that collide after slug normalization."""
+    # Given: Preview enabled with camera names that collapse to the same storage slug
+    data = minimal_config()
+    data["preview"] = {"enabled": True}
+    data["cameras"] = [
+        {
+            "name": "front door",
+            "source": {
+                "backend": "local_folder",
+                "config": {
+                    "watch_dir": "/tmp/front-door",
+                    "poll_interval": 1.0,
+                },
+            },
+        },
+        {
+            "name": "front_door",
+            "source": {
+                "backend": "local_folder",
+                "config": {
+                    "watch_dir": "/tmp/front_door",
+                    "poll_interval": 1.0,
+                },
+            },
+        },
+    ]
+
+    # When: Loading the config
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)
+
+    # Then: Validation rejects the aliasing preview storage paths
+    assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
+    assert "front door" in str(exc_info.value)
+    assert "front_door" in str(exc_info.value)
+
+
 def test_preview_rejects_unsupported_backend() -> None:
     """Preview config should reject deferred backends in the v1 contract."""
     # Given a config payload using the deferred MediaMTX backend and its native field
