@@ -168,6 +168,7 @@ class HLSLivePublisher(LivePublisher):
         self._maintenance_stop = Event()
         self._maintenance_thread: Thread | None = None
         self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+        self._last_stop_status = self._status
         self._start_in_progress = False
         self._active_start_token = 0
         self._cancelled_start_token = 0
@@ -193,9 +194,9 @@ class HLSLivePublisher(LivePublisher):
                 now = self._clock.now()
                 self._refresh_locked(now=now)
                 if queued_start_token and self._start_was_cancelled_locked(queued_start_token):
-                    return self._status
+                    return self._last_stop_status
                 if self._stop_requested_since_locked(stop_request_token):
-                    return self._status
+                    return self._last_stop_status
                 if self._recording_active:
                     return LivePublisherStartRefusal(
                         reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
@@ -234,6 +235,7 @@ class HLSLivePublisher(LivePublisher):
             self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
+            self._last_stop_status = self._status
 
     def note_viewer_activity(self, viewer_id: str | None = None) -> None:
         with self._lock:
@@ -268,6 +270,7 @@ class HLSLivePublisher(LivePublisher):
             self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
+            self._last_stop_status = self._status
             self._maintenance_stop.set()
             maintenance_thread = self._maintenance_thread
             self._maintenance_thread = None

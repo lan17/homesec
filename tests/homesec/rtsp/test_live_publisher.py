@@ -1118,6 +1118,74 @@ def test_request_stop_cancels_activation_that_queued_after_stop(tmp_path: Path) 
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
 
 
+def test_request_stop_keeps_cancelled_queue_from_observing_later_restart(tmp_path: Path) -> None:
+    """Explicit stop should keep stale queued callers from inheriting a later restart."""
+
+    # Given: One queued activation is already waiting when an explicit stop cancels startup
+    class _ThreadClock:
+        def __init__(self) -> None:
+            self.wait_started = Event()
+            self.release_wait = Event()
+
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            _ = seconds
+            self.wait_started.set()
+            self.release_wait.wait(timeout=1.0)
+
+    clock = _ThreadClock()
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=clock, discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_results: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def run_ensure_active(name: str) -> None:
+        start_results[name] = publisher.ensure_active()
+
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        first_thread = Thread(target=run_ensure_active, args=("first",))
+        second_thread = Thread(target=run_ensure_active, args=("second",))
+        third_thread = Thread(target=run_ensure_active, args=("third",))
+        first_thread.start()
+        assert discovery.started.wait(timeout=0.2)
+        second_thread.start()
+        assert clock.wait_started.wait(timeout=0.2)
+
+        # When: A later restart succeeds before the stale queued caller wakes up
+        publisher.request_stop()
+        discovery.release.set()
+        first_thread.join(timeout=1.0)
+        third_thread.start()
+        third_thread.join(timeout=1.0)
+        clock.release_wait.set()
+        second_thread.join(timeout=1.0)
+
+    # Then: The stale queued activation resolves to the stop result instead of piggybacking on restart
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert not third_thread.is_alive()
+    assert start_results["first"] == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+    )
+    assert start_results["second"] == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+    )
+    third_result = start_results["third"]
+    assert isinstance(third_result, LivePublisherStatus)
+    assert third_result.state == LivePublisherState.READY
+    assert third_result.viewer_count == 0
+    assert third_result.idle_shutdown_at is not None
+    assert len(calls) == 1
+    assert publisher.status() == third_result
+
+
 def test_recording_priority_preempts_slow_probe_before_spawn(tmp_path: Path) -> None:
     """Recording activation should interrupt startup before ffmpeg spawn when probing is slow."""
 
