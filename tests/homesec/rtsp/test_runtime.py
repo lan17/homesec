@@ -439,10 +439,11 @@ def test_startup_preflight_fallback_keeps_concurrent_preview_unclassified(
             detect_rtsp_url: str,
             preview_rtsp_url: str | None = None,
             preview_probe_rtsp_url: str | None = None,
+            preview_audio_enabled: bool = False,
         ) -> PreflightError:
             # Given: startup validation cannot classify the RTSP session topology
             _ = camera_name, primary_rtsp_url, detect_rtsp_url
-            _ = preview_rtsp_url, preview_probe_rtsp_url
+            _ = preview_rtsp_url, preview_probe_rtsp_url, preview_audio_enabled
             return PreflightError(
                 camera_key="cam-key",
                 stage="session_limit",
@@ -480,6 +481,7 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
         def __init__(self) -> None:
             self.preview_rtsp_url: str | None = None
             self.preview_probe_rtsp_url: str | None = None
+            self.preview_audio_enabled: bool | None = None
 
         def run(
             self,
@@ -489,11 +491,13 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
             detect_rtsp_url: str,
             preview_rtsp_url: str | None = None,
             preview_probe_rtsp_url: str | None = None,
+            preview_audio_enabled: bool = False,
         ) -> CameraPreflightOutcome:
             # Given: source startup asks preflight to validate current runtime topology
             _ = camera_name
             self.preview_rtsp_url = preview_rtsp_url
             self.preview_probe_rtsp_url = preview_probe_rtsp_url
+            self.preview_audio_enabled = preview_audio_enabled
             recording_profile = build_default_recording_profile(primary_rtsp_url)
             return CameraPreflightOutcome(
                 camera_key="cam-key",
@@ -534,6 +538,7 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
     # Then: the preview check receives the main RTSP URL used by HLSLivePublisher today
     assert fake_preflight.preview_rtsp_url == "rtsp://host/main"
     assert fake_preflight.preview_probe_rtsp_url == "rtsp://host/main"
+    assert fake_preflight.preview_audio_enabled is True
     assert publisher.concurrent_preview_downgrades == []
 
 

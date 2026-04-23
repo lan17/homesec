@@ -181,6 +181,7 @@ class _SessionOpenSpec:
     role: str
     input_url: str
     tool: Literal["ffmpeg", "ffprobe"] = "ffmpeg"
+    include_audio: bool = False
 
 
 class RTSPStartupPreflight:
@@ -218,6 +219,7 @@ class RTSPStartupPreflight:
         detect_rtsp_url: str,
         preview_rtsp_url: str | None = None,
         preview_probe_rtsp_url: str | None = None,
+        preview_audio_enabled: bool = False,
     ) -> CameraPreflightOutcome | PreflightError:
         """Run startup preflight and return locked profiles or a typed error."""
 
@@ -310,6 +312,7 @@ class RTSPStartupPreflight:
                 recording_profile=recording_profile,
                 preview_rtsp_url=preview_rtsp_url,
                 preview_probe_rtsp_url=preview_probe_rtsp_url,
+                preview_audio_enabled=preview_audio_enabled,
                 diagnostics=diagnostics,
             )
             return CameraPreflightOutcome(
@@ -345,6 +348,7 @@ class RTSPStartupPreflight:
             recording_profile=recording_profile,
             preview_rtsp_url=preview_rtsp_url,
             preview_probe_rtsp_url=preview_probe_rtsp_url,
+            preview_audio_enabled=preview_audio_enabled,
             diagnostics=diagnostics,
         )
         return CameraPreflightOutcome(
@@ -363,6 +367,7 @@ class RTSPStartupPreflight:
         recording_profile: RecordingProfile,
         preview_rtsp_url: str | None,
         preview_probe_rtsp_url: str | None,
+        preview_audio_enabled: bool,
         diagnostics: CameraPreflightDiagnostics,
     ) -> None:
         if preview_rtsp_url is None:
@@ -391,6 +396,7 @@ class RTSPStartupPreflight:
             motion_profile.input_url,
             recording_profile.input_url,
             preview_rtsp_url,
+            preview_audio_enabled=preview_audio_enabled,
         )
         if validation_result is ConcurrentStreamOpenResult.SUPPORTED:
             diagnostics.concurrent_preview_supported = True
@@ -626,13 +632,19 @@ class RTSPStartupPreflight:
         motion_url: str,
         recording_url: str,
         preview_url: str,
+        *,
+        preview_audio_enabled: bool = False,
     ) -> ConcurrentStreamOpenResult:
         """Validate the current runtime topology for motion, recording, and preview."""
         return self._validate_concurrent_stream_opens(
             [
                 _SessionOpenSpec(role="motion", input_url=motion_url),
                 _SessionOpenSpec(role="recording", input_url=recording_url),
-                _SessionOpenSpec(role="preview", input_url=preview_url),
+                _SessionOpenSpec(
+                    role="preview",
+                    input_url=preview_url,
+                    include_audio=preview_audio_enabled,
+                ),
             ]
         )
 
@@ -799,6 +811,7 @@ class RTSPStartupPreflight:
                     input_url=spec.input_url,
                     timeout_args=timeout_args,
                     duration_s=duration_s,
+                    include_audio=spec.include_audio,
                 )
             case "ffprobe":
                 return self._build_probe_open_cmd(
@@ -813,6 +826,7 @@ class RTSPStartupPreflight:
         input_url: str,
         timeout_args: list[str],
         duration_s: float,
+        include_audio: bool = False,
     ) -> list[str]:
         cmd = [
             "ffmpeg",
@@ -824,18 +838,12 @@ class RTSPStartupPreflight:
             "tcp",
         ]
         cmd.extend(timeout_args)
-        cmd.extend(
-            [
-                "-i",
-                input_url,
-                "-t",
-                f"{max(0.5, duration_s):.1f}",
-                "-an",
-                "-f",
-                "null",
-                "-",
-            ]
-        )
+        cmd.extend(["-i", input_url, "-t", f"{max(0.5, duration_s):.1f}"])
+        if include_audio:
+            cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        else:
+            cmd.append("-an")
+        cmd.extend(["-f", "null", "-"])
         return cmd
 
     def _build_probe_open_cmd(
@@ -849,13 +857,11 @@ class RTSPStartupPreflight:
             "ffprobe",
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
             "-read_intervals",
             f"%+{max(0.5, duration_s):.1f}",
             "-count_packets",
             "-show_entries",
-            "stream=codec_name,width,height,avg_frame_rate,nb_read_packets",
+            "stream=codec_type,codec_name,width,height,avg_frame_rate,nb_read_packets",
             "-of",
             "json",
             "-rtsp_transport",

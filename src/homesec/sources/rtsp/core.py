@@ -314,8 +314,10 @@ class RTSPSource(ThreadedClipSource):
             and config.runtime_preview.recording_policy == "allow_during_recording"
         )
         self._preview_startup_probe_required = False
+        self._preview_audio_enabled = False
         if config.runtime_preview is not None:
             preview_hls_config = config.runtime_preview.config
+            self._preview_audio_enabled = preview_hls_config.audio_enabled
             self._preview_startup_probe_required = preview_hls_config.video_codec == "auto" or (
                 preview_hls_config.audio_enabled and preview_hls_config.audio_codec == "auto"
             )
@@ -485,6 +487,9 @@ class RTSPSource(ThreadedClipSource):
                 self.rtsp_url
                 if self._preview_concurrency_requested and self._preview_startup_probe_required
                 else None
+            ),
+            preview_audio_enabled=(
+                self._preview_concurrency_requested and self._preview_audio_enabled
             ),
         )
         match result:
