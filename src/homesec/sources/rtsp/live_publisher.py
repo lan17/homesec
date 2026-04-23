@@ -37,7 +37,9 @@ _READY_POLL_INTERVAL_S = 0.1
 _DEFAULT_VIEWER_WINDOW_S = 2.0
 _START_FAILURE_MAX_BYTES = 4_000
 _SESSION_LIMIT_HINTS: tuple[str, ...] = (
-    "too many",
+    "too many clients",
+    "too many connections",
+    "too many sessions",
     "max number of clients",
     "maximum number of clients",
     "maximum number of connections",
@@ -355,9 +357,11 @@ class HLSLivePublisher(LivePublisher):
             if not self._is_process_running_locked():
                 return False
             if self._output_ready_locked():
-                return True
+                return self._is_process_running_locked()
             self._clock.sleep(_READY_POLL_INTERVAL_S)
-        return self._output_ready_locked()
+        if not self._output_ready_locked():
+            return False
+        return self._is_process_running_locked()
 
     def _refresh_locked(self, *, now: float) -> None:
         self._expire_viewers_locked(now=now)

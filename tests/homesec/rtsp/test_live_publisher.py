@@ -16,14 +16,22 @@ from homesec.sources.rtsp.live_publisher import (
 
 
 class FakeClock:
-    def __init__(self, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        start: float = 0.0,
+        *,
+        on_sleep: Callable[[float], None] | None = None,
+    ) -> None:
         self._now = float(start)
+        self._on_sleep = on_sleep
 
     def now(self) -> float:
         return self._now
 
     def sleep(self, seconds: float) -> None:
         self._now += float(seconds)
+        if self._on_sleep is not None:
+            self._on_sleep(self._now)
 
 
 class FakeDiscovery:
@@ -74,6 +82,15 @@ class _Writable(Protocol):
     def write(self, text: str) -> object: ...
 
     def flush(self) -> None: ...
+
+
+def _write_live_output(*, playlist_path: Path, segment_pattern: Path) -> None:
+    playlist_path.parent.mkdir(parents=True, exist_ok=True)
+    playlist_path.write_text(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nsegment_000000.ts\n",
+        encoding="utf-8",
+    )
+    Path(str(segment_pattern).replace("%06d", "000000")).write_bytes(b"segment")
 
 
 def _probe_stream(
@@ -131,6 +148,7 @@ def _fake_popen_factory(
     make_output: bool = True,
     returncode: int | None = None,
     stderr_text: str = "",
+    on_spawn: Callable[[FakeProc, list[str]], None] | None = None,
 ) -> Callable[..., FakeProc]:
     next_pid = 1000
 
@@ -156,6 +174,9 @@ def _fake_popen_factory(
             }
         )
 
+        if on_spawn is not None:
+            on_spawn(proc, list(cmd))
+
         if stderr_text and hasattr(stderr, "write") and hasattr(stderr, "flush"):
             stderr_handle = cast(_Writable, stderr)
             stderr_handle.write(stderr_text)
@@ -164,12 +185,10 @@ def _fake_popen_factory(
         if make_output:
             playlist_path = Path(cmd[-1])
             segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text(
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nsegment_000000.ts\n",
-                encoding="utf-8",
+            _write_live_output(
+                playlist_path=playlist_path,
+                segment_pattern=segment_pattern,
             )
-            Path(str(segment_pattern).replace("%06d", "000000")).write_bytes(b"segment")
 
         return proc
 
@@ -409,4 +428,81 @@ def test_start_failure_maps_session_budget_refusal_and_cleans_storage(tmp_path: 
     assert status.state == LivePublisherState.ERROR
     assert status.last_error is not None
     assert "Too many clients" in status.last_error
+    assert not (tmp_path / "homesec" / "Front_Door_1").exists()
+
+
+def test_non_session_limit_failure_does_not_map_generic_too_many_text(tmp_path: Path) -> None:
+    """Non-session ffmpeg errors should not be misclassified as session-budget refusals."""
+    # Given: A publisher whose ffmpeg start fails with a non-session "too many" error
+    publisher = _make_publisher(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            make_output=False,
+            returncode=1,
+            stderr_text="Too many packets buffered for output stream 0:1.\n",
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The refusal stays generic instead of claiming the camera session budget is exhausted
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert publisher.status().state == LivePublisherState.ERROR
+
+
+def test_startup_requires_running_process_when_ready_deadline_expires(tmp_path: Path) -> None:
+    """Startup should refuse readiness when ffmpeg exits before the deadline check completes."""
+    # Given: A publisher whose ffmpeg produces HLS files but exits at the startup deadline
+    calls: list[dict[str, object]] = []
+    spawn: dict[str, FakeProc | Path] = {}
+
+    def on_sleep(now: float) -> None:
+        proc = spawn.get("proc")
+        playlist_path = spawn.get("playlist_path")
+        segment_pattern = spawn.get("segment_pattern")
+        if (
+            now < 6.0
+            or not isinstance(proc, FakeProc)
+            or not isinstance(playlist_path, Path)
+            or not isinstance(segment_pattern, Path)
+            or proc.returncode is not None
+        ):
+            return
+
+        _write_live_output(
+            playlist_path=playlist_path,
+            segment_pattern=segment_pattern,
+        )
+        proc.returncode = 1
+
+    clock = FakeClock(on_sleep=on_sleep)
+    publisher = _make_publisher(tmp_path, clock=clock)
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        spawn["proc"] = proc
+        spawn["playlist_path"] = Path(cmd[-1])
+        spawn["segment_pattern"] = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            make_output=False,
+            on_spawn=on_spawn,
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: Startup fails closed instead of reporting READY for a dead ffmpeg process
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    status = publisher.status()
+    assert status.state == LivePublisherState.ERROR
+    assert status.last_error == "Preview publisher exited before producing HLS output"
     assert not (tmp_path / "homesec" / "Front_Door_1").exists()
