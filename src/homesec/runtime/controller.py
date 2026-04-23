@@ -56,3 +56,13 @@ class RuntimeController(Protocol):
     ) -> CameraPreviewStopResult:
         """Force-stop preview for a camera."""
         ...
+
+    async def note_preview_viewer_activity(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        """Record successful preview playback activity for a camera."""
+        ...

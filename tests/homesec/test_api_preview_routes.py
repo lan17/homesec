@@ -1,8 +1,9 @@
-"""Tests for preview control-plane API routes."""
+"""Tests for preview control-plane and playback API routes."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -10,7 +11,8 @@ from fastapi.testclient import TestClient
 
 from homesec.api.preview_tokens import validate_camera_preview_token
 from homesec.api.server import create_app
-from homesec.models.config import FastAPIServerConfig, PreviewConfig
+from homesec.models.config import FastAPIServerConfig, HLSPreviewConfig, PreviewConfig
+from homesec.preview_paths import preview_camera_dir
 from homesec.runtime.errors import PreviewCameraNotFoundError, PreviewRuntimeUnavailableError
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
@@ -31,6 +33,7 @@ class _StubPreviewApp:
         stop_result: CameraPreviewStopResult | None = None,
         server_config: FastAPIServerConfig | None = None,
         preview_config: PreviewConfig | None = None,
+        camera_names: list[str] | None = None,
         bootstrap_mode: bool = False,
         status_error: Exception | None = None,
         ensure_error: Exception | None = None,
@@ -38,7 +41,6 @@ class _StubPreviewApp:
     ) -> None:
         resolved_server = ensure_stub_ui_dist(server_config or FastAPIServerConfig())
         resolved_preview = preview_config or PreviewConfig(enabled=True)
-        self._config = SimpleNamespace(server=resolved_server, preview=resolved_preview, cameras=[])
         self._bootstrap_mode = bootstrap_mode
         self._status = status or CameraPreviewStatus(
             camera_name="front",
@@ -55,6 +57,13 @@ class _StubPreviewApp:
         self._status_error = status_error
         self._ensure_error = ensure_error
         self._stop_error = stop_error
+        self.viewer_activity_calls: list[tuple[str, str | None]] = []
+        resolved_camera_names = camera_names or [self._status.camera_name]
+        self._config = SimpleNamespace(
+            server=resolved_server,
+            preview=resolved_preview,
+            cameras=[SimpleNamespace(name=name) for name in resolved_camera_names],
+        )
 
     @property
     def config(self):
@@ -92,6 +101,24 @@ class _StubPreviewApp:
             raise self._stop_error
         assert camera_name == self._stop_result.camera_name
         return self._stop_result
+
+    async def note_camera_preview_viewer_activity(
+        self,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        self.viewer_activity_calls.append((camera_name, viewer_id))
+
+
+def _write_preview_files(tmp_path: Path, camera_name: str) -> None:
+    camera_dir = preview_camera_dir(tmp_path, camera_name)
+    camera_dir.mkdir(parents=True, exist_ok=True)
+    (camera_dir / "playlist.m3u8").write_text(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nsegment_000000.ts\n",
+        encoding="utf-8",
+    )
+    (camera_dir / "segment_000000.ts").write_bytes(b"segment-bytes")
 
 
 def _client(app: _StubPreviewApp) -> TestClient:
@@ -226,6 +253,106 @@ def test_post_preview_returns_direct_playlist_when_auth_disabled() -> None:
     assert payload["token_expires_at"] is None
     assert payload["playlist_url"] == "/api/v1/preview/cameras/front/playlist.m3u8"
     assert payload["idle_timeout_s"] == 12.5
+
+
+def test_preview_tokenized_playlist_url_is_playable_end_to_end(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """POST /preview should return a playlist URL that serves playlist and segment media."""
+    # Given: Auth enabled with preview artifacts ready on disk
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    camera_name = "front door"
+    _write_preview_files(tmp_path, camera_name)
+    app = _StubPreviewApp(
+        status=CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=True,
+            state=PreviewState.READY,
+            viewer_count=0,
+        ),
+        ensure_result=CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=True,
+            state=PreviewState.READY,
+            viewer_count=0,
+        ),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+        preview_config=PreviewConfig(
+            enabled=True,
+            token_ttl_s=45,
+            idle_timeout_s=30.0,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+    )
+    client = _client(app)
+
+    # When: Starting preview, fetching the returned playlist, then fetching a segment from it
+    create_response = client.post(
+        "/api/v1/preview/cameras/front door",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert create_response.status_code == 200
+    create_payload = create_response.json()
+
+    playlist_response = client.get(create_payload["playlist_url"])
+    playlist_lines = [line for line in playlist_response.text.splitlines() if line]
+    segment_url = next(line for line in playlist_lines if not line.startswith("#"))
+    segment_response = client.get(
+        f"/api/v1/preview/cameras/front door/{segment_url}",
+    )
+
+    # Then: Playback succeeds and the segment request records viewer activity using the preview token
+    assert playlist_response.status_code == 200
+    assert playlist_response.headers["content-type"].startswith("application/vnd.apple.mpegurl")
+    assert "segment_000000.ts?token=" in playlist_response.text
+    assert segment_response.status_code == 200
+    assert segment_response.content == b"segment-bytes"
+    assert app.viewer_activity_calls == [("front door", create_payload["token"])]
+
+
+def test_preview_playlist_rejects_invalid_token(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Preview playlist route should reject invalid token query strings."""
+    # Given: Auth enabled with preview artifacts present
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
+    )
+    client = _client(app)
+
+    # When: Fetching the playlist with an invalid preview token
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8?token=bad-token")
+
+    # Then: The route rejects the request with the canonical preview token error
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "PREVIEW_TOKEN_REJECTED"
+
+
+def test_preview_playlist_returns_conflict_when_media_is_missing(tmp_path: Path) -> None:
+    """Preview playlist route should report unavailable media until artifacts exist."""
+    # Given: Preview is configured but the live playlist is not present yet
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+    client = _client(app)
+
+    # When: Fetching the playlist before preview artifacts are ready
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: The route reports preview media unavailable instead of falling through to 404
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
 
 
 def test_post_preview_returns_warning_when_degraded() -> None:

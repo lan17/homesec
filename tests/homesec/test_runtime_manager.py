@@ -108,6 +108,7 @@ class _FakeController(RuntimeController):
         self.preview_status_calls: list[tuple[int, str]] = []
         self.preview_ensure_calls: list[tuple[int, str]] = []
         self.preview_force_stop_calls: list[tuple[int, str]] = []
+        self.preview_viewer_activity_calls: list[tuple[int, str, str | None]] = []
         self.shutdown_all_calls = 0
         self.running_generations: set[int] = set()
         self.fail_build_generations: set[int] = set()
@@ -186,6 +187,15 @@ class _FakeController(RuntimeController):
             accepted=True,
             state=PreviewState.STOPPING,
         )
+
+    async def note_preview_viewer_activity(
+        self,
+        runtime: RuntimeBundle,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        self.preview_viewer_activity_calls.append((runtime.generation, camera_name, viewer_id))
 
 
 def _make_config(*, camera_name: str, watch_dir: str) -> Config:
@@ -554,9 +564,10 @@ async def test_runtime_manager_delegates_preview_methods_to_active_runtime() -> 
     config = _make_config(camera_name="front", watch_dir="/tmp/front-preview")
     await manager.start_initial_runtime(config)
 
-    # When: Querying preview status, ensuring preview, and force-stopping preview
+    # When: Querying preview status, ensuring preview, recording viewer activity, and force-stopping preview
     status = await manager.get_preview_status("front")
     ensured = await manager.ensure_preview_active("front")
+    await manager.note_preview_viewer_activity("front", viewer_id="viewer-1")
     stopped = await manager.force_stop_preview("front")
 
     # Then: Each preview operation targets the active runtime generation
@@ -565,6 +576,7 @@ async def test_runtime_manager_delegates_preview_methods_to_active_runtime() -> 
     assert isinstance(ensured, CameraPreviewStatus)
     assert ensured.state == PreviewState.READY
     assert controller.preview_ensure_calls == [(1, "front")]
+    assert controller.preview_viewer_activity_calls == [(1, "front", "viewer-1")]
     assert stopped.state == PreviewState.STOPPING
     assert controller.preview_force_stop_calls == [(1, "front")]
 
@@ -586,3 +598,7 @@ async def test_runtime_manager_preview_methods_require_active_runtime() -> None:
     # When/Then: Preview force-stop requires an active runtime
     with pytest.raises(PreviewRuntimeUnavailableError, match="Runtime is not active"):
         await manager.force_stop_preview("front")
+
+    # When/Then: Preview viewer activity requires an active runtime
+    with pytest.raises(PreviewRuntimeUnavailableError, match="Runtime is not active"):
+        await manager.note_preview_viewer_activity("front", viewer_id="viewer-1")

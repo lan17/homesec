@@ -1,17 +1,25 @@
-"""Preview control-plane endpoints."""
+"""Preview control-plane and playback endpoints."""
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from homesec.api.dependencies import get_homesec_app
+from homesec.api.dependencies import get_homesec_app, verify_preview_access
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.preview_tokens import issue_camera_preview_token
+from homesec.preview_paths import (
+    is_preview_segment_name,
+    preview_playlist_path,
+    preview_segment_path,
+)
 from homesec.runtime.errors import PreviewCameraNotFoundError, PreviewRuntimeUnavailableError
 from homesec.runtime.models import CameraPreviewStartRefusal, CameraPreviewStatus, PreviewState
 
@@ -19,7 +27,12 @@ if TYPE_CHECKING:
     from homesec.app import Application
 from homesec.runtime.models import PreviewRefusalReason
 
-router = APIRouter(tags=["preview"])
+logger = logging.getLogger(__name__)
+_PREVIEW_CACHE_HEADERS = {"Cache-Control": "no-store"}
+
+control_router = APIRouter(tags=["preview"])
+playback_router = APIRouter(tags=["preview"])
+router = control_router
 
 
 class PreviewStatusResponse(BaseModel):
@@ -103,7 +116,66 @@ def _raise_runtime_unavailable(exc: PreviewRuntimeUnavailableError) -> None:
     ) from exc
 
 
-@router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
+def _preview_storage_dir(app: Application) -> Path:
+    return Path(app.config.preview.config.storage_dir)
+
+
+def _read_playlist_text(playlist_path: Path) -> str:
+    if not playlist_path.is_file():
+        raise APIError(
+            "Preview media unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        )
+    try:
+        playlist_text = playlist_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.warning(
+            "Failed to read preview playlist at %s: %s",
+            playlist_path,
+            exc,
+            exc_info=True,
+        )
+        raise APIError(
+            "Preview media unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        ) from exc
+    if not playlist_text.strip():
+        raise APIError(
+            "Preview media unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        )
+    return playlist_text
+
+
+def _rewrite_playlist_for_token(playlist_text: str, token: str | None) -> str:
+    if token is None:
+        return playlist_text
+
+    lines: list[str] = []
+    for line in playlist_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            separator = "&" if "?" in stripped else "?"
+            lines.append(f"{stripped}{separator}{urlencode({'token': token})}")
+        else:
+            lines.append(line)
+
+    rewritten = "\n".join(lines)
+    if playlist_text.endswith(("\n", "\r")):
+        rewritten += "\n"
+    return rewritten
+
+
+async def _ensure_known_camera(app: Application, camera_name: str) -> None:
+    if any(camera.name == camera_name for camera in app.config.cameras):
+        return
+    _raise_camera_not_found(PreviewCameraNotFoundError(camera_name))
+
+
+@control_router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
 async def get_preview_status(
     camera_name: str,
     app: Application = Depends(get_homesec_app),
@@ -117,7 +189,7 @@ async def get_preview_status(
     return _status_response(preview_status)
 
 
-@router.post("/api/v1/preview/cameras/{camera_name}", response_model=PreviewSessionResponse)
+@control_router.post("/api/v1/preview/cameras/{camera_name}", response_model=PreviewSessionResponse)
 async def ensure_preview_active(
     camera_name: str,
     app: Application = Depends(get_homesec_app),
@@ -167,7 +239,7 @@ async def ensure_preview_active(
     )
 
 
-@router.delete(
+@control_router.delete(
     "/api/v1/preview/cameras/{camera_name}",
     response_model=PreviewStopResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -185,3 +257,81 @@ async def force_stop_preview(
         _raise_runtime_unavailable(exc)
 
     return PreviewStopResponse(accepted=result.accepted, state=result.state)
+
+
+@playback_router.get("/api/v1/preview/cameras/{camera_name}/playlist.m3u8")
+async def get_preview_playlist(
+    camera_name: str,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> Response:
+    """Return the live HLS playlist for a camera preview session."""
+    await _ensure_known_camera(app, camera_name)
+    playlist_text = _read_playlist_text(
+        preview_playlist_path(_preview_storage_dir(app), camera_name)
+    )
+    return Response(
+        content=_rewrite_playlist_for_token(playlist_text, preview_token),
+        media_type="application/vnd.apple.mpegurl",
+        headers=_PREVIEW_CACHE_HEADERS,
+    )
+
+
+@playback_router.get("/api/v1/preview/cameras/{camera_name}/{segment_name}")
+async def get_preview_segment(
+    camera_name: str,
+    segment_name: str,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> FileResponse:
+    """Return a live HLS transport-stream segment for a camera preview session."""
+    if not is_preview_segment_name(segment_name):
+        raise APIError(
+            "Not Found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.NOT_FOUND,
+        )
+
+    await _ensure_known_camera(app, camera_name)
+    try:
+        segment_path = preview_segment_path(_preview_storage_dir(app), camera_name, segment_name)
+    except ValueError as exc:
+        raise APIError(
+            "Not Found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.NOT_FOUND,
+        ) from exc
+
+    if not segment_path.is_file():
+        raise APIError(
+            "Preview media unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        )
+
+    try:
+        await app.note_camera_preview_viewer_activity(
+            camera_name,
+            viewer_id=preview_token,
+        )
+    except PreviewCameraNotFoundError as exc:
+        _raise_camera_not_found(exc)
+    except PreviewRuntimeUnavailableError as exc:
+        logger.warning(
+            "Preview viewer activity update skipped for camera=%s: %s",
+            camera_name,
+            exc,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Unexpected preview viewer activity failure for camera=%s: %s",
+            camera_name,
+            exc,
+            exc_info=True,
+        )
+
+    return FileResponse(
+        path=segment_path,
+        media_type="video/mp2t",
+        headers=_PREVIEW_CACHE_HEADERS,
+    )

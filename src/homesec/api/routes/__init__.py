@@ -37,8 +37,12 @@ def register_routes(app: FastAPI) -> None:
         dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
     )
     app.include_router(
-        preview.router,
+        preview.control_router,
         dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
+    )
+    app.include_router(
+        preview.playback_router,
+        dependencies=[Depends(require_normal_mode)],
     )
     app.include_router(
         clips.router,

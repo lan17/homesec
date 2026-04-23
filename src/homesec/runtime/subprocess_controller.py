@@ -391,6 +391,37 @@ class SubprocessRuntimeController(RuntimeController):
             state=result.stop_result.state,
         )
 
+    async def note_preview_viewer_activity(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise PreviewCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            raise PreviewRuntimeUnavailableError(self._runtime_unavailable_message(handle))
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.PREVIEW_NOTE_VIEWER_ACTIVITY,
+                camera_name,
+                viewer_id=viewer_id,
+            )
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            raise PreviewRuntimeUnavailableError(message) from exc
+
+        if result.status is not None:
+            handle.camera_preview_statuses[camera_name] = self._runtime_preview_status(
+                camera_name,
+                result.status,
+            )
+
     @staticmethod
     def _ensure_posix_support() -> None:
         if os.name != "posix":
@@ -539,6 +570,8 @@ class SubprocessRuntimeController(RuntimeController):
         handle: SubprocessRuntimeHandle,
         command_type: WorkerCommandType,
         camera_name: str,
+        *,
+        viewer_id: str | None = None,
     ) -> WorkerCommandResult:
         command = WorkerCommand(
             command=command_type,
@@ -546,6 +579,7 @@ class SubprocessRuntimeController(RuntimeController):
             generation=handle.generation,
             correlation_id=handle.correlation_id,
             camera_name=camera_name,
+            viewer_id=viewer_id,
         )
 
         try:

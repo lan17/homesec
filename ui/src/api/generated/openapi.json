@@ -2629,6 +2629,129 @@
         ]
       }
     },
+    "/api/v1/preview/cameras/{camera_name}/playlist.m3u8": {
+      "get": {
+        "description": "Return the live HLS playlist for a camera preview session.",
+        "operationId": "get_preview_playlist_api_v1_preview_cameras__camera_name__playlist_m3u8_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preview Playlist",
+        "tags": [
+          "preview"
+        ]
+      }
+    },
+    "/api/v1/preview/cameras/{camera_name}/{segment_name}": {
+      "get": {
+        "description": "Return a live HLS transport-stream segment for a camera preview session.",
+        "operationId": "get_preview_segment_api_v1_preview_cameras__camera_name___segment_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "segment_name",
+            "required": true,
+            "schema": {
+              "title": "Segment Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preview Segment",
+        "tags": [
+          "preview"
+        ]
+      }
+    },
     "/api/v1/runtime/reload": {
       "post": {
         "description": "Trigger runtime reload and return async acceptance outcome.",

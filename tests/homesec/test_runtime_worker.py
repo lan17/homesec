@@ -232,6 +232,9 @@ def test_runtime_worker_preview_status_command_reports_runtime_preview_state() -
         def stop_preview(self) -> None:
             raise AssertionError("status test should not call stop_preview")
 
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("status test should not call note_preview_viewer_activity")
+
     # Given: A preview-enabled RTSP camera with a preview-capable source in the runtime bundle
     config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
     service = _make_service(config)
@@ -270,6 +273,9 @@ def test_runtime_worker_preview_status_collection_degrades_when_source_raises() 
 
         def stop_preview(self) -> None:
             raise AssertionError("status collection should not call stop_preview")
+
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("status collection should not call note_preview_viewer_activity")
 
     # Given: A preview-enabled RTSP camera whose source raises during status lookup
     config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
@@ -336,6 +342,9 @@ def test_runtime_worker_preview_ensure_command_returns_machine_readable_refusal(
         def stop_preview(self) -> None:
             raise AssertionError("ensure test should not call stop_preview")
 
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("ensure test should not call note_preview_viewer_activity")
+
     # Given: A preview-enabled RTSP camera whose source refuses preview startup
     config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
     service = _make_service(config)
@@ -372,6 +381,9 @@ def test_runtime_worker_preview_ensure_command_degrades_when_source_raises() -> 
 
         def stop_preview(self) -> None:
             raise AssertionError("ensure test should not call stop_preview")
+
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("ensure test should not call note_preview_viewer_activity")
 
     # Given: A preview-enabled RTSP camera whose source raises on preview activation
     config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
@@ -413,6 +425,9 @@ def test_runtime_worker_preview_force_stop_command_returns_stopping_ack() -> Non
         def stop_preview(self) -> None:
             self.stop_calls += 1
 
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("stop test should not call note_preview_viewer_activity")
+
     # Given: A preview-enabled RTSP camera with a preview-capable source
     config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
     service = _make_service(config)
@@ -451,6 +466,9 @@ def test_runtime_worker_preview_force_stop_command_rejects_when_source_raises() 
 
         def stop_preview(self) -> None:
             raise RuntimeError("publisher crashed")
+
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("stop test should not call note_preview_viewer_activity")
 
     # Given: A preview-enabled RTSP camera whose source raises while stopping preview
     config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)

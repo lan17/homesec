@@ -362,6 +362,18 @@ class Application:
         """Force-stop preview for a runtime camera."""
         return await self._require_runtime_manager().force_stop_preview(camera_name)
 
+    async def note_camera_preview_viewer_activity(
+        self,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        """Record successful preview playback activity for a runtime camera."""
+        await self._require_runtime_manager().note_preview_viewer_activity(
+            camera_name,
+            viewer_id=viewer_id,
+        )
+
     def _require_config(self) -> Config:
         if self._config is None:
             raise RuntimeError("Config not loaded")

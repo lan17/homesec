@@ -10,6 +10,13 @@ from pathlib import Path
 from threading import Event, RLock, Thread, current_thread
 from typing import Literal, Protocol, TextIO
 
+from homesec.preview_paths import (
+    preview_camera_dir,
+    preview_ffmpeg_log_path,
+    preview_playlist_path,
+    preview_segment_filename_pattern,
+    sanitize_preview_camera_name,
+)
 from homesec.sources.rtsp.capabilities import (
     RTSPTimeoutCapabilities,
     get_global_rtsp_timeout_capabilities,
@@ -132,14 +139,17 @@ class HLSLivePublisher(LivePublisher):
         maintenance_interval_s: float | None = None,
     ) -> None:
         self._camera_name = camera_name
-        self._camera_slug = _sanitize_camera_name(camera_name)
+        self._camera_slug = sanitize_preview_camera_name(camera_name)
         self._camera_key = build_camera_key(camera_name, rtsp_url)
         self._rtsp_url = rtsp_url
         self._storage_dir = Path(storage_dir)
-        self._camera_dir = self._storage_dir / "homesec" / self._camera_slug
-        self._playlist_path = self._camera_dir / "playlist.m3u8"
-        self._stderr_log_path = self._camera_dir / "preview_ffmpeg.log"
-        self._segment_filename_pattern = self._camera_dir / "segment_%06d.ts"
+        self._camera_dir = preview_camera_dir(self._storage_dir, camera_name)
+        self._playlist_path = preview_playlist_path(self._storage_dir, camera_name)
+        self._stderr_log_path = preview_ffmpeg_log_path(self._storage_dir, camera_name)
+        self._segment_filename_pattern = preview_segment_filename_pattern(
+            self._storage_dir,
+            camera_name,
+        )
         self._segment_duration_s = max(0.001, float(segment_duration_ms) / 1000.0)
         self._live_window_segments = int(live_window_segments)
         self._idle_timeout_s = max(0.0, float(idle_timeout_s))
@@ -930,24 +940,6 @@ class NoopLivePublisher(LivePublisher):
 
 def _format_segment_duration(segment_duration_s: float) -> str:
     return f"{segment_duration_s:.3f}".rstrip("0").rstrip(".")
-
-
-def _sanitize_camera_name(name: str) -> str:
-    raw = str(name).strip()
-    if not raw:
-        return "camera"
-    out: list[str] = []
-    for ch in raw:
-        if ch.isalnum() or ch in ("-", "_"):
-            out.append(ch)
-        elif ch.isspace():
-            out.append("_")
-        else:
-            out.append("_")
-    cleaned = "".join(out).strip("_")
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    return cleaned or "camera"
 
 
 def _classify_start_refusal(stderr_tail: str) -> LivePublisherRefusalReason:
