@@ -818,7 +818,7 @@ def test_concurrent_preview_downgrade_blocks_only_while_recording(tmp_path: Path
     assert refused.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
     assert "downgraded" in refused.message
     assert publisher.status() == LivePublisherStatus(
-        state=LivePublisherState.DEGRADED,
+        state=LivePublisherState.IDLE,
         viewer_count=0,
         degraded_reason=reason,
     )
@@ -903,7 +903,7 @@ def test_repeated_start_failures_while_recording_downgrade_concurrent_preview(
     assert third.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
     assert len(calls) == 2
     assert publisher.status() == LivePublisherStatus(
-        state=LivePublisherState.DEGRADED,
+        state=LivePublisherState.IDLE,
         viewer_count=0,
         degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
     )
@@ -1187,14 +1187,14 @@ def test_repeated_early_exits_while_recording_downgrade_concurrent_preview(
         second_status = publisher.status()
         after_downgrade = publisher.ensure_active()
 
-    # Then: The second early exit downgrades concurrent preview for the process
+    # Then: The second early exit downgrades concurrent preview without reporting playable media
     assert isinstance(first_start, LivePublisherStatus)
     assert first_start.state == LivePublisherState.READY
     assert first_status.state == LivePublisherState.ERROR
     assert first_status.degraded_reason is None
     assert isinstance(second_start, LivePublisherStatus)
     assert second_start.state == LivePublisherState.READY
-    assert second_status.state == LivePublisherState.DEGRADED
+    assert second_status.state == LivePublisherState.ERROR
     assert second_status.degraded_reason == CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
     assert isinstance(after_downgrade, LivePublisherStartRefusal)
     assert after_downgrade.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
@@ -1370,7 +1370,7 @@ def test_recording_activation_starts_early_exit_window_for_existing_preview(
     assert first_status.degraded_reason is None
     assert isinstance(second_start, LivePublisherStatus)
     assert second_start.state == LivePublisherState.READY
-    assert second_status.state == LivePublisherState.DEGRADED
+    assert second_status.state == LivePublisherState.ERROR
     assert second_status.degraded_reason == CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
     assert len(calls) == 2
 

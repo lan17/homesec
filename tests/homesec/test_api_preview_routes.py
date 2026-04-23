@@ -703,7 +703,7 @@ def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_prev
     tmp_path: Path,
 ) -> None:
     """Preview playback should fail closed when runtime status says the session is inactive."""
-    # Given: Stale preview artifacts on disk after the runtime has already marked preview idle
+    # Given: Stale preview artifacts after a downgraded camera has no active preview session
     _write_preview_files(tmp_path, "front")
     app = _StubPreviewApp(
         status=CameraPreviewStatus(
@@ -711,6 +711,7 @@ def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_prev
             enabled=True,
             state=PreviewState.IDLE,
             viewer_count=0,
+            degraded_reason="concurrent_preview_unsupported_by_startup_preflight",
         ),
         preview_config=PreviewConfig(
             enabled=True,

@@ -612,11 +612,7 @@ class HLSLivePublisher(LivePublisher):
             else:
                 self._reset_recording_preview_failure_streaks_locked()
             self._status = LivePublisherStatus(
-                state=(
-                    LivePublisherState.DEGRADED
-                    if early_exit_while_recording and self._preview_downgraded_locked()
-                    else LivePublisherState.ERROR
-                ),
+                state=LivePublisherState.ERROR,
                 viewer_count=0,
                 degraded_reason=self._current_degraded_reason_locked(),
                 last_error=last_error,
@@ -814,11 +810,7 @@ class HLSLivePublisher(LivePublisher):
 
     def _idle_status_locked(self, *, last_error: str | None = None) -> LivePublisherStatus:
         return LivePublisherStatus(
-            state=(
-                LivePublisherState.DEGRADED
-                if self._recording_active and self._preview_downgraded_locked()
-                else LivePublisherState.IDLE
-            ),
+            state=LivePublisherState.IDLE,
             viewer_count=0,
             degraded_reason=self._current_degraded_reason_locked(),
             last_error=last_error,
