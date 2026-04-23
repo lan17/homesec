@@ -83,6 +83,19 @@ services:
       - /tmp/homesec-preview:size=64m
 ```
 
+Note: the HomeSec Docker image runs as a non-root `homesec` user. If you hit
+permission errors (or you want to lock down access), set tmpfs ownership and mode
+explicitly:
+
+```yaml
+services:
+  homesec:
+    tmpfs:
+      - /tmp/homesec-preview:uid=1000,gid=1000,mode=1700,size=64m
+```
+
+Replace `uid`/`gid` with the user/group running HomeSec inside the container.
+
 If you change the path in config, change the tmpfs mount path too.
 
 ## Bare-Metal Guidance
@@ -95,6 +108,7 @@ Operator checklist:
 
 - create the directory before starting HomeSec
 - ensure the HomeSec process can read and write it
+- restrict permissions; HLS playlists and segments contain camera audio/video
 - keep it on tmpfs, not the same persistent disk used for clips
 - size it for your expected number of concurrent previews
 
@@ -102,6 +116,7 @@ Operator checklist:
 
 - Preview storage is disposable. Losing it interrupts live preview but should not
   delete recorded clips.
+- Treat preview storage as sensitive media. Keep it private to the HomeSec process.
 - Keep preview storage independent from `output_dir`, uploaded clip storage, and
   Postgres data paths.
 - Larger `segment_duration_ms` or `live_window_segments` values increase memory
