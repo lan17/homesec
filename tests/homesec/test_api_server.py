@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 
 from homesec.api import server as api_server
 from homesec.api.server import APIServer
+from homesec.models.config import FastAPIServerConfig
+from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
 @pytest.mark.asyncio
@@ -246,6 +249,21 @@ def test_redact_token_query_param_from_url_strips_only_token_values() -> None:
     assert redacted == "/api/v1/preview/cameras/front/playlist.m3u8?foo=bar"
 
 
+def test_redact_token_query_param_from_url_leaves_non_token_paths_unchanged() -> None:
+    """Access-log URL redaction should leave unrelated paths and empty queries untouched."""
+    # Given: URLs without a token query parameter and a path that happens to contain the word token
+    no_query_url = "/api/v1/preview/cameras/front/playlist.m3u8"
+    empty_query_url = "/api/v1/preview/cameras/token?"
+
+    # When: Redacting token query parameters for access logging
+    redacted_no_query = api_server._redact_token_query_param_from_url(no_query_url)
+    redacted_empty_query = api_server._redact_token_query_param_from_url(empty_query_url)
+
+    # Then: The original URLs are preserved because there is no token query parameter to strip
+    assert redacted_no_query == no_query_url
+    assert redacted_empty_query == empty_query_url
+
+
 def test_token_redacting_access_log_filter_rewrites_uvicorn_path_argument() -> None:
     """Access-log filter should redact token query params from uvicorn access records."""
     # Given: A uvicorn-style access log record with the request path in args[2]
@@ -278,3 +296,75 @@ def test_token_redacting_access_log_filter_rewrites_uvicorn_path_argument() -> N
         "1.1",
         200,
     )
+
+
+def test_token_redacting_access_log_filter_supports_mutable_args_lists() -> None:
+    """Access-log filter should redact token query params when uvicorn passes args as a list."""
+    # Given: A uvicorn-style access log record with mutable list args
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=[
+            "127.0.0.1:1234",
+            "GET",
+            "/api/v1/preview/cameras/front/segment_000000.ts?token=secret",
+            "1.1",
+            200,
+        ],
+        exc_info=None,
+    )
+    access_filter = api_server._TokenRedactingAccessLogFilter()
+
+    # When: The access-log filter processes the record
+    accepted = access_filter.filter(record)
+
+    # Then: The record stays loggable and the token is stripped from the list-backed args
+    assert accepted is True
+    assert record.args == [
+        "127.0.0.1:1234",
+        "GET",
+        "/api/v1/preview/cameras/front/segment_000000.ts",
+        "1.1",
+        200,
+    ]
+
+
+def test_token_redacting_access_log_filter_leaves_nonstandard_records_untouched() -> None:
+    """Access-log filter should no-op when the record does not look like a uvicorn access record."""
+    # Given: A log record whose args do not contain a request path at index 2
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="access log",
+        args=("127.0.0.1:1234",),
+        exc_info=None,
+    )
+    access_filter = api_server._TokenRedactingAccessLogFilter()
+
+    # When: The filter processes the nonstandard record
+    accepted = access_filter.filter(record)
+
+    # Then: The record remains unchanged and loggable
+    assert accepted is True
+    assert record.args == ("127.0.0.1:1234",)
+
+
+def test_create_app_falls_back_to_embedded_server_config() -> None:
+    """create_app should use app.config.server when no explicit server_config attribute exists."""
+    # Given: An app instance that only exposes server config through app.config.server
+    embedded_server_config = ensure_stub_ui_dist(
+        FastAPIServerConfig(cors_origins=["https://example.com"])
+    )
+    app_instance = SimpleNamespace(config=SimpleNamespace(server=embedded_server_config))
+
+    # When: Creating the FastAPI app
+    app = api_server.create_app(app_instance)
+
+    # Then: The embedded server config is used and the app instance is attached to state
+    assert app.state.homesec is app_instance
+    assert app.user_middleware[0].kwargs["allow_credentials"] is True

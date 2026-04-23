@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -144,6 +145,45 @@ def _write_preview_files(tmp_path: Path, camera_name: str) -> None:
 
 def _client(app: _StubPreviewApp) -> TestClient:
     return TestClient(create_app(app))
+
+
+def test_warning_prefers_last_error_and_generic_fallback() -> None:
+    """Preview warnings should fall back from degraded_reason to last_error to a generic message."""
+    # Given: Degraded preview states with progressively less detail
+    last_error_only = CameraPreviewStatus(
+        camera_name="front",
+        enabled=True,
+        state=PreviewState.DEGRADED,
+        degraded_reason=None,
+        last_error="ffmpeg stalled",
+    )
+    generic_only = CameraPreviewStatus(
+        camera_name="front",
+        enabled=True,
+        state=PreviewState.DEGRADED,
+        degraded_reason=None,
+        last_error=None,
+    )
+
+    # When: Rendering warning text for each degraded status
+    last_error_warning = preview_routes._warning(last_error_only)
+    generic_warning = preview_routes._warning(generic_only)
+
+    # Then: The module falls back to last_error first and a generic message last
+    assert last_error_warning == "ffmpeg stalled"
+    assert generic_warning == "Preview is degraded"
+
+
+def test_rewrite_playlist_for_token_returns_original_text_when_token_is_absent() -> None:
+    """Playlist rewriting should be a no-op when playback is using header auth or auth is disabled."""
+    # Given: A preview playlist with a trailing newline
+    playlist_text = "#EXTM3U\n#EXTINF:1.0,\nsegment_000000.ts\n"
+
+    # When: Rewriting it without a preview token
+    rewritten = preview_routes._rewrite_playlist_for_token(playlist_text, None)
+
+    # Then: The original playlist text is preserved exactly
+    assert rewritten == playlist_text
 
 
 def test_get_preview_status_returns_runtime_status() -> None:
@@ -431,6 +471,27 @@ def test_preview_segment_path_rejects_invalid_segment_names(tmp_path: Path) -> N
     # Then: No path is constructed outside the preview directory
 
 
+def test_preview_playlist_rejects_unknown_camera_before_touching_disk(tmp_path: Path) -> None:
+    """Preview playlist route should reject unknown cameras before reading playlist files."""
+    # Given: Preview is enabled but the requested camera is not configured
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+        camera_names=["front"],
+    )
+    client = _client(app)
+
+    # When: Fetching the playlist for an unknown camera
+    response = client.get("/api/v1/preview/cameras/garage/playlist.m3u8")
+
+    # Then: The route returns the canonical camera-not-found error
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "PREVIEW_CAMERA_NOT_FOUND"
+
+
 def test_preview_playlist_rejects_invalid_token(
     monkeypatch,
     tmp_path: Path,
@@ -475,6 +536,60 @@ def test_preview_playlist_returns_conflict_when_media_is_missing(tmp_path: Path)
     assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
 
 
+def test_preview_playlist_returns_conflict_when_playlist_is_empty(tmp_path: Path) -> None:
+    """Preview playlist route should reject empty playlist files as unavailable media."""
+    # Given: A preview directory with an empty playlist file
+    camera_dir = preview_camera_dir(tmp_path, "front")
+    camera_dir.mkdir(parents=True, exist_ok=True)
+    (camera_dir / "playlist.m3u8").write_text("", encoding="utf-8")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+    client = _client(app)
+
+    # When: Fetching the empty playlist
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: The route reports preview media unavailable
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
+
+
+def test_preview_playlist_returns_conflict_when_playlist_read_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Preview playlist route should fail closed when reading playlist text raises."""
+    # Given: A preview directory whose playlist read fails unexpectedly
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+    client = _client(app)
+
+    def _raise_read_error(self: Path, encoding: str = "utf-8") -> str:
+        _ = encoding
+        raise OSError("disk read failed")
+
+    monkeypatch.setattr(Path, "read_text", _raise_read_error)
+
+    # When: Fetching the playlist while the file read fails
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: The route reports preview media unavailable and logs the read failure
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
+    assert "Failed to read preview playlist" in caplog.text
+
+
 def test_preview_playlist_rejects_stale_files_when_preview_disabled(tmp_path: Path) -> None:
     """Preview playback should stay unavailable when preview is disabled in config."""
     # Given: Stale preview artifacts on disk while preview is disabled
@@ -516,6 +631,50 @@ def test_preview_playlist_rejects_stale_files_when_runtime_is_unavailable(tmp_pa
     assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
 
 
+def test_preview_playlist_returns_404_when_runtime_reports_missing_camera(tmp_path: Path) -> None:
+    """Preview playback should surface missing-camera runtime errors as 404."""
+    # Given: Preview artifacts exist but runtime reports the camera no longer exists
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+        status_error=PreviewCameraNotFoundError("front"),
+    )
+    client = _client(app)
+
+    # When: Fetching the preview playlist
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: Playback surfaces the canonical preview-camera-not-found error
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "PREVIEW_CAMERA_NOT_FOUND"
+
+
+def test_preview_playlist_returns_503_when_runtime_status_lookup_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """Preview playback should surface runtime status failures as 503."""
+    # Given: Preview artifacts exist but runtime status cannot be fetched
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+        status_error=PreviewRuntimeUnavailableError("worker unavailable"),
+    )
+    client = _client(app)
+
+    # When: Fetching the preview playlist
+    response = client.get("/api/v1/preview/cameras/front/playlist.m3u8")
+
+    # Then: Playback surfaces the canonical preview-runtime-unavailable error
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
+
+
 def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_preview(
     tmp_path: Path,
 ) -> None:
@@ -543,6 +702,27 @@ def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_prev
     assert response.status_code == 409
     assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
     assert app.viewer_activity_calls == []
+
+
+def test_preview_segment_returns_conflict_when_segment_is_missing(tmp_path: Path) -> None:
+    """Preview segment route should report missing live-window segments as unavailable media."""
+    # Given: A preview session whose playlist exists but the requested segment has already been removed
+    _write_preview_files(tmp_path, "front")
+    (preview_camera_dir(tmp_path, "front") / "segment_000000.ts").unlink()
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+    client = _client(app)
+
+    # When: Fetching the missing segment
+    response = client.get("/api/v1/preview/cameras/front/segment_000000.ts")
+
+    # Then: The route reports preview media unavailable
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
 
 
 def test_post_preview_returns_warning_when_degraded() -> None:
@@ -574,6 +754,28 @@ def test_post_preview_returns_warning_when_degraded() -> None:
     # Then: The response includes a warning for UI display
     assert response.status_code == 200
     assert response.json()["warning"] == "viewer_count_unavailable"
+
+
+def test_post_preview_returns_warning_from_last_error_when_degraded_reason_is_missing() -> None:
+    """POST /preview/cameras/{camera_name} should fall back to last_error in warnings."""
+    # Given: A degraded preview with no explicit degraded_reason
+    degraded_status = CameraPreviewStatus(
+        camera_name="front",
+        enabled=True,
+        state=PreviewState.DEGRADED,
+        viewer_count=None,
+        degraded_reason=None,
+        last_error="playlist lagging",
+    )
+    app = _StubPreviewApp(status=degraded_status, ensure_result=degraded_status)
+    client = _client(app)
+
+    # When: Ensuring preview is active while degraded
+    response = client.post("/api/v1/preview/cameras/front")
+
+    # Then: The response falls back to last_error for the warning text
+    assert response.status_code == 200
+    assert response.json()["warning"] == "playlist lagging"
 
 
 def test_post_preview_refusals_map_to_stable_conflicts() -> None:
@@ -622,6 +824,79 @@ def test_post_preview_refusals_map_to_stable_conflicts() -> None:
         assert payload["reason"] == reason_value
 
 
+def test_post_preview_returns_404_when_runtime_reports_missing_camera() -> None:
+    """POST /preview/cameras/{camera_name} should map runtime missing-camera errors to 404."""
+    # Given: A preview app whose runtime cannot find the requested camera
+    app = _StubPreviewApp(ensure_error=PreviewCameraNotFoundError("front"))
+    client = _client(app)
+
+    # When: Ensuring preview is active
+    response = client.post("/api/v1/preview/cameras/front")
+
+    # Then: The route returns the canonical preview-camera-not-found error
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "PREVIEW_CAMERA_NOT_FOUND"
+
+
+def test_post_preview_returns_503_when_runtime_is_unavailable() -> None:
+    """POST /preview/cameras/{camera_name} should map runtime outages to 503."""
+    # Given: A preview app whose runtime cannot accept preview-start commands
+    app = _StubPreviewApp(ensure_error=PreviewRuntimeUnavailableError("worker unavailable"))
+    client = _client(app)
+
+    # When: Ensuring preview is active
+    response = client.post("/api/v1/preview/cameras/front")
+
+    # Then: The route returns the canonical preview-runtime-unavailable error
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
+
+
+def test_post_preview_returns_500_when_auth_is_enabled_but_api_key_is_missing(
+    monkeypatch,
+) -> None:
+    """POST /preview/cameras/{camera_name} should fail closed when auth is enabled without a key."""
+    # Given: Auth is enabled but the configured API key environment variable is unset
+    monkeypatch.delenv("HOMESEC_PREVIEW_TEST_MISSING_API_KEY", raising=False)
+    app = _StubPreviewApp(
+        server_config=FastAPIServerConfig(
+            auth_enabled=True,
+            api_key_env="HOMESEC_PREVIEW_TEST_MISSING_API_KEY",
+        ),
+    )
+    client = _client(app)
+
+    # When: Ensuring preview is active
+    response = client.post("/api/v1/preview/cameras/front")
+
+    # Then: The route reports the canonical API-key-not-configured error
+    assert response.status_code == 500
+    assert response.json()["error_code"] == "API_KEY_NOT_CONFIGURED"
+
+
+@pytest.mark.asyncio
+async def test_post_preview_direct_call_rejects_missing_api_key_after_runtime_success(
+    monkeypatch,
+) -> None:
+    """Direct preview attach logic should still fail closed when auth is enabled without a key."""
+    # Given: Runtime attach succeeds but the configured preview-signing key is unavailable
+    monkeypatch.delenv("HOMESEC_PREVIEW_TEST_MISSING_API_KEY", raising=False)
+    app = _StubPreviewApp(
+        server_config=FastAPIServerConfig(
+            auth_enabled=True,
+            api_key_env="HOMESEC_PREVIEW_TEST_MISSING_API_KEY",
+        ),
+    )
+
+    # When: Calling the route handler directly after runtime attach succeeds
+    with pytest.raises(APIError) as exc_info:
+        await preview_routes.ensure_preview_active(camera_name="front", app=app)
+
+    # Then: The handler rejects the request with the canonical API-key-not-configured error
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.error_code == "API_KEY_NOT_CONFIGURED"
+
+
 def test_delete_preview_returns_202_acknowledgement() -> None:
     """DELETE /preview/cameras/{camera_name} should return async stop acknowledgement."""
     # Given: A preview-capable app that can accept force-stop
@@ -654,3 +929,112 @@ def test_delete_preview_returns_503_when_runtime_unavailable() -> None:
     # Then: The route returns a canonical runtime-unavailable error
     assert response.status_code == 503
     assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
+
+
+def test_delete_preview_returns_404_when_camera_is_missing() -> None:
+    """DELETE /preview/cameras/{camera_name} should return 404 for missing cameras."""
+    # Given: A preview app whose runtime cannot find the requested camera
+    app = _StubPreviewApp(stop_error=PreviewCameraNotFoundError("front"))
+    client = _client(app)
+
+    # When: Force-stopping preview
+    response = client.delete("/api/v1/preview/cameras/front")
+
+    # Then: The route returns the canonical preview-camera-not-found error
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "PREVIEW_CAMERA_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_note_preview_viewer_activity_best_effort_logs_missing_camera(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Viewer-activity bookkeeping should log and swallow missing-camera races."""
+    # Given: A preview app whose viewer-activity callback races with camera removal
+    app = _StubPreviewApp()
+
+    async def _raise_missing_camera(
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        _ = (camera_name, viewer_id)
+        raise PreviewCameraNotFoundError("front")
+
+    app.note_camera_preview_viewer_activity = _raise_missing_camera
+
+    # When: Recording viewer activity best-effort
+    with caplog.at_level(logging.WARNING):
+        await preview_routes._note_preview_viewer_activity_best_effort(
+            app,
+            "front",
+            viewer_id="viewer-1",
+        )
+
+    # Then: The helper logs the race and swallows the exception
+    assert "Preview viewer activity camera disappeared" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_note_preview_viewer_activity_best_effort_logs_runtime_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Viewer-activity bookkeeping should log and swallow runtime outages."""
+    # Given: A preview app whose viewer-activity callback cannot reach the runtime
+    app = _StubPreviewApp()
+
+    async def _raise_runtime_unavailable(
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        _ = (camera_name, viewer_id)
+        raise PreviewRuntimeUnavailableError("worker unavailable")
+
+    app.note_camera_preview_viewer_activity = _raise_runtime_unavailable
+
+    # When: Recording viewer activity best-effort
+    with caplog.at_level(logging.WARNING):
+        await preview_routes._note_preview_viewer_activity_best_effort(
+            app,
+            "front",
+            viewer_id="viewer-1",
+        )
+
+    # Then: The helper logs the outage and swallows the exception
+    assert "Preview viewer activity update skipped" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_preview_segment_maps_defensive_path_validation_failures_to_404(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Preview segment route should preserve a 404 even if path helper validation fails unexpectedly."""
+    # Given: A valid-looking segment request whose path helper still rejects the segment name
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+
+    def _raise_value_error(storage_dir: Path, camera_name: str, segment_name: str) -> Path:
+        _ = (storage_dir, camera_name, segment_name)
+        raise ValueError("segment path rejected")
+
+    monkeypatch.setattr(preview_routes, "preview_segment_path", _raise_value_error)
+
+    # When: Fetching the preview segment directly from the route handler
+    with pytest.raises(APIError) as exc_info:
+        await preview_routes.get_preview_segment(
+            camera_name="front",
+            segment_name="segment_000000.ts",
+            preview_token=None,
+            app=app,
+        )
+
+    # Then: The route preserves the canonical not-found response
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.error_code == "NOT_FOUND"
