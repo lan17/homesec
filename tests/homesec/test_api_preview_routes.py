@@ -427,6 +427,35 @@ def test_preview_playlist_rejects_stale_files_when_runtime_is_unavailable(tmp_pa
     assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
 
 
+def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_preview(
+    tmp_path: Path,
+) -> None:
+    """Preview playback should fail closed when runtime status says the session is inactive."""
+    # Given: Stale preview artifacts on disk after the runtime has already marked preview idle
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        status=CameraPreviewStatus(
+            camera_name="front",
+            enabled=True,
+            state=PreviewState.IDLE,
+            viewer_count=0,
+        ),
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        ),
+    )
+    client = _client(app)
+
+    # When: Fetching playback media directly from the stale on-disk HLS window
+    response = client.get("/api/v1/preview/cameras/front/segment_000000.ts")
+
+    # Then: Playback is rejected instead of serving media from an inactive preview session
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "PREVIEW_MEDIA_UNAVAILABLE"
+    assert app.viewer_activity_calls == []
+
+
 def test_post_preview_returns_warning_when_degraded() -> None:
     """POST /preview/cameras/{camera_name} should surface degraded warnings."""
     # Given: A degraded preview that remains attachable

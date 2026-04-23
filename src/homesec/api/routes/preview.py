@@ -29,6 +29,13 @@ from homesec.runtime.models import PreviewRefusalReason
 
 logger = logging.getLogger(__name__)
 _PREVIEW_CACHE_HEADERS = {"Cache-Control": "no-store"}
+_ACTIVE_PLAYBACK_STATES = frozenset(
+    {
+        PreviewState.STARTING,
+        PreviewState.READY,
+        PreviewState.DEGRADED,
+    }
+)
 
 control_router = APIRouter(tags=["preview"])
 playback_router = APIRouter(tags=["preview"])
@@ -198,6 +205,22 @@ async def _ensure_preview_playback_enabled(app: Application, camera_name: str) -
         )
 
 
+async def _ensure_preview_media_active(app: Application, camera_name: str) -> None:
+    try:
+        preview_status = await app.get_camera_preview_status(camera_name)
+    except PreviewCameraNotFoundError as exc:
+        _raise_camera_not_found(exc)
+    except PreviewRuntimeUnavailableError as exc:
+        _raise_runtime_unavailable(exc)
+
+    if not preview_status.enabled or preview_status.state not in _ACTIVE_PLAYBACK_STATES:
+        raise APIError(
+            "Preview media unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        )
+
+
 @control_router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
 async def get_preview_status(
     camera_name: str,
@@ -292,6 +315,7 @@ async def get_preview_playlist(
 ) -> Response:
     """Return the live HLS playlist for a camera preview session."""
     await _ensure_preview_playback_enabled(app, camera_name)
+    await _ensure_preview_media_active(app, camera_name)
     playlist_text = _read_playlist_text(
         preview_playlist_path(_preview_storage_dir(app), camera_name)
     )
@@ -318,6 +342,7 @@ async def get_preview_segment(
         )
 
     await _ensure_preview_playback_enabled(app, camera_name)
+    await _ensure_preview_media_active(app, camera_name)
     try:
         segment_path = preview_segment_path(_preview_storage_dir(app), camera_name, segment_name)
     except ValueError as exc:
