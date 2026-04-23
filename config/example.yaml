@@ -96,6 +96,22 @@ state_store:
   dsn_env: DB_DSN  # e.g., postgresql+asyncpg://user:pass@localhost:5432/homesec
 
 # =============================================================================
+# Preview - Optional live preview served directly by HomeSec (v1 HLS)
+# =============================================================================
+preview:
+  enabled: false
+  backend: hls
+  token_ttl_s: 60
+  idle_timeout_s: 30.0
+  config:
+    segment_duration_ms: 1000
+    live_window_segments: 4
+    storage_dir: /tmp/homesec-preview  # Mount tmpfs here when possible
+    audio_enabled: true
+    audio_codec: auto
+    video_codec: auto
+
+# =============================================================================
 # Notifiers - How to send alerts
 # =============================================================================
 # Optional: set to [] (or disable all entries) to run analysis-only with no external alerts.
