@@ -6,7 +6,7 @@ import asyncio
 import signal
 import tempfile
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -28,7 +28,12 @@ from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.runtime.errors import PreviewRuntimeUnavailableError
 from homesec.runtime.manager import RuntimeManager
-from homesec.runtime.models import CameraPreviewStatus, PreviewState
+from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    PreviewRefusalReason,
+    PreviewState,
+)
 from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
     SubprocessRuntimeHandle,
@@ -36,6 +41,12 @@ from homesec.runtime.subprocess_controller import (
 )
 from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
 from homesec.sources.local_folder import LocalFolderSourceConfig
+
+
+class _FakeProcess:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
 
 
 def _make_config(
@@ -188,6 +199,57 @@ async def test_subprocess_controller_preview_stop_rejects_stale_worker() -> None
             await controller.force_stop_preview(runtime, "front")
     finally:
         await controller.shutdown_runtime(runtime)
+
+
+@pytest.mark.asyncio
+async def test_preview_command_failures_do_not_override_runtime_last_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview command failures should not overwrite runtime-wide worker error state."""
+    # Given: A fresh runtime handle with an existing worker error and a failing preview command
+    controller = SubprocessRuntimeController()
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview-command-error",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    runtime.last_error = "runtime worker exited with code 137"
+
+    async def _raise_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+    ) -> object:
+        _ = (handle, command_type, camera_name)
+        raise RuntimeError("preview command failed")
+
+    monkeypatch.setattr(controller, "_send_command", _raise_send_command)
+
+    try:
+        # When: Preview status, ensure, and stop all hit the command failure path
+        status = await controller.get_preview_status(runtime, "front")
+        ensured = await controller.ensure_preview_active(runtime, "front")
+        with pytest.raises(PreviewRuntimeUnavailableError, match="preview command failed"):
+            await controller.force_stop_preview(runtime, "front")
+
+        # Then: Preview failures stay local and preserve the runtime-wide error context
+        assert status.state == PreviewState.ERROR
+        assert status.last_error == "preview command failed"
+        assert isinstance(ensured, CameraPreviewStartRefusal)
+        assert ensured.reason == PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+        assert ensured.message == "preview command failed"
+        assert runtime.last_error == "runtime worker exited with code 137"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
 
 
 @pytest.mark.asyncio

@@ -277,7 +277,6 @@ class SubprocessRuntimeController(RuntimeController):
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
-            handle.last_error = message
             enabled = self._preview_enabled(handle, camera_name)
             if not enabled:
                 return CameraPreviewStatus(
@@ -332,7 +331,6 @@ class SubprocessRuntimeController(RuntimeController):
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
-            handle.last_error = message
             return CameraPreviewStartRefusal(
                 camera_name=camera_name,
                 reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
@@ -376,7 +374,6 @@ class SubprocessRuntimeController(RuntimeController):
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
-            handle.last_error = message
             raise PreviewRuntimeUnavailableError(message) from exc
 
         if result.stop_result is None:
