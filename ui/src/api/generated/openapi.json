@@ -1072,6 +1072,174 @@
         "title": "PreflightResponse",
         "type": "object"
       },
+      "PreviewSessionResponse": {
+        "properties": {
+          "camera_name": {
+            "title": "Camera Name",
+            "type": "string"
+          },
+          "idle_timeout_s": {
+            "title": "Idle Timeout S",
+            "type": "number"
+          },
+          "playlist_url": {
+            "title": "Playlist Url",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PreviewState"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "token_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Expires At"
+          },
+          "viewer_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewer Count"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "required": [
+          "camera_name",
+          "state",
+          "playlist_url",
+          "idle_timeout_s"
+        ],
+        "title": "PreviewSessionResponse",
+        "type": "object"
+      },
+      "PreviewState": {
+        "description": "Camera-scoped preview lifecycle state.",
+        "enum": [
+          "idle",
+          "starting",
+          "ready",
+          "degraded",
+          "stopping",
+          "error"
+        ],
+        "title": "PreviewState",
+        "type": "string"
+      },
+      "PreviewStatusResponse": {
+        "properties": {
+          "camera_name": {
+            "title": "Camera Name",
+            "type": "string"
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "idle_shutdown_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Shutdown At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PreviewState"
+          },
+          "viewer_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewer Count"
+          }
+        },
+        "required": [
+          "camera_name",
+          "enabled",
+          "state"
+        ],
+        "title": "PreviewStatusResponse",
+        "type": "object"
+      },
+      "PreviewStopResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PreviewState"
+          }
+        },
+        "required": [
+          "accepted",
+          "state"
+        ],
+        "title": "PreviewStopResponse",
+        "type": "object"
+      },
       "ProbeRequest": {
         "properties": {
           "host": {
@@ -2333,6 +2501,131 @@
         "summary": "Probe Onvif Camera",
         "tags": [
           "onvif"
+        ]
+      }
+    },
+    "/api/v1/preview/cameras/{camera_name}": {
+      "delete": {
+        "description": "Force-stop preview for a camera.",
+        "operationId": "force_stop_preview_api_v1_preview_cameras__camera_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewStopResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Force Stop Preview",
+        "tags": [
+          "preview"
+        ]
+      },
+      "get": {
+        "description": "Return preview status for a camera.",
+        "operationId": "get_preview_status_api_v1_preview_cameras__camera_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preview Status",
+        "tags": [
+          "preview"
+        ]
+      },
+      "post": {
+        "description": "Ensure preview is active for a camera and mint a fresh attach token.",
+        "operationId": "ensure_preview_active_api_v1_preview_cameras__camera_name__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ensure Preview Active",
+        "tags": [
+          "preview"
         ]
       }
     },

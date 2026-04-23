@@ -243,6 +243,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/preview/cameras/{camera_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Preview Status
+         * @description Return preview status for a camera.
+         */
+        get: operations["get_preview_status_api_v1_preview_cameras__camera_name__get"];
+        put?: never;
+        /**
+         * Ensure Preview Active
+         * @description Ensure preview is active for a camera and mint a fresh attach token.
+         */
+        post: operations["ensure_preview_active_api_v1_preview_cameras__camera_name__post"];
+        /**
+         * Force Stop Preview
+         * @description Force-stop preview for a camera.
+         */
+        delete: operations["force_stop_preview_api_v1_preview_cameras__camera_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runtime/reload": {
         parameters: {
             query?: never;
@@ -804,6 +832,52 @@ export interface components {
             all_passed: boolean;
             /** Checks */
             checks: components["schemas"]["PreflightCheckResponse"][];
+        };
+        /** PreviewSessionResponse */
+        PreviewSessionResponse: {
+            /** Camera Name */
+            camera_name: string;
+            /** Idle Timeout S */
+            idle_timeout_s: number;
+            /** Playlist Url */
+            playlist_url: string;
+            state: components["schemas"]["PreviewState"];
+            /** Token */
+            token?: string | null;
+            /** Token Expires At */
+            token_expires_at?: string | null;
+            /** Viewer Count */
+            viewer_count?: number | null;
+            /** Warning */
+            warning?: string | null;
+        };
+        /**
+         * PreviewState
+         * @description Camera-scoped preview lifecycle state.
+         * @enum {string}
+         */
+        PreviewState: "idle" | "starting" | "ready" | "degraded" | "stopping" | "error";
+        /** PreviewStatusResponse */
+        PreviewStatusResponse: {
+            /** Camera Name */
+            camera_name: string;
+            /** Degraded Reason */
+            degraded_reason?: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Idle Shutdown At */
+            idle_shutdown_at?: number | null;
+            /** Last Error */
+            last_error?: string | null;
+            state: components["schemas"]["PreviewState"];
+            /** Viewer Count */
+            viewer_count?: number | null;
+        };
+        /** PreviewStopResponse */
+        PreviewStopResponse: {
+            /** Accepted */
+            accepted: boolean;
+            state: components["schemas"]["PreviewState"];
         };
         /** ProbeRequest */
         ProbeRequest: {
@@ -1477,6 +1551,99 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_preview_status_api_v1_preview_cameras__camera_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ensure_preview_active_api_v1_preview_cameras__camera_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    force_stop_preview_api_v1_preview_cameras__camera_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewStopResponse"];
                 };
             };
             /** @description Validation Error */
