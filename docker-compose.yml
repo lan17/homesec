@@ -10,6 +10,8 @@ services:
         condition: service_healthy
     ports:
       - "8081:8081"
+    tmpfs:
+      - /tmp/homesec-preview:size=64m
     volumes:
       - ./config/config.yaml:/config/config.yaml:ro
       - ./.env:/config/.env:ro
