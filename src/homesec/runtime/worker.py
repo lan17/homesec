@@ -421,7 +421,6 @@ class _RuntimeWorkerService:
             correlation_id=self._correlation_id,
             pid=os.getpid(),
             cameras=self._collect_camera_statuses(),
-            previews=self._collect_preview_statuses(),
             message=message,
         )
         self._emitter.send(event)

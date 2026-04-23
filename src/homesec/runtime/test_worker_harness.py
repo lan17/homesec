@@ -215,7 +215,6 @@ class _HarnessService:
             correlation_id=self._correlation_id,
             pid=os.getpid(),
             cameras=self._camera_payloads(),
-            previews=dict(self._preview_statuses),
             message=message,
         )
         self._emitter.send(payload)

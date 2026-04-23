@@ -51,14 +51,17 @@ def _make_config(
     run_mode: VLMRunMode = VLMRunMode.TRIGGER_ONLY,
     source_backend: str = "local_folder",
     preview_enabled: bool = False,
+    camera_names: list[str] | None = None,
 ) -> Config:
+    cameras = [
+        CameraConfig(
+            name=name,
+            source=CameraSourceConfig(backend=source_backend, config={}),
+        )
+        for name in (camera_names or ["front"])
+    ]
     return Config(
-        cameras=[
-            CameraConfig(
-                name="front",
-                source=CameraSourceConfig(backend=source_backend, config={}),
-            )
-        ],
+        cameras=cameras,
         storage=StorageConfig(backend="local", config={}),
         state_store=StateStoreConfig(dsn="postgresql://user:pass@localhost/homesec"),
         notifiers=notifiers,
@@ -69,14 +72,18 @@ def _make_config(
     )
 
 
-def _make_service(config: Config) -> worker_module._RuntimeWorkerService:
+def _make_service(
+    config: Config,
+    *,
+    emitter: object | None = None,
+) -> worker_module._RuntimeWorkerService:
     return worker_module._RuntimeWorkerService(
         config=config,
         generation=1,
         correlation_id="test-correlation-id",
         heartbeat_interval_s=1.0,
         command_socket_path=Path("/tmp/homesec-worker-test.sock"),
-        emitter=cast(Any, _StubEmitter()),
+        emitter=cast(Any, emitter or _StubEmitter()),
     )
 
 
@@ -279,6 +286,38 @@ def test_runtime_worker_preview_status_collection_degrades_when_source_raises() 
     assert payloads["front"].enabled is True
     assert payloads["front"].state == PreviewState.ERROR
     assert payloads["front"].last_error == "Preview status unavailable"
+
+
+def test_runtime_worker_event_payload_stays_under_unix_datagram_limit() -> None:
+    """Heartbeat events should stay within the conservative Unix datagram size budget."""
+
+    class _CapturingEmitter:
+        def __init__(self) -> None:
+            self.payload: object | None = None
+
+        def send(self, event: object) -> None:
+            self.payload = event
+
+        def close(self) -> None:
+            return None
+
+    # Given: A preview-enabled worker with enough cameras to stress the heartbeat payload
+    config = _make_config(
+        notifiers=[],
+        source_backend="rtsp",
+        preview_enabled=True,
+        camera_names=[f"camera_{index}" for index in range(8)],
+    )
+    emitter = _CapturingEmitter()
+    service = _make_service(config, emitter=emitter)
+
+    # When: Emitting a heartbeat event
+    service._emit_event(worker_module.WorkerEventType.HEARTBEAT)
+
+    # Then: The serialized datagram fits within the 2048-byte macOS AF_UNIX limit
+    event = cast(worker_module.WorkerEvent, emitter.payload)
+    assert event.previews == {}
+    assert len(event.model_dump_json().encode("utf-8")) <= 2048
 
 
 def test_runtime_worker_preview_ensure_command_returns_machine_readable_refusal() -> None:
