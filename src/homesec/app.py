@@ -24,6 +24,9 @@ from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.manager import RuntimeManager
 from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    CameraPreviewStopResult,
     ManagedRuntime,
     RuntimeCameraStatus,
     RuntimeReloadRequest,
@@ -343,6 +346,21 @@ class Application:
     async def wait_for_runtime_reload(self) -> RuntimeReloadResult | None:
         """Wait for the in-flight runtime reload (if any)."""
         return await self._require_runtime_manager().wait_for_reload()
+
+    async def get_camera_preview_status(self, camera_name: str) -> CameraPreviewStatus:
+        """Return preview status for a runtime camera."""
+        return await self._require_runtime_manager().get_preview_status(camera_name)
+
+    async def ensure_camera_preview_active(
+        self,
+        camera_name: str,
+    ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+        """Ensure preview is active or attachable for a runtime camera."""
+        return await self._require_runtime_manager().ensure_preview_active(camera_name)
+
+    async def force_stop_camera_preview(self, camera_name: str) -> CameraPreviewStopResult:
+        """Force-stop preview for a runtime camera."""
+        return await self._require_runtime_manager().force_stop_preview(camera_name)
 
     def _require_config(self) -> Config:
         if self._config is None:

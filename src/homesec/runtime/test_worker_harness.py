@@ -12,10 +12,18 @@ import sys
 from pathlib import Path
 
 from homesec.models.config import Config
+from homesec.runtime.models import PreviewRefusalReason, PreviewState
 from homesec.runtime.subprocess_protocol import (
     WorkerCameraStatusPayload,
+    WorkerCommand,
+    WorkerCommandErrorCode,
+    WorkerCommandResult,
+    WorkerCommandType,
     WorkerEvent,
     WorkerEventType,
+    WorkerPreviewRefusalPayload,
+    WorkerPreviewStatusPayload,
+    WorkerPreviewStopPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +57,7 @@ class _HarnessService:
         generation: int,
         correlation_id: str,
         heartbeat_interval_s: float,
+        command_socket_path: Path,
         scenario: str,
         emitter: _HarnessEventEmitter,
     ) -> None:
@@ -56,8 +65,19 @@ class _HarnessService:
         self._generation = generation
         self._correlation_id = correlation_id
         self._heartbeat_interval_s = heartbeat_interval_s
+        self._command_socket_path = command_socket_path
         self._scenario = scenario
         self._emitter = emitter
+        self._command_server: asyncio.Server | None = None
+        self._preview_statuses = {
+            camera.name: WorkerPreviewStatusPayload(
+                enabled=(
+                    config.preview.enabled and camera.enabled and camera.source.backend == "rtsp"
+                ),
+                state=PreviewState.IDLE,
+            )
+            for camera in config.cameras
+        }
 
     async def run(self, stop_event: asyncio.Event) -> None:
         if self._scenario == _STARTUP_FAIL_SCENARIO:
@@ -67,6 +87,11 @@ class _HarnessService:
             )
             raise RuntimeError("runtime harness startup failure")
 
+        self._command_socket_path.unlink(missing_ok=True)
+        self._command_server = await asyncio.start_unix_server(
+            self._handle_command_connection,
+            path=str(self._command_socket_path),
+        )
         self._emit_event(WorkerEventType.STARTED)
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(stop_event))
         try:
@@ -77,6 +102,12 @@ class _HarnessService:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
+            command_server = self._command_server
+            self._command_server = None
+            if command_server is not None:
+                command_server.close()
+                await command_server.wait_closed()
+            self._command_socket_path.unlink(missing_ok=True)
             self._emit_event(WorkerEventType.STOPPED)
 
     def emit_error(self, exc: Exception) -> None:
@@ -92,6 +123,99 @@ class _HarnessService:
                 )
             except asyncio.TimeoutError:
                 self._emit_event(WorkerEventType.HEARTBEAT)
+
+    async def _handle_command_connection(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        client_disconnected = False
+        try:
+            raw_command = await reader.readline()
+            if not raw_command:
+                return
+            command = WorkerCommand.model_validate_json(raw_command.decode("utf-8"))
+            result = self._handle_command(command)
+            writer.write(result.model_dump_json().encode("utf-8") + b"\n")
+            try:
+                await writer.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                client_disconnected = True
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (BrokenPipeError, ConnectionResetError):
+                client_disconnected = True
+            if client_disconnected:
+                logger.debug("Harness preview command client disconnected before response flush")
+
+    def _handle_command(self, command: WorkerCommand) -> WorkerCommandResult:
+        if command.camera_name not in self._preview_statuses:
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                error_code=WorkerCommandErrorCode.CAMERA_NOT_FOUND,
+                error_message=f"Camera '{command.camera_name}' not found",
+            )
+
+        preview_status = self._preview_statuses[command.camera_name]
+        if command.command == WorkerCommandType.PREVIEW_STATUS:
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                status=preview_status,
+            )
+        if command.command == WorkerCommandType.PREVIEW_ENSURE_ACTIVE:
+            if not preview_status.enabled:
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    refusal=WorkerPreviewRefusalPayload(
+                        reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                        message="Preview is not enabled for this camera",
+                    ),
+                )
+            ready_status = WorkerPreviewStatusPayload(
+                enabled=True,
+                state=PreviewState.READY,
+                viewer_count=0,
+            )
+            self._preview_statuses[command.camera_name] = ready_status
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                status=ready_status,
+            )
+        stopping_status = WorkerPreviewStatusPayload(
+            enabled=preview_status.enabled,
+            state=PreviewState.STOPPING,
+            viewer_count=preview_status.viewer_count,
+        )
+        self._preview_statuses[command.camera_name] = stopping_status
+        return WorkerCommandResult(
+            command=command.command,
+            command_id=command.command_id,
+            generation=self._generation,
+            correlation_id=self._correlation_id,
+            camera_name=command.camera_name,
+            stop_result=WorkerPreviewStopPayload(
+                accepted=True,
+                state=PreviewState.STOPPING,
+            ),
+        )
 
     def _emit_event(self, event: WorkerEventType, *, message: str | None = None) -> None:
         payload = WorkerEvent(
@@ -119,6 +243,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--generation", type=int, required=True)
     parser.add_argument("--config-json-path", type=Path, required=True)
     parser.add_argument("--control-socket-path", type=Path, required=True)
+    parser.add_argument("--command-socket-path", type=Path, required=True)
     parser.add_argument("--correlation-id", type=str, required=True)
     parser.add_argument("--heartbeat-interval-s", type=float, default=0.05)
     parser.add_argument(
@@ -137,6 +262,7 @@ async def _run_harness(args: argparse.Namespace) -> None:
         generation=args.generation,
         correlation_id=args.correlation_id,
         heartbeat_interval_s=args.heartbeat_interval_s,
+        command_socket_path=args.command_socket_path,
         scenario=args.harness_scenario,
         emitter=emitter,
     )

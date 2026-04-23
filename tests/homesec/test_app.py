@@ -30,6 +30,11 @@ from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    CameraPreviewStopResult,
+    PreviewRefusalReason,
+    PreviewState,
     RuntimeCameraStatus,
     RuntimeState,
     RuntimeStatusSnapshot,
@@ -112,6 +117,7 @@ class _StubRuntimeController(RuntimeController):
             correlation_id=f"test-{generation}",
             temp_dir=Path("/tmp"),
             control_socket_path=Path("/tmp/homesec-test.sock"),
+            command_socket_path=Path("/tmp/homesec-test-command.sock"),
             config_json_path=Path("/tmp/homesec-test.json"),
         )
         self._handles.append(handle)
@@ -136,6 +142,42 @@ class _StubRuntimeController(RuntimeController):
     async def shutdown_all(self) -> None:
         for handle in self._handles:
             await self.shutdown_runtime(handle)
+
+    async def get_preview_status(
+        self,
+        runtime: SubprocessRuntimeHandle,
+        camera_name: str,
+    ) -> CameraPreviewStatus:
+        _ = runtime
+        return CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=False,
+            state=PreviewState.IDLE,
+        )
+
+    async def ensure_preview_active(
+        self,
+        runtime: SubprocessRuntimeHandle,
+        camera_name: str,
+    ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+        _ = runtime
+        return CameraPreviewStartRefusal(
+            camera_name=camera_name,
+            reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+            message="Preview is not enabled for this camera",
+        )
+
+    async def force_stop_preview(
+        self,
+        runtime: SubprocessRuntimeHandle,
+        camera_name: str,
+    ) -> CameraPreviewStopResult:
+        _ = runtime
+        return CameraPreviewStopResult(
+            camera_name=camera_name,
+            accepted=True,
+            state=PreviewState.STOPPING,
+        )
 
 
 class _StubRuntimeManagerStatus:
@@ -273,6 +315,7 @@ def test_get_runtime_status_preserves_reloading_when_heartbeat_is_stale() -> Non
         correlation_id="test-2",
         temp_dir=Path("/tmp"),
         control_socket_path=Path("/tmp/homesec-test.sock"),
+        command_socket_path=Path("/tmp/homesec-test-command.sock"),
         config_json_path=Path("/tmp/homesec-test.json"),
     )
     runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=1002))
@@ -313,6 +356,7 @@ def test_camera_health_degrades_when_runtime_heartbeat_is_stale() -> None:
         correlation_id="test-2",
         temp_dir=Path("/tmp"),
         control_socket_path=Path("/tmp/homesec-test.sock"),
+        command_socket_path=Path("/tmp/homesec-test-command.sock"),
         config_json_path=Path("/tmp/homesec-test.json"),
     )
     runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=1002))
@@ -437,6 +481,65 @@ async def test_request_runtime_reload_maps_source_config_error_to_400(
     # Then: API-facing error status/code are mapped from ConfigErrorCode
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_code == ConfigErrorCode.FILE_NOT_FOUND.value
+
+
+@pytest.mark.asyncio
+async def test_application_preview_methods_delegate_to_runtime_manager() -> None:
+    """Application preview facade should delegate to runtime manager methods."""
+
+    class _StubRuntimeManager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def get_preview_status(self, camera_name: str) -> CameraPreviewStatus:
+            self.calls.append(("status", camera_name))
+            return CameraPreviewStatus(
+                camera_name=camera_name,
+                enabled=True,
+                state=PreviewState.READY,
+                viewer_count=1,
+            )
+
+        async def ensure_preview_active(
+            self,
+            camera_name: str,
+        ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+            self.calls.append(("ensure", camera_name))
+            return CameraPreviewStatus(
+                camera_name=camera_name,
+                enabled=True,
+                state=PreviewState.READY,
+                viewer_count=1,
+            )
+
+        async def force_stop_preview(self, camera_name: str) -> CameraPreviewStopResult:
+            self.calls.append(("stop", camera_name))
+            return CameraPreviewStopResult(
+                camera_name=camera_name,
+                accepted=True,
+                state=PreviewState.STOPPING,
+            )
+
+    # Given: An application with a runtime manager that records preview calls
+    app = Application(config_path=Path(__file__))
+    manager = _StubRuntimeManager()
+    app._runtime_manager = cast(Any, manager)
+
+    # When: Calling the application preview methods
+    status = await app.get_camera_preview_status("front_door")
+    ensured = await app.ensure_camera_preview_active("front_door")
+    stopped = await app.force_stop_camera_preview("front_door")
+
+    # Then: Preview methods delegate through the runtime manager facade
+    assert status.state == PreviewState.READY
+    assert isinstance(ensured, CameraPreviewStatus)
+    assert ensured.state == PreviewState.READY
+    assert stopped.state == PreviewState.STOPPING
+    assert manager.calls == [
+        ("status", "front_door"),
+        ("ensure", "front_door"),
+        ("stop", "front_door"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -579,6 +682,7 @@ def test_get_runtime_status_uses_worker_exit_code_for_stale_runtime() -> None:
         correlation_id="test-3",
         temp_dir=Path("/tmp"),
         control_socket_path=Path("/tmp/homesec-test.sock"),
+        command_socket_path=Path("/tmp/homesec-test-command.sock"),
         config_json_path=Path("/tmp/homesec-test.json"),
     )
     runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=1003))

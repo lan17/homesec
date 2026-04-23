@@ -25,8 +25,18 @@ from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.runtime.controller import RuntimeController
+from homesec.runtime.errors import PreviewRuntimeUnavailableError
 from homesec.runtime.manager import RuntimeManager
-from homesec.runtime.models import RuntimeBundle, RuntimeState, config_signature
+from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    CameraPreviewStopResult,
+    PreviewRefusalReason,
+    PreviewState,
+    RuntimeBundle,
+    RuntimeState,
+    config_signature,
+)
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
@@ -95,6 +105,9 @@ class _FakeController(RuntimeController):
         self.build_calls: list[int] = []
         self.start_calls: list[int] = []
         self.shutdown_calls: list[int] = []
+        self.preview_status_calls: list[tuple[int, str]] = []
+        self.preview_ensure_calls: list[tuple[int, str]] = []
+        self.preview_force_stop_calls: list[tuple[int, str]] = []
         self.shutdown_all_calls = 0
         self.running_generations: set[int] = set()
         self.fail_build_generations: set[int] = set()
@@ -102,6 +115,9 @@ class _FakeController(RuntimeController):
         self.fail_shutdown_generations: set[int] = set()
         self.block_start_generations: set[int] = set()
         self.start_gate: asyncio.Event | None = None
+        self.preview_status_result: CameraPreviewStatus | None = None
+        self.preview_ensure_result: CameraPreviewStatus | CameraPreviewStartRefusal | None = None
+        self.preview_force_stop_result: CameraPreviewStopResult | None = None
 
     async def build_candidate(self, config: Config, generation: int) -> RuntimeBundle:
         self.build_calls.append(generation)
@@ -128,6 +144,48 @@ class _FakeController(RuntimeController):
     async def shutdown_all(self) -> None:
         self.shutdown_all_calls += 1
         self.running_generations.clear()
+
+    async def get_preview_status(
+        self,
+        runtime: RuntimeBundle,
+        camera_name: str,
+    ) -> CameraPreviewStatus:
+        self.preview_status_calls.append((runtime.generation, camera_name))
+        if self.preview_status_result is not None:
+            return self.preview_status_result
+        return CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=False,
+            state=PreviewState.IDLE,
+        )
+
+    async def ensure_preview_active(
+        self,
+        runtime: RuntimeBundle,
+        camera_name: str,
+    ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+        self.preview_ensure_calls.append((runtime.generation, camera_name))
+        if self.preview_ensure_result is not None:
+            return self.preview_ensure_result
+        return CameraPreviewStartRefusal(
+            camera_name=camera_name,
+            reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+            message="Preview is not enabled for this camera",
+        )
+
+    async def force_stop_preview(
+        self,
+        runtime: RuntimeBundle,
+        camera_name: str,
+    ) -> CameraPreviewStopResult:
+        self.preview_force_stop_calls.append((runtime.generation, camera_name))
+        if self.preview_force_stop_result is not None:
+            return self.preview_force_stop_result
+        return CameraPreviewStopResult(
+            camera_name=camera_name,
+            accepted=True,
+            state=PreviewState.STOPPING,
+        )
 
 
 def _make_config(*, camera_name: str, watch_dir: str) -> Config:
@@ -468,3 +526,63 @@ async def test_runtime_manager_shutdown_cancels_stuck_reload_task() -> None:
     status = manager.get_status()
     assert status.state == RuntimeState.IDLE
     assert status.reload_in_progress is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_manager_delegates_preview_methods_to_active_runtime() -> None:
+    """Preview control should target the currently active runtime generation."""
+    # Given: An active runtime with preview responses configured on the controller
+    controller = _FakeController()
+    controller.preview_status_result = CameraPreviewStatus(
+        camera_name="front",
+        enabled=True,
+        state=PreviewState.READY,
+        viewer_count=2,
+    )
+    controller.preview_ensure_result = CameraPreviewStatus(
+        camera_name="front",
+        enabled=True,
+        state=PreviewState.READY,
+        viewer_count=2,
+    )
+    controller.preview_force_stop_result = CameraPreviewStopResult(
+        camera_name="front",
+        accepted=True,
+        state=PreviewState.STOPPING,
+    )
+    manager = RuntimeManager(controller)
+    config = _make_config(camera_name="front", watch_dir="/tmp/front-preview")
+    await manager.start_initial_runtime(config)
+
+    # When: Querying preview status, ensuring preview, and force-stopping preview
+    status = await manager.get_preview_status("front")
+    ensured = await manager.ensure_preview_active("front")
+    stopped = await manager.force_stop_preview("front")
+
+    # Then: Each preview operation targets the active runtime generation
+    assert status.state == PreviewState.READY
+    assert controller.preview_status_calls == [(1, "front")]
+    assert isinstance(ensured, CameraPreviewStatus)
+    assert ensured.state == PreviewState.READY
+    assert controller.preview_ensure_calls == [(1, "front")]
+    assert stopped.state == PreviewState.STOPPING
+    assert controller.preview_force_stop_calls == [(1, "front")]
+
+
+@pytest.mark.asyncio
+async def test_runtime_manager_preview_methods_require_active_runtime() -> None:
+    """Preview control should fail explicitly before any runtime is active."""
+    # Given: A runtime manager with no active runtime
+    manager = RuntimeManager(_FakeController())
+
+    # When/Then: Preview status requires an active runtime
+    with pytest.raises(PreviewRuntimeUnavailableError, match="Runtime is not active"):
+        await manager.get_preview_status("front")
+
+    # When/Then: Preview ensure requires an active runtime
+    with pytest.raises(PreviewRuntimeUnavailableError, match="Runtime is not active"):
+        await manager.ensure_preview_active("front")
+
+    # When/Then: Preview force-stop requires an active runtime
+    with pytest.raises(PreviewRuntimeUnavailableError, match="Runtime is not active"):
+        await manager.force_stop_preview("front")
