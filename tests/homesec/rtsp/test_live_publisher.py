@@ -285,6 +285,35 @@ def test_auto_codec_prefers_copy_for_h264_and_aac(tmp_path: Path) -> None:
     assert "libx264" not in cmd
 
 
+def test_auto_codec_transcodes_mp4_safe_but_hls_unsafe_audio(tmp_path: Path) -> None:
+    """auto codec mode should transcode non-browser HLS audio even if recording can copy it."""
+    # Given: A publisher whose source probe reports H.264 video and AC-3 audio
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(_probe_stream(video_codec="h264", audio_codec="ac3")),
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The preview keeps video copy but transcodes audio to AAC for browser playback
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    cmd = calls[0]["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:a") + 1] == "aac"
+    assert cmd[cmd.index("-b:a") + 1] == "128k"
+
+
 def test_auto_codec_transcodes_non_browser_safe_source(tmp_path: Path) -> None:
     """auto codec mode should transcode unsupported source codecs to browser-safe outputs."""
     # Given: A publisher whose source probe reports H.265 video and PCMA audio

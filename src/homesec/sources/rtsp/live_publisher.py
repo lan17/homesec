@@ -22,7 +22,6 @@ from homesec.sources.rtsp.discovery import (
     ProbeStreamInfo,
     build_camera_key,
 )
-from homesec.sources.rtsp.recording_profile import is_mp4_audio_copy_compatible
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
     _format_cmd,
@@ -36,6 +35,7 @@ logger = logging.getLogger(__name__)
 _READY_POLL_INTERVAL_S = 0.1
 _DEFAULT_VIEWER_WINDOW_S = 2.0
 _START_FAILURE_MAX_BYTES = 4_000
+_HLS_BROWSER_COPY_AUDIO_CODECS: frozenset[str] = frozenset({"aac"})
 _SESSION_LIMIT_HINTS: tuple[str, ...] = (
     "too many clients",
     "too many connections",
@@ -473,7 +473,9 @@ class HLSLivePublisher(LivePublisher):
             audio_args = ("-map", "0:a:0?", "-c:a", "copy")
         elif self._audio_codec == "aac":
             audio_args = ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
-        elif stream_info is not None and is_mp4_audio_copy_compatible(stream_info.audio_codec):
+        elif stream_info is not None and _is_hls_browser_audio_copy_compatible(
+            stream_info.audio_codec
+        ):
             audio_args = ("-map", "0:a:0?", "-c:a", "copy")
         else:
             audio_args = ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
@@ -851,6 +853,12 @@ def _classify_start_refusal(stderr_tail: str) -> LivePublisherRefusalReason:
         if hint in lowered:
             return LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
     return LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+
+
+def _is_hls_browser_audio_copy_compatible(audio_codec: str | None) -> bool:
+    if audio_codec is None:
+        return False
+    return audio_codec.strip().lower() in _HLS_BROWSER_COPY_AUDIO_CODECS
 
 
 def _h264_transcode_args(segment_duration_s: float) -> tuple[str, ...]:
