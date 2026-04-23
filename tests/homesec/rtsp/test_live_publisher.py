@@ -1243,6 +1243,94 @@ def test_waiting_activation_inherits_failed_start_result(tmp_path: Path) -> None
     assert publisher.status().state == LivePublisherState.ERROR
 
 
+def test_waiting_activation_keeps_failed_result_after_later_restart(tmp_path: Path) -> None:
+    """Queued activation callers should not inherit a later restart after their start already failed."""
+
+    # Given: One preview activation probing slowly while a second caller waits behind it
+    class _ThreadClock:
+        def __init__(self) -> None:
+            self.wait_started = Event()
+            self.release_wait = Event()
+
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            _ = seconds
+            self.wait_started.set()
+            self.release_wait.wait(timeout=1.0)
+
+    clock = _ThreadClock()
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=clock, discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_results: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+    failed_start = _fake_popen_factory(
+        calls,
+        make_output=False,
+        returncode=1,
+        stderr_text="Too many clients already connected.\n",
+    )
+    successful_restart = _fake_popen_factory(calls)
+
+    def run_ensure_active(name: str) -> None:
+        start_results[name] = publisher.ensure_active()
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **kwargs: object,
+    ) -> FakeProc:
+        factory = failed_start if len(calls) == 0 else successful_restart
+        return factory(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=start_new_session,
+            **kwargs,
+        )
+
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=fake_popen,
+    ):
+        first_thread = Thread(target=run_ensure_active, args=("first",))
+        second_thread = Thread(target=run_ensure_active, args=("second",))
+        third_thread = Thread(target=run_ensure_active, args=("third",))
+        first_thread.start()
+        assert discovery.started.wait(timeout=0.2)
+        second_thread.start()
+        assert clock.wait_started.wait(timeout=0.2)
+
+        # When: The original start fails and a later caller restarts preview before the waiter wakes
+        discovery.release.set()
+        first_thread.join(timeout=1.0)
+        third_thread.start()
+        third_thread.join(timeout=1.0)
+        clock.release_wait.set()
+        second_thread.join(timeout=1.0)
+
+    # Then: The waiting caller still receives the failed start instead of inheriting the restart
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert not third_thread.is_alive()
+    first_result = start_results["first"]
+    second_result = start_results["second"]
+    third_result = start_results["third"]
+    assert isinstance(first_result, LivePublisherStartRefusal)
+    assert first_result.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert second_result == first_result
+    assert isinstance(third_result, LivePublisherStatus)
+    assert third_result.state == LivePublisherState.READY
+    assert third_result.viewer_count == 0
+    assert third_result.idle_shutdown_at is not None
+    assert len(calls) == 2
+    assert publisher.status() == third_result
+
+
 def test_recording_priority_preempts_slow_probe_before_spawn(tmp_path: Path) -> None:
     """Recording activation should interrupt startup before ffmpeg spawn when probing is slow."""
 

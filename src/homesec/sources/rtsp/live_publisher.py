@@ -171,10 +171,10 @@ class HLSLivePublisher(LivePublisher):
         self._last_cancellation_result: LivePublisherStatus | LivePublisherStartRefusal = (
             self._status
         )
-        self._last_completed_start_token = 0
-        self._last_completed_start_result: LivePublisherStatus | LivePublisherStartRefusal = (
-            self._status
-        )
+        self._completed_start_results: dict[
+            int, LivePublisherStatus | LivePublisherStartRefusal
+        ] = {}
+        self._queued_start_waiters: dict[int, int] = {}
         self._start_in_progress = False
         self._active_start_token = 0
         self._cancelled_start_token = 0
@@ -200,13 +200,22 @@ class HLSLivePublisher(LivePublisher):
                 now = self._clock.now()
                 self._refresh_locked(now=now)
                 if queued_start_token and self._start_was_cancelled_locked(queued_start_token):
+                    self._release_queued_start_waiter_locked(queued_start_token)
                     return self._last_cancellation_result
                 if self._stop_requested_since_locked(stop_request_token):
+                    self._release_queued_start_waiter_locked(queued_start_token)
                     return self._last_cancellation_result
                 if self._recording_active:
+                    self._release_queued_start_waiter_locked(queued_start_token)
                     return self._recording_priority_refusal()
 
+                completed_start_result = self._completed_start_results.get(queued_start_token)
+                if completed_start_result is not None:
+                    self._release_queued_start_waiter_locked(queued_start_token)
+                    return completed_start_result
+
                 if self._is_process_running_locked():
+                    self._release_queued_start_waiter_locked(queued_start_token)
                     self._mark_activity_locked(now=now)
                     self._status = self._build_running_status_locked(
                         now=now,
@@ -216,14 +225,16 @@ class HLSLivePublisher(LivePublisher):
                     self._ensure_maintenance_thread_started_locked()
                     return self._status
 
-                if queued_start_token and self._last_completed_start_token == queued_start_token:
-                    return self._last_completed_start_result
-
                 if self._start_in_progress:
-                    queued_start_token = self._active_start_token
+                    next_queued_start_token = self._active_start_token
+                    if queued_start_token != next_queued_start_token:
+                        self._release_queued_start_waiter_locked(queued_start_token)
+                        queued_start_token = next_queued_start_token
+                        self._register_queued_start_waiter_locked(queued_start_token)
                     self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
                     continue
 
+                self._release_queued_start_waiter_locked(queued_start_token)
                 queued_start_token = 0
                 self._start_in_progress = True
                 self._active_start_token += 1
@@ -237,9 +248,8 @@ class HLSLivePublisher(LivePublisher):
         finally:
             with self._lock:
                 self._start_in_progress = False
-                if start_result is not None:
-                    self._last_completed_start_token = start_token
-                    self._last_completed_start_result = start_result
+                if start_result is not None and self._queued_start_waiters.get(start_token, 0) > 0:
+                    self._completed_start_results[start_token] = start_result
 
     def request_stop(self) -> None:
         with self._lock:
@@ -751,6 +761,23 @@ class HLSLivePublisher(LivePublisher):
     def _cancel_pending_start_locked(self) -> None:
         if self._start_in_progress:
             self._cancelled_start_token = self._active_start_token
+
+    def _register_queued_start_waiter_locked(self, start_token: int) -> None:
+        if start_token <= 0:
+            return
+        self._queued_start_waiters[start_token] = self._queued_start_waiters.get(start_token, 0) + 1
+
+    def _release_queued_start_waiter_locked(self, start_token: int) -> None:
+        if start_token <= 0:
+            return
+        current_waiters = self._queued_start_waiters.get(start_token)
+        if current_waiters is None:
+            return
+        if current_waiters <= 1:
+            self._queued_start_waiters.pop(start_token, None)
+            self._completed_start_results.pop(start_token, None)
+            return
+        self._queued_start_waiters[start_token] = current_waiters - 1
 
     def _start_was_cancelled_locked(self, start_token: int) -> bool:
         return self._cancelled_start_token >= start_token
