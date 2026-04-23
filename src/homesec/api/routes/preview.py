@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,6 @@ from urllib.parse import quote, urlencode
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
-from starlette.background import BackgroundTask
 
 from homesec.api.dependencies import get_homesec_app, verify_preview_access
 from homesec.api.errors import APIError, APIErrorCode
@@ -254,6 +254,22 @@ async def _note_preview_viewer_activity_best_effort(
         )
 
 
+def _schedule_preview_viewer_activity_best_effort(
+    app: Application,
+    camera_name: str,
+    *,
+    viewer_id: str | None = None,
+) -> None:
+    """Kick off viewer-activity bookkeeping without blocking segment delivery."""
+    asyncio.create_task(
+        _note_preview_viewer_activity_best_effort(
+            app,
+            camera_name,
+            viewer_id=viewer_id,
+        )
+    )
+
+
 @control_router.get("/api/v1/preview/cameras/{camera_name}", response_model=PreviewStatusResponse)
 async def get_preview_status(
     camera_name: str,
@@ -392,14 +408,13 @@ async def get_preview_segment(
             error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
         )
 
+    _schedule_preview_viewer_activity_best_effort(
+        app,
+        camera_name,
+        viewer_id=preview_token,
+    )
     return FileResponse(
         path=segment_path,
         media_type="video/mp2t",
         headers=_PREVIEW_CACHE_HEADERS,
-        background=BackgroundTask(
-            _note_preview_viewer_activity_best_effort,
-            app,
-            camera_name,
-            viewer_id=preview_token,
-        ),
     )

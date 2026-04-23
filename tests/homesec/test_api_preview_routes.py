@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -345,11 +346,11 @@ def test_preview_tokenized_playlist_url_is_playable_end_to_end(
 
 
 @pytest.mark.asyncio
-async def test_preview_segment_defers_viewer_activity_until_after_response_creation(
+async def test_preview_segment_starts_viewer_activity_without_blocking_response_creation(
     tmp_path: Path,
 ) -> None:
-    """Segment responses should not block on viewer-activity bookkeeping."""
-    # Given: Active preview media and a viewer-activity callback that records successful playback
+    """Segment responses should start viewer bookkeeping promptly without blocking."""
+    # Given: Active preview media and a viewer-activity callback that blocks until released
     _write_preview_files(tmp_path, "front")
     app = _StubPreviewApp(
         preview_config=PreviewConfig(
@@ -357,6 +358,19 @@ async def test_preview_segment_defers_viewer_activity_until_after_response_creat
             config=HLSPreviewConfig(storage_dir=tmp_path),
         )
     )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_note(
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        started.set()
+        await release.wait()
+        app.viewer_activity_calls.append((camera_name, viewer_id))
+
+    app.note_camera_preview_viewer_activity = _blocking_note
 
     # When: Building the segment response directly from the route handler
     response = await preview_routes.get_preview_segment(
@@ -366,10 +380,13 @@ async def test_preview_segment_defers_viewer_activity_until_after_response_creat
         app=app,
     )
 
-    # Then: The route returns immediately and defers viewer activity to the response background task
+    # Then: The route returns immediately and the bookkeeping task starts without waiting
     assert app.viewer_activity_calls == []
-    assert response.background is not None
-    await response.background()
+    assert response.background is None
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    assert app.viewer_activity_calls == []
+    release.set()
+    await asyncio.sleep(0)
     assert app.viewer_activity_calls == [("front", "preview-token")]
 
 
