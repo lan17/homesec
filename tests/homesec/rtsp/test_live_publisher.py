@@ -1001,6 +1001,66 @@ def test_successful_start_resets_recording_failure_counter(tmp_path: Path) -> No
     assert len(calls) == 3
 
 
+def test_intervening_temporary_start_failure_resets_recording_failure_counter(
+    tmp_path: Path,
+) -> None:
+    """A non-session start failure should break a session-budget failure streak."""
+    # Given: A concurrent-preview publisher with mixed start failures while recording
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+    stderr_by_call = [
+        "Too many clients already connected.\n",
+        "Encoder failed before producing the first segment.\n",
+        "Too many clients already connected.\n",
+    ]
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(pid=916_000_000 + call_index, returncode=1)
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write(stderr_by_call[call_index])
+            stderr_handle.flush()
+        return proc
+
+    # When: A generic preview failure lands between two session-budget failures
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        third = publisher.ensure_active()
+
+    # Then: The later session-budget failure starts a new streak instead of downgrading
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert isinstance(second, LivePublisherStartRefusal)
+    assert second.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert isinstance(third, LivePublisherStartRefusal)
+    assert third.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        last_error="Too many clients already connected.",
+    )
+    assert len(calls) == 3
+
+
 def test_successful_start_separates_start_failure_from_early_exit(
     tmp_path: Path,
 ) -> None:
@@ -1150,6 +1210,87 @@ def test_non_session_early_exits_while_recording_do_not_downgrade_concurrent_pre
     assert second_status.degraded_reason is None
     assert isinstance(third_start, LivePublisherStatus)
     assert third_start.state == LivePublisherState.READY
+    assert len(calls) == 3
+
+
+def test_intervening_non_session_early_exit_resets_recording_failure_counter(
+    tmp_path: Path,
+) -> None:
+    """A non-session early exit should break a session-budget early-exit streak."""
+    # Given: A concurrent-preview publisher with mixed early exits while recording
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+    stderr_by_call = [
+        "Too many clients already connected.\n",
+        "Encoder failed after startup.\n",
+        "Too many clients already connected.\n",
+    ]
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(pid=925_000_000 + call_index)
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write(stderr_by_call[call_index])
+            stderr_handle.flush()
+        playlist_path = Path(cmd[-1])
+        segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+        _write_live_output(
+            playlist_path=playlist_path,
+            segment_pattern=segment_pattern,
+        )
+        return proc
+
+    # When: A generic early exit lands between two session-budget early exits
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first_start = publisher.ensure_active()
+        first_proc = calls[0]["proc"]
+        assert isinstance(first_proc, FakeProc)
+        first_proc.returncode = 1
+        first_status = publisher.status()
+
+        second_start = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        second_status = publisher.status()
+
+        third_start = publisher.ensure_active()
+        third_proc = calls[2]["proc"]
+        assert isinstance(third_proc, FakeProc)
+        third_proc.returncode = 1
+        third_status = publisher.status()
+
+    # Then: The later session-budget early exit starts a new streak instead of downgrading
+    assert isinstance(first_start, LivePublisherStatus)
+    assert first_start.state == LivePublisherState.READY
+    assert first_status.state == LivePublisherState.ERROR
+    assert first_status.degraded_reason is None
+    assert isinstance(second_start, LivePublisherStatus)
+    assert second_start.state == LivePublisherState.READY
+    assert second_status.state == LivePublisherState.ERROR
+    assert second_status.degraded_reason is None
+    assert isinstance(third_start, LivePublisherStatus)
+    assert third_start.state == LivePublisherState.READY
+    assert third_status.state == LivePublisherState.ERROR
+    assert third_status.degraded_reason is None
     assert len(calls) == 3
 
 

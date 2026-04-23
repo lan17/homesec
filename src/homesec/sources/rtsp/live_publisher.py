@@ -628,6 +628,7 @@ class HLSLivePublisher(LivePublisher):
                 self._status = self._idle_status_locked()
             return
 
+        self._reset_recording_preview_early_exit_streak_after_healthy_run_locked(now=now)
         viewer_count = self._viewer_count_locked(now=now)
         if viewer_count == 0 and self._last_activity_at is not None:
             idle_shutdown_at = self._last_activity_at + self._idle_timeout_s
@@ -867,16 +868,19 @@ class HLSLivePublisher(LivePublisher):
             not self._recording_active
             or self._recording_policy != "allow_during_recording"
             or self._preview_downgraded_locked()
-            or refusal.reason is LivePublisherRefusalReason.RECORDING_PRIORITY
-            or not should_count
         ):
+            return refusal
+        if refusal.reason is LivePublisherRefusalReason.RECORDING_PRIORITY or not should_count:
+            self._reset_recording_preview_failure_streaks_locked()
             return refusal
 
         match failure_kind:
             case "start":
+                self._consecutive_recording_preview_early_exits = 0
                 self._consecutive_recording_preview_start_failures += 1
                 consecutive_failures = self._consecutive_recording_preview_start_failures
             case "early_exit":
+                self._consecutive_recording_preview_start_failures = 0
                 self._consecutive_recording_preview_early_exits += 1
                 consecutive_failures = self._consecutive_recording_preview_early_exits
         logger.warning(
@@ -900,6 +904,23 @@ class HLSLivePublisher(LivePublisher):
         self._consecutive_recording_preview_start_failures = 0
         self._consecutive_recording_preview_early_exits = 0
 
+    def _reset_recording_preview_early_exit_streak_after_healthy_run_locked(
+        self,
+        *,
+        now: float,
+    ) -> None:
+        if (
+            not self._recording_active
+            or self._recording_policy != "allow_during_recording"
+            or self._preview_downgraded_locked()
+        ):
+            return
+        reference_at = self._recording_preview_early_exit_reference_at_locked()
+        if reference_at is None:
+            return
+        if (now - reference_at) > self._recording_preview_early_exit_window_s:
+            self._consecutive_recording_preview_early_exits = 0
+
     def _is_recording_preview_early_exit_locked(self, *, now: float) -> bool:
         if (
             not self._recording_active
@@ -907,14 +928,18 @@ class HLSLivePublisher(LivePublisher):
             or self._preview_downgraded_locked()
         ):
             return False
+        reference_at = self._recording_preview_early_exit_reference_at_locked()
+        if reference_at is None:
+            return True
+        return (now - reference_at) <= self._recording_preview_early_exit_window_s
+
+    def _recording_preview_early_exit_reference_at_locked(self) -> float | None:
         reference_at = self._preview_ready_at
         if self._recording_active_since is not None and (
             reference_at is None or self._recording_active_since > reference_at
         ):
             reference_at = self._recording_active_since
-        if reference_at is None:
-            return True
-        return (now - reference_at) <= self._recording_preview_early_exit_window_s
+        return reference_at
 
     def _output_ready_locked(self) -> bool:
         if not self._playlist_path.exists():

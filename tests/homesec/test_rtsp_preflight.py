@@ -997,6 +997,72 @@ def test_concurrent_preview_session_validation_returns_failed_for_generic_failur
     assert len(calls) == 3
 
 
+def test_concurrent_preview_probe_validation_keeps_ffprobe_open_for_overlap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview probe validation should keep ffprobe connected during overlap."""
+
+    class _FakeProc:
+        def __init__(self) -> None:
+            self._returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self._returncode
+
+        def terminate(self) -> None:
+            if self._returncode is None:
+                self._returncode = 0
+
+        def communicate(self, timeout: float) -> tuple[str, str]:
+            _ = timeout
+            if self._returncode is None:
+                self._returncode = 0
+            return ("", "")
+
+        def kill(self) -> None:
+            self._returncode = -9
+
+    calls: list[list[str]] = []
+
+    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
+        assert _kwargs.get("start_new_session") is True
+        calls.append(list(cmd))
+        return _FakeProc()
+
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery([]),
+        session_overlap_s=1.0,
+    )
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
+
+    # Given: the preview startup probe must open beside motion and recording consumers
+    motion_url = "rtsp://cam/motion"
+    recording_url = "rtsp://cam/recording"
+    preview_probe_url = "rtsp://cam/preview"
+
+    # When: validating the current startup-probe topology
+    result = preflight._validate_concurrent_preview_probe_session_limits(
+        motion_url,
+        recording_url,
+        preview_probe_url,
+    )
+
+    # Then: ffprobe reads packets for the overlap window instead of exiting after metadata
+    assert result is ConcurrentStreamOpenResult.SUPPORTED
+    assert [cmd[0] for cmd in calls] == ["ffmpeg", "ffmpeg", "ffprobe"]
+    ffprobe_cmd = calls[2]
+    assert "-read_intervals" in ffprobe_cmd
+    assert "%+2.0" in ffprobe_cmd
+    assert "-count_packets" in ffprobe_cmd
+    assert "stream=codec_name,width,height,avg_frame_rate,nb_read_packets" in ffprobe_cmd
+    assert ffprobe_cmd[-1] == preview_probe_url
+
+
 def test_session_limit_validation_requires_clean_exit_after_overlap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

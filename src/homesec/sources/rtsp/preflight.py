@@ -804,6 +804,7 @@ class RTSPStartupPreflight:
                 return self._build_probe_open_cmd(
                     input_url=spec.input_url,
                     timeout_args=timeout_args,
+                    duration_s=duration_s,
                 )
 
     def _build_stream_open_cmd(
@@ -842,6 +843,7 @@ class RTSPStartupPreflight:
         *,
         input_url: str,
         timeout_args: list[str],
+        duration_s: float,
     ) -> list[str]:
         cmd = [
             "ffprobe",
@@ -849,8 +851,11 @@ class RTSPStartupPreflight:
             "error",
             "-select_streams",
             "v:0",
+            "-read_intervals",
+            f"%+{max(0.5, duration_s):.1f}",
+            "-count_packets",
             "-show_entries",
-            "stream=codec_name,width,height,avg_frame_rate",
+            "stream=codec_name,width,height,avg_frame_rate,nb_read_packets",
             "-of",
             "json",
             "-rtsp_transport",
