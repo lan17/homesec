@@ -118,6 +118,7 @@ class CameraPreflightDiagnostics(BaseModel):
     selected_motion_url: str | None = None
     selected_recording_url: str | None = None
     selected_preview_url: str | None = None
+    selected_preview_probe_url: str | None = None
     negotiation_attempts: list[str] = Field(default_factory=list)
     selected_recording_profile: str | None = None
     session_mode: Literal["dual_stream", "single_stream"] | None = None
@@ -179,6 +180,7 @@ class RecordingValidationResult(BaseModel):
 class _SessionOpenSpec:
     role: str
     input_url: str
+    tool: Literal["ffmpeg", "ffprobe"] = "ffmpeg"
 
 
 class RTSPStartupPreflight:
@@ -215,6 +217,7 @@ class RTSPStartupPreflight:
         primary_rtsp_url: str,
         detect_rtsp_url: str,
         preview_rtsp_url: str | None = None,
+        preview_probe_rtsp_url: str | None = None,
     ) -> CameraPreflightOutcome | PreflightError:
         """Run startup preflight and return locked profiles or a typed error."""
 
@@ -272,6 +275,7 @@ class RTSPStartupPreflight:
         diagnostics.selected_motion_url = motion_stream.url
         diagnostics.selected_recording_url = recording_stream.url
         diagnostics.selected_preview_url = preview_rtsp_url
+        diagnostics.selected_preview_probe_url = preview_probe_rtsp_url
 
         negotiation = self._negotiate_recording_profile(
             camera_key=camera_key,
@@ -305,6 +309,7 @@ class RTSPStartupPreflight:
                 motion_profile=motion_profile,
                 recording_profile=recording_profile,
                 preview_rtsp_url=preview_rtsp_url,
+                preview_probe_rtsp_url=preview_probe_rtsp_url,
                 diagnostics=diagnostics,
             )
             return CameraPreflightOutcome(
@@ -339,6 +344,7 @@ class RTSPStartupPreflight:
             motion_profile=motion_profile,
             recording_profile=recording_profile,
             preview_rtsp_url=preview_rtsp_url,
+            preview_probe_rtsp_url=preview_probe_rtsp_url,
             diagnostics=diagnostics,
         )
         return CameraPreflightOutcome(
@@ -356,10 +362,30 @@ class RTSPStartupPreflight:
         motion_profile: MotionProfile,
         recording_profile: RecordingProfile,
         preview_rtsp_url: str | None,
+        preview_probe_rtsp_url: str | None,
         diagnostics: CameraPreflightDiagnostics,
     ) -> None:
         if preview_rtsp_url is None:
             return
+
+        if preview_probe_rtsp_url is not None:
+            probe_validation_result = self._validate_concurrent_preview_probe_session_limits(
+                motion_profile.input_url,
+                recording_profile.input_url,
+                preview_probe_rtsp_url,
+            )
+            if probe_validation_result is ConcurrentStreamOpenResult.SESSION_LIMIT:
+                self._mark_concurrent_preview_unsupported(diagnostics)
+                return
+            if probe_validation_result is not ConcurrentStreamOpenResult.SUPPORTED:
+                diagnostics.notes.append(
+                    "Concurrent preview startup probe could not be classified during startup; "
+                    "runtime will continue best-effort behavior"
+                )
+                return
+            diagnostics.notes.append(
+                "Concurrent preview startup probe validated with motion and recording streams"
+            )
 
         validation_result = self._validate_concurrent_preview_session_limits(
             motion_profile.input_url,
@@ -380,6 +406,12 @@ class RTSPStartupPreflight:
             )
             return
 
+        self._mark_concurrent_preview_unsupported(diagnostics)
+
+    @staticmethod
+    def _mark_concurrent_preview_unsupported(
+        diagnostics: CameraPreflightDiagnostics,
+    ) -> None:
         diagnostics.concurrent_preview_supported = False
         diagnostics.concurrent_preview_downgrade_reason = (
             "concurrent_preview_unsupported_by_startup_preflight"
@@ -604,23 +636,45 @@ class RTSPStartupPreflight:
             ]
         )
 
+    def _validate_concurrent_preview_probe_session_limits(
+        self,
+        motion_url: str,
+        recording_url: str,
+        preview_probe_url: str,
+    ) -> ConcurrentStreamOpenResult:
+        """Validate the preview startup probe alongside motion and recording."""
+        return self._validate_concurrent_stream_opens(
+            [
+                _SessionOpenSpec(role="motion", input_url=motion_url),
+                _SessionOpenSpec(role="recording", input_url=recording_url),
+                _SessionOpenSpec(
+                    role="preview_probe",
+                    input_url=preview_probe_url,
+                    tool="ffprobe",
+                ),
+            ]
+        )
+
     def _validate_concurrent_stream_opens(
         self, specs: list[_SessionOpenSpec]
     ) -> ConcurrentStreamOpenResult:
         """Validate that the requested RTSP consumers can open concurrently."""
-        timeout_args = self._timeout_args()
-        attempts = _build_timeout_attempts(timeout_args)
+        attempts = self._stream_open_attempts(specs)
         session_check_duration_s = max(2.0, self._session_overlap_s + 0.5)
         completion_timeout_s = session_check_duration_s + 1.5
 
-        for label, current_timeout_args in attempts:
+        for label, use_timeout_args in attempts:
             procs: dict[str, subprocess.Popen[str] | None] = {spec.role: None for spec in specs}
+            specs_by_role = {spec.role: spec for spec in specs}
 
             try:
                 for spec in specs:
-                    cmd = self._build_stream_open_cmd(
-                        input_url=spec.input_url,
-                        timeout_args=current_timeout_args,
+                    timeout_args = (
+                        self._timeout_args_for_tool(spec.tool) if use_timeout_args else []
+                    )
+                    cmd = self._build_session_open_cmd(
+                        spec=spec,
+                        timeout_args=timeout_args,
                         duration_s=session_check_duration_s,
                     )
                     procs[spec.role] = subprocess.Popen(
@@ -661,7 +715,7 @@ class RTSPStartupPreflight:
 
             if all(exit_code == 0 for exit_code, _err in exits_and_errors.values()):
                 if label == "timeouts":
-                    self._timeout_capabilities.note_ffmpeg_timeout_success()
+                    self._note_timeout_success(specs)
                 return ConcurrentStreamOpenResult.SUPPORTED
 
             timeout_option_error = label == "timeouts" and any(
@@ -671,11 +725,7 @@ class RTSPStartupPreflight:
                 return ConcurrentStreamOpenResult.SESSION_LIMIT
 
             if timeout_option_error:
-                changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
-                if changed:
-                    logger.warning(
-                        "ffmpeg timeout options unsupported; disabling RTSP timeout options for this process"
-                    )
+                self._mark_timeout_unsupported(specs_by_role, exits_and_errors)
                 logger.debug(
                     "Session-limit validation retrying without timeout options; errors=%s",
                     {role: err for role, (_exit_code, err) in exits_and_errors.items() if err},
@@ -727,6 +777,35 @@ class RTSPStartupPreflight:
         cmd.extend(["-y", str(output_path)])
         return cmd
 
+    def _stream_open_attempts(
+        self,
+        specs: list[_SessionOpenSpec],
+    ) -> tuple[tuple[Literal["timeouts", "no_timeouts"], bool], ...]:
+        has_timeout_args = any(self._timeout_args_for_tool(spec.tool) for spec in specs)
+        if has_timeout_args:
+            return (("timeouts", True), ("no_timeouts", False))
+        return (("no_timeouts", False),)
+
+    def _build_session_open_cmd(
+        self,
+        *,
+        spec: _SessionOpenSpec,
+        timeout_args: list[str],
+        duration_s: float,
+    ) -> list[str]:
+        match spec.tool:
+            case "ffmpeg":
+                return self._build_stream_open_cmd(
+                    input_url=spec.input_url,
+                    timeout_args=timeout_args,
+                    duration_s=duration_s,
+                )
+            case "ffprobe":
+                return self._build_probe_open_cmd(
+                    input_url=spec.input_url,
+                    timeout_args=timeout_args,
+                )
+
     def _build_stream_open_cmd(
         self,
         *,
@@ -758,11 +837,84 @@ class RTSPStartupPreflight:
         )
         return cmd
 
+    def _build_probe_open_cmd(
+        self,
+        *,
+        input_url: str,
+        timeout_args: list[str],
+    ) -> list[str]:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,width,height,avg_frame_rate",
+            "-of",
+            "json",
+            "-rtsp_transport",
+            "tcp",
+        ]
+        cmd.extend(timeout_args)
+        cmd.append(input_url)
+        return cmd
+
     def _timeout_args(self) -> list[str]:
         return self._timeout_capabilities.build_ffmpeg_timeout_args(
             connect_timeout_s=self._rtsp_connect_timeout_s,
             io_timeout_s=self._rtsp_io_timeout_s,
         )
+
+    def _ffprobe_timeout_args(self) -> list[str]:
+        return self._timeout_capabilities.build_ffprobe_timeout_args(
+            connect_timeout_s=self._rtsp_connect_timeout_s,
+            io_timeout_s=self._rtsp_io_timeout_s,
+        )
+
+    def _timeout_args_for_tool(self, tool: Literal["ffmpeg", "ffprobe"]) -> list[str]:
+        match tool:
+            case "ffmpeg":
+                return self._timeout_args()
+            case "ffprobe":
+                return self._ffprobe_timeout_args()
+
+    def _note_timeout_success(self, specs: list[_SessionOpenSpec]) -> None:
+        if any(spec.tool == "ffmpeg" and self._timeout_args() for spec in specs):
+            self._timeout_capabilities.note_ffmpeg_timeout_success()
+        if any(spec.tool == "ffprobe" and self._ffprobe_timeout_args() for spec in specs):
+            self._timeout_capabilities.note_ffprobe_timeout_success()
+
+    def _mark_timeout_unsupported(
+        self,
+        specs_by_role: dict[str, _SessionOpenSpec],
+        exits_and_errors: dict[str, tuple[int | None, str]],
+    ) -> None:
+        ffmpeg_changed = False
+        ffprobe_changed = False
+        for role, (_exit_code, err) in exits_and_errors.items():
+            if not _is_timeout_option_error(err):
+                continue
+            spec = specs_by_role[role]
+            match spec.tool:
+                case "ffmpeg":
+                    ffmpeg_changed = (
+                        self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
+                        or ffmpeg_changed
+                    )
+                case "ffprobe":
+                    ffprobe_changed = (
+                        self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
+                        or ffprobe_changed
+                    )
+        if ffmpeg_changed:
+            logger.warning(
+                "ffmpeg timeout options unsupported; disabling RTSP timeout options for this process"
+            )
+        if ffprobe_changed:
+            logger.warning(
+                "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
+            )
 
     def _wait_for_process_exit(
         self,

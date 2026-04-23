@@ -313,6 +313,12 @@ class RTSPSource(ThreadedClipSource):
             and config.runtime_preview.enabled
             and config.runtime_preview.recording_policy == "allow_during_recording"
         )
+        self._preview_startup_probe_required = False
+        if config.runtime_preview is not None:
+            preview_hls_config = config.runtime_preview.config
+            self._preview_startup_probe_required = preview_hls_config.video_codec == "auto" or (
+                preview_hls_config.audio_enabled and preview_hls_config.audio_codec == "auto"
+            )
 
         if config.stream.disable_hwaccel:
             logger.info("Hardware acceleration manually disabled")
@@ -475,6 +481,11 @@ class RTSPSource(ThreadedClipSource):
             primary_rtsp_url=self.rtsp_url,
             detect_rtsp_url=self.detect_rtsp_url,
             preview_rtsp_url=self.rtsp_url if self._preview_concurrency_requested else None,
+            preview_probe_rtsp_url=(
+                self.rtsp_url
+                if self._preview_concurrency_requested and self._preview_startup_probe_required
+                else None
+            ),
         )
         match result:
             case CameraPreflightOutcome() as outcome:
@@ -530,6 +541,11 @@ class RTSPSource(ThreadedClipSource):
             selected_recording_url=self.rtsp_url,
             selected_preview_url=(
                 self.rtsp_url if concurrent_preview_supported is not None else None
+            ),
+            selected_preview_probe_url=(
+                self.rtsp_url
+                if concurrent_preview_supported is not None and self._preview_startup_probe_required
+                else None
             ),
             selected_recording_profile=recording_profile.profile_id(),
             session_mode="single_stream",

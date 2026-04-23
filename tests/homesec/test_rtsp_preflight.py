@@ -220,6 +220,88 @@ def test_preflight_classifies_concurrent_preview_when_requested(
     assert preview_checks == [("rtsp://cam/low", "rtsp://cam/high", "rtsp://cam/high")]
 
 
+def test_preflight_validates_preview_startup_probe_when_required(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should validate the preview startup probe used by auto codecs."""
+    # Given: concurrent preview is requested and preview startup still needs stream probing
+    streams = [
+        ProbeStreamInfo(
+            url="rtsp://cam/high",
+            video_codec="h264",
+            audio_codec="aac",
+            width=1920,
+            height=1080,
+            fps=20.0,
+            fps_raw="20/1",
+            probe_ok=True,
+        ),
+        ProbeStreamInfo(
+            url="rtsp://cam/low",
+            video_codec="h264",
+            audio_codec="aac",
+            width=640,
+            height=360,
+            fps=10.0,
+            fps_raw="10/1",
+            probe_ok=True,
+        ),
+    ]
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery(streams),
+    )
+    probe_checks: list[tuple[str, str, str]] = []
+    preview_checks: list[tuple[str, str, str]] = []
+
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
+
+    def _validate_probe(
+        motion_url: str, recording_url: str, preview_probe_url: str
+    ) -> ConcurrentStreamOpenResult:
+        probe_checks.append((motion_url, recording_url, preview_probe_url))
+        return ConcurrentStreamOpenResult.SUPPORTED
+
+    def _validate_preview(
+        motion_url: str, recording_url: str, preview_url: str
+    ) -> ConcurrentStreamOpenResult:
+        preview_checks.append((motion_url, recording_url, preview_url))
+        return ConcurrentStreamOpenResult.SUPPORTED
+
+    monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
+    monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
+    monkeypatch.setattr(
+        preflight,
+        "_validate_concurrent_preview_probe_session_limits",
+        _validate_probe,
+    )
+    monkeypatch.setattr(
+        preflight,
+        "_validate_concurrent_preview_session_limits",
+        _validate_preview,
+    )
+
+    # When: running startup preflight with the preview probe URL requested
+    outcome = preflight.run(
+        camera_name="garage",
+        primary_rtsp_url="rtsp://cam/high",
+        detect_rtsp_url="rtsp://cam/low",
+        preview_rtsp_url="rtsp://cam/high",
+        preview_probe_rtsp_url="rtsp://cam/high",
+    )
+
+    # Then: the probe and preview checks both validate the current runtime topology
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.concurrent_preview_supported is True
+    assert probe_checks == [("rtsp://cam/low", "rtsp://cam/high", "rtsp://cam/high")]
+    assert preview_checks == [("rtsp://cam/low", "rtsp://cam/high", "rtsp://cam/high")]
+    assert outcome.diagnostics.selected_preview_probe_url == "rtsp://cam/high"
+
+
 def test_preflight_downgrades_concurrent_preview_when_three_stream_check_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

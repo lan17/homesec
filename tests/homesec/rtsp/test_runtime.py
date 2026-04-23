@@ -432,6 +432,7 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
     class _FakePreflight:
         def __init__(self) -> None:
             self.preview_rtsp_url: str | None = None
+            self.preview_probe_rtsp_url: str | None = None
 
         def run(
             self,
@@ -440,10 +441,12 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
             primary_rtsp_url: str,
             detect_rtsp_url: str,
             preview_rtsp_url: str | None = None,
+            preview_probe_rtsp_url: str | None = None,
         ) -> CameraPreflightOutcome:
             # Given: source startup asks preflight to validate current runtime topology
             _ = camera_name
             self.preview_rtsp_url = preview_rtsp_url
+            self.preview_probe_rtsp_url = preview_probe_rtsp_url
             recording_profile = build_default_recording_profile(primary_rtsp_url)
             return CameraPreflightOutcome(
                 camera_key="cam-key",
@@ -456,6 +459,7 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
                     selected_motion_url=detect_rtsp_url,
                     selected_recording_url=primary_rtsp_url,
                     selected_preview_url=preview_rtsp_url,
+                    selected_preview_probe_url=preview_probe_rtsp_url,
                     selected_recording_profile=recording_profile.profile_id(),
                     session_mode="dual_stream",
                     concurrent_preview_supported=True,
@@ -482,6 +486,7 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
 
     # Then: the preview check receives the main RTSP URL used by HLSLivePublisher today
     assert fake_preflight.preview_rtsp_url == "rtsp://host/main"
+    assert fake_preflight.preview_probe_rtsp_url == "rtsp://host/main"
     assert publisher.concurrent_preview_downgrades == []
 
 

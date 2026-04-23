@@ -217,6 +217,7 @@ class HLSLivePublisher(LivePublisher):
         self._stderr_handle: TextIO | None = None
         self._preview_ready_at: float | None = None
         self._recording_active = False
+        self._recording_active_since: float | None = None
         self._concurrent_preview_downgrade_reason: str | None = None
         self._consecutive_recording_preview_start_failures = 0
         self._consecutive_recording_preview_early_exits = 0
@@ -340,9 +341,12 @@ class HLSLivePublisher(LivePublisher):
             had_pending_start = self._start_in_progress
             self._recording_active = recording_active
             if not recording_active:
+                self._recording_active_since = None
                 self._reset_recording_preview_failure_streaks_locked()
                 self._refresh_locked(now=self._clock.now())
                 return
+            if not was_recording_active:
+                self._recording_active_since = self._clock.now()
 
             if (
                 self._recording_policy == "allow_during_recording"
@@ -604,7 +608,6 @@ class HLSLivePublisher(LivePublisher):
                         message="Preview publisher exited early while recording was active",
                     ),
                     failure_kind="early_exit",
-                    count_failure=True,
                 )
             else:
                 self._reset_recording_preview_failure_streaks_locked()
@@ -904,9 +907,14 @@ class HLSLivePublisher(LivePublisher):
             or self._preview_downgraded_locked()
         ):
             return False
-        if self._preview_ready_at is None:
+        reference_at = self._preview_ready_at
+        if self._recording_active_since is not None and (
+            reference_at is None or self._recording_active_since > reference_at
+        ):
+            reference_at = self._recording_active_since
+        if reference_at is None:
             return True
-        return (now - self._preview_ready_at) <= self._recording_preview_early_exit_window_s
+        return (now - reference_at) <= self._recording_preview_early_exit_window_s
 
     def _output_ready_locked(self) -> bool:
         if not self._playlist_path.exists():
