@@ -158,6 +158,13 @@ class PreviewConfig(BaseModel):
         ge=0.0,
         description="How long to keep the preview publisher alive without viewers.",
     )
+    recording_policy: Literal["stop_on_recording", "allow_during_recording"] = Field(
+        default="stop_on_recording",
+        description=(
+            "How preview behaves while the camera is recording. "
+            "'allow_during_recording' is best-effort and may consume an extra RTSP session."
+        ),
+    )
     config: HLSPreviewConfig = Field(default_factory=HLSPreviewConfig)
 
     @model_validator(mode="before")

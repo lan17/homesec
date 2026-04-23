@@ -720,6 +720,7 @@ def test_preview_defaults_apply_when_preview_block_is_absent() -> None:
     assert config.preview.backend == "hls"
     assert config.preview.token_ttl_s == 60
     assert config.preview.idle_timeout_s == 30.0
+    assert config.preview.recording_policy == "stop_on_recording"
     assert config.preview.config.segment_duration_ms == 1000
     assert config.preview.config.live_window_segments == 4
     assert config.preview.config.storage_dir == Path("/tmp/homesec-preview")
@@ -737,6 +738,7 @@ def test_preview_hls_config_parses_explicit_values() -> None:
         "backend": "HLS",
         "token_ttl_s": 120,
         "idle_timeout_s": 45.0,
+        "recording_policy": "allow_during_recording",
         "config": {
             "segment_duration_ms": 1500,
             "live_window_segments": 6,
@@ -755,6 +757,7 @@ def test_preview_hls_config_parses_explicit_values() -> None:
     assert config.preview.backend == "hls"
     assert config.preview.token_ttl_s == 120
     assert config.preview.idle_timeout_s == 45.0
+    assert config.preview.recording_policy == "allow_during_recording"
     assert config.preview.config.segment_duration_ms == 1500
     assert config.preview.config.live_window_segments == 6
     assert config.preview.config.storage_dir == Path("/run/homesec-preview")

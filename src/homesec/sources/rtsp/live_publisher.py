@@ -135,6 +135,9 @@ class HLSLivePublisher(LivePublisher):
         segment_duration_ms: int,
         live_window_segments: int,
         idle_timeout_s: float,
+        recording_policy: Literal["stop_on_recording", "allow_during_recording"] = (
+            "stop_on_recording"
+        ),
         audio_enabled: bool,
         audio_codec: Literal["auto", "copy", "aac"] = "auto",
         video_codec: Literal["auto", "copy", "h264"] = "auto",
@@ -162,6 +165,7 @@ class HLSLivePublisher(LivePublisher):
         self._segment_duration_s = max(0.001, float(segment_duration_ms) / 1000.0)
         self._live_window_segments = int(live_window_segments)
         self._idle_timeout_s = max(0.0, float(idle_timeout_s))
+        self._recording_policy = recording_policy
         self._audio_enabled = bool(audio_enabled)
         self._audio_codec = audio_codec
         self._video_codec = video_codec
@@ -225,7 +229,7 @@ class HLSLivePublisher(LivePublisher):
                 if self._stop_requested_since_locked(stop_request_token):
                     self._release_queued_start_waiter_locked(queued_start_token)
                     return self._last_cancellation_result
-                if self._recording_active:
+                if self._recording_blocks_preview_locked():
                     self._release_queued_start_waiter_locked(queued_start_token)
                     logger.info(
                         "Refusing preview activation because recording is active: camera=%s",
@@ -320,6 +324,15 @@ class HLSLivePublisher(LivePublisher):
                 self._refresh_locked(now=self._clock.now())
                 return
 
+            if self._recording_policy == "allow_during_recording":
+                if not was_recording_active:
+                    logger.info(
+                        "Recording became active; preview remains allowed by configuration: camera=%s",
+                        self._camera_name,
+                    )
+                self._refresh_locked(now=self._clock.now())
+                return
+
             if not was_recording_active:
                 if had_active_preview:
                     logger.info(
@@ -383,7 +396,7 @@ class HLSLivePublisher(LivePublisher):
                         self._stop_locked(clear_error=True)
                         return self._last_cancellation_result
 
-                    if self._recording_active:
+                    if self._recording_blocks_preview_locked():
                         return self._recording_priority_refusal()
 
                     if not self._prepare_live_dir_locked():
@@ -452,7 +465,7 @@ class HLSLivePublisher(LivePublisher):
                         self._stop_locked(clear_error=True)
                         return self._last_cancellation_result
 
-                    if self._recording_active:
+                    if self._recording_blocks_preview_locked():
                         self._stop_locked(clear_error=True)
                         return self._recording_priority_refusal()
 
@@ -659,6 +672,9 @@ class HLSLivePublisher(LivePublisher):
                     type(result).__name__,
                 )
                 return None
+
+    def _recording_blocks_preview_locked(self) -> bool:
+        return self._recording_policy == "stop_on_recording" and self._recording_active
 
     def _build_ffmpeg_cmd(
         self,

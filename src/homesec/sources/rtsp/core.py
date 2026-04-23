@@ -637,6 +637,7 @@ class RTSPSource(ThreadedClipSource):
             segment_duration_ms=hls_config.segment_duration_ms,
             live_window_segments=hls_config.live_window_segments,
             idle_timeout_s=preview_config.idle_timeout_s,
+            recording_policy=preview_config.recording_policy,
             audio_enabled=hls_config.audio_enabled,
             audio_codec=hls_config.audio_codec,
             video_codec=hls_config.video_codec,

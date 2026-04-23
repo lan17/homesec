@@ -103,6 +103,7 @@ preview:
   backend: hls
   token_ttl_s: 60
   idle_timeout_s: 30.0
+  recording_policy: stop_on_recording  # Use allow_during_recording for best-effort concurrent preview; may consume an extra RTSP session
   config:
     segment_duration_ms: 1000  # Lower latency means more segment churn
     live_window_segments: 4    # Total window ~= segment_duration_ms * segment count

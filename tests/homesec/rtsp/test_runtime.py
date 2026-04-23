@@ -340,7 +340,10 @@ def test_runtime_preview_publisher_receives_hwaccel_config(
     config = _make_config(
         tmp_path,
         stream={"disable_hwaccel": False},
-        __runtime_preview__={"enabled": True},
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
     )
 
     # When: initializing the source
@@ -349,6 +352,7 @@ def test_runtime_preview_publisher_receives_hwaccel_config(
     # Then: the live publisher receives the detected hwaccel config
     assert isinstance(source._live_publisher, CapturingLivePublisher)
     assert captured_kwargs["hwaccel_config"] == HardwareAccelConfig(hwaccel="cuda")
+    assert captured_kwargs["recording_policy"] == "allow_during_recording"
 
 
 def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:

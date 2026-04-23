@@ -143,6 +143,9 @@ def _make_publisher(
     clock: FakeClock | None = None,
     discovery: FakeDiscovery | None = None,
     idle_timeout_s: float = 5.0,
+    recording_policy: Literal["stop_on_recording", "allow_during_recording"] = (
+        "stop_on_recording"
+    ),
     audio_codec: Literal["auto", "copy", "aac"] = "auto",
     video_codec: Literal["auto", "copy", "h264"] = "auto",
     hwaccel_config: HardwareAccelConfig | None = None,
@@ -156,6 +159,7 @@ def _make_publisher(
         segment_duration_ms=1000,
         live_window_segments=4,
         idle_timeout_s=idle_timeout_s,
+        recording_policy=recording_policy,
         audio_enabled=True,
         audio_codec=audio_codec,
         video_codec=video_codec,
@@ -714,6 +718,72 @@ def test_recording_priority_sheds_active_preview_and_refuses_restart(
         "Refusing preview activation because recording is active" in record.message
         for record in caplog.records
     )
+
+
+def test_allow_during_recording_keeps_active_preview_and_allows_restart(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    """Concurrent-preview mode should keep preview alive when recording becomes active."""
+    # Given: An active preview publisher configured to allow preview during recording
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    with (
+        caplog.at_level(logging.INFO, logger="homesec.sources.rtsp.live_publisher"),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(calls),
+        ),
+    ):
+        first = publisher.ensure_active()
+        proc = calls[0]["proc"]
+        assert isinstance(proc, FakeProc)
+
+        # When: Recording becomes active and preview is requested again
+        publisher.sync_recording_active(True)
+        second = publisher.ensure_active()
+
+    # Then: The existing preview keeps running and no refusal is returned
+    assert first == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    assert second == first
+    assert proc.terminate_calls == 0
+    assert publisher.status() == first
+    assert any(
+        "preview remains allowed by configuration" in record.message for record in caplog.records
+    )
+    assert not any(
+        "Stopping preview because recording became active" in record.message
+        or "Refusing preview activation because recording is active" in record.message
+        for record in caplog.records
+    )
+
+
+def test_allow_during_recording_allows_start_while_recording_is_active(tmp_path: Path) -> None:
+    """Concurrent-preview mode should allow startup even when recording is already active."""
+    # Given: A publisher configured to allow preview while recording is active
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    # When: Activating preview during recording
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: Preview starts normally instead of returning a recording-priority refusal
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    assert len(calls) == 1
+    assert publisher.status() == result
 
 
 def test_start_failure_maps_session_budget_refusal_and_cleans_storage(tmp_path: Path) -> None:

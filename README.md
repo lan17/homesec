@@ -204,7 +204,7 @@ See [`config/example.yaml`](config/example.yaml) for a complete reference of all
 - **Secrets**: Never put secrets in YAML. Use env vars (`*_env`) and set them in your shell or `.env`.
 - **Notifiers**: Notifiers are optional. With no enabled notifiers, alert decisions are still evaluated and recorded, but no external notifications are sent.
 - **YOLO Classes**: Built-in classes include `person`, `car`, `truck`, `motorcycle`, `bicycle`, `dog`, `cat`, `bird`, `backpack`, `handbag`, `suitcase`.
-- **Preview storage**: `preview.config.storage_dir` is scratch space for on-demand HLS live preview output from RTSP sources. Prefer tmpfs and keep it separate from `recordings/` and durable storage. See [`docs/preview-deployment.md`](docs/preview-deployment.md).
+- **Preview storage**: `preview.config.storage_dir` is scratch space for on-demand HLS live preview output from RTSP sources. Prefer tmpfs and keep it separate from `recordings/` and durable storage. Preview defaults to `recording_policy: stop_on_recording`; `allow_during_recording` is best-effort and may consume an extra RTSP session. See [`docs/preview-deployment.md`](docs/preview-deployment.md).
 
 After installation, the `homesec` command is available:
 

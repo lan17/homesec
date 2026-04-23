@@ -10,6 +10,23 @@ camera. Artifacts are only written while preview is active and are cleaned up on
 stop or runtime shutdown. If preview is disabled (or the source backend does not
 support preview), this directory remains unused.
 
+By default, preview yields to active recording with:
+
+```yaml
+preview:
+  recording_policy: stop_on_recording
+```
+
+You can opt into best-effort concurrent preview during recording with:
+
+```yaml
+preview:
+  recording_policy: allow_during_recording
+```
+
+That mode can open an extra direct RTSP session to the camera. Use it only if
+your camera tolerates concurrent motion, recording, and preview consumers.
+
 ## Recommended Storage
 
 Use a tmpfs mount for `preview.config.storage_dir` when possible, and cap its size.
