@@ -259,4 +259,47 @@ describe('CameraPreviewPanel', () => {
     )
     expect(screen.getByText('READY')).toBeTruthy()
   })
+
+  it('prefers the active session state over a stale terminal status snapshot', () => {
+    // Given: A live preview session with a stale idle status snapshot
+    useCameraPreviewMock.mockReturnValue({
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'idle',
+        viewer_count: null,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      },
+      session: {
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      },
+      playlistUrl: 'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+      warning: null,
+      error: null,
+      isPending: false,
+      isStarting: false,
+      isStopping: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refreshStatus: vi.fn(),
+    })
+
+    // When: Rendering the preview panel
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The session stays labeled as active instead of regressing to stale idle state
+    expect(screen.getByText('READY')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Attach preview' })).toBeTruthy()
+  })
 })

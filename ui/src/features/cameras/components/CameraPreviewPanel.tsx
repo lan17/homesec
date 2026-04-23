@@ -9,6 +9,7 @@ import { useCameraPreview } from '../hooks/useCameraPreview'
 
 const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
+const PREVIEW_DISPLAY_STATUS_STATES = new Set(['starting', 'ready', 'degraded', 'stopping'])
 
 interface CameraPreviewPanelProps {
   cameraName: string
@@ -75,7 +76,10 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [playlistReady, setPlaylistReady] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
-  const effectiveState = status?.state ?? session?.state
+  const effectiveState =
+    session && (!status || !PREVIEW_DISPLAY_STATUS_STATES.has(status.state))
+      ? session.state
+      : status?.state ?? session?.state
   const viewerCount = status?.viewer_count ?? session?.viewer_count
 
   useEffect(() => {

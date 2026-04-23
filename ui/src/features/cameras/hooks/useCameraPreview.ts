@@ -32,6 +32,7 @@ export interface CameraPreviewState {
 interface StoredPreviewSession {
   snapshot: PreviewSessionSnapshot
   receivedAtMs: number
+  statusRequestSeq: number
 }
 
 export function useCameraPreview(cameraName: string): CameraPreviewState {
@@ -39,11 +40,13 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
   const sessionStateRef = useRef<StoredPreviewSession | null>(null)
+  const statusRequestSeqRef = useRef(0)
 
   const storeSession = useCallback((nextSession: PreviewSessionSnapshot) => {
     const nextState = {
       snapshot: nextSession,
       receivedAtMs: Date.now(),
+      statusRequestSeq: statusRequestSeqRef.current,
     }
     sessionStateRef.current = nextState
     setSessionState(nextState)
@@ -66,11 +69,13 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const statusQuery = useQuery<PreviewStatusSnapshot>({
     queryKey: QUERY_KEYS.cameraPreview(cameraName),
     queryFn: async ({ signal }) => {
+      statusRequestSeqRef.current += 1
+      const requestSeq = statusRequestSeqRef.current
       const nextStatus = await apiClient.getCameraPreviewStatus(cameraName, { signal })
       const currentSession = sessionStateRef.current
       if (
         currentSession !== null
-        && Date.now() >= currentSession.receivedAtMs
+        && requestSeq > currentSession.statusRequestSeq
         && (nextStatus.enabled === false
           || (!PREVIEW_SESSION_ACTIVE_STATES.has(nextStatus.state) && !startMutation.isPending))
       ) {

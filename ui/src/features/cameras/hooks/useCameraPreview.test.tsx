@@ -111,6 +111,107 @@ describe('useCameraPreview', () => {
     })
   })
 
+  it('does not let an older in-flight status refresh clear a newer preview session', async () => {
+    // Given: A stale status refresh that started before preview attach succeeds
+    let releaseStaleRefresh: ((value: {
+      camera_name: string
+      enabled: boolean
+      state: 'idle'
+      viewer_count: null
+      degraded_reason: null
+      last_error: null
+      idle_shutdown_at: null
+      httpStatus: 200
+    }) => void) | null = null
+    const staleRefresh = new Promise<{
+      camera_name: string
+      enabled: boolean
+      state: 'idle'
+      viewer_count: null
+      degraded_reason: null
+      last_error: null
+      idle_shutdown_at: null
+      httpStatus: 200
+    }>((resolve) => {
+      releaseStaleRefresh = resolve
+    })
+    vi.spyOn(apiClient, 'getCameraPreviewStatus')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'idle',
+        viewer_count: null,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      .mockImplementationOnce(() => staleRefresh)
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'ready',
+        viewer_count: 1,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+    const ensurePreviewActive = vi
+      .spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValue({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('idle')
+    })
+
+    // When: A manual refresh starts, preview attaches, then the older refresh resolves idle
+    await act(async () => {
+      void result.current.refreshStatus()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await expect(result.current.start()).resolves.toBeUndefined()
+    })
+
+    await act(async () => {
+      releaseStaleRefresh?.({
+        camera_name: 'front',
+        enabled: true,
+        state: 'idle',
+        viewer_count: null,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      await Promise.resolve()
+    })
+
+    // Then: The stale refresh cannot clear the newer session, and the queued refetch converges to ready
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+      expect(result.current.playlistUrl).toContain('preview-token-1')
+      expect(result.current.status?.state).toBe('ready')
+    })
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
+  })
+
   it('refreshes preview sessions before short-lived playback tokens expire', async () => {
     // Given: A ready preview session with an expiring playback token
     const nowMs = Date.parse('2026-04-23T12:00:00.000Z')
