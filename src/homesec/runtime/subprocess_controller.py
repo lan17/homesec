@@ -138,6 +138,7 @@ class SubprocessRuntimeController(RuntimeController):
     worker_heartbeat_interval_s: float = 2.0
     heartbeat_stale_s: float = 10.0
     command_timeout_s: float = 5.0
+    preview_start_timeout_s: float = 20.0
     worker_module: str = "homesec.runtime.worker"
     worker_extra_args: tuple[str, ...] = ()
     _active_runtime: SubprocessRuntimeHandle | None = field(default=None, init=False, repr=False)
@@ -328,6 +329,10 @@ class SubprocessRuntimeController(RuntimeController):
                 handle,
                 WorkerCommandType.PREVIEW_ENSURE_ACTIVE,
                 camera_name,
+                response_timeout_s=max(
+                    self.command_timeout_s,
+                    self.preview_start_timeout_s,
+                ),
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
@@ -572,6 +577,7 @@ class SubprocessRuntimeController(RuntimeController):
         camera_name: str,
         *,
         viewer_id: str | None = None,
+        response_timeout_s: float | None = None,
     ) -> WorkerCommandResult:
         command = WorkerCommand(
             command=command_type,
@@ -597,7 +603,7 @@ class SubprocessRuntimeController(RuntimeController):
             await asyncio.wait_for(writer.drain(), timeout=self.command_timeout_s)
             raw_response = await asyncio.wait_for(
                 reader.readline(),
-                timeout=self.command_timeout_s,
+                timeout=response_timeout_s or self.command_timeout_s,
             )
         finally:
             writer.close()

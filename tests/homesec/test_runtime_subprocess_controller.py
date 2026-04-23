@@ -39,7 +39,13 @@ from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeHandle,
     _WorkerEventProtocol,
 )
-from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
+from homesec.runtime.subprocess_protocol import (
+    WorkerCommandResult,
+    WorkerCommandType,
+    WorkerEvent,
+    WorkerEventType,
+    WorkerPreviewStatusPayload,
+)
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
@@ -227,8 +233,11 @@ async def test_preview_command_failures_do_not_override_runtime_last_error(
         handle: SubprocessRuntimeHandle,
         command_type: object,
         camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        response_timeout_s: float | None = None,
     ) -> object:
-        _ = (handle, command_type, camera_name)
+        _ = (handle, command_type, camera_name, viewer_id, response_timeout_s)
         raise RuntimeError("preview command failed")
 
     monkeypatch.setattr(controller, "_send_command", _raise_send_command)
@@ -247,6 +256,69 @@ async def test_preview_command_failures_do_not_override_runtime_last_error(
         assert ensured.reason == PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
         assert ensured.message == "preview command failed"
         assert runtime.last_error == "runtime worker exited with code 137"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_uses_extended_timeout_for_preview_activation_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview activation should use a longer response timeout than other commands."""
+    # Given: A preview-enabled runtime handle and controller with distinct command timeouts
+    controller = SubprocessRuntimeController(
+        command_timeout_s=1.0,
+        preview_start_timeout_s=7.5,
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview-timeout",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    observed_timeout_s: list[float | None] = []
+
+    async def _fake_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        response_timeout_s: float | None = None,
+    ) -> WorkerCommandResult:
+        _ = (handle, command_type, camera_name, viewer_id)
+        observed_timeout_s.append(response_timeout_s)
+        return WorkerCommandResult(
+            command=WorkerCommandType.PREVIEW_ENSURE_ACTIVE,
+            command_id="cmd-preview-timeout",
+            generation=1,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            status=WorkerPreviewStatusPayload(
+                enabled=True,
+                state=PreviewState.READY,
+                viewer_count=1,
+            ),
+        )
+
+    monkeypatch.setattr(controller, "_send_command", _fake_send_command)
+
+    try:
+        # When: Ensuring preview is active through the subprocess controller
+        ensured = await controller.ensure_preview_active(runtime, "front")
+
+        # Then: Preview activation uses the extended response timeout and still returns status
+        assert observed_timeout_s == [7.5]
+        assert isinstance(ensured, CameraPreviewStatus)
+        assert ensured.state == PreviewState.READY
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)

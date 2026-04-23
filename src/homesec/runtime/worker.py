@@ -337,7 +337,7 @@ class _RuntimeWorkerService:
                 logger.warning("Dropping invalid runtime preview command: %s", exc, exc_info=True)
                 return
 
-            result = self._handle_command(command)
+            result = await asyncio.to_thread(self._handle_command, command)
             writer.write(result.model_dump_json().encode("utf-8") + b"\n")
             try:
                 await writer.drain()

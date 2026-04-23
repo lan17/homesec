@@ -660,3 +660,64 @@ async def test_runtime_worker_handle_command_connection_swallows_client_disconne
         for record in caplog.records
     )
     assert all(record.levelno < logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_handle_command_connection_offloads_preview_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview commands should be dispatched off the asyncio loop."""
+
+    class _PreviewSource:
+        def preview_status(self) -> LivePublisherStatus:
+            return LivePublisherStatus(state=LivePublisherState.IDLE)
+
+        def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+            return LivePublisherStatus(state=LivePublisherState.READY, viewer_count=1)
+
+        def stop_preview(self) -> None:
+            raise AssertionError("ensure test should not call stop_preview")
+
+        def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None:
+            raise AssertionError("ensure test should not call note_preview_viewer_activity")
+
+    # Given: A preview ensure command and a worker service with a preview-capable source
+    config = _make_config(notifiers=[], source_backend="rtsp", preview_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": _PreviewSource()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.PREVIEW_ENSURE_ACTIVE,
+        command_id="cmd-offload",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+    reader = asyncio.StreamReader()
+    reader.feed_data(command.model_dump_json().encode("utf-8") + b"\n")
+    reader.feed_eof()
+    writer = _DisconnectingWriter()
+    captured: dict[str, object] = {}
+
+    async def _fake_to_thread(
+        func: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        captured["func"] = func
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return cast(Any, func)(*args, **kwargs)
+
+    monkeypatch.setattr(worker_module.asyncio, "to_thread", _fake_to_thread)
+
+    # When: The worker serves the preview command connection
+    await service._handle_command_connection(reader, cast(Any, writer))
+
+    # Then: The blocking preview work is routed through asyncio.to_thread
+    assert captured["func"] == service._handle_command
+    assert captured["args"] == (command,)
+    assert writer.closed is True
+    assert writer.writes != []
