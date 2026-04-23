@@ -104,9 +104,9 @@ preview:
   token_ttl_s: 60
   idle_timeout_s: 30.0
   config:
-    segment_duration_ms: 1000
-    live_window_segments: 4
-    storage_dir: /tmp/homesec-preview  # Mount tmpfs here when possible
+    segment_duration_ms: 1000  # Lower latency means more segment churn
+    live_window_segments: 4    # Total window ~= segment_duration_ms * segment count
+    storage_dir: /tmp/homesec-preview  # Prefer tmpfs; keep separate from recordings
     audio_enabled: true
     audio_codec: auto
     video_codec: auto
