@@ -168,6 +168,7 @@ class HLSLivePublisher(LivePublisher):
         self._maintenance_stop = Event()
         self._maintenance_thread: Thread | None = None
         self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+        self._start_in_progress = False
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr_handle: TextIO | None = None
         self._recording_active = False
@@ -181,26 +182,38 @@ class HLSLivePublisher(LivePublisher):
             return self._status
 
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
-        with self._lock:
-            now = self._clock.now()
-            self._refresh_locked(now=now)
-            if self._recording_active:
-                return LivePublisherStartRefusal(
-                    reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
-                    message="Preview is unavailable while recording is active for this camera",
-                )
+        while True:
+            with self._lock:
+                now = self._clock.now()
+                self._refresh_locked(now=now)
+                if self._recording_active:
+                    return LivePublisherStartRefusal(
+                        reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+                        message="Preview is unavailable while recording is active for this camera",
+                    )
 
-            if self._is_process_running_locked():
-                self._mark_activity_locked(now=now)
-                self._status = self._build_running_status_locked(
-                    now=now,
-                    state=LivePublisherState.READY,
-                    degraded_reason=None,
-                )
-                self._ensure_maintenance_thread_started_locked()
-                return self._status
+                if self._is_process_running_locked():
+                    self._mark_activity_locked(now=now)
+                    self._status = self._build_running_status_locked(
+                        now=now,
+                        state=LivePublisherState.READY,
+                        degraded_reason=None,
+                    )
+                    self._ensure_maintenance_thread_started_locked()
+                    return self._status
 
-            return self._start_locked(now=now)
+                if self._start_in_progress:
+                    self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
+                    continue
+
+                self._start_in_progress = True
+                break
+
+        try:
+            return self._start(now=now)
+        finally:
+            with self._lock:
+                self._start_in_progress = False
 
     def request_stop(self) -> None:
         with self._lock:
@@ -244,8 +257,8 @@ class HLSLivePublisher(LivePublisher):
         if maintenance_thread is not None and maintenance_thread is not current_thread():
             maintenance_thread.join(timeout=2.0)
 
-    def _start_locked(self, *, now: float) -> LivePublisherStatus | LivePublisherStartRefusal:
-        codec_plan = self._build_codec_plan_locked()
+    def _start(self, *, now: float) -> LivePublisherStatus | LivePublisherStartRefusal:
+        codec_plan = self._build_codec_plan()
         timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args_for_user_flags(
             connect_timeout_s=self._rtsp_connect_timeout_s,
             io_timeout_s=self._rtsp_io_timeout_s,
@@ -256,77 +269,86 @@ class HLSLivePublisher(LivePublisher):
         last_refusal: LivePublisherStartRefusal | None = None
 
         for label, timeout_attempt_args in attempts:
-            if not self._prepare_live_dir_locked():
-                return LivePublisherStartRefusal(
-                    reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                    message="Preview storage directory is unavailable",
+            with self._lock:
+                if self._recording_active:
+                    return LivePublisherStartRefusal(
+                        reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+                        message="Preview is unavailable while recording is active for this camera",
+                    )
+
+                if not self._prepare_live_dir_locked():
+                    return LivePublisherStartRefusal(
+                        reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                        message="Preview storage directory is unavailable",
+                    )
+
+                cmd = self._build_ffmpeg_cmd(
+                    codec_plan=codec_plan,
+                    timeout_args=timeout_attempt_args,
+                )
+                self._log_ffmpeg_cmd(label=label, cmd=cmd)
+
+                try:
+                    stderr_handle = open(self._stderr_log_path, "w", encoding="utf-8")
+                except Exception as exc:
+                    logger.warning("Failed to open preview stderr log: %s", exc, exc_info=True)
+                    return self._set_error_locked(
+                        reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                        message="Preview stderr log could not be created",
+                        last_error=f"Preview stderr log create failed: {type(exc).__name__}",
+                    )
+
+                try:
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=stderr_handle,
+                        start_new_session=True,
+                    )
+                except Exception as exc:
+                    stderr_handle.close()
+                    logger.warning("Failed to start preview ffmpeg: %s", exc, exc_info=True)
+                    return self._set_error_locked(
+                        reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                        message="Preview ffmpeg could not be started",
+                        last_error=f"Preview ffmpeg start failed: {type(exc).__name__}",
+                    )
+
+                self._process = process
+                self._stderr_handle = stderr_handle
+                self._mark_activity_locked(now=now)
+                self._status = LivePublisherStatus(
+                    state=LivePublisherState.STARTING,
+                    viewer_count=self._viewer_count_locked(now=now),
+                    idle_shutdown_at=now + self._idle_timeout_s,
                 )
 
-            cmd = self._build_ffmpeg_cmd(
-                codec_plan=codec_plan,
-                timeout_args=timeout_attempt_args,
-            )
-            self._log_ffmpeg_cmd(label=label, cmd=cmd)
+                if self._wait_until_ready_locked():
+                    if label == "timeouts":
+                        self._timeout_capabilities.note_ffmpeg_timeout_success()
+                    ready_now = self._clock.now()
+                    self._ensure_maintenance_thread_started_locked()
+                    self._status = self._build_running_status_locked(
+                        now=ready_now,
+                        state=LivePublisherState.READY,
+                        degraded_reason=None,
+                    )
+                    return self._status
 
-            try:
-                stderr_handle = open(self._stderr_log_path, "w", encoding="utf-8")
-            except Exception as exc:
-                logger.warning("Failed to open preview stderr log: %s", exc, exc_info=True)
-                return self._set_error_locked(
-                    reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                    message="Preview stderr log could not be created",
-                    last_error=f"Preview stderr log create failed: {type(exc).__name__}",
+                if self._recording_active:
+                    self._stop_locked(clear_error=True)
+                    return LivePublisherStartRefusal(
+                        reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+                        message="Preview is unavailable while recording is active for this camera",
+                    )
+
+                stderr_tail = self._read_stderr_tail_locked()
+                timeout_option_error = (
+                    label == "timeouts"
+                    and bool(stderr_tail)
+                    and _is_timeout_option_error(stderr_tail)
                 )
-
-            try:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=stderr_handle,
-                    start_new_session=True,
-                )
-            except Exception as exc:
-                stderr_handle.close()
-                logger.warning("Failed to start preview ffmpeg: %s", exc, exc_info=True)
-                return self._set_error_locked(
-                    reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-                    message="Preview ffmpeg could not be started",
-                    last_error=f"Preview ffmpeg start failed: {type(exc).__name__}",
-                )
-
-            self._process = process
-            self._stderr_handle = stderr_handle
-            self._mark_activity_locked(now=now)
-            self._status = LivePublisherStatus(
-                state=LivePublisherState.STARTING,
-                viewer_count=self._viewer_count_locked(now=now),
-                idle_shutdown_at=now + self._idle_timeout_s,
-            )
-
-            if self._wait_until_ready_locked():
-                if label == "timeouts":
-                    self._timeout_capabilities.note_ffmpeg_timeout_success()
-                ready_now = self._clock.now()
-                self._ensure_maintenance_thread_started_locked()
-                self._status = self._build_running_status_locked(
-                    now=ready_now,
-                    state=LivePublisherState.READY,
-                    degraded_reason=None,
-                )
-                return self._status
-
-            if self._recording_active:
-                self._stop_locked(clear_error=True)
-                return LivePublisherStartRefusal(
-                    reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
-                    message="Preview is unavailable while recording is active for this camera",
-                )
-
-            stderr_tail = self._read_stderr_tail_locked()
-            timeout_option_error = (
-                label == "timeouts" and bool(stderr_tail) and _is_timeout_option_error(stderr_tail)
-            )
-            self._stop_locked(clear_error=False)
+                self._stop_locked(clear_error=False)
 
             if timeout_option_error:
                 changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
@@ -411,8 +433,8 @@ class HLSLivePublisher(LivePublisher):
             degraded_reason=None,
         )
 
-    def _build_codec_plan_locked(self) -> _CodecPlan:
-        stream_info = self._probe_stream_info_locked()
+    def _build_codec_plan(self) -> _CodecPlan:
+        stream_info = self._probe_stream_info()
         video_args: tuple[str, ...]
         audio_args: tuple[str, ...]
 
@@ -438,7 +460,7 @@ class HLSLivePublisher(LivePublisher):
 
         return _CodecPlan(video_args=video_args, audio_args=audio_args)
 
-    def _probe_stream_info_locked(self) -> ProbeStreamInfo | None:
+    def _probe_stream_info(self) -> ProbeStreamInfo | None:
         needs_probe = self._video_codec == "auto" or (
             self._audio_enabled and self._audio_codec == "auto"
         )

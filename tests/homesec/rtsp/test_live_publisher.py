@@ -56,6 +56,28 @@ class FakeDiscovery:
         )
 
 
+class SlowDiscovery:
+    def __init__(self, stream: ProbeStreamInfo) -> None:
+        self._stream = stream
+        self.started = Event()
+        self.release = Event()
+
+    def probe(
+        self,
+        *,
+        camera_key: str,
+        candidate_urls: list[str],
+    ) -> CameraProbeResult:
+        self.started.set()
+        self.release.wait(timeout=1.0)
+        return CameraProbeResult(
+            camera_key=camera_key,
+            streams=[self._stream],
+            attempted_urls=list(candidate_urls),
+            duration_ms=0,
+        )
+
+
 class FakeProc:
     def __init__(self, *, pid: int, returncode: int | None = None) -> None:
         self.pid = pid
@@ -570,4 +592,56 @@ def test_recording_priority_preempts_slow_startup(tmp_path: Path) -> None:
     proc = calls[0]["proc"]
     assert isinstance(proc, FakeProc)
     assert proc.terminate_calls == 1
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
+def test_recording_priority_preempts_slow_probe_before_spawn(tmp_path: Path) -> None:
+    """Recording activation should interrupt startup before ffmpeg spawn when probing is slow."""
+
+    # Given: A publisher whose codec probe is still in flight
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock(), discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_result: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def run_ensure_active() -> None:
+        with patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(calls),
+        ):
+            start_result["result"] = publisher.ensure_active()
+
+    ensure_thread = Thread(target=run_ensure_active)
+    ensure_thread.start()
+    assert discovery.started.wait(timeout=0.2)
+
+    sync_completed = Event()
+
+    # When: Recording becomes active before the probe has released
+    def run_sync_recording_active() -> None:
+        publisher.sync_recording_active(True)
+        sync_completed.set()
+
+    sync_thread = Thread(target=run_sync_recording_active)
+    sync_thread.start()
+    sync_thread.join(timeout=0.3)
+
+    discovery.release.set()
+    ensure_thread.join(timeout=0.3)
+
+    # Then: Recording-priority preemption finishes without spawning preview ffmpeg
+    assert sync_completed.is_set()
+    assert not sync_thread.is_alive()
+    assert not ensure_thread.is_alive()
+    result = start_result["result"]
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert calls == []
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
