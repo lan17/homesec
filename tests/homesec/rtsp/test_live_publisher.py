@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 from typing import Literal, Protocol, cast
 from unittest.mock import patch
 
@@ -819,6 +819,121 @@ def test_waiting_activation_does_not_return_ready_until_start_completes(tmp_path
     second_result = start_results["second"]
     assert isinstance(first_result, LivePublisherStartRefusal)
     assert second_result == first_result
+
+
+def test_waiting_activation_restarts_when_process_exits_before_waiter_wakes(tmp_path: Path) -> None:
+    """Queued activation callers should not return a stale READY after ffmpeg has already exited."""
+
+    # Given: A publisher whose first startup is slow enough for a second caller to queue behind it
+    class _ControlledClock:
+        def __init__(self) -> None:
+            self.waiter_sleep_started = Event()
+            self.waiter_sleep_release = Event()
+
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            if current_thread().name == "waiter":
+                self.waiter_sleep_started.set()
+                self.waiter_sleep_release.wait()
+                return
+            time.sleep(seconds)
+
+    clock = _ControlledClock()
+    publisher = _make_publisher(tmp_path, clock=clock)
+    publisher._startup_timeout_s = 1.0
+
+    calls: list[dict[str, object]] = []
+    spawned = Event()
+    first_proc: FakeProc | None = None
+    start_results: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        _ = cmd
+        nonlocal first_proc
+        if first_proc is None:
+            first_proc = proc
+            spawned.set()
+
+    first_spawn = _fake_popen_factory(
+        calls,
+        make_output=False,
+        on_spawn=on_spawn,
+    )
+    second_spawn = _fake_popen_factory(calls)
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **kwargs: object,
+    ) -> FakeProc:
+        factory = first_spawn if len(calls) == 0 else second_spawn
+        return factory(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=start_new_session,
+            **kwargs,
+        )
+
+    def run_ensure_active(name: str) -> None:
+        start_results[name] = publisher.ensure_active()
+
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=fake_popen,
+    ):
+        starter_thread = Thread(
+            target=run_ensure_active,
+            args=("starter",),
+            name="starter",
+            daemon=True,
+        )
+        waiter_thread = Thread(
+            target=run_ensure_active,
+            args=("waiter",),
+            name="waiter",
+            daemon=True,
+        )
+        try:
+            starter_thread.start()
+            assert spawned.wait(timeout=0.5)
+            waiter_thread.start()
+            assert clock.waiter_sleep_started.wait(timeout=0.5)
+
+            camera_dir = tmp_path / "homesec" / "Front_Door_1"
+            _write_live_output(
+                playlist_path=camera_dir / "playlist.m3u8",
+                segment_pattern=camera_dir / "segment_%06d.ts",
+            )
+
+            starter_thread.join(timeout=1.0)
+            assert not starter_thread.is_alive()
+            starter_result = start_results["starter"]
+            assert isinstance(starter_result, LivePublisherStatus)
+            assert starter_result.state == LivePublisherState.READY
+            assert starter_result.viewer_count == 0
+
+            # When: The underlying process exits before the queued waiter observes the completed start
+            assert isinstance(first_proc, FakeProc)
+            first_proc.returncode = 1
+            clock.waiter_sleep_release.set()
+            waiter_thread.join(timeout=1.0)
+        finally:
+            clock.waiter_sleep_release.set()
+            starter_thread.join(timeout=1.0)
+            waiter_thread.join(timeout=1.0)
+
+    # Then: The queued waiter restarts preview instead of returning a stale READY result
+    assert not waiter_thread.is_alive()
+    assert len(calls) == 2
+    waiter_result = start_results["waiter"]
+    assert isinstance(waiter_result, LivePublisherStatus)
+    assert waiter_result.state == LivePublisherState.READY
 
 
 def test_request_stop_preempts_slow_startup_without_error(tmp_path: Path) -> None:

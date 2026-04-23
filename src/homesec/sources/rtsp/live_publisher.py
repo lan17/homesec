@@ -211,8 +211,18 @@ class HLSLivePublisher(LivePublisher):
 
                 completed_start_result = self._completed_start_results.get(queued_start_token)
                 if completed_start_result is not None:
-                    self._release_queued_start_waiter_locked(queued_start_token)
-                    return completed_start_result
+                    # A queued caller may observe a completed READY result even if the
+                    # underlying ffmpeg process has already exited. In that case, drop the
+                    # cached READY result and proceed with normal startup logic.
+                    if (
+                        isinstance(completed_start_result, LivePublisherStatus)
+                        and completed_start_result.state is LivePublisherState.READY
+                        and not self._is_process_running_locked()
+                    ):
+                        self._completed_start_results.pop(queued_start_token, None)
+                    else:
+                        self._release_queued_start_waiter_locked(queued_start_token)
+                        return completed_start_result
 
                 if self._start_in_progress:
                     next_queued_start_token = self._active_start_token
