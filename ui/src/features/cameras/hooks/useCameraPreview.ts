@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -10,6 +10,8 @@ import {
 import { QUERY_KEYS } from '../../../api/hooks/queryKeys'
 
 const PREVIEW_STATUS_REFRESH_MS = 5_000
+const PREVIEW_TOKEN_REFRESH_LEEWAY_MS = 5_000
+const PREVIEW_TOKEN_MIN_REFRESH_LEEWAY_MS = 250
 
 export interface CameraPreviewState {
   status: PreviewStatusSnapshot | null
@@ -28,6 +30,7 @@ export interface CameraPreviewState {
 export function useCameraPreview(cameraName: string): CameraPreviewState {
   const queryClient = useQueryClient()
   const [session, setSession] = useState<PreviewSessionSnapshot | null>(null)
+  const [refreshError, setRefreshError] = useState<Error | null>(null)
 
   const statusQuery = useQuery<PreviewStatusSnapshot>({
     queryKey: QUERY_KEYS.cameraPreview(cameraName),
@@ -39,6 +42,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const startMutation = useMutation<PreviewSessionSnapshot, Error>({
     mutationFn: () => apiClient.ensureCameraPreviewActive(cameraName),
     onSuccess: async (nextSession) => {
+      setRefreshError(null)
       setSession(nextSession)
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
     },
@@ -47,6 +51,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const stopMutation = useMutation<PreviewStopSnapshot, Error>({
     mutationFn: () => apiClient.stopCameraPreview(cameraName),
     onSuccess: async () => {
+      setRefreshError(null)
       setSession(null)
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
     },
@@ -58,6 +63,43 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       ? null
       : session
 
+  const refreshSession = useCallback(async () => {
+    try {
+      const nextSession = await apiClient.ensureCameraPreviewActive(cameraName)
+      setRefreshError(null)
+      setSession(nextSession)
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
+    } catch (nextError) {
+      setRefreshError(nextError as Error)
+    }
+  }, [cameraName, queryClient])
+
+  useEffect(() => {
+    if (activeSession?.token_expires_at == null || stopMutation.isPending) {
+      return
+    }
+
+    const expiresAtMs = Date.parse(activeSession.token_expires_at)
+    if (Number.isNaN(expiresAtMs)) {
+      return
+    }
+
+    const remainingMs = expiresAtMs - Date.now()
+    const refreshLeadMs = Math.max(
+      PREVIEW_TOKEN_MIN_REFRESH_LEEWAY_MS,
+      Math.min(PREVIEW_TOKEN_REFRESH_LEEWAY_MS, remainingMs / 2),
+    )
+    const refreshDelayMs = Math.max(0, remainingMs - refreshLeadMs)
+
+    const timeoutId = window.setTimeout(() => {
+      void refreshSession()
+    }, refreshDelayMs)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [activeSession?.token_expires_at, refreshSession, stopMutation.isPending])
+
   const warning =
     activeSession?.warning
     ?? statusQuery.data?.degraded_reason
@@ -65,7 +107,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     ?? null
 
   const playlistUrl = activeSession ? apiClient.resolvePath(activeSession.playlist_url) : null
-  const error = (startMutation.error ?? stopMutation.error ?? statusQuery.error ?? null) as Error | null
+  const error = (startMutation.error
+    ?? stopMutation.error
+    ?? refreshError
+    ?? statusQuery.error
+    ?? null) as Error | null
 
   return {
     status: statusQuery.data ?? null,
