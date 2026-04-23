@@ -9,6 +9,7 @@ from typing import Literal, Protocol, cast
 from unittest.mock import patch
 
 from homesec.sources.rtsp.discovery import CameraProbeResult, ProbeStreamInfo
+from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.live_publisher import (
     HLSLivePublisher,
     LivePublisherRefusalReason,
@@ -144,6 +145,7 @@ def _make_publisher(
     idle_timeout_s: float = 5.0,
     audio_codec: Literal["auto", "copy", "aac"] = "auto",
     video_codec: Literal["auto", "copy", "h264"] = "auto",
+    hwaccel_config: HardwareAccelConfig | None = None,
     background_maintenance: bool = False,
     maintenance_interval_s: float | None = None,
 ) -> HLSLivePublisher:
@@ -159,6 +161,7 @@ def _make_publisher(
         video_codec=video_codec,
         rtsp_connect_timeout_s=1.0,
         rtsp_io_timeout_s=1.0,
+        hwaccel_config=hwaccel_config,
         clock=clock or FakeClock(),
         stream_discovery=discovery
         or FakeDiscovery(_probe_stream(video_codec="h264", audio_codec="aac")),
@@ -378,6 +381,152 @@ def test_auto_codec_transcodes_non_browser_safe_source(tmp_path: Path) -> None:
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
     assert cmd[cmd.index("-c:a") + 1] == "aac"
     assert cmd[cmd.index("-b:a") + 1] == "128k"
+
+
+def test_transcode_prefers_matching_hardware_encoder_when_available(tmp_path: Path) -> None:
+    """Transcode mode should use the matching hardware H.264 encoder before software."""
+    # Given: A non-H.264 preview source and a supported VideoToolbox encoder
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(_probe_stream(video_codec="hevc", audio_codec="aac")),
+        hwaccel_config=HardwareAccelConfig(hwaccel="videotoolbox"),
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: Activating preview
+    with (
+        patch(
+            "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
+            return_value=True,
+        ),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(calls),
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The preview transcodes with the matching hardware encoder
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    cmd = calls[0]["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[cmd.index("-c:v") + 1] == "h264_videotoolbox"
+    assert "libx264" not in cmd
+
+
+def test_hardware_transcode_falls_back_to_software_when_encoder_startup_fails(
+    tmp_path: Path,
+) -> None:
+    """Hardware transcode failures should retry once with the software H.264 path."""
+    # Given: A non-H.264 preview source whose supported NVENC path fails immediately
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(_probe_stream(video_codec="hevc", audio_codec="aac")),
+        hwaccel_config=HardwareAccelConfig(hwaccel="cuda"),
+    )
+    calls: list[dict[str, object]] = []
+    hardware_spawn = _fake_popen_factory(
+        calls,
+        make_output=False,
+        returncode=1,
+        stderr_text="Error initializing output stream",
+    )
+    software_spawn = _fake_popen_factory(calls)
+
+    def _fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **kwargs: object,
+    ) -> FakeProc:
+        video_encoder = cmd[cmd.index("-c:v") + 1]
+        if video_encoder == "h264_nvenc":
+            return hardware_spawn(
+                cmd,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=start_new_session,
+                **kwargs,
+            )
+        return software_spawn(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=start_new_session,
+            **kwargs,
+        )
+
+    # When: Activating preview
+    with (
+        patch(
+            "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
+            return_value=True,
+        ),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen,
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: Preview retries with libx264 and becomes ready
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    assert len(calls) == 2
+    first_cmd = calls[0]["cmd"]
+    second_cmd = calls[1]["cmd"]
+    assert isinstance(first_cmd, list)
+    assert isinstance(second_cmd, list)
+    assert first_cmd[first_cmd.index("-c:v") + 1] == "h264_nvenc"
+    assert second_cmd[second_cmd.index("-c:v") + 1] == "libx264"
+
+
+def test_hardware_transcode_does_not_retry_software_on_session_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    """Session-limit refusals should not hide behind a software fallback retry."""
+    # Given: A non-H.264 preview source whose hardware attempt hits the camera session limit
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(_probe_stream(video_codec="hevc", audio_codec="aac")),
+        hwaccel_config=HardwareAccelConfig(hwaccel="cuda"),
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: Activating preview
+    with (
+        patch(
+            "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
+            return_value=True,
+        ),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(
+                calls,
+                make_output=False,
+                returncode=1,
+                stderr_text="Too many clients already connected",
+            ),
+        ),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: Preview reports the session-budget refusal without retrying software encode
+    assert isinstance(result, LivePublisherStartRefusal)
+    assert result.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert len(calls) == 1
+    cmd = calls[0]["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[cmd.index("-c:v") + 1] == "h264_nvenc"
 
 
 def test_request_stop_terminates_process_and_removes_live_window(tmp_path: Path) -> None:

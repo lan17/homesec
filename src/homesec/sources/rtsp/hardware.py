@@ -22,6 +22,15 @@ class HardwareAccelConfig:
         return self.hwaccel is not None
 
 
+@dataclass(frozen=True, slots=True)
+class H264HardwareEncoder:
+    """Preview H.264 encoder derived from an ffmpeg hardware backend."""
+
+    ffmpeg_encoder: str
+    ffmpeg_global_args: tuple[str, ...] = ()
+    requires_hwupload: bool = False
+
+
 class HardwareAccelDetector:
     """Detect available hardware acceleration options for ffmpeg."""
 
@@ -62,6 +71,21 @@ class HardwareAccelDetector:
         return HardwareAccelConfig(hwaccel=None)
 
     @staticmethod
+    def select_h264_encoder(config: HardwareAccelConfig) -> H264HardwareEncoder | None:
+        """Choose a matching H.264 hardware encoder when ffmpeg supports it."""
+        candidate = HardwareAccelDetector._candidate_h264_encoder(config)
+        if candidate is None:
+            return None
+        if HardwareAccelDetector._test_encoder(candidate.ffmpeg_encoder):
+            return candidate
+        logger.info(
+            "Hardware encoder %s unavailable for hwaccel=%s; using software encoding",
+            candidate.ffmpeg_encoder,
+            config.hwaccel,
+        )
+        return None
+
+    @staticmethod
     def _test_hwaccel(method: str) -> bool:
         """Test if a hardware acceleration method is available in ffmpeg."""
         try:
@@ -75,6 +99,46 @@ class HardwareAccelDetector:
             return method in result.stdout
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
             return False
+
+    @staticmethod
+    def _test_encoder(encoder: str) -> bool:
+        """Test if a named ffmpeg encoder is available."""
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            output = f"{result.stdout}\n{result.stderr}"
+            return encoder in output
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+            return False
+
+    @staticmethod
+    def _candidate_h264_encoder(config: HardwareAccelConfig) -> H264HardwareEncoder | None:
+        """Map a detected hwaccel backend to the corresponding H.264 encoder."""
+        hwaccel = (config.hwaccel or "").strip().lower()
+
+        match hwaccel:
+            case "vaapi":
+                ffmpeg_global_args: tuple[str, ...] = ()
+                if config.hwaccel_device:
+                    ffmpeg_global_args = ("-vaapi_device", config.hwaccel_device)
+                return H264HardwareEncoder(
+                    ffmpeg_encoder="h264_vaapi",
+                    ffmpeg_global_args=ffmpeg_global_args,
+                    requires_hwupload=True,
+                )
+            case "cuda":
+                return H264HardwareEncoder(ffmpeg_encoder="h264_nvenc")
+            case "videotoolbox":
+                return H264HardwareEncoder(ffmpeg_encoder="h264_videotoolbox")
+            case "qsv":
+                return H264HardwareEncoder(ffmpeg_encoder="h264_qsv")
+            case _:
+                return None
 
     @staticmethod
     def _test_decode(rtsp_url: str, config: HardwareAccelConfig) -> bool:
@@ -125,7 +189,12 @@ class HardwareAccelDetector:
         except subprocess.TimeoutExpired:
             return True
         except Exception as exc:
-            logger.warning("VAAPI check failed: %s", exc, exc_info=True)
+            logger.warning(
+                "Hardware decode check failed for %s: %s",
+                config.hwaccel or "software",
+                exc,
+                exc_info=True,
+            )
             return False
 
     @staticmethod

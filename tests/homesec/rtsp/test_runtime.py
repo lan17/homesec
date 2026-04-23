@@ -319,6 +319,38 @@ def test_hwaccel_detection_used_when_enabled(
     assert source.hwaccel_config.is_available
 
 
+def test_runtime_preview_publisher_receives_hwaccel_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preview runtime wiring should pass detected hwaccel config into the publisher."""
+
+    # Given: a detected CUDA backend and a runtime preview-enabled source config
+    captured_kwargs: dict[str, object] = {}
+
+    class CapturingLivePublisher(FakeLivePublisher):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__()
+            captured_kwargs.update(kwargs)
+
+    def _detect(_: str) -> HardwareAccelConfig:
+        return HardwareAccelConfig(hwaccel="cuda")
+
+    monkeypatch.setattr("homesec.sources.rtsp.core.HardwareAccelDetector.detect", _detect)
+    monkeypatch.setattr("homesec.sources.rtsp.core.HLSLivePublisher", CapturingLivePublisher)
+    config = _make_config(
+        tmp_path,
+        stream={"disable_hwaccel": False},
+        __runtime_preview__={"enabled": True},
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: the live publisher receives the detected hwaccel config
+    assert isinstance(source._live_publisher, CapturingLivePublisher)
+    assert captured_kwargs["hwaccel_config"] == HardwareAccelConfig(hwaccel="cuda")
+
+
 def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
     """Subtype=0 URLs should derive a subtype=1 detect stream."""
     # Given: a subtype=0 main stream with no explicit detect stream
