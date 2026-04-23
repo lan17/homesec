@@ -59,11 +59,24 @@ function startLabel(statusState: string | undefined): string {
 }
 
 export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
-  const { error, isPending, isStarting, isStopping, playlistUrl, refreshStatus, start, status, stop, warning } =
-    useCameraPreview(cameraName)
+  const {
+    error,
+    isPending,
+    isStarting,
+    isStopping,
+    playlistUrl,
+    refreshStatus,
+    session,
+    start,
+    status,
+    stop,
+    warning,
+  } = useCameraPreview(cameraName)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [playlistReady, setPlaylistReady] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
+  const effectiveState = status?.state ?? session?.state
+  const viewerCount = status?.viewer_count ?? session?.viewer_count
 
   useEffect(() => {
     if (!playlistUrl) {
@@ -206,9 +219,9 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
           <p className="camera-preview__subtitle">On-demand HLS stream from the active runtime.</p>
         </div>
         <div className="camera-item__badges">
-          <StatusBadge tone={previewTone(status?.state)}>{previewLabel(status?.state)}</StatusBadge>
-          {status?.viewer_count !== null && status?.viewer_count !== undefined ? (
-            <span className="camera-chip">viewers {status.viewer_count}</span>
+          <StatusBadge tone={previewTone(effectiveState)}>{previewLabel(effectiveState)}</StatusBadge>
+          {viewerCount !== null && viewerCount !== undefined ? (
+            <span className="camera-chip">viewers {viewerCount}</span>
           ) : null}
         </div>
       </header>
@@ -241,7 +254,7 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
           }}
           disabled={isPending || status?.enabled === false}
         >
-          {isStarting ? 'Starting...' : startLabel(status?.state)}
+          {isStarting ? 'Starting...' : startLabel(effectiveState)}
         </Button>
         <Button
           variant="ghost"
@@ -257,7 +270,7 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
           onClick={() => {
             void stop()
           }}
-          disabled={isStopping || (status?.state ?? 'idle') === 'idle'}
+          disabled={isStopping || (!session && (effectiveState ?? 'idle') === 'idle')}
         >
           {isStopping ? 'Stopping...' : 'Stop preview'}
         </Button>

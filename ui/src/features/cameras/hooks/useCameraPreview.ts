@@ -80,10 +80,18 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     isStarting: startMutation.isPending,
     isStopping: stopMutation.isPending,
     start: async () => {
-      await startMutation.mutateAsync()
+      try {
+        await startMutation.mutateAsync()
+      } catch {
+        return
+      }
     },
     stop: async () => {
-      await stopMutation.mutateAsync()
+      try {
+        await stopMutation.mutateAsync()
+      } catch {
+        return
+      }
     },
     refreshStatus: async () => {
       const result = await statusQuery.refetch()

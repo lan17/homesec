@@ -223,4 +223,40 @@ describe('CameraPreviewPanel', () => {
       expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
     })
   })
+
+  it('keeps stop enabled when a session exists but status is temporarily unavailable', () => {
+    // Given: An active preview session with no current status snapshot
+    useCameraPreviewMock.mockReturnValue({
+      status: null,
+      session: {
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      },
+      playlistUrl: 'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+      warning: null,
+      error: null,
+      isPending: false,
+      isStarting: false,
+      isStopping: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refreshStatus: vi.fn(),
+    })
+
+    // When: Rendering the preview panel
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: Stop remains available because an active session still exists
+    expect(screen.getByRole('button', { name: 'Stop preview' }).hasAttribute('disabled')).toBe(
+      false,
+    )
+    expect(screen.getByText('READY')).toBeTruthy()
+  })
 })
