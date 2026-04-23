@@ -11,11 +11,12 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
+from homesec.api.errors import APIError
 from homesec.api.preview_tokens import validate_camera_preview_token
 from homesec.api.routes import preview as preview_routes
 from homesec.api.server import create_app
 from homesec.models.config import FastAPIServerConfig, HLSPreviewConfig, PreviewConfig
-from homesec.preview_paths import preview_camera_dir
+from homesec.preview_paths import preview_camera_dir, preview_segment_path
 from homesec.runtime.errors import PreviewCameraNotFoundError, PreviewRuntimeUnavailableError
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
@@ -388,6 +389,46 @@ async def test_preview_segment_starts_viewer_activity_without_blocking_response_
     release.set()
     await asyncio.sleep(0)
     assert app.viewer_activity_calls == [("front", "preview-token")]
+
+
+@pytest.mark.asyncio
+async def test_preview_segment_rejects_path_traversal_before_path_construction(
+    tmp_path: Path,
+) -> None:
+    """Preview segment route should reject traversal payloads before building a file path."""
+    # Given: Active preview media for a valid camera
+    _write_preview_files(tmp_path, "front")
+    app = _StubPreviewApp(
+        preview_config=PreviewConfig(
+            enabled=True,
+            config=HLSPreviewConfig(storage_dir=tmp_path),
+        )
+    )
+
+    # When: Requesting a traversal-like segment name directly through the route handler
+    with pytest.raises(APIError) as exc_info:
+        await preview_routes.get_preview_segment(
+            camera_name="front",
+            segment_name="../../etc/passwd",
+            preview_token=None,
+            app=app,
+        )
+
+    # Then: The route rejects it with the canonical not-found error before any path join
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.error_code == "NOT_FOUND"
+
+
+def test_preview_segment_path_rejects_invalid_segment_names(tmp_path: Path) -> None:
+    """Preview segment path helper should reject traversal-like names."""
+    # Given: A preview storage root and an invalid segment name
+    storage_dir = tmp_path
+
+    # When: Resolving a segment path for a traversal-like segment name
+    with pytest.raises(ValueError, match="Invalid preview segment name"):
+        preview_segment_path(storage_dir, "front", "../../etc/passwd")
+
+    # Then: No path is constructed outside the preview directory
 
 
 def test_preview_playlist_rejects_invalid_token(

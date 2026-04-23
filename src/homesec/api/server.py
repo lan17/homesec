@@ -7,6 +7,7 @@ import logging
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -30,6 +31,56 @@ _SPA_ROOT_STATIC_FILES = {
     "manifest.webmanifest",
     "site.webmanifest",
 }
+_ACCESS_LOG_TOKEN_PARAM = "token"
+
+
+def _redact_token_query_param_from_url(url: str) -> str:
+    """Return a URL/path string with token query parameters removed."""
+    if "?" not in url or _ACCESS_LOG_TOKEN_PARAM not in url:
+        return url
+
+    parsed = urlsplit(url)
+    if not parsed.query:
+        return url
+
+    filtered_query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != _ACCESS_LOG_TOKEN_PARAM
+    ]
+    redacted_query = urlencode(filtered_query, doseq=True)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment))
+
+
+class _TokenRedactingAccessLogFilter(logging.Filter):
+    """Strip token query parameters from uvicorn access log paths."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            redacted_path = _redact_token_query_param_from_url(args[2])
+            if redacted_path != args[2]:
+                record.args = (*args[:2], redacted_path, *args[3:])
+            return True
+
+        if isinstance(args, list) and len(args) >= 3 and isinstance(args[2], str):
+            redacted_path = _redact_token_query_param_from_url(args[2])
+            if redacted_path != args[2]:
+                updated_args = list(args)
+                updated_args[2] = redacted_path
+                record.args = updated_args
+            return True
+
+        return True
+
+
+def _ensure_access_log_redaction() -> None:
+    """Install the token-redacting access-log filter once per process."""
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(isinstance(item, _TokenRedactingAccessLogFilter) for item in access_logger.filters):
+        return
+    access_logger.addFilter(_TokenRedactingAccessLogFilter())
 
 
 def create_contract_app() -> FastAPI:
@@ -167,13 +218,14 @@ class APIServer:
         if self._task is not None:
             return
 
+        _ensure_access_log_redaction()
         config = uvicorn.Config(
             self._app,
             host=self._host,
             port=self._port,
             loop="asyncio",
             log_level="info",
-            access_log=False,
+            access_log=True,
         )
         self._server = uvicorn.Server(config)
         cast(Any, self._server).install_signal_handlers = False

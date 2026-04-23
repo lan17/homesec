@@ -75,6 +75,9 @@ The exact bitrate depends on source content and codec handling:
 - `video_codec: copy` preserves the upstream video bitrate
 - `video_codec: h264` or `audio_codec: aac` can reduce or increase output size
   depending on the source
+- upstream H.264 sources are the cheapest path for browser playback; H.265/HEVC
+  sources will transcode to H.264 for preview and therefore increase CPU or
+  hardware-encoder load
 
 At the default `1000 ms` segments and `4` retained segments, a conservative
 starting point is `64 MiB` of tmpfs per actively previewed camera. Increase that
