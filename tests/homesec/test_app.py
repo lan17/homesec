@@ -179,6 +179,17 @@ class _StubRuntimeController(RuntimeController):
             state=PreviewState.STOPPING,
         )
 
+    async def note_preview_viewer_activity(
+        self,
+        runtime: SubprocessRuntimeHandle,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        _ = runtime
+        _ = camera_name
+        _ = viewer_id
+
 
 class _StubRuntimeManagerStatus:
     def __init__(
@@ -520,6 +531,14 @@ async def test_application_preview_methods_delegate_to_runtime_manager() -> None
                 state=PreviewState.STOPPING,
             )
 
+        async def note_preview_viewer_activity(
+            self,
+            camera_name: str,
+            *,
+            viewer_id: str | None = None,
+        ) -> None:
+            self.calls.append(("viewer", f"{camera_name}:{viewer_id or ''}"))
+
     # Given: An application with a runtime manager that records preview calls
     app = Application(config_path=Path(__file__))
     manager = _StubRuntimeManager()
@@ -529,6 +548,7 @@ async def test_application_preview_methods_delegate_to_runtime_manager() -> None
     status = await app.get_camera_preview_status("front_door")
     ensured = await app.ensure_camera_preview_active("front_door")
     stopped = await app.force_stop_camera_preview("front_door")
+    await app.note_camera_preview_viewer_activity("front_door", viewer_id="viewer-1")
 
     # Then: Preview methods delegate through the runtime manager facade
     assert status.state == PreviewState.READY
@@ -539,6 +559,7 @@ async def test_application_preview_methods_delegate_to_runtime_manager() -> None
         ("status", "front_door"),
         ("ensure", "front_door"),
         ("stop", "front_door"),
+        ("viewer", "front_door:viewer-1"),
     ]
 
 

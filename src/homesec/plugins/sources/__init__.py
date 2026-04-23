@@ -17,6 +17,7 @@ def load_source_plugin(
     source_backend: str,
     config: dict[str, object] | BaseModel,
     camera_name: str,
+    **runtime_context: object,
 ) -> ClipSource:
     """Load and instantiate a source plugin.
 
@@ -24,6 +25,7 @@ def load_source_plugin(
         source_backend: Name of the source plugin (e.g., "rtsp", "local_folder")
         config: Raw config dict or validated BaseModel
         camera_name: Name of the camera (runtime context)
+        runtime_context: Additional runtime-only values injected before validation.
 
     Returns:
         Instantiated ClipSource
@@ -38,6 +40,7 @@ def load_source_plugin(
             source_backend,
             config,
             camera_name=camera_name,
+            **runtime_context,
         ),
     )
 

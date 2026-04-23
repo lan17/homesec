@@ -199,6 +199,26 @@ class _HarnessService:
                 camera_name=command.camera_name,
                 status=ready_status,
             )
+        if command.command == WorkerCommandType.PREVIEW_NOTE_VIEWER_ACTIVITY:
+            next_viewer_count = (
+                0 if preview_status.viewer_count is None else preview_status.viewer_count
+            )
+            if command.viewer_id is not None:
+                next_viewer_count += 1
+            updated_status = WorkerPreviewStatusPayload(
+                enabled=preview_status.enabled,
+                state=PreviewState.READY,
+                viewer_count=next_viewer_count,
+            )
+            self._preview_statuses[command.camera_name] = updated_status
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                status=updated_status,
+            )
         stopping_status = WorkerPreviewStatusPayload(
             enabled=preview_status.enabled,
             state=PreviewState.STOPPING,

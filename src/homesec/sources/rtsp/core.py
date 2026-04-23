@@ -20,6 +20,7 @@ import numpy.typing as npt
 from pydantic import BaseModel, Field, model_validator
 
 from homesec.models.clip import Clip
+from homesec.models.config import PreviewConfig
 from homesec.sources.base import ThreadedClipSource
 from homesec.sources.rtsp.capabilities import (
     RTSPTimeoutCapabilities,
@@ -29,6 +30,7 @@ from homesec.sources.rtsp.clock import Clock, SystemClock
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
 from homesec.sources.rtsp.live_publisher import (
+    HLSLivePublisher,
     LivePublisher,
     LivePublisherRefusalReason,
     LivePublisherStartRefusal,
@@ -182,6 +184,13 @@ class RTSPSourceConfig(BaseModel):
         default=None,
         description="Optional human-friendly camera name.",
     )
+    runtime_preview: PreviewConfig | None = Field(
+        default=None,
+        alias="__runtime_preview__",
+        exclude=True,
+        repr=False,
+        description="Runtime-injected live preview settings.",
+    )
     rtsp_url_env: str | None = Field(
         default=None,
         description="Environment variable containing the RTSP URL.",
@@ -330,7 +339,10 @@ class RTSPSource(ThreadedClipSource):
             debug=self.debug_motion,
         )
         self._owns_frame_pipeline = frame_pipeline is None
-        self._live_publisher: LivePublisher = live_publisher or NoopLivePublisher()
+        self._live_publisher: LivePublisher = live_publisher or self._build_live_publisher(
+            config,
+            camera_name=camera_name,
+        )
         self._live_publisher_shutdown = False
         self._owns_recorder = recorder is None
 
@@ -606,6 +618,33 @@ class RTSPSource(ThreadedClipSource):
             self._live_publisher.sync_recording_active(self.recording_process is not None)
         except Exception as exc:
             logger.warning("Preview recording-state sync failed: %s", exc, exc_info=True)
+
+    def _build_live_publisher(
+        self,
+        config: RTSPSourceConfig,
+        *,
+        camera_name: str,
+    ) -> LivePublisher:
+        preview_config = config.runtime_preview
+        if preview_config is None or not preview_config.enabled:
+            return NoopLivePublisher()
+
+        hls_config = preview_config.config
+        return HLSLivePublisher(
+            camera_name=camera_name,
+            rtsp_url=self.rtsp_url,
+            storage_dir=hls_config.storage_dir,
+            segment_duration_ms=hls_config.segment_duration_ms,
+            live_window_segments=hls_config.live_window_segments,
+            idle_timeout_s=preview_config.idle_timeout_s,
+            audio_enabled=hls_config.audio_enabled,
+            audio_codec=hls_config.audio_codec,
+            video_codec=hls_config.video_codec,
+            rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+            rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+            clock=self._clock,
+            timeout_capabilities=self._timeout_capabilities,
+        )
 
     def _telemetry_common_fields(self) -> dict[str, object]:
         return {

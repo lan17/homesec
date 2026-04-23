@@ -168,6 +168,19 @@ class RuntimeManager:
             camera_name,
         )
 
+    async def note_preview_viewer_activity(
+        self,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        """Record successful preview playback activity for a camera."""
+        await self._controller.note_preview_viewer_activity(
+            self._require_active_runtime(),
+            camera_name,
+            viewer_id=viewer_id,
+        )
+
     async def shutdown(self) -> None:
         """Shutdown reload task (if any) and active runtime."""
         if self._reload_task is not None and not self._reload_task.done():

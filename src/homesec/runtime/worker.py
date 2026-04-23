@@ -91,6 +91,8 @@ class _PreviewCapableSource(Protocol):
 
     def stop_preview(self) -> None: ...
 
+    def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None: ...
+
 
 class _NoopNotifier(Notifier):
     """No-op notifier used when no notifiers are configured."""
@@ -304,10 +306,14 @@ class _RuntimeWorkerService:
             if not camera.enabled:
                 continue
             source_cfg = camera.source
+            runtime_context: dict[str, object] = {}
+            if source_cfg.backend == "rtsp":
+                runtime_context["__runtime_preview__"] = config.preview
             source = load_source_plugin(
                 source_backend=source_cfg.backend,
                 config=source_cfg.config,
                 camera_name=camera.name,
+                **runtime_context,
             )
             sources.append(source)
             sources_by_camera[camera.name] = source
@@ -412,6 +418,19 @@ class _RuntimeWorkerService:
                         accepted=stop_result.accepted,
                         state=stop_result.state,
                     ),
+                )
+            case WorkerCommandType.PREVIEW_NOTE_VIEWER_ACTIVITY:
+                status = self._note_preview_viewer_activity(
+                    command.camera_name,
+                    viewer_id=command.viewer_id,
+                )
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    status=self._preview_status_payload(command.camera_name, status),
                 )
             case _:
                 return WorkerCommandResult(
@@ -575,6 +594,36 @@ class _RuntimeWorkerService:
             accepted=True,
             state=PreviewState.STOPPING,
         )
+
+    def _note_preview_viewer_activity(
+        self,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> CameraPreviewStatus:
+        source = self._source_for_camera(camera_name)
+        if not self._preview_enabled(camera_name, source):
+            return CameraPreviewStatus(
+                camera_name=camera_name,
+                enabled=False,
+                state=PreviewState.IDLE,
+            )
+        if source is None:
+            return CameraPreviewStatus(
+                camera_name=camera_name,
+                enabled=True,
+                state=PreviewState.IDLE,
+            )
+        try:
+            source.note_preview_viewer_activity(viewer_id)
+        except Exception as exc:
+            logger.warning(
+                "Preview viewer activity update failed for camera=%s: %s",
+                camera_name,
+                exc,
+                exc_info=True,
+            )
+        return self._preview_status(camera_name)
 
     def _source_for_camera(self, camera_name: str) -> _PreviewCapableSource | None:
         bundle = self._runtime_bundle

@@ -56,6 +56,7 @@ class WorkerCommandType(StrEnum):
     PREVIEW_STATUS = "preview_status"
     PREVIEW_ENSURE_ACTIVE = "preview_ensure_active"
     PREVIEW_FORCE_STOP = "preview_force_stop"
+    PREVIEW_NOTE_VIEWER_ACTIVITY = "preview_note_viewer_activity"
 
 
 class WorkerCommandErrorCode(StrEnum):
@@ -86,6 +87,7 @@ class WorkerCommand(BaseModel):
     generation: int
     correlation_id: str
     camera_name: str
+    viewer_id: str | None = None
 
 
 class WorkerCommandResult(BaseModel):
