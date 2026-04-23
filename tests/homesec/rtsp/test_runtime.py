@@ -20,6 +20,10 @@ from homesec.sources.rtsp.live_publisher import (
     LivePublisherState,
     LivePublisherStatus,
 )
+from homesec.sources.rtsp.preflight import (
+    CameraPreflightDiagnostics,
+    CameraPreflightOutcome,
+)
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 
@@ -126,6 +130,7 @@ class FakeLivePublisher:
         self.ensure_result: LivePublisherStatus | LivePublisherStartRefusal = self._status
         self.viewer_activity: list[str | None] = []
         self.recording_active: list[bool] = []
+        self.concurrent_preview_downgrades: list[str] = []
         self.stop_calls = 0
         self.shutdown_calls = 0
 
@@ -134,6 +139,9 @@ class FakeLivePublisher:
 
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         return self.ensure_result
+
+    def downgrade_concurrent_preview(self, reason: str) -> None:
+        self.concurrent_preview_downgrades.append(reason)
 
     def request_stop(self) -> None:
         self.stop_calls += 1
@@ -163,6 +171,10 @@ class RaisingLivePublisher:
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         self._raise_if_configured("ensure_active")
         return LivePublisherStatus(state=LivePublisherState.READY)
+
+    def downgrade_concurrent_preview(self, reason: str) -> None:
+        _ = reason
+        self._raise_if_configured("downgrade_concurrent_preview")
 
     def request_stop(self) -> None:
         self._raise_if_configured("request_stop")
@@ -410,6 +422,110 @@ def test_session_limit_fallback_uses_default_recording_profile(tmp_path: Path) -
     expected_profile = build_default_recording_profile(source.rtsp_url)
     assert outcome.recording_profile == expected_profile
     assert outcome.diagnostics.selected_recording_profile == expected_profile.profile_id()
+
+
+def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requested(
+    tmp_path: Path,
+) -> None:
+    """RTSPSource should validate the preview input URL used by the HLS publisher."""
+
+    class _FakePreflight:
+        def __init__(self) -> None:
+            self.preview_rtsp_url: str | None = None
+
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+            preview_rtsp_url: str | None = None,
+        ) -> CameraPreflightOutcome:
+            # Given: source startup asks preflight to validate current runtime topology
+            _ = camera_name
+            self.preview_rtsp_url = preview_rtsp_url
+            recording_profile = build_default_recording_profile(primary_rtsp_url)
+            return CameraPreflightOutcome(
+                camera_key="cam-key",
+                motion_profile=MotionProfile(input_url=detect_rtsp_url),
+                recording_profile=recording_profile,
+                concurrent_preview_supported=True,
+                diagnostics=CameraPreflightDiagnostics(
+                    attempted_urls=[primary_rtsp_url, detect_rtsp_url],
+                    probes=[],
+                    selected_motion_url=detect_rtsp_url,
+                    selected_recording_url=primary_rtsp_url,
+                    selected_preview_url=preview_rtsp_url,
+                    selected_recording_profile=recording_profile.profile_id(),
+                    session_mode="dual_stream",
+                    concurrent_preview_supported=True,
+                ),
+            )
+
+    # Given: an RTSP source configured for concurrent preview while recording
+    publisher = FakeLivePublisher()
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/main",
+        detect_rtsp_url="rtsp://host/detect",
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+    fake_preflight = _FakePreflight()
+    source._preflight = fake_preflight  # noqa: SLF001
+
+    # When: startup preflight runs
+    source._run_startup_preflight()  # noqa: SLF001
+
+    # Then: the preview check receives the main RTSP URL used by HLSLivePublisher today
+    assert fake_preflight.preview_rtsp_url == "rtsp://host/main"
+    assert publisher.concurrent_preview_downgrades == []
+
+
+def test_startup_preflight_downgrade_reaches_live_publisher(tmp_path: Path) -> None:
+    """RTSPSource should apply failed preview classification to the live publisher."""
+    # Given: a preflight outcome that marks concurrent preview unsupported
+    publisher = FakeLivePublisher()
+    config = _make_config(
+        tmp_path,
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+    recording_profile = build_default_recording_profile(source.rtsp_url)
+    outcome = CameraPreflightOutcome(
+        camera_key="cam-key",
+        motion_profile=MotionProfile(input_url=source.detect_rtsp_url),
+        recording_profile=recording_profile,
+        concurrent_preview_supported=False,
+        concurrent_preview_downgrade_reason=("concurrent_preview_unsupported_by_startup_preflight"),
+        diagnostics=CameraPreflightDiagnostics(
+            attempted_urls=[source.rtsp_url],
+            probes=[],
+            selected_motion_url=source.detect_rtsp_url,
+            selected_recording_url=source.rtsp_url,
+            selected_preview_url=source.rtsp_url,
+            selected_recording_profile=recording_profile.profile_id(),
+            session_mode="dual_stream",
+            concurrent_preview_supported=False,
+            concurrent_preview_downgrade_reason=(
+                "concurrent_preview_unsupported_by_startup_preflight"
+            ),
+        ),
+    )
+
+    # When: applying startup preflight output
+    source._apply_preflight_outcome(outcome)  # noqa: SLF001
+
+    # Then: the publisher receives the process-local downgrade reason
+    assert publisher.concurrent_preview_downgrades == [
+        "concurrent_preview_unsupported_by_startup_preflight"
+    ]
 
 
 def test_default_preview_seam_refuses_until_backend_is_wired(tmp_path: Path) -> None:

@@ -150,6 +150,193 @@ def test_preflight_falls_back_to_single_stream_when_dual_fails(
     assert outcome.diagnostics.session_mode == "single_stream"
 
 
+def test_preflight_classifies_concurrent_preview_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should validate the motion, recording, and preview topology on request."""
+    # Given: dual stream validation succeeds and preview is allowed during recording
+    streams = [
+        ProbeStreamInfo(
+            url="rtsp://cam/high",
+            video_codec="h264",
+            audio_codec="aac",
+            width=1920,
+            height=1080,
+            fps=20.0,
+            fps_raw="20/1",
+            probe_ok=True,
+        ),
+        ProbeStreamInfo(
+            url="rtsp://cam/low",
+            video_codec="h264",
+            audio_codec="aac",
+            width=640,
+            height=360,
+            fps=10.0,
+            fps_raw="10/1",
+            probe_ok=True,
+        ),
+    ]
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery(streams),
+    )
+    preview_checks: list[tuple[str, str, str]] = []
+
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
+
+    def _validate_preview(motion_url: str, recording_url: str, preview_url: str) -> bool:
+        preview_checks.append((motion_url, recording_url, preview_url))
+        return True
+
+    monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
+    monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
+    monkeypatch.setattr(
+        preflight,
+        "_validate_concurrent_preview_session_limits",
+        _validate_preview,
+    )
+
+    # When: running startup preflight with the actual preview input URL requested
+    outcome = preflight.run(
+        camera_name="garage",
+        primary_rtsp_url="rtsp://cam/high",
+        detect_rtsp_url="rtsp://cam/low",
+        preview_rtsp_url="rtsp://cam/high",
+    )
+
+    # Then: the preview check uses motion low, recording high, and preview high
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.concurrent_preview_supported is True
+    assert outcome.concurrent_preview_downgrade_reason is None
+    assert outcome.diagnostics.selected_preview_url == "rtsp://cam/high"
+    assert preview_checks == [("rtsp://cam/low", "rtsp://cam/high", "rtsp://cam/high")]
+
+
+def test_preflight_downgrades_concurrent_preview_when_three_stream_check_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should mark concurrent preview unsupported without failing startup."""
+    # Given: motion plus recording works but the three-stream preview check fails
+    streams = [
+        ProbeStreamInfo(
+            url="rtsp://cam/high",
+            video_codec="h264",
+            audio_codec="aac",
+            width=1920,
+            height=1080,
+            fps=20.0,
+            fps_raw="20/1",
+            probe_ok=True,
+        ),
+        ProbeStreamInfo(
+            url="rtsp://cam/low",
+            video_codec="h264",
+            audio_codec="aac",
+            width=640,
+            height=360,
+            fps=10.0,
+            fps_raw="10/1",
+            probe_ok=True,
+        ),
+    ]
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery(streams),
+    )
+
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
+
+    monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
+    monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
+    monkeypatch.setattr(
+        preflight,
+        "_validate_concurrent_preview_session_limits",
+        lambda _m, _r, _p: False,
+    )
+
+    # When: running startup preflight with concurrent preview requested
+    outcome = preflight.run(
+        camera_name="garage",
+        primary_rtsp_url="rtsp://cam/high",
+        detect_rtsp_url="rtsp://cam/low",
+        preview_rtsp_url="rtsp://cam/high",
+    )
+
+    # Then: startup succeeds while the process-local preview downgrade is classified
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.concurrent_preview_supported is False
+    assert (
+        outcome.concurrent_preview_downgrade_reason
+        == "concurrent_preview_unsupported_by_startup_preflight"
+    )
+    assert outcome.diagnostics.concurrent_preview_supported is False
+    assert outcome.diagnostics.concurrent_preview_downgrade_reason == (
+        "concurrent_preview_unsupported_by_startup_preflight"
+    )
+
+
+def test_preflight_skips_three_stream_check_when_preview_not_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight should not run preview capability checks unless explicitly requested."""
+    # Given: a viable RTSP camera where preview concurrency was not requested
+    streams = [
+        ProbeStreamInfo(
+            url="rtsp://cam/high",
+            video_codec="h264",
+            audio_codec="aac",
+            width=1920,
+            height=1080,
+            fps=20.0,
+            fps_raw="20/1",
+            probe_ok=True,
+        ),
+    ]
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path,
+        rtsp_connect_timeout_s=2.0,
+        rtsp_io_timeout_s=2.0,
+        discovery=_FakeDiscovery(streams),
+    )
+
+    def _validate_profile(_profile: RecordingProfile) -> RecordingValidationResult:
+        return RecordingValidationResult(ok=True)
+
+    def _unexpected_preview_check(_motion_url: str, _recording_url: str, _preview_url: str) -> bool:
+        raise AssertionError("three-stream preview check should not run")
+
+    monkeypatch.setattr(preflight, "_validate_recording_profile", _validate_profile)
+    monkeypatch.setattr(preflight, "_validate_session_limits", lambda _m, _r: True)
+    monkeypatch.setattr(
+        preflight,
+        "_validate_concurrent_preview_session_limits",
+        _unexpected_preview_check,
+    )
+
+    # When: running startup preflight without a preview input URL
+    outcome = preflight.run(
+        camera_name="garage",
+        primary_rtsp_url="rtsp://cam/high",
+        detect_rtsp_url="rtsp://cam/high",
+    )
+
+    # Then: preview capability remains unclassified for this startup run
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.concurrent_preview_supported is None
+    assert outcome.diagnostics.concurrent_preview_supported is None
+    assert outcome.diagnostics.selected_preview_url is None
+
+
 def test_preflight_returns_negotiation_error_for_unusable_audio(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

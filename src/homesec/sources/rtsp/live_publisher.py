@@ -59,6 +59,10 @@ _SESSION_LIMIT_HINTS: tuple[str, ...] = (
     "max sessions",
     "maximum sessions",
 )
+CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON = (
+    "concurrent_preview_downgraded_after_repeated_recording_failures"
+)
+CONCURRENT_PREVIEW_FAILURE_THRESHOLD = 2
 
 
 class LivePublisherState(StrEnum):
@@ -95,6 +99,8 @@ class LivePublisher(Protocol):
     def status(self) -> LivePublisherStatus: ...
 
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal: ...
+
+    def downgrade_concurrent_preview(self, reason: str) -> None: ...
 
     def request_stop(self) -> None: ...
 
@@ -187,6 +193,10 @@ class HLSLivePublisher(LivePublisher):
         )
         self._viewer_window_s = max(_DEFAULT_VIEWER_WINDOW_S, self._segment_duration_s * 2.0)
         self._startup_timeout_s = max(3.0, min(10.0, (self._segment_duration_s * 4.0) + 2.0))
+        self._recording_preview_early_exit_window_s = max(
+            self._startup_timeout_s,
+            self._segment_duration_s * max(1, self._live_window_segments),
+        )
 
         self._lock = RLock()
         self._maintenance_stop = Event()
@@ -205,7 +215,10 @@ class HLSLivePublisher(LivePublisher):
         self._stop_request_token = 0
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr_handle: TextIO | None = None
+        self._preview_ready_at: float | None = None
         self._recording_active = False
+        self._concurrent_preview_downgrade_reason: str | None = None
+        self._consecutive_recording_preview_failures = 0
         self._viewer_activity: dict[str, float] = {}
         self._anonymous_viewer_last_seen: float | None = None
         self._last_activity_at: float | None = None
@@ -244,7 +257,8 @@ class HLSLivePublisher(LivePublisher):
                     # cached READY result and proceed with normal startup logic.
                     if (
                         isinstance(completed_start_result, LivePublisherStatus)
-                        and completed_start_result.state is LivePublisherState.READY
+                        and completed_start_result.state
+                        in (LivePublisherState.READY, LivePublisherState.DEGRADED)
                         and not self._is_process_running_locked()
                     ):
                         self._completed_start_results.pop(queued_start_token, None)
@@ -266,8 +280,8 @@ class HLSLivePublisher(LivePublisher):
                     self._mark_activity_locked(now=now)
                     self._status = self._build_running_status_locked(
                         now=now,
-                        state=LivePublisherState.READY,
-                        degraded_reason=None,
+                        state=self._running_state_locked(),
+                        degraded_reason=self._current_degraded_reason_locked(),
                     )
                     self._ensure_maintenance_thread_started_locked()
                     return self._status
@@ -288,6 +302,10 @@ class HLSLivePublisher(LivePublisher):
                 self._start_in_progress = False
                 if start_result is not None and self._queued_start_waiters.get(start_token, 0) > 0:
                     self._completed_start_results[start_token] = start_result
+
+    def downgrade_concurrent_preview(self, reason: str) -> None:
+        with self._lock:
+            self._downgrade_concurrent_preview_locked(reason=reason)
 
     def request_stop(self) -> None:
         with self._lock:
@@ -310,8 +328,8 @@ class HLSLivePublisher(LivePublisher):
                 self._viewer_activity[viewer_id] = now
             self._status = self._build_running_status_locked(
                 now=now,
-                state=LivePublisherState.READY,
-                degraded_reason=None,
+                state=self._running_state_locked(),
+                degraded_reason=self._current_degraded_reason_locked(),
             )
 
     def sync_recording_active(self, recording_active: bool) -> None:
@@ -321,10 +339,14 @@ class HLSLivePublisher(LivePublisher):
             had_pending_start = self._start_in_progress
             self._recording_active = recording_active
             if not recording_active:
+                self._consecutive_recording_preview_failures = 0
                 self._refresh_locked(now=self._clock.now())
                 return
 
-            if self._recording_policy == "allow_during_recording":
+            if (
+                self._recording_policy == "allow_during_recording"
+                and not self._preview_downgraded_locked()
+            ):
                 if not was_recording_active:
                     logger.info(
                         "Recording became active; preview remains allowed by configuration: camera=%s",
@@ -369,6 +391,17 @@ class HLSLivePublisher(LivePublisher):
             maintenance_thread.join(timeout=2.0)
 
     def _start(
+        self,
+        *,
+        start_token: int,
+    ) -> LivePublisherStatus | LivePublisherStartRefusal:
+        result = self._start_impl(start_token=start_token)
+        if isinstance(result, LivePublisherStartRefusal):
+            with self._lock:
+                return self._maybe_downgrade_after_recording_preview_failure_locked(result)
+        return result
+
+    def _start_impl(
         self,
         *,
         start_token: int,
@@ -440,6 +473,7 @@ class HLSLivePublisher(LivePublisher):
 
                     self._process = process
                     self._stderr_handle = stderr_handle
+                    self._preview_ready_at = None
                     started_now = self._clock.now()
                     self._mark_activity_locked(now=started_now)
                     self._status = LivePublisherStatus(
@@ -452,12 +486,13 @@ class HLSLivePublisher(LivePublisher):
                         if label == "timeouts":
                             self._timeout_capabilities.note_ffmpeg_timeout_success()
                         ready_now = self._clock.now()
+                        self._preview_ready_at = ready_now
                         self._mark_activity_locked(now=ready_now)
                         self._ensure_maintenance_thread_started_locked()
                         self._status = self._build_running_status_locked(
                             now=ready_now,
-                            state=LivePublisherState.READY,
-                            degraded_reason=None,
+                            state=self._running_state_locked(),
+                            degraded_reason=self._current_degraded_reason_locked(),
                         )
                         return self._status
 
@@ -554,16 +589,31 @@ class HLSLivePublisher(LivePublisher):
             self._viewer_activity.clear()
             self._anonymous_viewer_last_seen = None
             self._last_activity_at = None
+            last_error = stderr_tail or f"Preview ffmpeg exited unexpectedly ({exit_code})"
+            early_exit_while_recording = self._is_recording_preview_early_exit_locked(now=now)
+            self._preview_ready_at = None
+            if early_exit_while_recording:
+                self._maybe_downgrade_after_recording_preview_failure_locked(
+                    LivePublisherStartRefusal(
+                        reason=_classify_start_refusal(last_error),
+                        message="Preview publisher exited early while recording was active",
+                    )
+                )
             self._status = LivePublisherStatus(
-                state=LivePublisherState.ERROR,
+                state=(
+                    LivePublisherState.DEGRADED
+                    if self._preview_downgraded_locked()
+                    else LivePublisherState.ERROR
+                ),
                 viewer_count=0,
-                last_error=stderr_tail or f"Preview ffmpeg exited unexpectedly ({exit_code})",
+                degraded_reason=self._current_degraded_reason_locked(),
+                last_error=last_error,
             )
             return
 
         if not self._is_process_running_locked():
             if self._status.state not in (LivePublisherState.ERROR,):
-                self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+                self._status = self._idle_status_locked()
             return
 
         viewer_count = self._viewer_count_locked(now=now)
@@ -579,8 +629,8 @@ class HLSLivePublisher(LivePublisher):
 
         self._status = self._build_running_status_locked(
             now=now,
-            state=LivePublisherState.READY,
-            degraded_reason=None,
+            state=self._running_state_locked(),
+            degraded_reason=self._current_degraded_reason_locked(),
         )
 
     def _build_codec_plans(self) -> tuple[_CodecPlan, ...]:
@@ -674,7 +724,9 @@ class HLSLivePublisher(LivePublisher):
                 return None
 
     def _recording_blocks_preview_locked(self) -> bool:
-        return self._recording_policy == "stop_on_recording" and self._recording_active
+        return self._recording_active and (
+            self._recording_policy == "stop_on_recording" or self._preview_downgraded_locked()
+        )
 
     def _build_ffmpeg_cmd(
         self,
@@ -747,6 +799,86 @@ class HLSLivePublisher(LivePublisher):
             idle_shutdown_at=idle_shutdown_at,
         )
 
+    def _idle_status_locked(self, *, last_error: str | None = None) -> LivePublisherStatus:
+        return LivePublisherStatus(
+            state=(
+                LivePublisherState.DEGRADED
+                if self._recording_active and self._preview_downgraded_locked()
+                else LivePublisherState.IDLE
+            ),
+            viewer_count=0,
+            degraded_reason=self._current_degraded_reason_locked(),
+            last_error=last_error,
+        )
+
+    def _running_state_locked(self) -> LivePublisherState:
+        if self._preview_downgraded_locked():
+            return LivePublisherState.DEGRADED
+        return LivePublisherState.READY
+
+    def _preview_downgraded_locked(self) -> bool:
+        return self._concurrent_preview_downgrade_reason is not None
+
+    def _current_degraded_reason_locked(self) -> str | None:
+        return self._concurrent_preview_downgrade_reason
+
+    def _downgrade_concurrent_preview_locked(self, *, reason: str) -> None:
+        if self._concurrent_preview_downgrade_reason == reason:
+            return
+
+        self._concurrent_preview_downgrade_reason = reason
+        logger.warning(
+            "Downgrading concurrent preview while recording for camera=%s reason=%s",
+            self._camera_name,
+            reason,
+        )
+        if self._recording_active:
+            self._cancel_pending_start_locked()
+            self._stop_locked(clear_error=True)
+            self._last_cancellation_result = self._recording_priority_refusal()
+        elif not self._is_process_running_locked():
+            self._status = self._idle_status_locked()
+
+    def _maybe_downgrade_after_recording_preview_failure_locked(
+        self,
+        refusal: LivePublisherStartRefusal,
+    ) -> LivePublisherStartRefusal:
+        if (
+            not self._recording_active
+            or self._recording_policy != "allow_during_recording"
+            or self._preview_downgraded_locked()
+            or refusal.reason is LivePublisherRefusalReason.RECORDING_PRIORITY
+        ):
+            return refusal
+
+        self._consecutive_recording_preview_failures += 1
+        logger.warning(
+            "Preview failed while recording is active: "
+            "camera=%s consecutive_failures=%s threshold=%s reason=%s",
+            self._camera_name,
+            self._consecutive_recording_preview_failures,
+            CONCURRENT_PREVIEW_FAILURE_THRESHOLD,
+            refusal.reason.value,
+        )
+        if self._consecutive_recording_preview_failures < CONCURRENT_PREVIEW_FAILURE_THRESHOLD:
+            return refusal
+
+        self._downgrade_concurrent_preview_locked(
+            reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
+        )
+        return self._recording_priority_refusal()
+
+    def _is_recording_preview_early_exit_locked(self, *, now: float) -> bool:
+        if (
+            not self._recording_active
+            or self._recording_policy != "allow_during_recording"
+            or self._preview_downgraded_locked()
+        ):
+            return False
+        if self._preview_ready_at is None:
+            return True
+        return (now - self._preview_ready_at) <= self._recording_preview_early_exit_window_s
+
     def _output_ready_locked(self) -> bool:
         if not self._playlist_path.exists():
             return False
@@ -770,13 +902,14 @@ class HLSLivePublisher(LivePublisher):
         has_live_window = self._camera_dir.exists()
         if self._process is None and self._stderr_handle is None and not has_live_window:
             if clear_error:
-                self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+                self._status = self._idle_status_locked()
             return None
 
         self._status = LivePublisherStatus(state=LivePublisherState.STOPPING, viewer_count=0)
         teardown_errors: list[str] = []
         process = self._process
         self._process = None
+        self._preview_ready_at = None
         if process is not None:
             stop_error = self._terminate_process(process)
             if stop_error is not None:
@@ -796,7 +929,7 @@ class HLSLivePublisher(LivePublisher):
                     last_error="; ".join(teardown_errors),
                 )
             else:
-                self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+                self._status = self._idle_status_locked()
 
         if teardown_errors:
             return "; ".join(teardown_errors)
@@ -975,11 +1108,20 @@ class HLSLivePublisher(LivePublisher):
         self._status = LivePublisherStatus(
             state=LivePublisherState.ERROR,
             viewer_count=0,
+            degraded_reason=self._current_degraded_reason_locked(),
             last_error=last_error,
         )
         return LivePublisherStartRefusal(reason=reason, message=message)
 
     def _recording_priority_refusal(self) -> LivePublisherStartRefusal:
+        if self._preview_downgraded_locked():
+            return LivePublisherStartRefusal(
+                reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
+                message=(
+                    "Preview is unavailable while recording is active because concurrent "
+                    "preview was downgraded for this camera"
+                ),
+            )
         return LivePublisherStartRefusal(
             reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
             message="Preview is unavailable while recording is active for this camera",
@@ -1022,6 +1164,9 @@ class NoopLivePublisher(LivePublisher):
             reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
             message="Preview publisher is not configured for this RTSP source",
         )
+
+    def downgrade_concurrent_preview(self, reason: str) -> None:
+        _ = reason
 
     def request_stop(self) -> None:
         self._status = LivePublisherStatus(state=LivePublisherState.IDLE)
