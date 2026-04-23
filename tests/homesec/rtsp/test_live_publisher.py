@@ -775,6 +775,89 @@ def test_recording_priority_preempts_slow_startup(tmp_path: Path) -> None:
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
 
 
+def test_request_stop_clears_racing_start_failure_error(tmp_path: Path) -> None:
+    """Explicit stop should win over a concurrent startup-failure error transition."""
+
+    # Given: A publisher timing out during startup while error reporting is delayed
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock())
+    publisher._startup_timeout_s = 0.2
+    calls: list[dict[str, object]] = []
+    spawned = Event()
+    error_transition_started = Event()
+    allow_error_transition = Event()
+
+    original_set_error_locked = publisher._set_error_locked
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        _ = proc
+        _ = cmd
+        spawned.set()
+
+    def delayed_set_error_locked(
+        *,
+        reason: LivePublisherRefusalReason,
+        message: str,
+        last_error: str,
+    ) -> LivePublisherStartRefusal:
+        error_transition_started.set()
+        allow_error_transition.wait(timeout=1.0)
+        return original_set_error_locked(
+            reason=reason,
+            message=message,
+            last_error=last_error,
+        )
+
+    def run_ensure_active() -> None:
+        with (
+            patch(
+                "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+                side_effect=_fake_popen_factory(
+                    calls,
+                    make_output=False,
+                    on_spawn=on_spawn,
+                ),
+            ),
+            patch.object(
+                publisher,
+                "_set_error_locked",
+                side_effect=delayed_set_error_locked,
+            ),
+        ):
+            _ = publisher.ensure_active()
+
+    ensure_thread = Thread(target=run_ensure_active)
+    ensure_thread.start()
+    assert spawned.wait(timeout=0.2)
+    assert error_transition_started.wait(timeout=1.0)
+
+    stop_completed = Event()
+
+    # When: Explicit stop races the startup-failure error transition
+    def run_request_stop() -> None:
+        publisher.request_stop()
+        stop_completed.set()
+
+    stop_thread = Thread(target=run_request_stop)
+    stop_thread.start()
+    time.sleep(0.05)
+    allow_error_transition.set()
+    ensure_thread.join(timeout=1.0)
+    stop_thread.join(timeout=1.0)
+
+    # Then: The later stop request leaves the publisher idle instead of ERROR
+    assert stop_completed.is_set()
+    assert not ensure_thread.is_alive()
+    assert not stop_thread.is_alive()
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
 def test_request_stop_preempts_slow_probe_before_spawn(tmp_path: Path) -> None:
     """Explicit stop should cancel startup before ffmpeg spawn when probing is slow."""
 

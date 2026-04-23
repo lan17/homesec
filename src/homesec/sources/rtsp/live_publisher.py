@@ -280,6 +280,8 @@ class HLSLivePublisher(LivePublisher):
         last_refusal: LivePublisherStartRefusal | None = None
 
         for label, timeout_attempt_args in attempts:
+            attempt_refusal: LivePublisherStartRefusal | None = None
+            timeout_option_error = False
             with self._lock:
                 if self._start_was_cancelled_locked(start_token):
                     self._stop_locked(clear_error=True)
@@ -366,11 +368,25 @@ class HLSLivePublisher(LivePublisher):
 
                 stderr_tail = self._read_stderr_tail_locked()
                 timeout_option_error = (
-                    label == "timeouts"
-                    and bool(stderr_tail)
-                    and _is_timeout_option_error(stderr_tail)
+                    bool(stderr_tail)
+                    and label == "timeouts"
+                    and (_is_timeout_option_error(stderr_tail))
                 )
                 self._stop_locked(clear_error=False)
+
+                if not timeout_option_error:
+                    refusal_reason = _classify_start_refusal(stderr_tail)
+                    message = (
+                        "Preview could not start because the camera session budget is exhausted"
+                        if refusal_reason is LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+                        else "Preview publisher failed to become ready"
+                    )
+                    attempt_refusal = self._set_error_locked(
+                        reason=refusal_reason,
+                        message=message,
+                        last_error=stderr_tail
+                        or "Preview publisher exited before producing HLS output",
+                    )
 
             if timeout_option_error:
                 changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
@@ -380,27 +396,19 @@ class HLSLivePublisher(LivePublisher):
                     )
                 continue
 
-            refusal_reason = _classify_start_refusal(stderr_tail)
-            message = (
-                "Preview could not start because the camera session budget is exhausted"
-                if refusal_reason is LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
-                else "Preview publisher failed to become ready"
-            )
-            last_refusal = self._set_error_locked(
-                reason=refusal_reason,
-                message=message,
-                last_error=stderr_tail or "Preview publisher exited before producing HLS output",
-            )
-            break
+            if attempt_refusal is not None:
+                last_refusal = attempt_refusal
+                break
 
         if last_refusal is not None:
             return last_refusal
 
-        return self._set_error_locked(
-            reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
-            message="Preview publisher failed to start",
-            last_error="Preview publisher failed after retrying timeout options",
-        )
+        with self._lock:
+            return self._set_error_locked(
+                reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="Preview publisher failed to start",
+                last_error="Preview publisher failed after retrying timeout options",
+            )
 
     def _wait_until_ready_locked(self) -> bool:
         deadline = self._clock.now() + self._startup_timeout_s
