@@ -186,11 +186,14 @@ class HLSLivePublisher(LivePublisher):
 
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         start_token = 0
+        queued_start_token = 0
         stop_request_token = self._stop_request_token
         while True:
             with self._lock:
                 now = self._clock.now()
                 self._refresh_locked(now=now)
+                if queued_start_token and self._start_was_cancelled_locked(queued_start_token):
+                    return self._status
                 if self._stop_requested_since_locked(stop_request_token):
                     return self._status
                 if self._recording_active:
@@ -210,9 +213,11 @@ class HLSLivePublisher(LivePublisher):
                     return self._status
 
                 if self._start_in_progress:
+                    queued_start_token = self._active_start_token
                     self._sleep_without_lock_locked(_READY_POLL_INTERVAL_S)
                     continue
 
+                queued_start_token = 0
                 self._start_in_progress = True
                 self._active_start_token += 1
                 start_token = self._active_start_token
