@@ -2,6 +2,7 @@ import type { CameraCreate, CameraResponse } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
 import { Card } from '../../../components/ui/Card'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
+import { CameraPreviewPanel } from './CameraPreviewPanel'
 import { CameraSourceConfigEditor } from './CameraSourceConfigEditor'
 
 interface CameraListProps {
@@ -74,6 +75,10 @@ export function CameraList({
                   <dd>{formatLastHeartbeat(camera.last_heartbeat)}</dd>
                 </div>
               </dl>
+
+              {camera.source_backend === 'rtsp' ? (
+                <CameraPreviewPanel cameraName={camera.name} />
+              ) : null}
 
               <pre className="camera-item__config">{JSON.stringify(camera.source_config, null, 2)}</pre>
 

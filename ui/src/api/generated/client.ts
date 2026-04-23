@@ -11,6 +11,9 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  PreviewSessionResponse,
+  PreviewStatusResponse,
+  PreviewStopResponse,
   DiagnosticsResponse,
   DiscoverRequest,
   DiscoveredCameraResponse,
@@ -56,6 +59,18 @@ export interface GeneratedHomeSecClient {
     name: string,
     options?: CameraMutationOptions,
   ): Promise<ApiResponseWithStatus<ConfigChangeResponse>>
+  getCameraPreviewStatus(
+    cameraName: string,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PreviewStatusResponse>>
+  ensureCameraPreviewActive(
+    cameraName: string,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PreviewSessionResponse>>
+  stopCameraPreview(
+    cameraName: string,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PreviewStopResponse>>
   getSetupStatus(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<SetupStatusResponse>>
   finalizeSetup(
     payload: FinalizeRequest,

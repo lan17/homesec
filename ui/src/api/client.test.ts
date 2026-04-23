@@ -631,6 +631,102 @@ describe('HomeSecApiClient.createClipMediaToken', () => {
   })
 })
 
+describe('HomeSecApiClient preview methods', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('gets preview status and parses the payload', async () => {
+    // Given: A preview status endpoint returning a ready preview snapshot
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          camera_name: 'front',
+          enabled: true,
+          state: 'ready',
+          viewer_count: 2,
+          degraded_reason: null,
+          last_error: null,
+          idle_shutdown_at: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting preview status
+    const result = await client.getCameraPreviewStatus('front')
+
+    // Then: Client returns typed preview status metadata
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/preview/cameras/front')
+    expect(result.httpStatus).toBe(200)
+    expect(result.state).toBe('ready')
+    expect(result.viewer_count).toBe(2)
+  })
+
+  it('posts preview start and parses the session payload', async () => {
+    // Given: A preview start endpoint returning a playlist URL
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          camera_name: 'front',
+          state: 'ready',
+          viewer_count: 1,
+          token: 'preview-token',
+          token_expires_at: '2026-02-15T20:00:00.000Z',
+          playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+          idle_timeout_s: 30,
+          warning: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Starting preview
+    const result = await client.ensureCameraPreviewActive('front')
+
+    // Then: Client posts the request and returns typed session data
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/preview/cameras/front')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+    expect(result.playlist_url).toContain('/api/v1/preview/cameras/front/playlist.m3u8')
+    expect(result.token).toBe('preview-token')
+  })
+
+  it('deletes preview sessions and parses the stop payload', async () => {
+    // Given: A preview stop endpoint returning an accepted response
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accepted: true,
+          state: 'stopping',
+        }),
+        {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Stopping preview
+    const result = await client.stopCameraPreview('front')
+
+    // Then: Client issues a DELETE and returns typed stop metadata
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/preview/cameras/front')
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'DELETE' })
+    expect(result.httpStatus).toBe(202)
+    expect(result.accepted).toBe(true)
+    expect(result.state).toBe('stopping')
+  })
+})
+
 describe('HomeSecApiClient camera mutation methods', () => {
   afterEach(() => {
     vi.restoreAllMocks()

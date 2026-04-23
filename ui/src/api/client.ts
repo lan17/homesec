@@ -11,6 +11,9 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  PreviewSessionResponse,
+  PreviewStatusResponse,
+  PreviewStopResponse,
   DiscoverRequest,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
@@ -38,6 +41,9 @@ import {
   parseClipMediaTokenResponse,
   parseClipResponse,
   parseConfigChangeResponse,
+  parsePreviewSessionResponse,
+  parsePreviewStatusResponse,
+  parsePreviewStopResponse,
   parseOnvifDiscoverResponse,
   parseOnvifProbeResponse,
   parseDiagnosticsResponse,
@@ -61,6 +67,9 @@ export type DiagnosticsSnapshot = ApiSnapshot<DiagnosticsResponse>
 export type ClipListSnapshot = ApiSnapshot<ClipListResponse>
 export type ClipSnapshot = ApiSnapshot<ClipResponse>
 export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
+export type PreviewSessionSnapshot = ApiSnapshot<PreviewSessionResponse>
+export type PreviewStatusSnapshot = ApiSnapshot<PreviewStatusResponse>
+export type PreviewStopSnapshot = ApiSnapshot<PreviewStopResponse>
 export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
 export type SetupStatusSnapshot = ApiSnapshot<SetupStatusResponse>
@@ -164,6 +173,70 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid delete-camera response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async getCameraPreviewStatus(
+    cameraName: string,
+    options: ApiRequestOptions = {},
+  ): Promise<PreviewStatusSnapshot> {
+    const { status, payload } = await this.httpClient.requestJson(
+      `/api/v1/preview/cameras/${encodeURIComponent(cameraName)}`,
+      options,
+    )
+
+    try {
+      return withHttpStatus(parsePreviewStatusResponse(payload), status)
+    } catch {
+      throw new APIError('Invalid preview status response payload', status, payload, null)
+    }
+  }
+
+  async ensureCameraPreviewActive(
+    cameraName: string,
+    options: ApiRequestOptions = {},
+  ): Promise<PreviewSessionSnapshot> {
+    const response = await this.httpClient.requestJson(
+      `/api/v1/preview/cameras/${encodeURIComponent(cameraName)}`,
+      {
+        ...options,
+        method: 'POST',
+      },
+    )
+
+    try {
+      return withHttpStatus(parsePreviewSessionResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid preview session response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async stopCameraPreview(
+    cameraName: string,
+    options: ApiRequestOptions = {},
+  ): Promise<PreviewStopSnapshot> {
+    const response = await this.httpClient.requestJson(
+      `/api/v1/preview/cameras/${encodeURIComponent(cameraName)}`,
+      {
+        ...options,
+        method: 'DELETE',
+      },
+    )
+
+    try {
+      return withHttpStatus(parsePreviewStopResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid preview stop response payload',
         response.status,
         response.payload,
         null,
