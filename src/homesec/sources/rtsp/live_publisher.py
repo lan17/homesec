@@ -169,6 +169,8 @@ class HLSLivePublisher(LivePublisher):
         self._maintenance_thread: Thread | None = None
         self._status = LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
         self._start_in_progress = False
+        self._active_start_token = 0
+        self._cancelled_start_token = 0
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr_handle: TextIO | None = None
         self._recording_active = False
@@ -182,6 +184,7 @@ class HLSLivePublisher(LivePublisher):
             return self._status
 
     def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+        start_token = 0
         while True:
             with self._lock:
                 now = self._clock.now()
@@ -207,16 +210,19 @@ class HLSLivePublisher(LivePublisher):
                     continue
 
                 self._start_in_progress = True
+                self._active_start_token += 1
+                start_token = self._active_start_token
                 break
 
         try:
-            return self._start(now=now)
+            return self._start(now=now, start_token=start_token)
         finally:
             with self._lock:
                 self._start_in_progress = False
 
     def request_stop(self) -> None:
         with self._lock:
+            self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
 
     def note_viewer_activity(self, viewer_id: str | None = None) -> None:
@@ -249,6 +255,7 @@ class HLSLivePublisher(LivePublisher):
     def shutdown(self) -> None:
         maintenance_thread: Thread | None = None
         with self._lock:
+            self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
             self._maintenance_stop.set()
             maintenance_thread = self._maintenance_thread
@@ -257,7 +264,12 @@ class HLSLivePublisher(LivePublisher):
         if maintenance_thread is not None and maintenance_thread is not current_thread():
             maintenance_thread.join(timeout=2.0)
 
-    def _start(self, *, now: float) -> LivePublisherStatus | LivePublisherStartRefusal:
+    def _start(
+        self,
+        *,
+        now: float,
+        start_token: int,
+    ) -> LivePublisherStatus | LivePublisherStartRefusal:
         codec_plan = self._build_codec_plan()
         timeout_args = self._timeout_capabilities.build_ffmpeg_timeout_args_for_user_flags(
             connect_timeout_s=self._rtsp_connect_timeout_s,
@@ -270,6 +282,10 @@ class HLSLivePublisher(LivePublisher):
 
         for label, timeout_attempt_args in attempts:
             with self._lock:
+                if self._start_was_cancelled_locked(start_token):
+                    self._stop_locked(clear_error=True)
+                    return self._status
+
                 if self._recording_active:
                     return LivePublisherStartRefusal(
                         reason=LivePublisherRefusalReason.RECORDING_PRIORITY,
@@ -333,6 +349,10 @@ class HLSLivePublisher(LivePublisher):
                         state=LivePublisherState.READY,
                         degraded_reason=None,
                     )
+                    return self._status
+
+                if self._start_was_cancelled_locked(start_token):
+                    self._stop_locked(clear_error=True)
                     return self._status
 
                 if self._recording_active:
@@ -668,6 +688,13 @@ class HLSLivePublisher(LivePublisher):
             )
         finally:
             self._stderr_handle = None
+
+    def _cancel_pending_start_locked(self) -> None:
+        if self._start_in_progress:
+            self._cancelled_start_token = self._active_start_token
+
+    def _start_was_cancelled_locked(self, start_token: int) -> bool:
+        return self._cancelled_start_token >= start_token
 
     def _sleep_without_lock_locked(self, seconds: float) -> None:
         self._lock.release()

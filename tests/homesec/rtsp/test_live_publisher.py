@@ -532,6 +532,57 @@ def test_startup_requires_running_process_when_ready_deadline_expires(tmp_path: 
     assert not (tmp_path / "homesec" / "Front_Door_1").exists()
 
 
+def test_request_stop_preempts_slow_startup_without_error(tmp_path: Path) -> None:
+    """Explicit stop should cancel a slow startup instead of surfacing preview failure."""
+
+    # Given: A publisher whose ffmpeg process stays alive but never produces HLS output
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock())
+    publisher._startup_timeout_s = 0.5
+    calls: list[dict[str, object]] = []
+    spawned = Event()
+    start_result: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def on_spawn(proc: FakeProc, cmd: list[str]) -> None:
+        _ = proc
+        _ = cmd
+        spawned.set()
+
+    def run_ensure_active() -> None:
+        with patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(
+                calls,
+                make_output=False,
+                on_spawn=on_spawn,
+            ),
+        ):
+            start_result["result"] = publisher.ensure_active()
+
+    ensure_thread = Thread(target=run_ensure_active)
+    ensure_thread.start()
+    assert spawned.wait(timeout=0.2)
+
+    # When: Preview is explicitly stopped while startup is still waiting for HLS readiness
+    publisher.request_stop()
+    ensure_thread.join(timeout=0.3)
+
+    # Then: Startup resolves as an idle cancellation instead of forcing ERROR state
+    assert not ensure_thread.is_alive()
+    result = start_result["result"]
+    assert result == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+    proc = calls[0]["proc"]
+    assert isinstance(proc, FakeProc)
+    assert proc.terminate_calls == 1
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
 def test_recording_priority_preempts_slow_startup(tmp_path: Path) -> None:
     """Recording activation should preempt a slow preview startup without blocking."""
 
@@ -592,6 +643,46 @@ def test_recording_priority_preempts_slow_startup(tmp_path: Path) -> None:
     proc = calls[0]["proc"]
     assert isinstance(proc, FakeProc)
     assert proc.terminate_calls == 1
+    assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
+def test_request_stop_preempts_slow_probe_before_spawn(tmp_path: Path) -> None:
+    """Explicit stop should cancel startup before ffmpeg spawn when probing is slow."""
+
+    # Given: A publisher whose codec probe is still in flight
+    class _ThreadClock:
+        def now(self) -> float:
+            return time.monotonic()
+
+        def sleep(self, seconds: float) -> None:
+            time.sleep(seconds)
+
+    discovery = SlowDiscovery(_probe_stream(video_codec="h264", audio_codec="aac"))
+    publisher = _make_publisher(tmp_path, clock=_ThreadClock(), discovery=discovery)
+    calls: list[dict[str, object]] = []
+    start_result: dict[str, LivePublisherStatus | LivePublisherStartRefusal] = {}
+
+    def run_ensure_active() -> None:
+        with patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(calls),
+        ):
+            start_result["result"] = publisher.ensure_active()
+
+    ensure_thread = Thread(target=run_ensure_active)
+    ensure_thread.start()
+    assert discovery.started.wait(timeout=0.2)
+
+    # When: Preview is explicitly stopped before the probe has released
+    publisher.request_stop()
+    discovery.release.set()
+    ensure_thread.join(timeout=0.3)
+
+    # Then: Startup finishes idle without spawning preview ffmpeg
+    assert not ensure_thread.is_alive()
+    result = start_result["result"]
+    assert result == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+    assert calls == []
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
 
 
