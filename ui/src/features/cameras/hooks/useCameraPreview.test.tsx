@@ -425,4 +425,83 @@ describe('useCameraPreview', () => {
     })
     expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps a dropped preview session cleared across later status refreshes', async () => {
+    // Given: A preview session invalidated by a newer terminal runtime status
+    vi.spyOn(apiClient, 'getCameraPreviewStatus')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'idle',
+        viewer_count: null,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'error',
+        viewer_count: 0,
+        degraded_reason: null,
+        last_error: 'runtime worker exited with code 137',
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'ready',
+        viewer_count: 2,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+    const ensurePreviewActive = vi
+      .spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValue({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('idle')
+    })
+
+    // When: Starting preview, dropping the stale session, then refreshing status again
+    await act(async () => {
+      await expect(result.current.start()).resolves.toBeUndefined()
+    })
+
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('error')
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+    })
+
+    await act(async () => {
+      await expect(result.current.refreshStatus()).resolves.toMatchObject({ state: 'ready' })
+    })
+
+    // Then: The hook keeps the stale session cleared until the user explicitly re-attaches
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+    })
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
+  })
 })
