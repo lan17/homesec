@@ -202,6 +202,8 @@ async def get_preview_status(
         preview_status = await app.get_camera_preview_status(camera_name)
     except PreviewCameraNotFoundError as exc:
         _raise_camera_not_found(exc)
+    except PreviewRuntimeUnavailableError as exc:
+        _raise_runtime_unavailable(exc)
 
     return _status_response(preview_status)
 

@@ -181,6 +181,20 @@ def test_get_preview_status_returns_404_for_missing_camera() -> None:
     assert response.json()["error_code"] == "PREVIEW_CAMERA_NOT_FOUND"
 
 
+def test_get_preview_status_returns_503_when_runtime_unavailable() -> None:
+    """GET /preview/cameras/{camera_name} should surface runtime-unavailable failures."""
+    # Given: A preview app whose runtime cannot accept status commands
+    app = _StubPreviewApp(status_error=PreviewRuntimeUnavailableError("worker unavailable"))
+    client = _client(app)
+
+    # When: Requesting preview status
+    response = client.get("/api/v1/preview/cameras/front")
+
+    # Then: The route returns the canonical preview-runtime-unavailable error
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "PREVIEW_RUNTIME_UNAVAILABLE"
+
+
 def test_post_preview_returns_tokenized_playlist_when_auth_enabled(
     monkeypatch,
 ) -> None:
