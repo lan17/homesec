@@ -47,10 +47,6 @@ from homesec.runtime.subprocess_protocol import (
     WorkerPreviewStatusPayload,
     WorkerPreviewStopPayload,
 )
-from homesec.sources.rtsp.live_publisher import (
-    LivePublisherStartRefusal,
-    LivePublisherStatus,
-)
 
 if TYPE_CHECKING:
     from homesec.interfaces import (
@@ -67,12 +63,31 @@ logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
+class _PreviewStatusLike(Protocol):
+    """Structural preview-status payload exposed by a source plugin."""
+
+    state: object
+    viewer_count: int | None
+    degraded_reason: str | None
+    last_error: str | None
+    idle_shutdown_at: float | None
+
+
+@runtime_checkable
+class _PreviewRefusalLike(Protocol):
+    """Structural preview-start refusal payload exposed by a source plugin."""
+
+    reason: object
+    message: str
+
+
+@runtime_checkable
 class _PreviewCapableSource(Protocol):
     """Structural protocol for camera sources that expose preview controls."""
 
-    def preview_status(self) -> LivePublisherStatus: ...
+    def preview_status(self) -> _PreviewStatusLike: ...
 
-    def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal: ...
+    def ensure_preview_active(self) -> _PreviewStatusLike | _PreviewRefusalLike: ...
 
     def stop_preview(self) -> None: ...
 
@@ -473,16 +488,22 @@ class _RuntimeWorkerService:
                 state=PreviewState.IDLE,
             )
 
-        preview_status = source.preview_status()
-        return CameraPreviewStatus(
-            camera_name=camera_name,
-            enabled=True,
-            state=PreviewState(preview_status.state.value),
-            viewer_count=preview_status.viewer_count,
-            degraded_reason=preview_status.degraded_reason,
-            last_error=preview_status.last_error,
-            idle_shutdown_at=preview_status.idle_shutdown_at,
-        )
+        try:
+            preview_status = source.preview_status()
+            return self._camera_preview_status_from_source(camera_name, preview_status)
+        except Exception as exc:
+            logger.warning(
+                "Preview status lookup failed for camera=%s: %s",
+                camera_name,
+                exc,
+                exc_info=True,
+            )
+            return CameraPreviewStatus(
+                camera_name=camera_name,
+                enabled=True,
+                state=PreviewState.ERROR,
+                last_error="Preview status unavailable",
+            )
 
     def _ensure_preview_active(
         self,
@@ -502,27 +523,45 @@ class _RuntimeWorkerService:
                 message="Preview source is not available",
             )
 
-        result = source.ensure_preview_active()
-        if isinstance(result, LivePublisherStartRefusal):
+        try:
+            result = source.ensure_preview_active()
+            if isinstance(result, _PreviewRefusalLike):
+                return CameraPreviewStartRefusal(
+                    camera_name=camera_name,
+                    reason=self._preview_refusal_reason_from_source(result.reason),
+                    message=result.message,
+                )
+            return self._camera_preview_status_from_source(camera_name, result)
+        except Exception as exc:
+            logger.warning(
+                "Preview activation failed for camera=%s: %s",
+                camera_name,
+                exc,
+                exc_info=True,
+            )
             return CameraPreviewStartRefusal(
                 camera_name=camera_name,
-                reason=PreviewRefusalReason(result.reason.value),
-                message=result.message,
+                reason=PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="Preview activation failed",
             )
-        return CameraPreviewStatus(
-            camera_name=camera_name,
-            enabled=True,
-            state=PreviewState(result.state.value),
-            viewer_count=result.viewer_count,
-            degraded_reason=result.degraded_reason,
-            last_error=result.last_error,
-            idle_shutdown_at=result.idle_shutdown_at,
-        )
 
     def _force_stop_preview(self, camera_name: str) -> CameraPreviewStopResult:
         source = self._source_for_camera(camera_name)
         if source is not None and self._preview_enabled(camera_name, source):
-            source.stop_preview()
+            try:
+                source.stop_preview()
+            except Exception as exc:
+                logger.warning(
+                    "Preview stop failed for camera=%s: %s",
+                    camera_name,
+                    exc,
+                    exc_info=True,
+                )
+                return CameraPreviewStopResult(
+                    camera_name=camera_name,
+                    accepted=False,
+                    state=PreviewState.ERROR,
+                )
         return CameraPreviewStopResult(
             camera_name=camera_name,
             accepted=True,
@@ -549,6 +588,40 @@ class _RuntimeWorkerService:
         if source is not None:
             return True
         return camera.source.backend == "rtsp"
+
+    @staticmethod
+    def _camera_preview_status_from_source(
+        camera_name: str,
+        preview_status: _PreviewStatusLike,
+    ) -> CameraPreviewStatus:
+        return CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=True,
+            state=_preview_state_from_source(preview_status.state),
+            viewer_count=preview_status.viewer_count,
+            degraded_reason=preview_status.degraded_reason,
+            last_error=preview_status.last_error,
+            idle_shutdown_at=preview_status.idle_shutdown_at,
+        )
+
+    @staticmethod
+    def _preview_refusal_reason_from_source(reason: object) -> PreviewRefusalReason:
+        raw_reason = getattr(reason, "value", reason)
+        if not isinstance(raw_reason, str):
+            raise TypeError(
+                "Preview refusal reason must be a string-compatible enum, "
+                f"got {type(reason).__name__}"
+            )
+        return PreviewRefusalReason(raw_reason)
+
+
+def _preview_state_from_source(state: object) -> PreviewState:
+    raw_state = getattr(state, "value", state)
+    if not isinstance(raw_state, str):
+        raise TypeError(
+            f"Preview state must be a string-compatible enum, got {type(state).__name__}"
+        )
+    return PreviewState(raw_state)
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
