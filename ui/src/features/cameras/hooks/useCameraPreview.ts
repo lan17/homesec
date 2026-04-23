@@ -13,6 +13,7 @@ const PREVIEW_STATUS_REFRESH_MS = 5_000
 const PREVIEW_TOKEN_REFRESH_LEEWAY_MS = 5_000
 const PREVIEW_TOKEN_MIN_REFRESH_LEEWAY_MS = 250
 const PREVIEW_TOKEN_REFRESH_RETRY_MS = 1_000
+const PREVIEW_SESSION_ACTIVE_STATES = new Set(['starting', 'ready', 'degraded'])
 
 export interface CameraPreviewState {
   status: PreviewStatusSnapshot | null
@@ -69,9 +70,15 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
 
   const statusIsNewerThanSession =
     sessionState !== null && statusQuery.dataUpdatedAt >= sessionState.receivedAtMs
+  const statusState = statusQuery.data?.state
+  const newerStatusInvalidatesSession =
+    statusIsNewerThanSession
+    && (statusQuery.data?.enabled === false
+      || (statusState !== undefined
+        && !PREVIEW_SESSION_ACTIVE_STATES.has(statusState)
+        && !startMutation.isPending))
   const activeSession =
-    statusQuery.data?.enabled === false
-    || (statusQuery.data?.state === 'idle' && !startMutation.isPending && statusIsNewerThanSession)
+    newerStatusInvalidatesSession
       ? null
       : session
 
