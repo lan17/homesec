@@ -602,6 +602,7 @@ def test_load_example_config() -> None:
     # When loading the config
     config = load_config(example_path)
     # Then expected fields are present
+    assert config.preview.backend == "hls"
     assert config.filter.backend == "yolo"
     assert config.vlm.backend == "openai"
 
@@ -704,3 +705,152 @@ def test_server_config_rejects_legacy_serve_ui_field() -> None:
 
     assert exc_info.value.code == ConfigErrorCode.VALIDATION_FAILED
     assert "serve_ui" in str(exc_info.value)
+
+
+def test_preview_defaults_apply_when_preview_block_is_absent() -> None:
+    """Preview config should default to the accepted v1 HLS contract surface."""
+    # Given a valid config payload without a preview block
+    data = minimal_config()
+
+    # When loading the config
+    config = load_config_from_dict(data)
+
+    # Then preview defaults match the v1 contract
+    assert config.preview.enabled is False
+    assert config.preview.backend == "hls"
+    assert config.preview.token_ttl_s == 60
+    assert config.preview.idle_timeout_s == 30.0
+    assert config.preview.recording_policy == "stop_on_recording"
+    assert config.preview.config.segment_duration_ms == 1000
+    assert config.preview.config.live_window_segments == 4
+    assert config.preview.config.storage_dir == Path("/tmp/homesec-preview")
+    assert config.preview.config.audio_enabled is True
+    assert config.preview.config.audio_codec == "auto"
+    assert config.preview.config.video_codec == "auto"
+
+
+def test_preview_hls_config_parses_explicit_values() -> None:
+    """Preview config should parse the accepted HLS override surface."""
+    # Given a config payload with explicit preview overrides
+    data = minimal_config()
+    data["preview"] = {
+        "enabled": True,
+        "backend": "HLS",
+        "token_ttl_s": 120,
+        "idle_timeout_s": 45.0,
+        "recording_policy": "allow_during_recording",
+        "config": {
+            "segment_duration_ms": 1500,
+            "live_window_segments": 6,
+            "storage_dir": "/run/homesec-preview",
+            "audio_enabled": False,
+            "audio_codec": "aac",
+            "video_codec": "h264",
+        },
+    }
+
+    # When loading the config
+    config = load_config_from_dict(data)
+
+    # Then preview config is normalized and typed correctly
+    assert config.preview.enabled is True
+    assert config.preview.backend == "hls"
+    assert config.preview.token_ttl_s == 120
+    assert config.preview.idle_timeout_s == 45.0
+    assert config.preview.recording_policy == "allow_during_recording"
+    assert config.preview.config.segment_duration_ms == 1500
+    assert config.preview.config.live_window_segments == 6
+    assert config.preview.config.storage_dir == Path("/run/homesec-preview")
+    assert config.preview.config.audio_enabled is False
+    assert config.preview.config.audio_codec == "aac"
+    assert config.preview.config.video_codec == "h264"
+
+
+def test_preview_rejects_camera_names_that_alias_same_storage_path() -> None:
+    """Preview config should reject camera names that collide after slug normalization."""
+    # Given: Preview enabled with camera names that collapse to the same storage slug
+    data = minimal_config()
+    data["preview"] = {"enabled": True}
+    data["cameras"] = [
+        {
+            "name": "front door",
+            "source": {
+                "backend": "local_folder",
+                "config": {
+                    "watch_dir": "/tmp/front-door",
+                    "poll_interval": 1.0,
+                },
+            },
+        },
+        {
+            "name": "front_door",
+            "source": {
+                "backend": "local_folder",
+                "config": {
+                    "watch_dir": "/tmp/front_door",
+                    "poll_interval": 1.0,
+                },
+            },
+        },
+    ]
+
+    # When: Loading the config
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)
+
+    # Then: Validation rejects the aliasing preview storage paths
+    assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
+    assert "front door" in str(exc_info.value)
+    assert "front_door" in str(exc_info.value)
+
+
+def test_preview_rejects_unsupported_backend() -> None:
+    """Preview config should reject deferred backends in the v1 contract."""
+    # Given a config payload using the deferred MediaMTX backend and its native field
+    data = minimal_config()
+    data["preview"] = {
+        "enabled": True,
+        "backend": "mediamtx",
+        "config": {
+            "publish_rtsp_base_url": "rtsp://mediamtx:8554",
+        },
+    }
+
+    # When loading the config
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)
+
+    # Then validation rejects the backend before HLS-only config validation noise
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
+    assert "preview.backend" in str(exc_info.value) or "preview -> backend" in str(exc_info.value)
+    assert "hls" in str(exc_info.value)
+    assert "publish_rtsp_base_url" not in str(exc_info.value)
+
+
+def test_preview_rejects_v2_and_legacy_extra_fields() -> None:
+    """Preview config should reject fields outside the accepted v1 contract."""
+    # Given a config payload with deferred and legacy preview keys
+    data = minimal_config()
+    data["preview"] = {
+        "enabled": True,
+        "backend": "hls",
+        "mode": "inline",
+        "config": {
+            "segment_duration_ms": 1000,
+            "live_window_segments": 4,
+            "storage_dir": "/tmp/homesec-preview",
+            "audio_enabled": True,
+            "audio_codec": "auto",
+            "video_codec": "auto",
+            "publish_rtsp_base_url": "rtsp://mediamtx:8554",
+        },
+    }
+
+    # When loading the config
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)
+
+    # Then validation surfaces the unknown v1-forbidden keys
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
+    assert "mode" in str(exc_info.value)
+    assert "publish_rtsp_base_url" in str(exc_info.value)

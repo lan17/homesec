@@ -13,6 +13,7 @@ from fastapi import Depends, Query, Request, status
 
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.media_tokens import MediaTokenError, validate_clip_media_token
+from homesec.api.preview_tokens import PreviewTokenError, validate_camera_preview_token
 from homesec.models.config import FastAPIServerConfig
 
 if TYPE_CHECKING:
@@ -113,6 +114,50 @@ async def verify_media_access(
             status_code=status.HTTP_401_UNAUTHORIZED,
             error_code=APIErrorCode.MEDIA_TOKEN_REJECTED,
         ) from exc
+
+
+async def verify_preview_access(
+    request: Request,
+    camera_name: str,
+    token: str | None = Query(default=None),
+    app: Application = Depends(get_homesec_app),
+) -> str | None:
+    """Authorize preview playback requests with API key or short-lived preview token."""
+    server_config = _get_server_config(app)
+    if not server_config.auth_enabled:
+        return None
+
+    api_key = _require_api_key_value(app)
+    bearer_token = _parse_bearer_token(request)
+    if bearer_token is not None and secrets.compare_digest(bearer_token, api_key):
+        return None
+
+    if token is None:
+        raise APIError(
+            "Preview token rejected",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.PREVIEW_TOKEN_REJECTED,
+        )
+
+    try:
+        validate_camera_preview_token(
+            api_key=api_key,
+            token=token,
+            camera_name=camera_name,
+        )
+    except PreviewTokenError as exc:
+        logger.info(
+            "Rejected preview token for camera_name=%s reason=%s",
+            camera_name,
+            exc.code.value,
+        )
+        raise APIError(
+            "Preview token rejected",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.PREVIEW_TOKEN_REJECTED,
+        ) from exc
+
+    return token
 
 
 async def require_database(app: Application = Depends(get_homesec_app)) -> None:

@@ -10,8 +10,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from homesec.runtime.controller import RuntimeController
-from homesec.runtime.errors import sanitize_runtime_error
+from homesec.runtime.errors import PreviewRuntimeUnavailableError, sanitize_runtime_error
 from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    CameraPreviewStopResult,
     ManagedRuntime,
     RuntimeReloadRequest,
     RuntimeReloadResult,
@@ -141,6 +144,43 @@ class RuntimeManager:
         status.reload_in_progress = self._reload_task is not None and not self._reload_task.done()
         return status
 
+    async def get_preview_status(self, camera_name: str) -> CameraPreviewStatus:
+        """Return preview status for a camera in the active runtime."""
+        return await self._controller.get_preview_status(
+            self._require_active_runtime(),
+            camera_name,
+        )
+
+    async def ensure_preview_active(
+        self,
+        camera_name: str,
+    ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+        """Ensure preview is active or attachable for a camera."""
+        return await self._controller.ensure_preview_active(
+            self._require_active_runtime(),
+            camera_name,
+        )
+
+    async def force_stop_preview(self, camera_name: str) -> CameraPreviewStopResult:
+        """Force-stop preview for a camera in the active runtime."""
+        return await self._controller.force_stop_preview(
+            self._require_active_runtime(),
+            camera_name,
+        )
+
+    async def note_preview_viewer_activity(
+        self,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+    ) -> None:
+        """Record successful preview playback activity for a camera."""
+        await self._controller.note_preview_viewer_activity(
+            self._require_active_runtime(),
+            camera_name,
+            viewer_id=viewer_id,
+        )
+
     async def shutdown(self) -> None:
         """Shutdown reload task (if any) and active runtime."""
         if self._reload_task is not None and not self._reload_task.done():
@@ -262,6 +302,12 @@ class RuntimeManager:
             await self._controller.shutdown_all()
         except Exception as exc:
             logger.error("%s failed: %s", context, exc, exc_info=exc)
+
+    def _require_active_runtime(self) -> ManagedRuntime:
+        runtime = self._active_runtime
+        if runtime is None:
+            raise PreviewRuntimeUnavailableError("Runtime is not active")
+        return runtime
 
     def _rollback_to_previous_runtime(
         self,

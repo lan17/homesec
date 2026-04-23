@@ -11,9 +11,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from homesec.models.clip import ClipStateData
-from homesec.models.config import FastAPIServerConfig
+from homesec.models.config import FastAPIServerConfig, PreviewConfig
 from homesec.models.enums import ClipStatus
-from homesec.runtime.models import RuntimeState, RuntimeStatusSnapshot
+from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    CameraPreviewStopResult,
+    PreviewState,
+    RuntimeState,
+    RuntimeStatusSnapshot,
+)
 from homesec.services import setup as setup_service
 from tests.homesec.test_api_routes import (
     _client,
@@ -36,15 +43,42 @@ class _MatrixStubApp(_StubApp):
     ) -> None:
         super().__init__(**kwargs)
         self._runtime_status = runtime_status
+        self._config.preview = PreviewConfig(enabled=True)
 
     def get_runtime_status(self) -> RuntimeStatusSnapshot:
         return self._runtime_status
+
+    async def get_camera_preview_status(self, camera_name: str) -> CameraPreviewStatus:
+        return CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=True,
+            state=PreviewState.READY,
+            viewer_count=1,
+        )
+
+    async def ensure_camera_preview_active(
+        self,
+        camera_name: str,
+    ) -> CameraPreviewStatus | CameraPreviewStartRefusal:
+        return CameraPreviewStatus(
+            camera_name=camera_name,
+            enabled=True,
+            state=PreviewState.READY,
+            viewer_count=1,
+        )
+
+    async def force_stop_camera_preview(self, camera_name: str) -> CameraPreviewStopResult:
+        return CameraPreviewStopResult(
+            camera_name=camera_name,
+            accepted=True,
+            state=PreviewState.STOPPING,
+        )
 
 
 @dataclass(frozen=True)
 class _MatrixCase:
     name: str
-    method: Literal["GET", "POST"]
+    method: Literal["GET", "POST", "DELETE"]
     path: str
     auth_enabled: bool
     db_ok: bool
@@ -107,6 +141,8 @@ def _build_client(tmp_path: Path, case: _MatrixCase) -> tuple[TestClient, _StubR
 def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]):
     if case.method == "GET":
         return client.get(case.path, headers=headers)
+    if case.method == "DELETE":
+        return client.delete(case.path, headers=headers)
     request_json = case.request_json if case.request_json is not None else {}
     return client.post(case.path, headers=headers, json=request_json)
 
@@ -381,6 +417,114 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             path="/api/v1/runtime/status",
             auth_enabled=False,
             db_ok=True,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
+            name="preview_status_requires_api_key_when_auth_enabled",
+            method="GET",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="preview_status_does_not_require_db",
+            method="GET",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=True,
+            auth_header="Bearer secret",
+            include_clip=False,
+            expected_status=200,
+        ),
+        _MatrixCase(
+            name="preview_status_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
+            name="preview_post_requires_api_key_when_auth_enabled",
+            method="POST",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="preview_post_does_not_require_db",
+            method="POST",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=True,
+            auth_header="Bearer secret",
+            include_clip=False,
+            expected_status=200,
+        ),
+        _MatrixCase(
+            name="preview_post_is_blocked_in_bootstrap_mode",
+            method="POST",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
+            name="preview_delete_requires_api_key_when_auth_enabled",
+            method="DELETE",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="preview_delete_does_not_require_db",
+            method="DELETE",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=True,
+            auth_header="Bearer secret",
+            include_clip=False,
+            expected_status=202,
+        ),
+        _MatrixCase(
+            name="preview_delete_is_blocked_in_bootstrap_mode",
+            method="DELETE",
+            path="/api/v1/preview/cameras/front",
+            auth_enabled=False,
+            db_ok=False,
             pipeline_running=False,
             auth_header=None,
             include_clip=False,

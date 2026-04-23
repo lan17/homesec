@@ -14,6 +14,12 @@ import pytest
 from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
+from homesec.sources.rtsp.live_publisher import (
+    LivePublisherRefusalReason,
+    LivePublisherStartRefusal,
+    LivePublisherState,
+    LivePublisherStatus,
+)
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 
@@ -112,6 +118,65 @@ class FakeRecorder:
 
     def is_alive(self, proc: DummyProc) -> bool:
         return proc not in self.dead
+
+
+class FakeLivePublisher:
+    def __init__(self) -> None:
+        self._status = LivePublisherStatus(state=LivePublisherState.IDLE)
+        self.ensure_result: LivePublisherStatus | LivePublisherStartRefusal = self._status
+        self.viewer_activity: list[str | None] = []
+        self.recording_active: list[bool] = []
+        self.stop_calls = 0
+        self.shutdown_calls = 0
+
+    def status(self) -> LivePublisherStatus:
+        return self._status
+
+    def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+        return self.ensure_result
+
+    def request_stop(self) -> None:
+        self.stop_calls += 1
+
+    def note_viewer_activity(self, viewer_id: str | None = None) -> None:
+        self.viewer_activity.append(viewer_id)
+
+    def sync_recording_active(self, recording_active: bool) -> None:
+        self.recording_active.append(recording_active)
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
+class RaisingLivePublisher:
+    def __init__(self, *, methods: set[str]) -> None:
+        self._methods = methods
+
+    def _raise_if_configured(self, method: str) -> None:
+        if method in self._methods:
+            raise RuntimeError(f"{method} boom")
+
+    def status(self) -> LivePublisherStatus:
+        self._raise_if_configured("status")
+        return LivePublisherStatus(state=LivePublisherState.READY)
+
+    def ensure_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
+        self._raise_if_configured("ensure_active")
+        return LivePublisherStatus(state=LivePublisherState.READY)
+
+    def request_stop(self) -> None:
+        self._raise_if_configured("request_stop")
+
+    def note_viewer_activity(self, viewer_id: str | None = None) -> None:
+        _ = viewer_id
+        self._raise_if_configured("note_viewer_activity")
+
+    def sync_recording_active(self, recording_active: bool) -> None:
+        _ = recording_active
+        self._raise_if_configured("sync_recording_active")
+
+    def shutdown(self) -> None:
+        self._raise_if_configured("shutdown")
 
 
 def _make_config(tmp_path: Path, **overrides: object) -> RTSPSourceConfig:
@@ -254,6 +319,42 @@ def test_hwaccel_detection_used_when_enabled(
     assert source.hwaccel_config.is_available
 
 
+def test_runtime_preview_publisher_receives_hwaccel_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preview runtime wiring should pass detected hwaccel config into the publisher."""
+
+    # Given: a detected CUDA backend and a runtime preview-enabled source config
+    captured_kwargs: dict[str, object] = {}
+
+    class CapturingLivePublisher(FakeLivePublisher):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__()
+            captured_kwargs.update(kwargs)
+
+    def _detect(_: str) -> HardwareAccelConfig:
+        return HardwareAccelConfig(hwaccel="cuda")
+
+    monkeypatch.setattr("homesec.sources.rtsp.core.HardwareAccelDetector.detect", _detect)
+    monkeypatch.setattr("homesec.sources.rtsp.core.HLSLivePublisher", CapturingLivePublisher)
+    config = _make_config(
+        tmp_path,
+        stream={"disable_hwaccel": False},
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: the live publisher receives the detected hwaccel config
+    assert isinstance(source._live_publisher, CapturingLivePublisher)
+    assert captured_kwargs["hwaccel_config"] == HardwareAccelConfig(hwaccel="cuda")
+    assert captured_kwargs["recording_policy"] == "allow_during_recording"
+
+
 def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
     """Subtype=0 URLs should derive a subtype=1 detect stream."""
     # Given: a subtype=0 main stream with no explicit detect stream
@@ -309,6 +410,146 @@ def test_session_limit_fallback_uses_default_recording_profile(tmp_path: Path) -
     expected_profile = build_default_recording_profile(source.rtsp_url)
     assert outcome.recording_profile == expected_profile
     assert outcome.diagnostics.selected_recording_profile == expected_profile.profile_id()
+
+
+def test_default_preview_seam_refuses_until_backend_is_wired(tmp_path: Path) -> None:
+    """RTSP preview seam should fail closed until a real publisher is configured."""
+    # Given: An RTSP source with the default no-op live publisher seam
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Requesting preview activation
+    preview_result = source.ensure_preview_active()
+
+    # Then: Preview activation is refused and status remains idle
+    assert isinstance(preview_result, LivePublisherStartRefusal)
+    assert preview_result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert source.preview_status() == LivePublisherStatus(state=LivePublisherState.IDLE)
+
+
+def test_preview_methods_delegate_to_live_publisher(tmp_path: Path) -> None:
+    """RTSPSource should delegate preview lifecycle calls to the live publisher seam."""
+    # Given: An RTSP source with an injected live publisher
+    publisher = FakeLivePublisher()
+    publisher.ensure_result = LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=2,
+        idle_shutdown_at=12.0,
+    )
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+
+    # When: Querying preview status and exercising preview lifecycle calls
+    status_before = source.preview_status()
+    ensure_result = source.ensure_preview_active()
+    source.note_preview_viewer_activity("viewer-1")
+    source.stop_preview()
+
+    # Then: RTSPSource forwards the calls to the live publisher
+    assert status_before == LivePublisherStatus(state=LivePublisherState.IDLE)
+    assert ensure_result == publisher.ensure_result
+    assert publisher.viewer_activity == ["viewer-1"]
+    assert publisher.stop_calls == 1
+
+
+def test_recording_state_changes_are_forwarded_to_live_publisher(tmp_path: Path) -> None:
+    """Preview seam should observe recording-active transitions from RTSPSource."""
+    # Given: An RTSP source with a fake recorder and live publisher
+    publisher = FakeLivePublisher()
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        recorder=recorder,
+        live_publisher=publisher,
+        clock=clock,
+    )
+
+    # When: Starting and then stopping a recording
+    source.start_recording()
+    source.stop_recording()
+
+    # Then: The live publisher sees the recording transition edges
+    assert publisher.recording_active == [True, False]
+
+
+def test_cleanup_shuts_down_live_publisher(tmp_path: Path) -> None:
+    """RTSP cleanup should shut down the injected live publisher seam."""
+    # Given: An RTSP source with an injected live publisher
+    publisher = FakeLivePublisher()
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+
+    # When: Cleaning up the source
+    source.cleanup()
+
+    # Then: The live publisher is shut down
+    assert publisher.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_shuts_down_live_publisher_even_before_start(tmp_path: Path) -> None:
+    """RTSP shutdown should release preview resources for unstarted sources."""
+    # Given: An RTSP source with an injected live publisher that has not started
+    publisher = FakeLivePublisher()
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+
+    # When: Shutting down the source before its worker thread starts
+    await source.shutdown()
+
+    # Then: The live publisher is still shut down
+    assert publisher.shutdown_calls == 1
+
+
+def test_preview_failures_degrade_without_raising(tmp_path: Path) -> None:
+    """Preview control APIs should fail closed when the live publisher raises."""
+    # Given: An RTSP source whose live publisher raises for preview methods
+    publisher = RaisingLivePublisher(
+        methods={"status", "ensure_active", "request_stop", "note_viewer_activity"}
+    )
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+
+    # When: Querying and controlling preview
+    status = source.preview_status()
+    ensure_result = source.ensure_preview_active()
+    source.note_preview_viewer_activity("viewer-1")
+    source.stop_preview()
+
+    # Then: The source reports preview failure without raising
+    assert status.state == LivePublisherState.ERROR
+    assert status.last_error == "Preview publisher status unavailable"
+    assert isinstance(ensure_result, LivePublisherStartRefusal)
+    assert ensure_result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert ensure_result.message == "Preview publisher activation failed"
+
+
+def test_recording_lifecycle_tolerates_live_publisher_sync_failures(tmp_path: Path) -> None:
+    """Recording start/stop should still work if preview state sync fails."""
+    # Given: An RTSP source whose live publisher raises during recording-state sync
+    publisher = RaisingLivePublisher(methods={"sync_recording_active"})
+    recorder = FakeRecorder()
+    clock = FakeClock()
+    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        recorder=recorder,
+        live_publisher=publisher,
+        clock=clock,
+    )
+
+    # When: Starting and then stopping a recording
+    source.start_recording()
+    source.stop_recording()
+
+    # Then: Recording lifecycle still completes
+    assert len(recorder.started) == 1
+    assert len(recorder.stopped) == 1
+    assert source.recording_process is None
 
 
 def test_reconnect_retries_until_success(tmp_path: Path) -> None:

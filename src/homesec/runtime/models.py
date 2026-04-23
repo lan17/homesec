@@ -33,6 +33,25 @@ class RuntimeState(StrEnum):
     FAILED = "failed"
 
 
+class PreviewState(StrEnum):
+    """Camera-scoped preview lifecycle state."""
+
+    IDLE = "idle"
+    STARTING = "starting"
+    READY = "ready"
+    DEGRADED = "degraded"
+    STOPPING = "stopping"
+    ERROR = "error"
+
+
+class PreviewRefusalReason(StrEnum):
+    """Machine-readable preview start refusal reason."""
+
+    RECORDING_PRIORITY = "recording_priority"
+    SESSION_BUDGET_EXHAUSTED = "session_budget_exhausted"
+    PREVIEW_TEMPORARILY_UNAVAILABLE = "preview_temporarily_unavailable"
+
+
 @dataclass(slots=True)
 class RuntimeBundle:
     """Restartable runtime unit managed by RuntimeManager."""
@@ -56,6 +75,37 @@ class RuntimeCameraStatus:
 
     healthy: bool
     last_heartbeat: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class CameraPreviewStatus:
+    """Runtime-owned preview status for a single camera."""
+
+    camera_name: str
+    enabled: bool
+    state: PreviewState
+    viewer_count: int | None = None
+    degraded_reason: str | None = None
+    last_error: str | None = None
+    idle_shutdown_at: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CameraPreviewStartRefusal:
+    """Machine-readable refusal when preview cannot be attached or started."""
+
+    camera_name: str
+    reason: PreviewRefusalReason
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CameraPreviewStopResult:
+    """Runtime acknowledgement for a force-stop preview request."""
+
+    camera_name: str
+    accepted: bool
+    state: PreviewState
 
 
 @dataclass(slots=True)
@@ -93,3 +143,18 @@ def config_signature(config: Config) -> str:
     payload = config.model_dump(mode="json")
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def preview_error_status(
+    camera_name: str,
+    *,
+    enabled: bool,
+    message: str,
+) -> CameraPreviewStatus:
+    """Return an error preview status with bounded user-facing detail."""
+    return CameraPreviewStatus(
+        camera_name=camera_name,
+        enabled=enabled,
+        state=PreviewState.ERROR,
+        last_error=message,
+    )

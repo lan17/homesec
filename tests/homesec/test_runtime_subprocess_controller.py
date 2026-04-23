@@ -6,6 +6,7 @@ import asyncio
 import signal
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -25,24 +26,52 @@ from homesec.models.vlm import VLMConfig
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
+from homesec.runtime.errors import PreviewRuntimeUnavailableError
 from homesec.runtime.manager import RuntimeManager
+from homesec.runtime.models import (
+    CameraPreviewStartRefusal,
+    CameraPreviewStatus,
+    PreviewRefusalReason,
+    PreviewState,
+)
 from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
     SubprocessRuntimeHandle,
     _WorkerEventProtocol,
 )
-from homesec.runtime.subprocess_protocol import WorkerEvent, WorkerEventType
+from homesec.runtime.subprocess_protocol import (
+    WorkerCommandResult,
+    WorkerCommandType,
+    WorkerEvent,
+    WorkerEventType,
+    WorkerPreviewStatusPayload,
+)
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
 
-def _make_config(*, watch_dir: str) -> Config:
+class _FakeProcess:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
+
+
+def _make_config(
+    *,
+    watch_dir: str,
+    source_backend: str = "local_folder",
+    preview_enabled: bool = False,
+) -> Config:
     return Config(
         cameras=[
             CameraConfig(
                 name="front",
                 source=CameraSourceConfig(
-                    backend="local_folder",
-                    config=LocalFolderSourceConfig(watch_dir=watch_dir, poll_interval=1.0),
+                    backend=source_backend,
+                    config=(
+                        LocalFolderSourceConfig(watch_dir=watch_dir, poll_interval=1.0)
+                        if source_backend == "local_folder"
+                        else {}
+                    ),
                 ),
             )
         ],
@@ -62,6 +91,7 @@ def _make_config(*, watch_dir: str) -> Config:
             trigger_classes=["person"],
         ),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
+        preview={"enabled": preview_enabled},
     )
 
 
@@ -93,6 +123,205 @@ async def test_subprocess_controller_starts_and_stops_test_worker() -> None:
     assert runtime.is_running is False
     assert "front" in runtime.camera_statuses
     assert runtime.camera_statuses["front"].healthy is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.subprocess
+async def test_subprocess_controller_preview_commands_round_trip_to_worker() -> None:
+    """Preview control should round-trip through worker command plumbing."""
+    # Given: A preview-enabled RTSP camera supervised by the harness worker
+    controller = SubprocessRuntimeController(
+        startup_timeout_s=3.0,
+        shutdown_timeout_s=1.0,
+        kill_timeout_s=1.0,
+        worker_heartbeat_interval_s=0.05,
+        heartbeat_stale_s=1.0,
+        worker_module="homesec.runtime.test_worker_harness",
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+
+    try:
+        await controller.start_runtime(runtime)
+
+        # When: Reading preview status, ensuring preview, and force-stopping preview
+        status = await controller.get_preview_status(runtime, "front")
+        ensured = await controller.ensure_preview_active(runtime, "front")
+        stopped = await controller.force_stop_preview(runtime, "front")
+
+        # Then: The runtime preview contract is returned from the worker
+        assert status.enabled is True
+        assert status.state == PreviewState.IDLE
+        assert isinstance(ensured, CameraPreviewStatus)
+        assert ensured.state == PreviewState.READY
+        assert stopped.accepted is True
+        assert stopped.state == PreviewState.STOPPING
+        assert runtime.camera_preview_statuses["front"].state == PreviewState.STOPPING
+    finally:
+        await controller.shutdown_runtime(runtime)
+
+
+@pytest.mark.asyncio
+@pytest.mark.subprocess
+async def test_subprocess_controller_preview_stop_rejects_stale_worker() -> None:
+    """Force-stop should fail explicitly when the worker heartbeat is stale."""
+    # Given: A running worker whose cached heartbeat has gone stale
+    controller = SubprocessRuntimeController(
+        startup_timeout_s=3.0,
+        shutdown_timeout_s=1.0,
+        kill_timeout_s=1.0,
+        worker_heartbeat_interval_s=5.0,
+        heartbeat_stale_s=0.01,
+        worker_module="homesec.runtime.test_worker_harness",
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview-stale",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+
+    try:
+        await controller.start_runtime(runtime)
+        assert runtime.last_heartbeat_at is not None
+        runtime.last_heartbeat_at = runtime.last_heartbeat_at - timedelta(seconds=60)
+
+        # When/Then: Force-stop fails because the runtime can no longer accept preview commands
+        with pytest.raises(PreviewRuntimeUnavailableError, match="heartbeat timed out"):
+            await controller.force_stop_preview(runtime, "front")
+    finally:
+        await controller.shutdown_runtime(runtime)
+
+
+@pytest.mark.asyncio
+async def test_preview_command_failures_do_not_override_runtime_last_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview command failures should not overwrite runtime-wide worker error state."""
+    # Given: A fresh runtime handle with an existing worker error and a failing preview command
+    controller = SubprocessRuntimeController()
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview-command-error",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    runtime.last_error = "runtime worker exited with code 137"
+
+    async def _raise_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        response_timeout_s: float | None = None,
+    ) -> object:
+        _ = (handle, command_type, camera_name, viewer_id, response_timeout_s)
+        raise RuntimeError("preview command failed")
+
+    monkeypatch.setattr(controller, "_send_command", _raise_send_command)
+
+    try:
+        # When: Preview status, ensure, and stop all hit the command failure path
+        status = await controller.get_preview_status(runtime, "front")
+        ensured = await controller.ensure_preview_active(runtime, "front")
+        with pytest.raises(PreviewRuntimeUnavailableError, match="preview command failed"):
+            await controller.force_stop_preview(runtime, "front")
+
+        # Then: Preview failures stay local and preserve the runtime-wide error context
+        assert status.state == PreviewState.ERROR
+        assert status.last_error == "preview command failed"
+        assert isinstance(ensured, CameraPreviewStartRefusal)
+        assert ensured.reason == PreviewRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+        assert ensured.message == "preview command failed"
+        assert runtime.last_error == "runtime worker exited with code 137"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_uses_extended_timeout_for_preview_activation_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview activation should use a longer response timeout than other commands."""
+    # Given: A preview-enabled runtime handle and controller with distinct command timeouts
+    controller = SubprocessRuntimeController(
+        command_timeout_s=1.0,
+        preview_start_timeout_s=7.5,
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/preview-timeout",
+                source_backend="rtsp",
+                preview_enabled=True,
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    observed_timeout_s: list[float | None] = []
+
+    async def _fake_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        response_timeout_s: float | None = None,
+    ) -> WorkerCommandResult:
+        _ = (handle, command_type, camera_name, viewer_id)
+        observed_timeout_s.append(response_timeout_s)
+        return WorkerCommandResult(
+            command=WorkerCommandType.PREVIEW_ENSURE_ACTIVE,
+            command_id="cmd-preview-timeout",
+            generation=1,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            status=WorkerPreviewStatusPayload(
+                enabled=True,
+                state=PreviewState.READY,
+                viewer_count=1,
+            ),
+        )
+
+    monkeypatch.setattr(controller, "_send_command", _fake_send_command)
+
+    try:
+        # When: Ensuring preview is active through the subprocess controller
+        ensured = await controller.ensure_preview_active(runtime, "front")
+
+        # Then: Preview activation uses the extended response timeout and still returns status
+        assert observed_timeout_s == [7.5]
+        assert isinstance(ensured, CameraPreviewStatus)
+        assert ensured.state == PreviewState.READY
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,10 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  PreviewSessionResponse,
+  PreviewState,
+  PreviewStatusResponse,
+  PreviewStopResponse,
   DeviceInfoResponse,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
@@ -395,6 +399,20 @@ function parseRuntimeState(value: unknown, fieldName: string): RuntimeState {
   throw new Error(`${fieldName} must be one of idle|reloading|failed`)
 }
 
+function parsePreviewState(value: unknown, fieldName: string): PreviewState {
+  if (
+    value === 'idle'
+    || value === 'starting'
+    || value === 'ready'
+    || value === 'degraded'
+    || value === 'stopping'
+    || value === 'error'
+  ) {
+    return value
+  }
+  throw new Error(`${fieldName} must be one of idle|starting|ready|degraded|stopping|error`)
+}
+
 export function parseRuntimeReloadResponse(payload: unknown): RuntimeReloadResponse {
   if (!isJsonObject(payload)) {
     throw new Error('Runtime reload response is not a JSON object')
@@ -419,6 +437,50 @@ export function parseRuntimeStatusResponse(payload: unknown): RuntimeStatusRespo
     active_config_version: expectNullableString(payload.active_config_version, 'active_config_version'),
     last_reload_at: expectNullableString(payload.last_reload_at, 'last_reload_at'),
     last_reload_error: expectNullableString(payload.last_reload_error, 'last_reload_error'),
+  }
+}
+
+export function parsePreviewStatusResponse(payload: unknown): PreviewStatusResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preview status response is not a JSON object')
+  }
+
+  return {
+    camera_name: expectString(payload.camera_name, 'camera_name'),
+    enabled: expectBoolean(payload.enabled, 'enabled'),
+    state: parsePreviewState(payload.state, 'state'),
+    viewer_count: expectNullableNumber(payload.viewer_count, 'viewer_count'),
+    degraded_reason: expectNullableString(payload.degraded_reason, 'degraded_reason'),
+    last_error: expectNullableString(payload.last_error, 'last_error'),
+    idle_shutdown_at: expectNullableNumber(payload.idle_shutdown_at, 'idle_shutdown_at'),
+  }
+}
+
+export function parsePreviewSessionResponse(payload: unknown): PreviewSessionResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preview session response is not a JSON object')
+  }
+
+  return {
+    camera_name: expectString(payload.camera_name, 'camera_name'),
+    state: parsePreviewState(payload.state, 'state'),
+    viewer_count: expectNullableNumber(payload.viewer_count, 'viewer_count'),
+    token: expectNullableString(payload.token, 'token'),
+    token_expires_at: expectNullableString(payload.token_expires_at, 'token_expires_at'),
+    playlist_url: expectString(payload.playlist_url, 'playlist_url'),
+    idle_timeout_s: expectNumber(payload.idle_timeout_s, 'idle_timeout_s'),
+    warning: expectNullableString(payload.warning, 'warning'),
+  }
+}
+
+export function parsePreviewStopResponse(payload: unknown): PreviewStopResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preview stop response is not a JSON object')
+  }
+
+  return {
+    accepted: expectBoolean(payload.accepted, 'accepted'),
+    state: parsePreviewState(payload.state, 'state'),
   }
 }
 

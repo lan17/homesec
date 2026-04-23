@@ -70,6 +70,28 @@ def test_test_decode_treats_timeout_as_success(
     assert ok
 
 
+def test_test_decode_logs_backend_name_on_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unexpected decode probe failures should log the active backend name."""
+
+    # Given: ffmpeg raises an unexpected runtime error during decode probing
+    def _boom(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr("homesec.sources.rtsp.hardware.subprocess.run", _boom)
+    config = HardwareAccelConfig(hwaccel="cuda")
+
+    # When: testing decode
+    with caplog.at_level("WARNING"):
+        ok = HardwareAccelDetector._test_decode("rtsp://host/stream", config)
+
+    # Then: decode fails closed and the backend name is preserved in logs
+    assert not ok
+    assert "Hardware decode check failed for cuda" in caplog.text
+
+
 def test_check_nvidia_returns_false_on_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -109,3 +131,69 @@ def test_detect_returns_software_when_no_accel_available(
 
     # Then: software decode is selected
     assert config.hwaccel is None
+
+
+def test_select_h264_encoder_returns_matching_videotoolbox_encoder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Encoder selection should map VideoToolbox decode to VideoToolbox H.264 encode."""
+
+    # Given: a VideoToolbox decode config and ffmpeg encoder support
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
+        lambda _encoder: True,
+    )
+    config = HardwareAccelConfig(hwaccel="videotoolbox")
+
+    # When: selecting the preview H.264 encoder
+    encoder = HardwareAccelDetector.select_h264_encoder(config)
+
+    # Then: the matching VideoToolbox encoder is returned
+    assert encoder is not None
+    assert encoder.ffmpeg_encoder == "h264_videotoolbox"
+    assert encoder.ffmpeg_global_args == ()
+    assert not encoder.requires_hwupload
+
+
+def test_select_h264_encoder_adds_vaapi_device_and_hwupload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAAPI selection should keep the render device and upload requirement explicit."""
+
+    # Given: a VAAPI decode config with a render device and ffmpeg encoder support
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
+        lambda _encoder: True,
+    )
+    config = HardwareAccelConfig(
+        hwaccel="vaapi",
+        hwaccel_device="/dev/dri/renderD128",
+    )
+
+    # When: selecting the preview H.264 encoder
+    encoder = HardwareAccelDetector.select_h264_encoder(config)
+
+    # Then: the VAAPI encoder keeps the device and upload requirement
+    assert encoder is not None
+    assert encoder.ffmpeg_encoder == "h264_vaapi"
+    assert encoder.ffmpeg_global_args == ("-vaapi_device", "/dev/dri/renderD128")
+    assert encoder.requires_hwupload
+
+
+def test_select_h264_encoder_returns_none_when_encoder_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing ffmpeg encoder support should fall back to software encode."""
+
+    # Given: a CUDA decode config whose matching H.264 encoder is unavailable
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
+        lambda _encoder: False,
+    )
+    config = HardwareAccelConfig(hwaccel="cuda")
+
+    # When: selecting the preview H.264 encoder
+    encoder = HardwareAccelDetector.select_h264_encoder(config)
+
+    # Then: no hardware encoder is selected
+    assert encoder is None

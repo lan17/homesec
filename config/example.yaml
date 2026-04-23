@@ -96,6 +96,23 @@ state_store:
   dsn_env: DB_DSN  # e.g., postgresql+asyncpg://user:pass@localhost:5432/homesec
 
 # =============================================================================
+# Preview - Live preview config contract (v1 HLS; RTSP sources support on-demand preview)
+# =============================================================================
+preview:
+  enabled: false
+  backend: hls
+  token_ttl_s: 60
+  idle_timeout_s: 30.0
+  recording_policy: stop_on_recording  # Use allow_during_recording for best-effort concurrent preview; may consume an extra RTSP session
+  config:
+    segment_duration_ms: 1000  # Lower latency means more segment churn
+    live_window_segments: 4    # Total window ~= segment_duration_ms * segment count
+    storage_dir: /tmp/homesec-preview  # Prefer tmpfs; keep separate from recordings and other durable storage
+    audio_enabled: true
+    audio_codec: auto
+    video_codec: auto
+
+# =============================================================================
 # Notifiers - How to send alerts
 # =============================================================================
 # Optional: set to [] (or disable all entries) to run analysis-only with no external alerts.
