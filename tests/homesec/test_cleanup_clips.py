@@ -79,8 +79,6 @@ class _CleanupStorage:
 
 
 class _CleanupStateStore:
-    _engine = object()
-
     def __init__(self, calls: list[str], *, initialize_ok: bool) -> None:
         self._calls = calls
         self._initialize_ok = initialize_ok

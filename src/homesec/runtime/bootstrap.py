@@ -83,7 +83,12 @@ def _create_event_store(
 
 def _create_postgres_event_store(state_store: StateStore) -> EventStore:
     """Create an event store for the configured Postgres state store."""
-    return create_event_store_for_postgres_state_store(cast(PostgresStateStore, state_store))
+    if not isinstance(state_store, PostgresStateStore):
+        raise TypeError(
+            "Default event store factory requires PostgresStateStore; "
+            "pass event_store_factory when using a custom state_store_factory"
+        )
+    return create_event_store_for_postgres_state_store(state_store)
 
 
 def _create_repository(
@@ -111,6 +116,12 @@ async def build_runtime_persistence_stack(
     event_store_factory: Callable[[StateStore], EventStore] | None = None,
 ) -> RuntimePersistenceStack:
     """Build shared storage and persistence components for a runtime."""
+    if state_store_factory is not None and event_store_factory is None:
+        raise RuntimeError(
+            "Custom state_store_factory requires event_store_factory so persistence wiring "
+            "stays explicit"
+        )
+
     loader = load_storage_plugin if storage_loader is None else storage_loader
     factory = PostgresStateStore if state_store_factory is None else state_store_factory
     event_factory = (

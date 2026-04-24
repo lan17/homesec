@@ -708,6 +708,8 @@ def create_event_store_for_postgres_state_store(state_store: PostgresStateStore)
     """Create a Postgres event store sharing the state store engine.
 
     If the state store failed to initialize, events degrade to the no-op store.
+    The returned Postgres event store borrows the state store's engine; engine
+    disposal remains the responsibility of PostgresStateStore.shutdown().
     """
     if state_store._engine is None:
         return NoopEventStore()
