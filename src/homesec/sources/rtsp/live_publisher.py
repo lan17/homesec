@@ -1281,10 +1281,6 @@ def _software_h264_transcode_args(segment_duration_s: float) -> tuple[str, ...]:
     return (
         "-c:v",
         "libx264",
-        "-preset",
-        "veryfast",
-        "-tune",
-        "zerolatency",
         "-pix_fmt",
         "yuv420p",
         "-sc_threshold",

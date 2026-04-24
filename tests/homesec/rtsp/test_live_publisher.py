@@ -362,6 +362,8 @@ def test_auto_codec_transcodes_high_profile_h264_for_browser_preview(tmp_path: P
     assert isinstance(cmd, list)
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
     assert cmd[cmd.index("-c:a") + 1] == "copy"
+    assert "-preset" not in cmd
+    assert "-tune" not in cmd
 
 
 def test_auto_codec_transcodes_mp4_safe_but_hls_unsafe_audio(tmp_path: Path) -> None:
