@@ -25,7 +25,10 @@ from homesec.plugins.filters import load_filter
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository.clip_repository import ClipRepository
-from homesec.state.postgres import PostgresStateStore
+from homesec.state.postgres import (
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 
 logger = logging.getLogger("homesec.cleanup_clips")
 
@@ -187,7 +190,7 @@ async def run_cleanup(opts: CleanupOptions) -> None:
     if not ok:
         raise RuntimeError("Failed to initialize Postgres state store")
 
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     repo = ClipRepository(state_store, event_store, retry=cfg.retry)
 
     recheck_cfg = _build_recheck_filter_config(cfg.filter, opts)

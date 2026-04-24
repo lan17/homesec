@@ -16,6 +16,7 @@ from homesec.models.enums import VLMRunMode
 from homesec.models.filter import FilterConfig
 from homesec.models.vlm import VLMConfig
 from homesec.runtime.bootstrap import build_runtime_persistence_stack
+from homesec.state.postgres import NoopEventStore
 
 
 def _make_config() -> Config:
@@ -61,9 +62,6 @@ async def test_build_runtime_persistence_stack_shuts_down_storage_when_state_ini
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
 
-        def create_event_store(self) -> object:
-            raise AssertionError("create_event_store should not be reached")
-
     # When: Building the shared runtime persistence stack
     with pytest.raises(RuntimeError, match="boom"):
         await build_runtime_persistence_stack(
@@ -99,10 +97,10 @@ async def test_build_runtime_persistence_stack_shuts_down_partial_state_when_eve
             _ = timeout
             self.shutdown_called = True
 
-        def create_event_store(self) -> object:
-            raise RuntimeError("event store failed")
-
     store = _StateStoreWithFailingEvents("unused")
+
+    def _raise_event_store_failure(_store: object) -> NoopEventStore:
+        raise RuntimeError("event store failed")
 
     # When: Building the shared runtime persistence stack
     with pytest.raises(RuntimeError, match="event store failed"):
@@ -113,6 +111,7 @@ async def test_build_runtime_persistence_stack_shuts_down_partial_state_when_eve
             event_store_unavailable_warning="events unavailable",
             storage_loader=lambda _cfg: storage,
             state_store_factory=lambda _dsn: store,
+            event_store_factory=_raise_event_store_failure,
         )
 
     # Then: Both initialized resources are shut down on partial-build failure
@@ -142,9 +141,6 @@ async def test_build_runtime_persistence_stack_preserves_primary_failure_when_cl
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
 
-        def create_event_store(self) -> object:
-            raise AssertionError("create_event_store should not be reached")
-
     # When: Building the shared runtime persistence stack
     with pytest.raises(RuntimeError, match="primary failure"):
         await build_runtime_persistence_stack(
@@ -157,3 +153,41 @@ async def test_build_runtime_persistence_stack_preserves_primary_failure_when_cl
         )
 
     # Then: Cleanup errors do not replace the original bootstrap failure
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_persistence_stack_uses_noop_events_when_state_init_returns_false() -> (
+    None
+):
+    # Given: Postgres initialization degrades without raising
+    config = _make_config()
+    storage = _RecordingStorage()
+
+    class _UnavailableStateStore:
+        _engine = None
+
+        def __init__(self, dsn: str) -> None:
+            self.dsn = dsn
+
+        async def initialize(self) -> bool:
+            return False
+
+        async def shutdown(self, timeout: float | None = None) -> None:
+            _ = timeout
+
+    store = _UnavailableStateStore(config.state_store.dsn or "")
+
+    # When: Building the shared runtime persistence stack
+    persistence = await build_runtime_persistence_stack(
+        config,
+        resolve_env=lambda env: env,
+        missing_dsn_message="missing dsn",
+        event_store_unavailable_warning="events unavailable",
+        storage_loader=lambda _cfg: storage,
+        state_store_factory=lambda _dsn: store,
+    )
+
+    # Then: Runtime can continue with best-effort/no-op event persistence
+    assert persistence.state_store is store
+    assert isinstance(persistence.event_store, NoopEventStore)
+    assert storage.shutdown_called is False

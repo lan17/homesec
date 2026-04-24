@@ -579,12 +579,6 @@ class PostgresStateStore(StateStore):
         """Parse JSONB payload from SQLAlchemy into a dict."""
         return _parse_jsonb_payload(raw)
 
-    def create_event_store(self) -> EventStore:
-        """Create a Postgres-backed event store or a no-op fallback."""
-        if self._engine is None:
-            return NoopEventStore()
-        return PostgresEventStore(self._engine)
-
 
 def _parse_jsonb_payload(raw: object) -> dict[str, Any]:
     """Parse JSONB payload from SQLAlchemy into a dict."""
@@ -710,6 +704,16 @@ class PostgresEventStore(EventStore):
             return False
 
 
+def create_event_store_for_postgres_state_store(state_store: PostgresStateStore) -> EventStore:
+    """Create a Postgres event store sharing the state store engine.
+
+    If the state store failed to initialize, events degrade to the no-op store.
+    """
+    if state_store._engine is None:
+        return NoopEventStore()
+    return PostgresEventStore(state_store._engine)
+
+
 class NoopEventStore(EventStore):
     """Event store that drops events (used when Postgres is unavailable)."""
 
@@ -806,7 +810,3 @@ class NoopStateStore(StateStore):
 
     async def ping(self) -> bool:
         return False
-
-    def create_event_store(self) -> EventStore:
-        """Return NoopEventStore."""
-        return NoopEventStore()

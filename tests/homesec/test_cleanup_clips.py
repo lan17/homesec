@@ -12,7 +12,10 @@ from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterOverrides, FilterResult
 from homesec.plugins.storage.local import LocalStorage, LocalStorageConfig
-from homesec.state.postgres import PostgresStateStore
+from homesec.state.postgres import (
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 
 
 class _TestFilter(ObjectFilter):
@@ -149,7 +152,8 @@ async def test_cleanup_deletes_empty_clips(
     storage_path = Path(upload.storage_uri.split("local:", 1)[1])
     assert not storage_path.exists()
 
-    events = await state_store.create_event_store().get_events(clip_id)
+    event_store = create_event_store_for_postgres_state_store(state_store)
+    events = await event_store.get_events(clip_id)
     assert any(event.event_type == "clip_deleted" for event in events)
 
     await storage.shutdown()
@@ -217,7 +221,8 @@ async def test_cleanup_marks_false_negatives(
     storage_path = Path(upload.storage_uri.split("local:", 1)[1])
     assert storage_path.exists()
 
-    events = await state_store.create_event_store().get_events(clip_id)
+    event_store = create_event_store_for_postgres_state_store(state_store)
+    events = await event_store.get_events(clip_id)
     assert any(event.event_type == "clip_rechecked" for event in events)
     assert not any(event.event_type == "clip_deleted" for event in events)
 

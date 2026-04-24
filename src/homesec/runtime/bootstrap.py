@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Protocol, cast
 from homesec.interfaces import EventStore
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository import ClipRepository
-from homesec.state import NoopEventStore, PostgresStateStore
+from homesec.state.postgres import (
+    NoopEventStore,
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 
 if TYPE_CHECKING:
     from homesec.interfaces import StateStore, StorageBackend
@@ -24,9 +28,6 @@ class _InitializableStateStore(Protocol):
 
     async def initialize(self) -> bool:
         """Initialize backing resources."""
-
-    def create_event_store(self) -> EventStore:
-        """Create associated event store."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +71,19 @@ async def _create_state_store(
 def _create_event_store(
     state_store: StateStore,
     *,
+    event_store_factory: Callable[[StateStore], EventStore],
     unavailable_warning: str,
 ) -> EventStore:
-    """Create event store from state store and warn when events are unavailable."""
-    event_store = state_store.create_event_store()
+    """Create explicitly wired event store and warn when events are unavailable."""
+    event_store = event_store_factory(state_store)
     if isinstance(event_store, NoopEventStore):
         logger.warning(unavailable_warning)
     return event_store
+
+
+def _create_postgres_event_store(state_store: StateStore) -> EventStore:
+    """Create an event store for the configured Postgres state store."""
+    return create_event_store_for_postgres_state_store(cast(PostgresStateStore, state_store))
 
 
 def _create_repository(
@@ -101,10 +108,14 @@ async def build_runtime_persistence_stack(
     event_store_unavailable_warning: str,
     storage_loader: Callable[[StorageConfig], StorageBackend] | None = None,
     state_store_factory: Callable[[str], _InitializableStateStore] | None = None,
+    event_store_factory: Callable[[StateStore], EventStore] | None = None,
 ) -> RuntimePersistenceStack:
     """Build shared storage and persistence components for a runtime."""
     loader = load_storage_plugin if storage_loader is None else storage_loader
     factory = PostgresStateStore if state_store_factory is None else state_store_factory
+    event_factory = (
+        _create_postgres_event_store if event_store_factory is None else event_store_factory
+    )
 
     storage = _create_storage_backend(config, loader=loader)
     state_store: StateStore | None = None
@@ -117,6 +128,7 @@ async def build_runtime_persistence_stack(
         )
         event_store = _create_event_store(
             state_store,
+            event_store_factory=event_factory,
             unavailable_warning=event_store_unavailable_warning,
         )
         repository = _create_repository(

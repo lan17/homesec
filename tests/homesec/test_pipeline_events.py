@@ -28,7 +28,11 @@ from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.repository import ClipRepository
-from homesec.state.postgres import PostgresEventStore, PostgresStateStore
+from homesec.state.postgres import (
+    PostgresEventStore,
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 from tests.homesec.mocks import (
     MockFilter,
     MockNotifier,
@@ -118,7 +122,7 @@ async def test_pipeline_emits_success_events(
     # Given: A real Postgres event store and a pipeline with successful mocks
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     config = build_config()
     repository = ClipRepository(state_store, event_store, retry=config.retry)
@@ -189,7 +193,7 @@ async def test_pipeline_emits_notification_events_per_notifier(
     # Given: A real Postgres event store and two notifier entries
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     config = build_config(notifier_count=2)
     repository = ClipRepository(state_store, event_store, retry=config.retry)
@@ -241,7 +245,7 @@ async def test_pipeline_records_alert_decision_without_notification_events_when_
     # Given: A real Postgres event store and runtime-provided empty notifier entries
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     config = build_config(notifier_count=0)
     repository = ClipRepository(state_store, event_store, retry=config.retry)
@@ -286,7 +290,7 @@ async def test_pipeline_emits_vlm_skipped_event(
     # Given: A clip with non-trigger classes and notify_on_motion disabled
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     config = build_config()
     repository = ClipRepository(state_store, event_store, retry=config.retry)
@@ -332,7 +336,7 @@ async def test_pipeline_emits_vlm_skipped_event_for_run_mode_never(
     # Given: A clip with trigger classes but run_mode forcing VLM disabled
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     config = build_config(run_mode="never")
     repository = ClipRepository(state_store, event_store, retry=config.retry)
@@ -378,7 +382,7 @@ async def test_pipeline_emits_upload_failed_event(
     # Given: A pipeline where upload fails but filter/VLM succeed
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     config = build_config()
     repository = ClipRepository(state_store, event_store, retry=config.retry)

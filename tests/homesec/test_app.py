@@ -11,6 +11,7 @@ import pytest
 
 from homesec.app import Application
 from homesec.config.loader import ConfigError, ConfigErrorCode
+from homesec.interfaces import EventStore
 from homesec.models.config import (
     AlertPolicyConfig,
     CameraConfig,
@@ -42,6 +43,7 @@ from homesec.runtime.models import (
 )
 from homesec.runtime.subprocess_controller import SubprocessRuntimeHandle
 from homesec.sources.local_folder import LocalFolderSourceConfig
+from homesec.state.postgres import NoopEventStore
 from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
@@ -89,14 +91,13 @@ class _StubStateStore:
     async def ping(self) -> bool:
         return True
 
-    def create_event_store(self) -> object:
-        from homesec.state import NoopEventStore
-
-        return NoopEventStore()
-
     async def shutdown(self, timeout: float | None = None) -> None:
         _ = timeout
         self.shutdown_called = True
+
+
+def _noop_event_store_factory(_state_store: object) -> EventStore:
+    return NoopEventStore()
 
 
 class _StubPostgresBackupManager:
@@ -267,6 +268,10 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
         "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
     )
     monkeypatch.setattr("homesec.runtime.bootstrap.PostgresStateStore", _StubStateStore)
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.create_event_store_for_postgres_state_store",
+        _noop_event_store_factory,
+    )
     monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
     monkeypatch.setattr("homesec.app.validate_plugin_names", lambda *args, **kwargs: None)
     monkeypatch.setattr("homesec.app.validate_config", lambda *args, **kwargs: None)
@@ -727,16 +732,15 @@ async def test_build_runtime_persistence_stack_prefers_env_dsn(
         async def ping(self) -> bool:
             return True
 
-        def create_event_store(self) -> object:
-            from homesec.state import NoopEventStore
-
-            return NoopEventStore()
-
     app = Application(config_path=Path(__file__))
     monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "postgresql://from-env")
     monkeypatch.setattr("homesec.runtime.bootstrap.PostgresStateStore", _RecordingStateStore)
     monkeypatch.setattr(
         "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
+    )
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.create_event_store_for_postgres_state_store",
+        _noop_event_store_factory,
     )
 
     # When: Building shared runtime persistence

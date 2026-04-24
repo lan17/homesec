@@ -17,7 +17,11 @@ from homesec.models.vlm import (
     SequenceAnalysis,
 )
 from homesec.repository import ClipRepository
-from homesec.state.postgres import PostgresEventStore, PostgresStateStore
+from homesec.state.postgres import (
+    PostgresEventStore,
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 from tests.homesec.mocks import MockEventStore, MockStateStore
 
 
@@ -34,7 +38,7 @@ async def test_initialize_clip(postgres_dsn: str, tmp_path: Path, clean_test_db:
     # Given: A repository with state and event stores
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     repository = ClipRepository(state_store, event_store)
 
@@ -98,7 +102,7 @@ async def test_record_upload_completed(
     # Given: A clip that's been initialized
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     repository = ClipRepository(state_store, event_store)
 
@@ -144,7 +148,7 @@ async def test_record_filter_completed(
     # Given: A clip that's been initialized
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     repository = ClipRepository(state_store, event_store)
 
@@ -193,7 +197,7 @@ async def test_record_clip_rechecked_updates_state_and_event(
     # Given: A clip initialized in the repository
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     repository = ClipRepository(state_store, event_store)
 
@@ -251,7 +255,7 @@ async def test_record_vlm_completed(postgres_dsn: str, tmp_path: Path, clean_tes
     # Given: A clip that's been initialized
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     repository = ClipRepository(state_store, event_store)
 
@@ -370,7 +374,7 @@ async def test_record_notification_sent(
     # Given: A clip that's been analyzed
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
     repository = ClipRepository(state_store, event_store)
 
