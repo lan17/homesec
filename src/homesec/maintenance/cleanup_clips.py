@@ -17,7 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from homesec.config import load_config, resolve_env_var
-from homesec.interfaces import EventStore, ObjectFilter, StorageBackend
+from homesec.interfaces import EventStore, ObjectFilter, Shutdownable, StorageBackend
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterConfig
 from homesec.plugins import discover_all_plugins
@@ -188,6 +188,7 @@ async def run_cleanup(opts: CleanupOptions) -> None:
     state_store: PostgresStateStore | None = None
     event_store: EventStore | None = None
     filter_plugin: ObjectFilter | None = None
+    primary_error: Exception | None = None
     try:
         storage = load_storage_plugin(cfg.storage)
         state_store = PostgresStateStore(dsn)
@@ -279,15 +280,34 @@ async def run_cleanup(opts: CleanupOptions) -> None:
             }
         )
         _log_json(logging.INFO, "Cleanup summary", summary_payload)
+    except Exception as exc:
+        primary_error = exc
+        raise
     finally:
+        shutdown_error: Exception | None = None
         if filter_plugin is not None:
-            await filter_plugin.shutdown()
+            error = await _shutdown_cleanup_resource(filter_plugin, label="filter")
+            shutdown_error = shutdown_error or error
         if event_store is not None:
-            await event_store.shutdown()
+            error = await _shutdown_cleanup_resource(event_store, label="event store")
+            shutdown_error = shutdown_error or error
         if storage is not None:
-            await storage.shutdown()
+            error = await _shutdown_cleanup_resource(storage, label="storage")
+            shutdown_error = shutdown_error or error
         if state_store is not None:
-            await state_store.shutdown()
+            error = await _shutdown_cleanup_resource(state_store, label="state store")
+            shutdown_error = shutdown_error or error
+        if primary_error is None and shutdown_error is not None:
+            raise shutdown_error
+
+
+async def _shutdown_cleanup_resource(component: Shutdownable, *, label: str) -> Exception | None:
+    try:
+        await component.shutdown()
+    except Exception as exc:
+        logger.warning("Cleanup failed to shut down %s: %s", label, exc, exc_info=True)
+        return exc
+    return None
 
 
 async def _process_candidate(
