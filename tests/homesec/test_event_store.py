@@ -13,7 +13,11 @@ from homesec.models.events import (
     FilterCompletedEvent,
     UploadCompletedEvent,
 )
-from homesec.state.postgres import PostgresEventStore, PostgresStateStore
+from homesec.state.postgres import (
+    PostgresEventStore,
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 
 
 @pytest.mark.asyncio
@@ -21,7 +25,7 @@ async def test_append_and_get_events(postgres_dsn: str, clean_test_db: None) -> 
     # Given: A state store and event store with initialized tables
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
 
     clip_id = "test-clip-001"
@@ -88,7 +92,7 @@ async def test_append_and_get_clip_deleted_event(
     # Given: A state store and event store with initialized tables
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
 
     clip_id = "test-clip-delete-001"
@@ -133,7 +137,7 @@ async def test_get_events_after_id(postgres_dsn: str, clean_test_db: None) -> No
     # Given: A clip with multiple events
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
 
     clip_id = "test-clip-002"
@@ -184,7 +188,7 @@ async def test_events_for_nonexistent_clip(postgres_dsn: str) -> None:
     # Given: An initialized event store
     state_store = PostgresStateStore(postgres_dsn)
     await state_store.initialize()
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     assert isinstance(event_store, PostgresEventStore)
 
     # When: We query events for a nonexistent clip

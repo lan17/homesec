@@ -17,7 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from homesec.config import load_config, resolve_env_var
-from homesec.interfaces import ObjectFilter, StorageBackend
+from homesec.interfaces import EventStore, ObjectFilter, Shutdownable, StorageBackend
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterConfig
 from homesec.plugins import discover_all_plugins
@@ -25,7 +25,10 @@ from homesec.plugins.filters import load_filter
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage import load_storage_plugin
 from homesec.repository.clip_repository import ClipRepository
-from homesec.state.postgres import PostgresStateStore
+from homesec.state.postgres import (
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 
 logger = logging.getLogger("homesec.cleanup_clips")
 
@@ -181,26 +184,31 @@ async def run_cleanup(opts: CleanupOptions) -> None:
     if not dsn:
         raise RuntimeError("Postgres DSN is required for cleanup")
 
-    storage = load_storage_plugin(cfg.storage)
-    state_store = PostgresStateStore(dsn)
-    ok = await state_store.initialize()
-    if not ok:
-        raise RuntimeError("Failed to initialize Postgres state store")
-
-    event_store = state_store.create_event_store()
-    repo = ClipRepository(state_store, event_store, retry=cfg.retry)
-
-    recheck_cfg = _build_recheck_filter_config(cfg.filter, opts)
-    filter_plugin = load_filter(recheck_cfg)
-
-    sem = asyncio.Semaphore(int(opts.workers))
-
-    cache_dir = Path.cwd() / "video_cache" / "cleanup" / run_id
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    totals = _Counts()
-
+    storage: StorageBackend | None = None
+    state_store: PostgresStateStore | None = None
+    event_store: EventStore | None = None
+    filter_plugin: ObjectFilter | None = None
+    primary_error: Exception | None = None
     try:
+        storage = load_storage_plugin(cfg.storage)
+        state_store = PostgresStateStore(dsn)
+        ok = await state_store.initialize()
+        if not ok:
+            raise RuntimeError("Failed to initialize Postgres state store")
+
+        event_store = create_event_store_for_postgres_state_store(state_store)
+        repo = ClipRepository(state_store, event_store, retry=cfg.retry)
+
+        recheck_cfg = _build_recheck_filter_config(cfg.filter, opts)
+        filter_plugin = load_filter(recheck_cfg)
+
+        sem = asyncio.Semaphore(int(opts.workers))
+
+        cache_dir = Path.cwd() / "video_cache" / "cleanup" / run_id
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        totals = _Counts()
+
         cursor: tuple[datetime, str] | None = None
         while True:
             rows = await repo.list_candidate_clips_for_cleanup(
@@ -272,12 +280,34 @@ async def run_cleanup(opts: CleanupOptions) -> None:
             }
         )
         _log_json(logging.INFO, "Cleanup summary", summary_payload)
+    except Exception as exc:
+        primary_error = exc
+        raise
     finally:
-        try:
-            await filter_plugin.shutdown()
-        finally:
-            await storage.shutdown()
-            await state_store.shutdown()
+        shutdown_error: Exception | None = None
+        if filter_plugin is not None:
+            error = await _shutdown_cleanup_resource(filter_plugin, label="filter")
+            shutdown_error = shutdown_error or error
+        if event_store is not None:
+            error = await _shutdown_cleanup_resource(event_store, label="event store")
+            shutdown_error = shutdown_error or error
+        if storage is not None:
+            error = await _shutdown_cleanup_resource(storage, label="storage")
+            shutdown_error = shutdown_error or error
+        if state_store is not None:
+            error = await _shutdown_cleanup_resource(state_store, label="state store")
+            shutdown_error = shutdown_error or error
+        if primary_error is None and shutdown_error is not None:
+            raise shutdown_error
+
+
+async def _shutdown_cleanup_resource(component: Shutdownable, *, label: str) -> Exception | None:
+    try:
+        await component.shutdown()
+    except Exception as exc:
+        logger.warning("Cleanup failed to shut down %s: %s", label, exc, exc_info=True)
+        return exc
+    return None
 
 
 async def _process_candidate(

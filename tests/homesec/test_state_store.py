@@ -18,8 +18,11 @@ from homesec.postgres_support import (
     drop_schema_cascade,
     normalize_async_dsn,
 )
-from homesec.state import PostgresStateStore
-from homesec.state.postgres import ClipState
+from homesec.state.postgres import (
+    ClipState,
+    PostgresStateStore,
+    create_event_store_for_postgres_state_store,
+)
 from tests.homesec.postgres_test_support import default_test_dsn, reset_store_tables
 
 
@@ -797,7 +800,7 @@ async def test_count_alerts_since_counts_notifying_alert_decision_events(
             local_path="/tmp/old.mp4",
         ),
     )
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     await event_store.append(
         AlertDecisionMadeEvent(
             clip_id="test_alert_count_yes",
@@ -861,7 +864,7 @@ async def test_count_alerts_since_ignores_notification_sent_events(
             local_path="/tmp/delivery.mp4",
         ),
     )
-    event_store = state_store.create_event_store()
+    event_store = create_event_store_for_postgres_state_store(state_store)
     await event_store.append(
         AlertDecisionMadeEvent(
             clip_id=clip_id,

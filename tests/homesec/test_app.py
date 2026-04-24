@@ -11,6 +11,7 @@ import pytest
 
 from homesec.app import Application
 from homesec.config.loader import ConfigError, ConfigErrorCode
+from homesec.interfaces import EventStore
 from homesec.models.config import (
     AlertPolicyConfig,
     CameraConfig,
@@ -42,6 +43,7 @@ from homesec.runtime.models import (
 )
 from homesec.runtime.subprocess_controller import SubprocessRuntimeHandle
 from homesec.sources.local_folder import LocalFolderSourceConfig
+from homesec.state.postgres import NoopEventStore
 from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
@@ -89,14 +91,29 @@ class _StubStateStore:
     async def ping(self) -> bool:
         return True
 
-    def create_event_store(self) -> object:
-        from homesec.state import NoopEventStore
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+        self.shutdown_called = True
 
-        return NoopEventStore()
+
+class _RecordingEventStore(NoopEventStore):
+    instances: list[_RecordingEventStore] = []
+
+    def __init__(self) -> None:
+        self.shutdown_called = False
+        self.__class__.instances.append(self)
 
     async def shutdown(self, timeout: float | None = None) -> None:
         _ = timeout
         self.shutdown_called = True
+
+
+def _noop_event_store_factory(_state_store: object) -> EventStore:
+    return _RecordingEventStore()
+
+
+def _latest_event_store() -> _RecordingEventStore:
+    return _RecordingEventStore.instances[-1]
 
 
 class _StubPostgresBackupManager:
@@ -263,10 +280,15 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
     # Given: Runtime dependencies mocked for deterministic tests
     controller = _StubRuntimeController()
     _StubPostgresBackupManager.instances.clear()
+    _RecordingEventStore.instances.clear()
     monkeypatch.setattr(
         "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
     )
     monkeypatch.setattr("homesec.runtime.bootstrap.PostgresStateStore", _StubStateStore)
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.create_event_store_for_postgres_state_store",
+        _noop_event_store_factory,
+    )
     monkeypatch.setattr("homesec.plugins.discover_all_plugins", lambda: None)
     monkeypatch.setattr("homesec.app.validate_plugin_names", lambda *args, **kwargs: None)
     monkeypatch.setattr("homesec.app.validate_config", lambda *args, **kwargs: None)
@@ -334,6 +356,7 @@ async def test_application_shuts_down_postgres_backup_manager_before_storage(
     assert isinstance(manager, _StubPostgresBackupManager)
     assert manager.shutdown_called is True
     assert manager.shutdown_timeout == 10.0
+    assert _latest_event_store().shutdown_called is True
 
 
 @pytest.mark.asyncio
@@ -362,6 +385,7 @@ async def test_application_cleans_up_started_backup_manager_when_api_creation_fa
     assert manager.shutdown_timeout == 10.0
     assert isinstance(manager.storage, _StubStorage)
     assert manager.storage.shutdown_called is True
+    assert _latest_event_store().shutdown_called is True
     assert _mock_runtime_environment._handles[0].process is None
 
 
@@ -727,16 +751,15 @@ async def test_build_runtime_persistence_stack_prefers_env_dsn(
         async def ping(self) -> bool:
             return True
 
-        def create_event_store(self) -> object:
-            from homesec.state import NoopEventStore
-
-            return NoopEventStore()
-
     app = Application(config_path=Path(__file__))
     monkeypatch.setattr("homesec.app.resolve_env_var", lambda _: "postgresql://from-env")
     monkeypatch.setattr("homesec.runtime.bootstrap.PostgresStateStore", _RecordingStateStore)
     monkeypatch.setattr(
         "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
+    )
+    monkeypatch.setattr(
+        "homesec.runtime.bootstrap.create_event_store_for_postgres_state_store",
+        _noop_event_store_factory,
     )
 
     # When: Building shared runtime persistence

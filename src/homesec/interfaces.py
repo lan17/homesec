@@ -218,16 +218,6 @@ class StateStore(Shutdownable, ABC):
         """Health check. Returns True if database is reachable."""
         raise NotImplementedError
 
-    @abstractmethod
-    def create_event_store(self) -> EventStore:
-        """Create an event store associated with this state store.
-
-        Returns NoopEventStore if not supported.
-        """
-        from homesec.state import NoopEventStore
-
-        return NoopEventStore()
-
 
 class EventStore(Shutdownable, ABC):
     """Manages clip lifecycle events in Postgres."""

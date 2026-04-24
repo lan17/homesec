@@ -228,6 +228,7 @@ class Application:
             if backup_manager_started:
                 await postgres_backup_manager.shutdown(timeout=10.0)
             await runtime_manager.shutdown()
+            await persistence.event_store.shutdown()
             await persistence.state_store.shutdown()
             await persistence.storage.shutdown()
             raise
@@ -446,6 +447,9 @@ class Application:
         # Stop backup scheduler before closing shared storage.
         if self._postgres_backup_manager:
             await self._postgres_backup_manager.shutdown(timeout=10.0)
+
+        # Close event store before the state store that owns the shared Postgres engine.
+        await self._event_store.shutdown()
 
         # Close state store
         if self._state_store:

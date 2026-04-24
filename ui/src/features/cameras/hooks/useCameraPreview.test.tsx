@@ -8,6 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiClient } from '../../../api/client'
 import { useCameraPreview } from './useCameraPreview'
 
+const PREVIEW_TEST_NOW_MS = Date.parse('2026-04-23T12:00:00.000Z')
+
+function freezePreviewClock() {
+  vi.spyOn(Date, 'now').mockReturnValue(PREVIEW_TEST_NOW_MS)
+}
+
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -67,6 +73,7 @@ describe('useCameraPreview', () => {
 
   it('keeps a fresh preview session when the follow-up status refetch fails', async () => {
     // Given: An idle camera whose preview start succeeds but the invalidated status refresh fails
+    freezePreviewClock()
     vi.spyOn(apiClient, 'getCameraPreviewStatus')
       .mockResolvedValueOnce({
         camera_name: 'front',
@@ -113,6 +120,7 @@ describe('useCameraPreview', () => {
 
   it('does not let an older in-flight status refresh clear a newer preview session', async () => {
     // Given: A stale status refresh that started before preview attach succeeds
+    freezePreviewClock()
     let releaseStaleRefresh: ((value: {
       camera_name: string
       enabled: boolean
@@ -470,6 +478,7 @@ describe('useCameraPreview', () => {
 
   it('drops stale preview sessions after a newer terminal runtime status', async () => {
     // Given: A started preview session whose follow-up status says the runtime has already failed it
+    freezePreviewClock()
     vi.spyOn(apiClient, 'getCameraPreviewStatus')
       .mockResolvedValueOnce({
         camera_name: 'front',
@@ -529,6 +538,7 @@ describe('useCameraPreview', () => {
 
   it('keeps a dropped preview session cleared across later status refreshes', async () => {
     // Given: A preview session invalidated by a newer terminal runtime status
+    freezePreviewClock()
     vi.spyOn(apiClient, 'getCameraPreviewStatus')
       .mockResolvedValueOnce({
         camera_name: 'front',
