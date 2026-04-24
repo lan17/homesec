@@ -264,6 +264,42 @@ describe('CameraPreviewPanel', () => {
     })
   })
 
+  it('renders attached previews without native playback controls', async () => {
+    // Given: A ready preview session with playable live media
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The attached video does not expose browser play or pause controls
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video).toBeTruthy()
+      expect(video?.hasAttribute('controls')).toBe(false)
+      expect(video?.getAttribute('preload')).toBe('auto')
+    })
+  })
+
+  it('resumes playback when the attached video pauses', async () => {
+    // Given: A ready preview session with an attached hls.js player
+    mockReadyPreviewSession()
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    await waitFor(() => {
+      expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+    })
+    const video = container.querySelector('video')
+
+    // When: The browser pauses the live video element
+    video?.dispatchEvent(new Event('pause'))
+
+    // Then: The panel requests playback again while the preview remains attached
+    await waitFor(() => {
+      expect(play).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('keeps stop enabled when a session exists but status is temporarily unavailable', () => {
     // Given: An active preview session with no current status snapshot
     useCameraPreviewMock.mockReturnValue({

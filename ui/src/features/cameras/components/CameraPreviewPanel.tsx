@@ -150,7 +150,57 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
     }
 
     let hls: Hls | null = null
+    let keepPlaybackActive = true
+    let resumeTimeoutId: number | null = null
     setPlayerError(null)
+
+    const clearResumeTimeout = (): void => {
+      if (resumeTimeoutId === null) {
+        return
+      }
+      window.clearTimeout(resumeTimeoutId)
+      resumeTimeoutId = null
+    }
+
+    const requestPlayback = (): void => {
+      if (!keepPlaybackActive) {
+        return
+      }
+      clearResumeTimeout()
+      resumeTimeoutId = window.setTimeout(() => {
+        resumeTimeoutId = null
+        if (!keepPlaybackActive) {
+          return
+        }
+        void video.play().catch(() => {})
+      }, 0)
+    }
+
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') {
+        requestPlayback()
+      }
+    }
+
+    const cleanupPlayback = (): void => {
+      keepPlaybackActive = false
+      clearResumeTimeout()
+      video.removeEventListener('pause', requestPlayback)
+      video.removeEventListener('ended', requestPlayback)
+      video.removeEventListener('stalled', requestPlayback)
+      video.removeEventListener('waiting', requestPlayback)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      hls?.destroy()
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+
+    video.addEventListener('pause', requestPlayback)
+    video.addEventListener('ended', requestPlayback)
+    video.addEventListener('stalled', requestPlayback)
+    video.addEventListener('waiting', requestPlayback)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     if (Hls.isSupported()) {
       hls = new Hls({
@@ -160,42 +210,31 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
       hls.loadSource(playlistUrl)
       hls.attachMedia(video)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        void video.play().catch(() => {})
+        requestPlayback()
       })
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) {
           return
         }
         setPlayerError('Preview playback failed. Restart preview.')
+        keepPlaybackActive = false
+        clearResumeTimeout()
         hls?.destroy()
         hls = null
       })
 
-      return () => {
-        hls?.destroy()
-        video.pause()
-        video.removeAttribute('src')
-        video.load()
-      }
+      return cleanupPlayback
     }
 
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = playlistUrl
-      void video.play().catch(() => {})
-      return () => {
-        video.pause()
-        video.removeAttribute('src')
-        video.load()
-      }
+      requestPlayback()
+      return cleanupPlayback
     }
 
     setPlayerError('This browser cannot play the live preview stream.')
 
-    return () => {
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
-    }
+    return cleanupPlayback
   }, [playlistReady, playlistUrl])
 
   const statusMessage = useMemo(() => {
@@ -240,10 +279,10 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
           <video
             ref={videoRef}
             className="camera-preview__video"
-            controls
             muted
             autoPlay
             playsInline
+            preload="auto"
           />
         ) : (
           <div className="camera-preview__placeholder">
