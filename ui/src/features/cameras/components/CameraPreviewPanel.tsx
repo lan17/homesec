@@ -9,6 +9,7 @@ import { useCameraPreview } from '../hooks/useCameraPreview'
 
 const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
+const PLAYBACK_RETRY_DELAY_MS = 1000
 const PREVIEW_DISPLAY_STATUS_STATES = new Set(['starting', 'ready', 'degraded', 'stopping'])
 
 type WebKitFullscreenDocument = Document & {
@@ -211,7 +212,17 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
     let hls: Hls | null = null
     let keepPlaybackActive = true
     let resumeTimeoutId: number | null = null
+    let resumeIntervalId: number | null = null
     setPlayerError(null)
+
+    video.muted = true
+    video.defaultMuted = true
+    video.autoplay = true
+    video.playsInline = true
+    video.setAttribute('autoplay', '')
+    video.setAttribute('muted', '')
+    video.setAttribute('playsinline', '')
+    video.setAttribute('webkit-playsinline', '')
 
     const clearResumeTimeout = (): void => {
       if (resumeTimeoutId === null) {
@@ -219,6 +230,14 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
       }
       window.clearTimeout(resumeTimeoutId)
       resumeTimeoutId = null
+    }
+
+    const clearResumeInterval = (): void => {
+      if (resumeIntervalId === null) {
+        return
+      }
+      window.clearInterval(resumeIntervalId)
+      resumeIntervalId = null
     }
 
     const requestPlayback = (): void => {
@@ -231,8 +250,24 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
         if (!keepPlaybackActive) {
           return
         }
+        if (!video.paused && !video.ended) {
+          return
+        }
         void video.play().catch(() => {})
       }, 0)
+    }
+
+    const startPlaybackMonitor = (): void => {
+      requestPlayback()
+      clearResumeInterval()
+      resumeIntervalId = window.setInterval(() => {
+        if (!keepPlaybackActive || document.visibilityState === 'hidden') {
+          return
+        }
+        if (video.paused || video.ended) {
+          requestPlayback()
+        }
+      }, PLAYBACK_RETRY_DELAY_MS)
     }
 
     const handleVisibilityChange = (): void => {
@@ -244,8 +279,13 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
     const cleanupPlayback = (): void => {
       keepPlaybackActive = false
       clearResumeTimeout()
+      clearResumeInterval()
       video.removeEventListener('pause', requestPlayback)
       video.removeEventListener('ended', requestPlayback)
+      video.removeEventListener('loadedmetadata', requestPlayback)
+      video.removeEventListener('loadeddata', requestPlayback)
+      video.removeEventListener('canplay', requestPlayback)
+      video.removeEventListener('canplaythrough', requestPlayback)
       video.removeEventListener('stalled', requestPlayback)
       video.removeEventListener('waiting', requestPlayback)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -257,6 +297,10 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
 
     video.addEventListener('pause', requestPlayback)
     video.addEventListener('ended', requestPlayback)
+    video.addEventListener('loadedmetadata', requestPlayback)
+    video.addEventListener('loadeddata', requestPlayback)
+    video.addEventListener('canplay', requestPlayback)
+    video.addEventListener('canplaythrough', requestPlayback)
     video.addEventListener('stalled', requestPlayback)
     video.addEventListener('waiting', requestPlayback)
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -269,7 +313,7 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
       hls.loadSource(playlistUrl)
       hls.attachMedia(video)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        requestPlayback()
+        startPlaybackMonitor()
       })
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) {
@@ -278,16 +322,19 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
         setPlayerError('Preview playback failed. Restart preview.')
         keepPlaybackActive = false
         clearResumeTimeout()
+        clearResumeInterval()
         hls?.destroy()
         hls = null
       })
+
+      startPlaybackMonitor()
 
       return cleanupPlayback
     }
 
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = playlistUrl
-      requestPlayback()
+      startPlaybackMonitor()
       return cleanupPlayback
     }
 

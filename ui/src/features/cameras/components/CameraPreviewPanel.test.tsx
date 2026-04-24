@@ -217,11 +217,12 @@ describe('CameraPreviewPanel', () => {
   it('initializes hls.js playback when a playlist URL becomes ready', async () => {
     // Given: A ready preview session with a tokenized playlist URL
     mockReadyPreviewSession()
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
 
     // When: Rendering the preview panel
     render(<CameraPreviewPanel cameraName="front" />)
 
-    // Then: The player probes the playlist URL and initializes hls.js
+    // Then: The player probes the playlist URL, initializes hls.js, and requests playback
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
@@ -232,6 +233,7 @@ describe('CameraPreviewPanel', () => {
         'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
       )
       expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+      expect(play).toHaveBeenCalled()
     })
   })
 
@@ -281,6 +283,9 @@ describe('CameraPreviewPanel', () => {
       expect(video).toBeTruthy()
       expect(video?.hasAttribute('controls')).toBe(false)
       expect(video?.getAttribute('preload')).toBe('auto')
+      expect(video?.getAttribute('muted')).toBe('')
+      expect(video?.getAttribute('playsinline')).toBe('')
+      expect(video?.getAttribute('webkit-playsinline')).toBe('')
       expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeTruthy()
     })
   })
@@ -307,7 +312,9 @@ describe('CameraPreviewPanel', () => {
 
     await waitFor(() => {
       expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+      expect(play).toHaveBeenCalled()
     })
+    play.mockClear()
     const video = container.querySelector('video')
 
     // When: The browser pauses the live video element
@@ -315,7 +322,7 @@ describe('CameraPreviewPanel', () => {
 
     // Then: The panel requests playback again while the preview remains attached
     await waitFor(() => {
-      expect(play).toHaveBeenCalledTimes(1)
+      expect(play).toHaveBeenCalled()
     })
   })
 
