@@ -6,6 +6,9 @@ import userEvent from '@testing-library/user-event'
 
 import { CameraPreviewPanel } from './CameraPreviewPanel'
 
+const DEFAULT_PLAYLIST_URL =
+  'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token'
+
 const {
   useCameraPreviewMock,
   hlsAttachMediaMock,
@@ -47,6 +50,41 @@ vi.mock('hls.js', () => {
 
   return { default: MockHls }
 })
+
+function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
+  useCameraPreviewMock.mockReturnValue({
+    status: {
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    },
+    session: {
+      camera_name: 'front',
+      state: 'ready',
+      viewer_count: 1,
+      token: 'preview-token',
+      token_expires_at: null,
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+      idle_timeout_s: 30,
+      warning: null,
+      httpStatus: 200,
+    },
+    playlistUrl,
+    warning: null,
+    error: null,
+    isPending: false,
+    isStarting: false,
+    isStopping: false,
+    start: vi.fn(),
+    stop: vi.fn(),
+    refreshStatus: vi.fn(),
+  })
+}
 
 describe('CameraPreviewPanel', () => {
   beforeEach(() => {
@@ -174,38 +212,7 @@ describe('CameraPreviewPanel', () => {
 
   it('initializes hls.js playback when a playlist URL becomes ready', async () => {
     // Given: A ready preview session with a tokenized playlist URL
-    useCameraPreviewMock.mockReturnValue({
-      status: {
-        camera_name: 'front',
-        enabled: true,
-        state: 'ready',
-        viewer_count: 1,
-        degraded_reason: null,
-        last_error: null,
-        idle_shutdown_at: null,
-        httpStatus: 200,
-      },
-      session: {
-        camera_name: 'front',
-        state: 'ready',
-        viewer_count: 1,
-        token: 'preview-token',
-        token_expires_at: null,
-        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
-        idle_timeout_s: 30,
-        warning: null,
-        httpStatus: 200,
-      },
-      playlistUrl: 'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
-      warning: null,
-      error: null,
-      isPending: false,
-      isStarting: false,
-      isStopping: false,
-      start: vi.fn(),
-      stop: vi.fn(),
-      refreshStatus: vi.fn(),
-    })
+    mockReadyPreviewSession()
 
     // When: Rendering the preview panel
     render(<CameraPreviewPanel cameraName="front" />)
@@ -221,6 +228,39 @@ describe('CameraPreviewPanel', () => {
         'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
       )
       expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('uses hls.js before native HLS when both playback paths are available', async () => {
+    // Given: Safari-like native HLS support and hls.js support are both available
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The player takes the hls.js path instead of short-circuiting to native HLS
+    await waitFor(() => {
+      expect(hlsConstructMock).toHaveBeenCalledTimes(1)
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith(DEFAULT_PLAYLIST_URL)
+      expect(HTMLMediaElement.prototype.canPlayType).not.toHaveBeenCalled()
+    })
+  })
+
+  it('falls back to native HLS when hls.js is unavailable', async () => {
+    // Given: hls.js cannot run but the browser supports native HLS playback
+    hlsIsSupportedMock.mockReturnValue(false)
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The player assigns the playlist directly to the video element
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video?.getAttribute('src')).toBe(DEFAULT_PLAYLIST_URL)
+      expect(hlsConstructMock).not.toHaveBeenCalled()
     })
   })
 

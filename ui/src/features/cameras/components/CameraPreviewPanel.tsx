@@ -152,6 +152,33 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
     let hls: Hls | null = null
     setPlayerError(null)
 
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+      })
+      hls.loadSource(playlistUrl)
+      hls.attachMedia(video)
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        void video.play().catch(() => {})
+      })
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) {
+          return
+        }
+        setPlayerError('Preview playback failed. Restart preview.')
+        hls?.destroy()
+        hls = null
+      })
+
+      return () => {
+        hls?.destroy()
+        video.pause()
+        video.removeAttribute('src')
+        video.load()
+      }
+    }
+
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = playlistUrl
       void video.play().catch(() => {})
@@ -162,31 +189,9 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
       }
     }
 
-    if (!Hls.isSupported()) {
-      setPlayerError('This browser cannot play the live preview stream.')
-      return
-    }
-
-    hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: true,
-    })
-    hls.loadSource(playlistUrl)
-    hls.attachMedia(video)
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      void video.play().catch(() => {})
-    })
-    hls.on(Hls.Events.ERROR, (_event, data) => {
-      if (!data.fatal) {
-        return
-      }
-      setPlayerError('Preview playback failed. Restart preview.')
-      hls?.destroy()
-      hls = null
-    })
+    setPlayerError('This browser cannot play the live preview stream.')
 
     return () => {
-      hls?.destroy()
       video.pause()
       video.removeAttribute('src')
       video.load()
