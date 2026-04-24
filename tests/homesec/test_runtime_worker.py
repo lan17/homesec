@@ -199,28 +199,43 @@ async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_neve
     stop_event.set()
 
     class _StubStorage:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
+            self.shutdown_called = True
 
     class _StubStateStore:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
+            self.shutdown_called = True
 
     class _StubEventStore:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
+            self.shutdown_called = True
 
     class _StubFilter:
         async def shutdown(self, timeout: float | None = None) -> None:
             _ = timeout
 
     monkeypatch.setattr(worker_module, "discover_all_plugins", lambda: None)
+    storage = _StubStorage()
+    state_store = _StubStateStore()
+    event_store = _StubEventStore()
 
     async def _fake_build_runtime_persistence_stack() -> RuntimePersistenceStack:
         return RuntimePersistenceStack(
-            storage=cast(Any, _StubStorage()),
-            state_store=cast(Any, _StubStateStore()),
-            event_store=cast(Any, _StubEventStore()),
+            storage=cast(Any, storage),
+            state_store=cast(Any, state_store),
+            event_store=cast(Any, event_store),
             repository=cast(Any, object()),
         )
 
@@ -241,6 +256,9 @@ async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_neve
 
     # Then: Worker completes lifecycle without invoking analyzer loader
     assert service._runtime_bundle is None
+    assert event_store.shutdown_called is True
+    assert state_store.shutdown_called is True
+    assert storage.shutdown_called is True
 
 
 def test_runtime_worker_preview_status_command_reports_runtime_preview_state() -> None:

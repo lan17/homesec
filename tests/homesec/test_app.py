@@ -96,8 +96,24 @@ class _StubStateStore:
         self.shutdown_called = True
 
 
+class _RecordingEventStore(NoopEventStore):
+    instances: list[_RecordingEventStore] = []
+
+    def __init__(self) -> None:
+        self.shutdown_called = False
+        self.__class__.instances.append(self)
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+        self.shutdown_called = True
+
+
 def _noop_event_store_factory(_state_store: object) -> EventStore:
-    return NoopEventStore()
+    return _RecordingEventStore()
+
+
+def _latest_event_store() -> _RecordingEventStore:
+    return _RecordingEventStore.instances[-1]
 
 
 class _StubPostgresBackupManager:
@@ -264,6 +280,7 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
     # Given: Runtime dependencies mocked for deterministic tests
     controller = _StubRuntimeController()
     _StubPostgresBackupManager.instances.clear()
+    _RecordingEventStore.instances.clear()
     monkeypatch.setattr(
         "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
     )
@@ -339,6 +356,7 @@ async def test_application_shuts_down_postgres_backup_manager_before_storage(
     assert isinstance(manager, _StubPostgresBackupManager)
     assert manager.shutdown_called is True
     assert manager.shutdown_timeout == 10.0
+    assert _latest_event_store().shutdown_called is True
 
 
 @pytest.mark.asyncio
@@ -367,6 +385,7 @@ async def test_application_cleans_up_started_backup_manager_when_api_creation_fa
     assert manager.shutdown_timeout == 10.0
     assert isinstance(manager.storage, _StubStorage)
     assert manager.storage.shutdown_called is True
+    assert _latest_event_store().shutdown_called is True
     assert _mock_runtime_environment._handles[0].process is None
 
 

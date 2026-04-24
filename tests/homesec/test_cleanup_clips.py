@@ -13,6 +13,7 @@ from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterOverrides, FilterResult
 from homesec.plugins.storage.local import LocalStorage, LocalStorageConfig
 from homesec.state.postgres import (
+    NoopEventStore,
     PostgresStateStore,
     create_event_store_for_postgres_state_store,
 )
@@ -51,6 +52,39 @@ class _TestFilter(ObjectFilter):
     async def ping(self) -> bool:
         """Health check - test filter is always healthy."""
         return not self.shutdown_called
+
+
+class _CleanupStorage:
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+        self._calls.append("storage")
+
+
+class _CleanupStateStore:
+    _engine = object()
+
+    def __init__(self, calls: list[str], *, initialize_ok: bool) -> None:
+        self._calls = calls
+        self._initialize_ok = initialize_ok
+
+    async def initialize(self) -> bool:
+        return self._initialize_ok
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+        self._calls.append("state")
+
+
+class _CleanupEventStore(NoopEventStore):
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        _ = timeout
+        self._calls.append("event")
 
 
 def _write_cleanup_config(path: Path, *, dsn: str, storage_root: Path) -> None:
@@ -158,6 +192,77 @@ async def test_cleanup_deletes_empty_clips(
 
     await storage.shutdown()
     await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_releases_storage_and_state_when_postgres_init_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup should not leak resources when fail-fast Postgres init fails."""
+    # Given: Cleanup storage is created but Postgres initialization degrades
+    config_path = tmp_path / "config.yaml"
+    _write_cleanup_config(
+        config_path,
+        dsn="postgresql://user:pass@localhost/db",
+        storage_root=tmp_path / "storage",
+    )
+    calls: list[str] = []
+    storage = _CleanupStorage(calls)
+    state_store = _CleanupStateStore(calls, initialize_ok=False)
+    monkeypatch.setattr("homesec.maintenance.cleanup_clips.load_storage_plugin", lambda _: storage)
+    monkeypatch.setattr(
+        "homesec.maintenance.cleanup_clips.PostgresStateStore",
+        lambda _dsn: state_store,
+    )
+
+    def _fail_if_filter_loads(_: object) -> object:
+        raise AssertionError("filter should not load after Postgres init failure")
+
+    monkeypatch.setattr("homesec.maintenance.cleanup_clips.load_filter", _fail_if_filter_loads)
+
+    # When/Then: Cleanup fails fast and releases resources acquired before failure
+    with pytest.raises(RuntimeError, match="Failed to initialize Postgres state store"):
+        await run_cleanup(CleanupOptions(config_path=config_path))
+
+    assert calls == ["storage", "state"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_releases_persistence_when_filter_composition_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup should unwind explicit persistence wiring if later composition fails."""
+    # Given: Cleanup reaches event-store wiring before filter creation fails
+    config_path = tmp_path / "config.yaml"
+    _write_cleanup_config(
+        config_path,
+        dsn="postgresql://user:pass@localhost/db",
+        storage_root=tmp_path / "storage",
+    )
+    calls: list[str] = []
+    storage = _CleanupStorage(calls)
+    state_store = _CleanupStateStore(calls, initialize_ok=True)
+    event_store = _CleanupEventStore(calls)
+    monkeypatch.setattr("homesec.maintenance.cleanup_clips.load_storage_plugin", lambda _: storage)
+    monkeypatch.setattr(
+        "homesec.maintenance.cleanup_clips.PostgresStateStore",
+        lambda _dsn: state_store,
+    )
+    monkeypatch.setattr(
+        "homesec.maintenance.cleanup_clips.create_event_store_for_postgres_state_store",
+        lambda _state_store: event_store,
+    )
+
+    def _raise_filter_failure(_: object) -> object:
+        raise RuntimeError("filter setup failed")
+
+    monkeypatch.setattr("homesec.maintenance.cleanup_clips.load_filter", _raise_filter_failure)
+
+    # When/Then: Later composition failure unwinds event store, storage, and state store
+    with pytest.raises(RuntimeError, match="filter setup failed"):
+        await run_cleanup(CleanupOptions(config_path=config_path))
+
+    assert calls == ["event", "storage", "state"]
 
 
 @pytest.mark.asyncio

@@ -230,6 +230,10 @@ class _RuntimeWorkerService:
             await self._assembler.shutdown_bundle(runtime_bundle)
             self._runtime_bundle = None
 
+        if self._event_store is not None:
+            await self._event_store.shutdown()
+            self._event_store = None
+
         if self._state_store is not None:
             await self._state_store.shutdown()
             self._state_store = None

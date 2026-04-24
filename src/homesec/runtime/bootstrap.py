@@ -119,6 +119,7 @@ async def build_runtime_persistence_stack(
 
     storage = _create_storage_backend(config, loader=loader)
     state_store: StateStore | None = None
+    event_store: EventStore | None = None
     try:
         state_store = await _create_state_store(
             config.state_store,
@@ -143,6 +144,8 @@ async def build_runtime_persistence_stack(
             repository=repository,
         )
     except Exception:
+        if event_store is not None:
+            await _safe_shutdown(event_store, label="event store")
         if state_store is not None:
             await _safe_shutdown(state_store, label="state store")
         await _safe_shutdown(storage, label="storage backend")

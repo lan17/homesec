@@ -17,7 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from homesec.config import load_config, resolve_env_var
-from homesec.interfaces import ObjectFilter, StorageBackend
+from homesec.interfaces import EventStore, ObjectFilter, StorageBackend
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterConfig
 from homesec.plugins import discover_all_plugins
@@ -184,26 +184,30 @@ async def run_cleanup(opts: CleanupOptions) -> None:
     if not dsn:
         raise RuntimeError("Postgres DSN is required for cleanup")
 
-    storage = load_storage_plugin(cfg.storage)
-    state_store = PostgresStateStore(dsn)
-    ok = await state_store.initialize()
-    if not ok:
-        raise RuntimeError("Failed to initialize Postgres state store")
-
-    event_store = create_event_store_for_postgres_state_store(state_store)
-    repo = ClipRepository(state_store, event_store, retry=cfg.retry)
-
-    recheck_cfg = _build_recheck_filter_config(cfg.filter, opts)
-    filter_plugin = load_filter(recheck_cfg)
-
-    sem = asyncio.Semaphore(int(opts.workers))
-
-    cache_dir = Path.cwd() / "video_cache" / "cleanup" / run_id
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    totals = _Counts()
-
+    storage: StorageBackend | None = None
+    state_store: PostgresStateStore | None = None
+    event_store: EventStore | None = None
+    filter_plugin: ObjectFilter | None = None
     try:
+        storage = load_storage_plugin(cfg.storage)
+        state_store = PostgresStateStore(dsn)
+        ok = await state_store.initialize()
+        if not ok:
+            raise RuntimeError("Failed to initialize Postgres state store")
+
+        event_store = create_event_store_for_postgres_state_store(state_store)
+        repo = ClipRepository(state_store, event_store, retry=cfg.retry)
+
+        recheck_cfg = _build_recheck_filter_config(cfg.filter, opts)
+        filter_plugin = load_filter(recheck_cfg)
+
+        sem = asyncio.Semaphore(int(opts.workers))
+
+        cache_dir = Path.cwd() / "video_cache" / "cleanup" / run_id
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        totals = _Counts()
+
         cursor: tuple[datetime, str] | None = None
         while True:
             rows = await repo.list_candidate_clips_for_cleanup(
@@ -276,10 +280,13 @@ async def run_cleanup(opts: CleanupOptions) -> None:
         )
         _log_json(logging.INFO, "Cleanup summary", summary_payload)
     finally:
-        try:
+        if filter_plugin is not None:
             await filter_plugin.shutdown()
-        finally:
+        if event_store is not None:
+            await event_store.shutdown()
+        if storage is not None:
             await storage.shutdown()
+        if state_store is not None:
             await state_store.shutdown()
 
 
