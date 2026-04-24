@@ -30,6 +30,9 @@ class ProbeStreamInfo(BaseModel):
 
     url: str
     video_codec: str | None = None
+    video_profile: str | None = None
+    video_level: int | None = None
+    video_has_b_frames: int | None = None
     audio_codec: str | None = None
     width: int | None = None
     height: int | None = None
@@ -105,7 +108,7 @@ class FfprobeStreamDiscovery:
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,width,height,avg_frame_rate",
+            ("stream=codec_type,codec_name,profile,level,has_b_frames,width,height,avg_frame_rate"),
             "-of",
             "json",
             "-rtsp_transport",
@@ -273,6 +276,9 @@ def _parse_ffprobe_payload(payload: str, rtsp_url: str) -> ProbeStreamInfo:
     return ProbeStreamInfo(
         url=rtsp_url,
         video_codec=_coerce_str(video_stream.get("codec_name")),
+        video_profile=_coerce_str(video_stream.get("profile")),
+        video_level=_coerce_int(video_stream.get("level")),
+        video_has_b_frames=_coerce_int(video_stream.get("has_b_frames")),
         audio_codec=_coerce_str(audio_stream.get("codec_name")) if audio_stream else None,
         width=width,
         height=height,

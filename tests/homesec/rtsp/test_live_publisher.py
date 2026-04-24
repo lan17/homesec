@@ -124,10 +124,12 @@ def _probe_stream(
     *,
     video_codec: str,
     audio_codec: str | None,
+    video_profile: str | None = None,
 ) -> ProbeStreamInfo:
     return ProbeStreamInfo(
         url="rtsp://host/main",
         video_codec=video_codec,
+        video_profile=video_profile,
         audio_codec=audio_codec,
         width=1920,
         height=1080,
@@ -306,7 +308,9 @@ def test_auto_codec_prefers_copy_for_h264_and_aac(tmp_path: Path) -> None:
     # Given: A publisher whose source probe reports H.264 video and AAC audio
     publisher = _make_publisher(
         tmp_path,
-        discovery=FakeDiscovery(_probe_stream(video_codec="h264", audio_codec="aac")),
+        discovery=FakeDiscovery(
+            _probe_stream(video_codec="h264", video_profile="Baseline", audio_codec="aac")
+        ),
     )
     calls: list[dict[str, object]] = []
 
@@ -330,12 +334,44 @@ def test_auto_codec_prefers_copy_for_h264_and_aac(tmp_path: Path) -> None:
     assert "libx264" not in cmd
 
 
+def test_auto_codec_transcodes_high_profile_h264_for_browser_preview(tmp_path: Path) -> None:
+    """auto codec mode should normalize H.264 profiles that are flaky in native HLS."""
+    # Given: A publisher whose source probe reports a high-profile H.264 camera stream
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(
+            _probe_stream(video_codec="h264", video_profile="High", audio_codec="aac")
+        ),
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The HLS ffmpeg path transcodes video instead of remuxing the source bitstream
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    cmd = calls[0]["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert cmd[cmd.index("-c:a") + 1] == "copy"
+
+
 def test_auto_codec_transcodes_mp4_safe_but_hls_unsafe_audio(tmp_path: Path) -> None:
     """auto codec mode should transcode non-browser HLS audio even if recording can copy it."""
     # Given: A publisher whose source probe reports H.264 video and AC-3 audio
     publisher = _make_publisher(
         tmp_path,
-        discovery=FakeDiscovery(_probe_stream(video_codec="h264", audio_codec="ac3")),
+        discovery=FakeDiscovery(
+            _probe_stream(video_codec="h264", video_profile="Baseline", audio_codec="ac3")
+        ),
     )
     calls: list[dict[str, object]] = []
 

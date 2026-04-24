@@ -49,6 +49,9 @@ _READY_POLL_INTERVAL_S = 0.1
 _DEFAULT_VIEWER_WINDOW_S = 2.0
 _START_FAILURE_MAX_BYTES = 4_000
 _HLS_BROWSER_COPY_AUDIO_CODECS: frozenset[str] = frozenset({"aac"})
+_HLS_BROWSER_COPY_H264_PROFILES: frozenset[str] = frozenset(
+    {"baseline", "constrained baseline", "main"}
+)
 CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON = (
     "concurrent_preview_downgraded_after_repeated_recording_failures"
 )
@@ -655,7 +658,7 @@ class HLSLivePublisher(LivePublisher):
             )
 
         if self._video_codec == "auto" and stream_info is not None:
-            if (stream_info.video_codec or "").strip().lower() == "h264":
+            if _is_hls_browser_video_copy_compatible(stream_info):
                 return (
                     _CodecPlan(
                         codec_name="copy",
@@ -1244,6 +1247,17 @@ def _is_hls_browser_audio_copy_compatible(audio_codec: str | None) -> bool:
     if audio_codec is None:
         return False
     return audio_codec.strip().lower() in _HLS_BROWSER_COPY_AUDIO_CODECS
+
+
+def _is_hls_browser_video_copy_compatible(stream_info: ProbeStreamInfo) -> bool:
+    if (stream_info.video_codec or "").strip().lower() != "h264":
+        return False
+
+    profile = stream_info.video_profile
+    if profile is None:
+        return True
+
+    return profile.strip().lower() in _HLS_BROWSER_COPY_H264_PROFILES
 
 
 def _build_audio_codec_args(

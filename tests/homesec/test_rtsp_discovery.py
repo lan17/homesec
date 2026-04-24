@@ -35,7 +35,8 @@ def test_probe_parses_video_and_audio_streams(monkeypatch: pytest.MonkeyPatch) -
     payload = (
         '{"streams":['
         '{"codec_type":"video","codec_name":"h264","width":1280,'
-        '"height":720,"avg_frame_rate":"15/1"},'
+        '"height":720,"avg_frame_rate":"15/1","profile":"High",'
+        '"level":42,"has_b_frames":1},'
         '{"codec_type":"audio","codec_name":"aac"}'
         "]}"
     )
@@ -52,6 +53,9 @@ def test_probe_parses_video_and_audio_streams(monkeypatch: pytest.MonkeyPatch) -
     # Then: stream metadata is populated
     assert result.streams[0].probe_ok
     assert result.streams[0].video_codec == "h264"
+    assert result.streams[0].video_profile == "High"
+    assert result.streams[0].video_level == 42
+    assert result.streams[0].video_has_b_frames == 1
     assert result.streams[0].audio_codec == "aac"
     assert result.streams[0].width == 1280
     assert result.streams[0].height == 720
