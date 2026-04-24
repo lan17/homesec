@@ -24,6 +24,8 @@ const {
   hlsIsSupportedMock: vi.fn(() => true),
 }))
 
+const READY_PLAYLIST = '#EXTM3U\n#EXTINF:1.0,\nsegment_000000.ts\n#EXTINF:1.0,\nsegment_000001.ts\n'
+
 vi.mock('../hooks/useCameraPreview', () => ({
   useCameraPreview: (...args: unknown[]) => useCameraPreviewMock(...args),
 }))
@@ -59,7 +61,7 @@ describe('CameraPreviewPanel', () => {
     hlsIsSupportedMock.mockReset()
     hlsIsSupportedMock.mockReturnValue(true)
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('#EXTM3U', {
+      new Response(READY_PLAYLIST, {
         status: 200,
         headers: { 'content-type': 'application/vnd.apple.mpegurl' },
       }),
@@ -84,6 +86,7 @@ describe('CameraPreviewPanel', () => {
 
   afterEach(() => {
     cleanup()
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -221,6 +224,73 @@ describe('CameraPreviewPanel', () => {
         'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
       )
       expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('waits for a usable live HLS window before initializing playback', async () => {
+    // Given: A ready preview session whose first playlist poll has only one segment
+    const playlistUrl =
+      'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token'
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(
+        new Response('#EXTM3U\n#EXTINF:1.0,\nsegment_000000.ts\n', {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(READY_PLAYLIST, {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+    useCameraPreviewMock.mockReturnValue({
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'ready',
+        viewer_count: 1,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      },
+      session: {
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      },
+      playlistUrl,
+      warning: null,
+      error: null,
+      isPending: false,
+      isStarting: false,
+      isStopping: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refreshStatus: vi.fn(),
+    })
+
+    // When: Rendering the preview panel before the playlist has enough media
+    render(<CameraPreviewPanel cameraName="front" />)
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    // Then: The player waits instead of attaching to a thin live window
+    expect(hlsConstructMock).not.toHaveBeenCalled()
+
+    // Then: Playback initialization proceeds once a later poll sees a full enough window
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+      expect(hlsConstructMock).toHaveBeenCalledTimes(1)
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith(playlistUrl)
     })
   })
 

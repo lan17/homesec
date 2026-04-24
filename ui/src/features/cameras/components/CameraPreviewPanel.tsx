@@ -9,6 +9,7 @@ import { useCameraPreview } from '../hooks/useCameraPreview'
 
 const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
+const PLAYLIST_READY_MIN_SEGMENTS = 2
 const PREVIEW_DISPLAY_STATUS_STATES = new Set(['starting', 'ready', 'degraded', 'stopping'])
 
 interface CameraPreviewPanelProps {
@@ -59,6 +60,15 @@ function startLabel(statusState: string | undefined): string {
   return 'Start preview'
 }
 
+function countPlaylistSegments(playlistText: string): number {
+  return playlistText
+    .split(/\r?\n/)
+    .filter((line) => {
+      const stripped = line.trim()
+      return stripped.length > 0 && !stripped.startsWith('#')
+    }).length
+}
+
 export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
   const {
     error,
@@ -102,10 +112,14 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
           signal: controller.signal,
         })
         if (response.ok) {
-          if (!cancelled) {
+          const playlistText = await response.text()
+          if (
+            !cancelled
+            && countPlaylistSegments(playlistText) >= PLAYLIST_READY_MIN_SEGMENTS
+          ) {
             setPlaylistReady(true)
+            return
           }
-          return
         }
         if (response.status !== 404 && response.status !== 409) {
           throw new Error(`Preview playlist unavailable (${response.status})`)
