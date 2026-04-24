@@ -13,6 +13,7 @@ const RTSP_BACKEND: BackendFormDef = {
   steps: [{ title: 'Configure RTSP source', component: RtspForm }],
   defaultConfig: {
     rtsp_url: 'rtsp://username:password@camera.local/stream',
+    preview_stream: 'main',
     output_dir: './recordings',
   },
   suggestNamePrefix: 'rtsp',
@@ -104,6 +105,7 @@ const ONVIF_BACKEND: BackendFormDef = {
   steps: [{ title: 'Discover and select ONVIF stream', component: OnvifForm }],
   defaultConfig: {
     rtsp_url: '',
+    preview_stream: 'main',
     output_dir: './recordings',
   },
   suggestNamePrefix: 'onvif',
@@ -147,4 +149,3 @@ export function suggestCameraName(prefix: string, existingNames: readonly string
   }
   return `${prefix}_${index}`
 }
-

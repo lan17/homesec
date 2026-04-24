@@ -4,6 +4,7 @@ import { readString } from './configReaders'
 export function RtspForm({ config, onChange }: BackendFormStepProps) {
   const rtspUrl = readString(config, 'rtsp_url', '')
   const outputDir = readString(config, 'output_dir', './recordings')
+  const previewStream = readString(config, 'preview_stream', 'main')
 
   return (
     <div className="inline-form">
@@ -38,6 +39,24 @@ export function RtspForm({ config, onChange }: BackendFormStepProps) {
             })
           }}
         />
+      </label>
+
+      <label className="field-label" htmlFor="camera-rtsp-preview-stream">
+        Preview stream
+        <select
+          id="camera-rtsp-preview-stream"
+          className="input"
+          value={previewStream === 'detect' ? 'detect' : 'main'}
+          onChange={(event) => {
+            onChange({
+              ...config,
+              preview_stream: event.target.value,
+            })
+          }}
+        >
+          <option value="main">Main</option>
+          <option value="detect">Detect</option>
+        </select>
       </label>
     </div>
   )

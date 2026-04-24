@@ -367,8 +367,8 @@ def test_auto_codec_transcodes_high_profile_h264_for_browser_preview(tmp_path: P
 
 
 def test_auto_codec_falls_back_to_copy_when_h264_encoder_is_missing(tmp_path: Path) -> None:
-    """auto codec mode should preserve preview availability when ffmpeg lacks libx264."""
-    # Given: A high-profile H.264 source on a runtime whose ffmpeg has no software H.264 encoder
+    """auto codec mode should preserve preview availability when H.264 encoders are missing."""
+    # Given: A high-profile H.264 source on a runtime whose ffmpeg has no H.264 encoder
     publisher = _make_publisher(
         tmp_path,
         discovery=FakeDiscovery(
@@ -397,7 +397,7 @@ def test_auto_codec_falls_back_to_copy_when_h264_encoder_is_missing(tmp_path: Pa
         **kwargs: object,
     ) -> FakeProc:
         video_encoder = cmd[cmd.index("-c:v") + 1]
-        if video_encoder == "libx264":
+        if video_encoder in {"libx264", "libopenh264"}:
             return encoder_missing_spawn(
                 cmd,
                 stdout=stdout,
@@ -420,7 +420,79 @@ def test_auto_codec_falls_back_to_copy_when_h264_encoder_is_missing(tmp_path: Pa
     ):
         result = publisher.ensure_active()
 
-    # Then: The publisher falls back to copy-remuxing instead of returning a startup 409
+    # Then: The publisher exhausts encoder choices before falling back to copy-remuxing
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    assert len(calls) == 3
+    first_cmd = calls[0]["cmd"]
+    second_cmd = calls[1]["cmd"]
+    third_cmd = calls[2]["cmd"]
+    assert isinstance(first_cmd, list)
+    assert isinstance(second_cmd, list)
+    assert isinstance(third_cmd, list)
+    assert first_cmd[first_cmd.index("-c:v") + 1] == "libx264"
+    assert second_cmd[second_cmd.index("-c:v") + 1] == "libopenh264"
+    assert third_cmd[third_cmd.index("-c:v") + 1] == "copy"
+
+
+def test_auto_codec_tries_openh264_when_libx264_is_missing(tmp_path: Path) -> None:
+    """auto codec mode should try another software H.264 encoder before copy fallback."""
+    # Given: A high-profile H.264 source and a runtime whose ffmpeg lacks libx264
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(
+            _probe_stream(video_codec="h264", video_profile="High", audio_codec="aac")
+        ),
+    )
+    calls: list[dict[str, object]] = []
+    libx264_missing_spawn = _fake_popen_factory(
+        calls,
+        make_output=False,
+        returncode=1,
+        stderr_text=(
+            "Unknown encoder 'libx264'\n"
+            "Error selecting an encoder\n"
+            "Error opening output files: Encoder not found\n"
+        ),
+    )
+    openh264_spawn = _fake_popen_factory(calls)
+
+    def _fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **kwargs: object,
+    ) -> FakeProc:
+        video_encoder = cmd[cmd.index("-c:v") + 1]
+        if video_encoder == "libx264":
+            return libx264_missing_spawn(
+                cmd,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=start_new_session,
+                **kwargs,
+            )
+        return openh264_spawn(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=start_new_session,
+            **kwargs,
+        )
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen,
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The publisher uses libopenh264 instead of falling straight back to copy-remuxing
     assert result == LivePublisherStatus(
         state=LivePublisherState.READY,
         viewer_count=0,
@@ -432,7 +504,7 @@ def test_auto_codec_falls_back_to_copy_when_h264_encoder_is_missing(tmp_path: Pa
     assert isinstance(first_cmd, list)
     assert isinstance(second_cmd, list)
     assert first_cmd[first_cmd.index("-c:v") + 1] == "libx264"
-    assert second_cmd[second_cmd.index("-c:v") + 1] == "copy"
+    assert second_cmd[second_cmd.index("-c:v") + 1] == "libopenh264"
 
 
 def test_auto_codec_transcodes_mp4_safe_but_hls_unsafe_audio(tmp_path: Path) -> None:

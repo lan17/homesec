@@ -276,6 +276,23 @@ def test_detect_rtsp_url_env_missing_falls_back(
     assert source._detect_rtsp_url_source == "explicit"
 
 
+def test_preview_stream_detect_uses_detect_rtsp_url(tmp_path: Path) -> None:
+    """Detect preview stream mode should use the lower-cost detect URL for HLS preview."""
+    # Given: An RTSP source with separate main and derived detect streams
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream1",
+        preview_stream="detect",
+    )
+
+    # When: initializing the source
+    source = RTSPSource(config, camera_name="cam")
+
+    # Then: preview publishes from the derived detect stream
+    assert source.detect_rtsp_url == "rtsp://host/stream2"
+    assert source.preview_rtsp_url == "rtsp://host/stream2"
+
+
 def test_detect_stream_explicit_overrides_derived(tmp_path: Path) -> None:
     """Explicit detect stream should be used even when subtype=0 is present."""
     # Given: an explicit detect stream URL alongside subtype=0
@@ -366,6 +383,36 @@ def test_runtime_preview_publisher_receives_hwaccel_config(
     assert isinstance(source._live_publisher, CapturingLivePublisher)
     assert captured_kwargs["hwaccel_config"] == HardwareAccelConfig(hwaccel="cuda")
     assert captured_kwargs["recording_policy"] == "allow_during_recording"
+
+
+def test_runtime_preview_publisher_receives_configured_preview_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preview publisher wiring should honor the RTSP preview stream selection."""
+    # Given: a runtime preview-enabled source configured to use its detect stream for preview
+    captured_kwargs: dict[str, object] = {}
+
+    class CapturingLivePublisher(FakeLivePublisher):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__()
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr("homesec.sources.rtsp.core.HLSLivePublisher", CapturingLivePublisher)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream1",
+        preview_stream="detect",
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+
+    # When: initializing the source
+    RTSPSource(config, camera_name="cam")
+
+    # Then: HLS preview publishes from the derived detect stream
+    assert captured_kwargs["rtsp_url"] == "rtsp://host/stream2"
 
 
 def test_detect_stream_derived_from_subtype(tmp_path: Path) -> None:
@@ -539,6 +586,73 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
     assert fake_preflight.preview_rtsp_url == "rtsp://host/main"
     assert fake_preflight.preview_probe_rtsp_url == "rtsp://host/main"
     assert fake_preflight.preview_audio_enabled is True
+    assert publisher.concurrent_preview_downgrades == []
+
+
+def test_startup_preflight_passes_detect_preview_input_url_when_configured(
+    tmp_path: Path,
+) -> None:
+    """Startup preflight should validate the configured detect preview input."""
+
+    class _FakePreflight:
+        def __init__(self) -> None:
+            self.preview_rtsp_url: str | None = None
+            self.preview_probe_rtsp_url: str | None = None
+
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+            preview_rtsp_url: str | None = None,
+            preview_probe_rtsp_url: str | None = None,
+            preview_audio_enabled: bool = False,
+        ) -> CameraPreflightOutcome:
+            # Given: source startup asks preflight to validate the selected preview topology
+            _ = camera_name, preview_audio_enabled
+            self.preview_rtsp_url = preview_rtsp_url
+            self.preview_probe_rtsp_url = preview_probe_rtsp_url
+            recording_profile = build_default_recording_profile(primary_rtsp_url)
+            return CameraPreflightOutcome(
+                camera_key="cam-key",
+                motion_profile=MotionProfile(input_url=detect_rtsp_url),
+                recording_profile=recording_profile,
+                concurrent_preview_supported=True,
+                diagnostics=CameraPreflightDiagnostics(
+                    attempted_urls=[primary_rtsp_url, detect_rtsp_url],
+                    probes=[],
+                    selected_motion_url=detect_rtsp_url,
+                    selected_recording_url=primary_rtsp_url,
+                    selected_preview_url=preview_rtsp_url,
+                    selected_preview_probe_url=preview_probe_rtsp_url,
+                    selected_recording_profile=recording_profile.profile_id(),
+                    session_mode="dual_stream",
+                    concurrent_preview_supported=True,
+                ),
+            )
+
+    # Given: an RTSP source configured to preview from the detect stream
+    publisher = FakeLivePublisher()
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://host/stream1",
+        preview_stream="detect",
+        __runtime_preview__={
+            "enabled": True,
+            "recording_policy": "allow_during_recording",
+        },
+    )
+    source = RTSPSource(config, camera_name="cam", live_publisher=publisher)
+    fake_preflight = _FakePreflight()
+    source._preflight = fake_preflight  # noqa: SLF001
+
+    # When: startup preflight runs
+    source._run_startup_preflight()  # noqa: SLF001
+
+    # Then: the preview check receives the detect RTSP URL used by HLSLivePublisher
+    assert fake_preflight.preview_rtsp_url == "rtsp://host/stream2"
+    assert fake_preflight.preview_probe_rtsp_url == "rtsp://host/stream2"
     assert publisher.concurrent_preview_downgrades == []
 
 

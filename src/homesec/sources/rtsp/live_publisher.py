@@ -52,6 +52,7 @@ _HLS_BROWSER_COPY_AUDIO_CODECS: frozenset[str] = frozenset({"aac"})
 _HLS_BROWSER_COPY_H264_PROFILES: frozenset[str] = frozenset(
     {"baseline", "constrained baseline", "main"}
 )
+_SOFTWARE_H264_ENCODERS: tuple[str, ...] = ("libx264", "libopenh264")
 CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON = (
     "concurrent_preview_downgraded_after_repeated_recording_failures"
 )
@@ -120,7 +121,7 @@ class _CodecPlan:
     video_args: tuple[str, ...]
     audio_args: tuple[str, ...]
     uses_hardware_encoder: bool = False
-    fallback_to_copy_on_encoder_unavailable: bool = False
+    retry_next_on_encoder_unavailable: bool = False
 
 
 class HLSLivePublisher(LivePublisher):
@@ -559,9 +560,9 @@ class HLSLivePublisher(LivePublisher):
                 )
                 continue
 
-            if _should_retry_with_copy_codec(codec_plan, codec_failure_error):
+            if _should_retry_with_next_codec(codec_plan, codec_failure_error):
                 logger.warning(
-                    "Preview H.264 encoder unavailable, falling back to copy: camera=%s encoder=%s error=%s",
+                    "Preview H.264 encoder unavailable, trying next codec plan: camera=%s encoder=%s error=%s",
                     self._camera_name,
                     codec_plan.codec_name,
                     codec_failure_error,
@@ -670,23 +671,28 @@ class HLSLivePublisher(LivePublisher):
             if _is_hls_browser_video_copy_compatible(stream_info):
                 return (copy_plan,)
 
-        software_plan = _CodecPlan(
-            codec_name="libx264",
-            ffmpeg_global_args=(),
-            video_args=_software_h264_transcode_args(self._segment_duration_s),
-            audio_args=audio_args,
-            fallback_to_copy_on_encoder_unavailable=(
-                self._video_codec == "auto"
-                and stream_info is not None
-                and _is_h264_video(stream_info)
-            ),
+        copy_fallback_enabled = (
+            self._video_codec == "auto" and stream_info is not None and _is_h264_video(stream_info)
         )
+        software_plans = tuple(
+            _CodecPlan(
+                codec_name=encoder,
+                ffmpeg_global_args=(),
+                video_args=_software_h264_transcode_args(
+                    encoder=encoder,
+                    segment_duration_s=self._segment_duration_s,
+                ),
+                audio_args=audio_args,
+                retry_next_on_encoder_unavailable=(
+                    index < len(_SOFTWARE_H264_ENCODERS) - 1 or copy_fallback_enabled
+                ),
+            )
+            for index, encoder in enumerate(_SOFTWARE_H264_ENCODERS)
+        )
+        fallback_plans = (copy_plan,) if copy_fallback_enabled else ()
         hardware_encoder = HardwareAccelDetector.select_h264_encoder(self._hwaccel_config)
-        fallback_plans = (
-            (copy_plan,) if software_plan.fallback_to_copy_on_encoder_unavailable else ()
-        )
         if hardware_encoder is None:
-            return (software_plan, *fallback_plans)
+            return (*software_plans, *fallback_plans)
 
         logger.info(
             "Preview will try hardware H.264 encoder: camera=%s encoder=%s",
@@ -704,7 +710,7 @@ class HLSLivePublisher(LivePublisher):
                 audio_args=audio_args,
                 uses_hardware_encoder=True,
             ),
-            software_plan,
+            *software_plans,
             *fallback_plans,
         )
 
@@ -1292,10 +1298,10 @@ def _build_audio_codec_args(
     return ("-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k")
 
 
-def _software_h264_transcode_args(segment_duration_s: float) -> tuple[str, ...]:
+def _software_h264_transcode_args(*, encoder: str, segment_duration_s: float) -> tuple[str, ...]:
     return (
         "-c:v",
-        "libx264",
+        encoder,
         "-pix_fmt",
         "yuv420p",
         "-sc_threshold",
@@ -1332,8 +1338,8 @@ def _should_retry_with_software_codec(
     return refusal.reason is not LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
 
 
-def _should_retry_with_copy_codec(codec_plan: _CodecPlan, error_text: str) -> bool:
-    if not codec_plan.fallback_to_copy_on_encoder_unavailable:
+def _should_retry_with_next_codec(codec_plan: _CodecPlan, error_text: str) -> bool:
+    if not codec_plan.retry_next_on_encoder_unavailable:
         return False
     return _is_encoder_unavailable_error(error_text)
 

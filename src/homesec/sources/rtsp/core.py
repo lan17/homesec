@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -207,6 +208,13 @@ class RTSPSourceConfig(BaseModel):
         default=None,
         description="RTSP URL for the detect stream.",
     )
+    preview_stream: Literal["main", "detect"] = Field(
+        default="main",
+        description=(
+            "Which configured RTSP stream to use for live preview. "
+            "'main' uses rtsp_url; 'detect' uses the lower-cost detect stream."
+        ),
+    )
     output_dir: str = Field(
         default="./recordings",
         description="Directory to store recordings and logs.",
@@ -279,6 +287,9 @@ class RTSPSource(ThreadedClipSource):
         else:
             self.detect_rtsp_url = self.rtsp_url
             self._detect_rtsp_url_source = "same_as_rtsp_url"
+        self.preview_rtsp_url = (
+            self.detect_rtsp_url if config.preview_stream == "detect" else self.rtsp_url
+        )
 
         self.output_dir = Path(config.output_dir)
         sanitized_name = self._sanitize_camera_name(camera_name)
@@ -482,9 +493,11 @@ class RTSPSource(ThreadedClipSource):
             camera_name=self.camera_name,
             primary_rtsp_url=self.rtsp_url,
             detect_rtsp_url=self.detect_rtsp_url,
-            preview_rtsp_url=self.rtsp_url if self._preview_concurrency_requested else None,
+            preview_rtsp_url=(
+                self.preview_rtsp_url if self._preview_concurrency_requested else None
+            ),
             preview_probe_rtsp_url=(
-                self.rtsp_url
+                self.preview_rtsp_url
                 if self._preview_concurrency_requested and self._preview_startup_probe_required
                 else None
             ),
@@ -674,7 +687,7 @@ class RTSPSource(ThreadedClipSource):
         hls_config = preview_config.config
         return HLSLivePublisher(
             camera_name=camera_name,
-            rtsp_url=self.rtsp_url,
+            rtsp_url=self.preview_rtsp_url,
             storage_dir=hls_config.storage_dir,
             segment_duration_ms=hls_config.segment_duration_ms,
             live_window_segments=hls_config.live_window_segments,

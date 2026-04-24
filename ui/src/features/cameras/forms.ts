@@ -8,6 +8,7 @@ export const REDACTED_PLACEHOLDER = '***redacted***'
 const CAMERA_SOURCE_CONFIG_TEMPLATES: Record<CameraBackend, CameraCreate['source_config']> = {
   rtsp: {
     rtsp_url: 'rtsp://username:password@camera.local/stream',
+    preview_stream: 'main',
     output_dir: './recordings',
   },
   ftp: {

@@ -18,6 +18,7 @@ describe('RtspForm', () => {
       const [config, setConfig] = useState<Record<string, unknown>>({
         rtsp_url: 'rtsp://old-user:old-pass@camera.local/stream',
         output_dir: './recordings',
+        preview_stream: 'main',
       })
       return (
         <RtspForm
@@ -40,10 +41,24 @@ describe('RtspForm', () => {
 
     // Then: Form emits updated config preserving sibling fields
     expect(screen.getByLabelText('Output directory')).toBeTruthy()
+    expect(screen.getByLabelText('Preview stream')).toBeTruthy()
     expect(onChange).toHaveBeenCalled()
     expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({
       rtsp_url: 'rtsp://new-user:new-pass@camera.local/live',
       output_dir: './recordings',
+      preview_stream: 'main',
+    })
+
+    // When: Operator switches preview to the detect stream
+    fireEvent.change(screen.getByLabelText('Preview stream'), {
+      target: { value: 'detect' },
+    })
+
+    // Then: Form emits the preview stream selection
+    expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({
+      rtsp_url: 'rtsp://new-user:new-pass@camera.local/live',
+      output_dir: './recordings',
+      preview_stream: 'detect',
     })
   })
 })
