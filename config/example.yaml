@@ -213,3 +213,16 @@ alert_policy:
 #   upload_workers: 4
 #   filter_workers: 4
 #   vlm_workers: 2
+
+# Periodic Postgres backups
+# maintenance:
+#   postgres_backup:
+#     enabled: false
+#     interval: 24h
+#     keep_count: 5
+#     local_dir: ./backups/postgres
+#     timeout_s: 1800
+#     compression_level: 6
+#     upload:
+#       enabled: true
+#       storage_backend: primary

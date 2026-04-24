@@ -28,6 +28,8 @@ import type {
   ProbeResponse,
   RuntimeReloadResponse,
   RuntimeStatusResponse,
+  PostgresBackupRunResponse,
+  PostgresBackupStatusResponse,
   SetupStatusResponse,
   StatsResponse,
 } from './types'
@@ -88,6 +90,12 @@ export interface GeneratedHomeSecClient {
   getRuntimeStatus(
     options?: ApiRequestOptions,
   ): Promise<ApiResponseWithStatus<RuntimeStatusResponse>>
+  getPostgresBackupStatus(
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PostgresBackupStatusResponse>>
+  runPostgresBackupNow(
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PostgresBackupRunResponse>>
   discoverOnvifCameras(
     payload?: DiscoverRequest,
     options?: ApiRequestOptions,

@@ -197,6 +197,17 @@ a:hover {
   min-height: 52px;
 }
 
+.info-tile {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.info-tile .muted,
+.info-tile .metric {
+  overflow-wrap: anywhere;
+}
+
 .metric {
   margin: 0;
   font-size: 1.22rem;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -90,6 +91,64 @@ class RetentionConfig(BaseModel):
         ge=0,
         description="Max local clip bytes to retain before oldest-first pruning.",
     )
+
+
+_DURATION_PATTERN = re.compile(r"^\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>s|m|h|d)\s*$")
+
+
+def _parse_duration_seconds(value: str) -> float:
+    match = _DURATION_PATTERN.fullmatch(value)
+    if match is None:
+        raise ValueError("duration must use a number followed by s, m, h, or d")
+
+    amount = float(match.group("value"))
+    unit = match.group("unit")
+    multiplier = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
+    return amount * multiplier
+
+
+class PostgresBackupUploadConfig(BaseModel):
+    """Postgres backup upload configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = True
+    storage_backend: Literal["primary"] = "primary"
+
+
+class PostgresBackupConfig(BaseModel):
+    """Periodic Postgres backup configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    interval: str = "24h"
+    keep_count: int = Field(default=5, ge=1)
+    local_dir: Path = Path("./backups/postgres")
+    timeout_s: float = Field(default=1800.0, gt=0.0)
+    compression_level: int = Field(default=6, ge=0, le=9)
+    upload: PostgresBackupUploadConfig = Field(default_factory=PostgresBackupUploadConfig)
+
+    @field_validator("interval")
+    @classmethod
+    def _validate_interval(cls, value: str) -> str:
+        seconds = _parse_duration_seconds(value)
+        if seconds < 15 * 60:
+            raise ValueError("maintenance.postgres_backup.interval must be at least 15m")
+        return value.strip()
+
+    @property
+    def interval_seconds(self) -> float:
+        """Return configured backup interval in seconds."""
+        return _parse_duration_seconds(self.interval)
+
+
+class MaintenanceConfig(BaseModel):
+    """Background maintenance configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    postgres_backup: PostgresBackupConfig = Field(default_factory=PostgresBackupConfig)
 
 
 class ConcurrencyConfig(BaseModel):
@@ -268,6 +327,7 @@ class Config(BaseModel):
     state_store: StateStoreConfig = Field(default_factory=StateStoreConfig)
     notifiers: list[NotifierConfig] = Field(default_factory=list)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    maintenance: MaintenanceConfig = Field(default_factory=MaintenanceConfig)
     concurrency: ConcurrencyConfig = Field(default_factory=ConcurrencyConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     server: FastAPIServerConfig = Field(default_factory=FastAPIServerConfig)

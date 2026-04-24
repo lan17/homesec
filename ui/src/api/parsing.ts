@@ -18,6 +18,8 @@ import type {
   PreflightResponse,
   TestConnectionResponse,
   ProbeResponse,
+  PostgresBackupRunResponse,
+  PostgresBackupStatusResponse,
   RuntimeReloadResponse,
   RuntimeState,
   RuntimeStatusResponse,
@@ -437,6 +439,42 @@ export function parseRuntimeStatusResponse(payload: unknown): RuntimeStatusRespo
     active_config_version: expectNullableString(payload.active_config_version, 'active_config_version'),
     last_reload_at: expectNullableString(payload.last_reload_at, 'last_reload_at'),
     last_reload_error: expectNullableString(payload.last_reload_error, 'last_reload_error'),
+  }
+}
+
+export function parsePostgresBackupStatusResponse(
+  payload: unknown,
+): PostgresBackupStatusResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Postgres backup status response is not a JSON object')
+  }
+
+  return {
+    enabled: expectBoolean(payload.enabled, 'enabled'),
+    running: expectBoolean(payload.running, 'running'),
+    available: expectBoolean(payload.available, 'available'),
+    unavailable_reason: expectNullableString(payload.unavailable_reason, 'unavailable_reason'),
+    last_attempted_at: expectNullableString(payload.last_attempted_at, 'last_attempted_at'),
+    last_success_at: expectNullableString(payload.last_success_at, 'last_success_at'),
+    last_error: expectNullableString(payload.last_error, 'last_error'),
+    last_local_path: expectNullableString(payload.last_local_path, 'last_local_path'),
+    last_uploaded_uri: expectNullableString(payload.last_uploaded_uri, 'last_uploaded_uri'),
+    next_run_at: expectNullableString(payload.next_run_at, 'next_run_at'),
+    pending_remote_delete_count: expectNumber(
+      payload.pending_remote_delete_count,
+      'pending_remote_delete_count',
+    ),
+  }
+}
+
+export function parsePostgresBackupRunResponse(payload: unknown): PostgresBackupRunResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Postgres backup run response is not a JSON object')
+  }
+
+  return {
+    accepted: expectBoolean(payload.accepted, 'accepted'),
+    message: expectString(payload.message, 'message'),
   }
 }
 

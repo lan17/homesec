@@ -458,6 +458,107 @@ describe('HomeSecApiClient.getDiagnostics', () => {
   })
 })
 
+describe('HomeSecApiClient.getPostgresBackupStatus', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns structured backup status data for successful responses', async () => {
+    // Given: A maintenance status endpoint with backup metadata
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          enabled: true,
+          running: false,
+          available: true,
+          unavailable_reason: null,
+          last_attempted_at: '2026-04-23T16:00:00Z',
+          last_success_at: '2026-04-23T16:00:00Z',
+          last_error: null,
+          last_local_path: '/backups/homesec-postgres-20260423-160000.dump',
+          last_uploaded_uri: 'mock://backups/homesec-postgres-20260423-160000.dump',
+          next_run_at: '2026-04-24T16:00:00Z',
+          pending_remote_delete_count: 1,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting Postgres backup status
+    const result = await client.getPostgresBackupStatus()
+
+    // Then: Status fields and HTTP metadata are parsed
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      'http://localhost:8081/api/v1/maintenance/postgres-backups/status',
+    )
+    expect(result.httpStatus).toBe(200)
+    expect(result.enabled).toBe(true)
+    expect(result.last_uploaded_uri).toContain('homesec-postgres')
+    expect(result.pending_remote_delete_count).toBe(1)
+  })
+
+  it('throws APIError when backup status payload is malformed', async () => {
+    // Given: A malformed backup status payload
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          enabled: true,
+          pending_remote_delete_count: 'one',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When / Then: Client rejects malformed backup status payloads with APIError
+    await expect(client.getPostgresBackupStatus()).rejects.toBeInstanceOf(APIError)
+  })
+})
+
+describe('HomeSecApiClient.runPostgresBackupNow', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('posts manual backup requests and parses accepted response', async () => {
+    // Given: A maintenance run endpoint that accepts the backup request
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accepted: true,
+          message: 'Postgres backup accepted',
+        }),
+        {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Triggering a manual Postgres backup
+    const result = await client.runPostgresBackupNow()
+
+    // Then: Client POSTs to the maintenance route and returns HTTP metadata
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      'http://localhost:8081/api/v1/maintenance/postgres-backups/run',
+    )
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+    expect(result).toEqual({
+      accepted: true,
+      message: 'Postgres backup accepted',
+      httpStatus: 202,
+    })
+  })
+})
+
 describe('HomeSecApiClient.getClips', () => {
   afterEach(() => {
     vi.restoreAllMocks()

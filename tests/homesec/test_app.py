@@ -99,6 +99,25 @@ class _StubStateStore:
         self.shutdown_called = True
 
 
+class _StubPostgresBackupManager:
+    instances: list[_StubPostgresBackupManager] = []
+
+    def __init__(self, *, config: Config, storage: object) -> None:
+        self.config = config
+        self.storage = storage
+        self.start_called = False
+        self.shutdown_called = False
+        self.shutdown_timeout: float | None = None
+        self.__class__.instances.append(self)
+
+    async def start(self) -> None:
+        self.start_called = True
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        self.shutdown_called = True
+        self.shutdown_timeout = timeout
+
+
 class _FakeProcess:
     def __init__(self, pid: int) -> None:
         self.pid = pid
@@ -243,6 +262,7 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
     """Mock runtime environment and return controller stub."""
     # Given: Runtime dependencies mocked for deterministic tests
     controller = _StubRuntimeController()
+    _StubPostgresBackupManager.instances.clear()
     monkeypatch.setattr(
         "homesec.runtime.bootstrap.load_storage_plugin", lambda cfg: _StubStorage(cfg)
     )
@@ -255,6 +275,7 @@ def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeCo
         "_create_runtime_controller",
         lambda self: controller,
     )
+    monkeypatch.setattr("homesec.app.PostgresBackupManager", _StubPostgresBackupManager)
     return controller
 
 
@@ -288,6 +309,60 @@ async def test_application_wires_runtime_and_api(
     source = app.get_source("front_door")
     assert source is not None
     assert source.last_heartbeat() == 1.0
+    assert isinstance(app.postgres_backup_manager, _StubPostgresBackupManager)
+    assert app.postgres_backup_manager.start_called is True
+    assert app.postgres_backup_manager.storage is app.storage
+
+
+@pytest.mark.asyncio
+async def test_application_shuts_down_postgres_backup_manager_before_storage(
+    _mock_runtime_environment: _StubRuntimeController,
+) -> None:
+    """Application shutdown should stop backup scheduler before shared storage closes."""
+    # Given: An application with components already created
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    config.server = FastAPIServerConfig(enabled=False)
+    app = Application(config_path=__file__)
+    app._config = config
+    await app._create_components()
+    manager = app.postgres_backup_manager
+
+    # When: The application shuts down
+    await app.shutdown()
+
+    # Then: Backup manager shutdown is called with a bounded timeout
+    assert isinstance(manager, _StubPostgresBackupManager)
+    assert manager.shutdown_called is True
+    assert manager.shutdown_timeout == 10.0
+
+
+@pytest.mark.asyncio
+async def test_application_cleans_up_started_backup_manager_when_api_creation_fails(
+    _mock_runtime_environment: _StubRuntimeController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial component startup should not leak backup tasks or shared storage."""
+    # Given: API app creation fails after runtime and backup manager startup
+    config = _make_config([NotifierConfig(backend="mqtt", config={"host": "localhost"})])
+    app = Application(config_path=__file__)
+    app._config = config
+
+    def _raise_create_app(_: Application) -> object:
+        raise RuntimeError("api creation failed")
+
+    monkeypatch.setattr("homesec.app.create_app", _raise_create_app)
+
+    # When/Then: Component creation fails and already-started resources are cleaned up
+    with pytest.raises(RuntimeError, match="api creation failed"):
+        await app._create_components()
+
+    manager = _StubPostgresBackupManager.instances[0]
+    assert manager.start_called is True
+    assert manager.shutdown_called is True
+    assert manager.shutdown_timeout == 10.0
+    assert isinstance(manager.storage, _StubStorage)
+    assert manager.storage.shutdown_called is True
+    assert _mock_runtime_environment._handles[0].process is None
 
 
 @pytest.mark.asyncio

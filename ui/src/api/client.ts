@@ -26,6 +26,8 @@ import type {
   TestConnectionResponse,
   ProbeRequest,
   ProbeResponse,
+  PostgresBackupRunResponse,
+  PostgresBackupStatusResponse,
   RuntimeReloadResponse,
   RuntimeStatusResponse,
   SetupStatusResponse,
@@ -50,6 +52,8 @@ import {
   parseFinalizeResponse,
   parseHealthResponse,
   parsePreflightResponse,
+  parsePostgresBackupRunResponse,
+  parsePostgresBackupStatusResponse,
   parseTestConnectionResponse,
   parseRuntimeReloadResponse,
   parseRuntimeStatusResponse,
@@ -72,6 +76,8 @@ export type PreviewStatusSnapshot = ApiSnapshot<PreviewStatusResponse>
 export type PreviewStopSnapshot = ApiSnapshot<PreviewStopResponse>
 export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
+export type PostgresBackupStatusSnapshot = ApiSnapshot<PostgresBackupStatusResponse>
+export type PostgresBackupRunSnapshot = ApiSnapshot<PostgresBackupRunResponse>
 export type SetupStatusSnapshot = ApiSnapshot<SetupStatusResponse>
 export type FinalizeSnapshot = ApiSnapshot<FinalizeResponse>
 export type PreflightSnapshot = ApiSnapshot<PreflightResponse>
@@ -380,6 +386,46 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid runtime status response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async getPostgresBackupStatus(
+    options: ApiRequestOptions = {},
+  ): Promise<PostgresBackupStatusSnapshot> {
+    const response = await this.httpClient.requestJson(
+      '/api/v1/maintenance/postgres-backups/status',
+      options,
+    )
+
+    try {
+      return withHttpStatus(parsePostgresBackupStatusResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid Postgres backup status response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async runPostgresBackupNow(
+    options: ApiRequestOptions = {},
+  ): Promise<PostgresBackupRunSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/maintenance/postgres-backups/run', {
+      ...options,
+      method: 'POST',
+    })
+
+    try {
+      return withHttpStatus(parsePostgresBackupRunResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid Postgres backup run response payload',
         response.status,
         response.payload,
         null,
