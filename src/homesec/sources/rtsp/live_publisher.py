@@ -120,6 +120,7 @@ class _CodecPlan:
     video_args: tuple[str, ...]
     audio_args: tuple[str, ...]
     uses_hardware_encoder: bool = False
+    fallback_to_copy_on_encoder_unavailable: bool = False
 
 
 class HLSLivePublisher(LivePublisher):
@@ -558,6 +559,15 @@ class HLSLivePublisher(LivePublisher):
                 )
                 continue
 
+            if _should_retry_with_copy_codec(codec_plan, codec_failure_error):
+                logger.warning(
+                    "Preview H.264 encoder unavailable, falling back to copy: camera=%s encoder=%s error=%s",
+                    self._camera_name,
+                    codec_plan.codec_name,
+                    codec_failure_error,
+                )
+                continue
+
             return codec_refusal
 
         with self._lock:
@@ -646,37 +656,37 @@ class HLSLivePublisher(LivePublisher):
             audio_codec=self._audio_codec,
             stream_info=stream_info,
         )
+        copy_plan = _CodecPlan(
+            codec_name="copy",
+            ffmpeg_global_args=(),
+            video_args=("-c:v", "copy"),
+            audio_args=audio_args,
+        )
 
         if self._video_codec == "copy":
-            return (
-                _CodecPlan(
-                    codec_name="copy",
-                    ffmpeg_global_args=(),
-                    video_args=("-c:v", "copy"),
-                    audio_args=audio_args,
-                ),
-            )
+            return (copy_plan,)
 
         if self._video_codec == "auto" and stream_info is not None:
             if _is_hls_browser_video_copy_compatible(stream_info):
-                return (
-                    _CodecPlan(
-                        codec_name="copy",
-                        ffmpeg_global_args=(),
-                        video_args=("-c:v", "copy"),
-                        audio_args=audio_args,
-                    ),
-                )
+                return (copy_plan,)
 
         software_plan = _CodecPlan(
             codec_name="libx264",
             ffmpeg_global_args=(),
             video_args=_software_h264_transcode_args(self._segment_duration_s),
             audio_args=audio_args,
+            fallback_to_copy_on_encoder_unavailable=(
+                self._video_codec == "auto"
+                and stream_info is not None
+                and _is_h264_video(stream_info)
+            ),
         )
         hardware_encoder = HardwareAccelDetector.select_h264_encoder(self._hwaccel_config)
+        fallback_plans = (
+            (copy_plan,) if software_plan.fallback_to_copy_on_encoder_unavailable else ()
+        )
         if hardware_encoder is None:
-            return (software_plan,)
+            return (software_plan, *fallback_plans)
 
         logger.info(
             "Preview will try hardware H.264 encoder: camera=%s encoder=%s",
@@ -695,6 +705,7 @@ class HLSLivePublisher(LivePublisher):
                 uses_hardware_encoder=True,
             ),
             software_plan,
+            *fallback_plans,
         )
 
     def _probe_stream_info(self) -> ProbeStreamInfo | None:
@@ -1250,7 +1261,7 @@ def _is_hls_browser_audio_copy_compatible(audio_codec: str | None) -> bool:
 
 
 def _is_hls_browser_video_copy_compatible(stream_info: ProbeStreamInfo) -> bool:
-    if (stream_info.video_codec or "").strip().lower() != "h264":
+    if not _is_h264_video(stream_info):
         return False
 
     profile = stream_info.video_profile
@@ -1258,6 +1269,10 @@ def _is_hls_browser_video_copy_compatible(stream_info: ProbeStreamInfo) -> bool:
         return True
 
     return profile.strip().lower() in _HLS_BROWSER_COPY_H264_PROFILES
+
+
+def _is_h264_video(stream_info: ProbeStreamInfo) -> bool:
+    return (stream_info.video_codec or "").strip().lower() == "h264"
 
 
 def _build_audio_codec_args(
@@ -1315,3 +1330,18 @@ def _should_retry_with_software_codec(
     if not codec_plan.uses_hardware_encoder:
         return False
     return refusal.reason is not LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+
+
+def _should_retry_with_copy_codec(codec_plan: _CodecPlan, error_text: str) -> bool:
+    if not codec_plan.fallback_to_copy_on_encoder_unavailable:
+        return False
+    return _is_encoder_unavailable_error(error_text)
+
+
+def _is_encoder_unavailable_error(error_text: str) -> bool:
+    normalized = error_text.lower()
+    return (
+        "unknown encoder" in normalized
+        or "encoder not found" in normalized
+        or "error selecting an encoder" in normalized
+    )

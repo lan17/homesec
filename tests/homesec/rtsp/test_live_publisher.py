@@ -366,6 +366,75 @@ def test_auto_codec_transcodes_high_profile_h264_for_browser_preview(tmp_path: P
     assert "-tune" not in cmd
 
 
+def test_auto_codec_falls_back_to_copy_when_h264_encoder_is_missing(tmp_path: Path) -> None:
+    """auto codec mode should preserve preview availability when ffmpeg lacks libx264."""
+    # Given: A high-profile H.264 source on a runtime whose ffmpeg has no software H.264 encoder
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(
+            _probe_stream(video_codec="h264", video_profile="High", audio_codec="aac")
+        ),
+    )
+    calls: list[dict[str, object]] = []
+    encoder_missing_spawn = _fake_popen_factory(
+        calls,
+        make_output=False,
+        returncode=1,
+        stderr_text=(
+            "Unknown encoder 'libx264'\n"
+            "Error selecting an encoder\n"
+            "Error opening output files: Encoder not found\n"
+        ),
+    )
+    copy_spawn = _fake_popen_factory(calls)
+
+    def _fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **kwargs: object,
+    ) -> FakeProc:
+        video_encoder = cmd[cmd.index("-c:v") + 1]
+        if video_encoder == "libx264":
+            return encoder_missing_spawn(
+                cmd,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=start_new_session,
+                **kwargs,
+            )
+        return copy_spawn(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=start_new_session,
+            **kwargs,
+        )
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen,
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The publisher falls back to copy-remuxing instead of returning a startup 409
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    assert len(calls) == 2
+    first_cmd = calls[0]["cmd"]
+    second_cmd = calls[1]["cmd"]
+    assert isinstance(first_cmd, list)
+    assert isinstance(second_cmd, list)
+    assert first_cmd[first_cmd.index("-c:v") + 1] == "libx264"
+    assert second_cmd[second_cmd.index("-c:v") + 1] == "copy"
+
+
 def test_auto_codec_transcodes_mp4_safe_but_hls_unsafe_audio(tmp_path: Path) -> None:
     """auto codec mode should transcode non-browser HLS audio even if recording can copy it."""
     # Given: A publisher whose source probe reports H.264 video and AC-3 audio
