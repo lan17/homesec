@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.1 (2026-04-24)
+
+### Bug Fixes
+
+- Prefer hlsjs preview playback ([#66](https://github.com/lan17/homesec/pull/66),
+  [`16f6873`](https://github.com/lan17/homesec/commit/16f68733ee3f897b0a6194df2f33a1fb9229c002))
+
+
 ## v1.9.0 (2026-04-24)
 
 ### Bug Fixes
