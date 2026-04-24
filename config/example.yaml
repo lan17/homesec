@@ -220,7 +220,7 @@ alert_policy:
 #     enabled: false
 #     interval: 24h
 #     keep_count: 5
-#     local_dir: /data/storage/backups/postgres  # Docker Compose durable path
+#     local_dir: ./backups/postgres
 #     timeout_s: 1800
 #     compression_level: 6
 #     upload:
