@@ -15,6 +15,7 @@ from homesec.api.routes import (
     clips,
     config,
     health,
+    maintenance,
     media,
     onvif,
     preview,
@@ -70,6 +71,10 @@ def register_routes(app: FastAPI) -> None:
     )
     app.include_router(
         runtime.router,
+        dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
+    )
+    app.include_router(
+        maintenance.router,
         dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
     )
     app.include_router(onvif.router, dependencies=[Depends(verify_api_key)])

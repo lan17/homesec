@@ -71,10 +71,22 @@ FROM python:3.14-slim-bookworm AS runtime
 # - ffmpeg: required for RTSP source video processing
 # - libgl1: required by OpenCV
 # - libglib2.0-0: required by OpenCV
+# - postgresql-client-16: pg_dump/pg_restore version compatible with docker-compose postgres:16
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    gnupg \
+    && install -d -m 0755 /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    postgresql-client-16 \
+    && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security

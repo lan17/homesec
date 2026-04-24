@@ -2,6 +2,8 @@ import { Link } from 'react-router-dom'
 
 import { clearApiKey, isAPIError, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
 import { useHealthQuery } from '../../api/hooks/useHealthQuery'
+import { usePostgresBackupRunMutation } from '../../api/hooks/usePostgresBackupRunMutation'
+import { usePostgresBackupStatusQuery } from '../../api/hooks/usePostgresBackupStatusQuery'
 import { useStatsQuery } from '../../api/hooks/useStatsQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
@@ -14,32 +16,62 @@ export function DashboardPage() {
   const { shouldRedirect, isChecking } = useSetupRedirect()
   const healthQuery = useHealthQuery()
   const statsQuery = useStatsQuery()
+  const backupStatusQuery = usePostgresBackupStatusQuery()
+  const backupRunMutation = usePostgresBackupRunMutation()
 
   if (isChecking || shouldRedirect) {
     return null
   }
 
-  const isRefreshing = healthQuery.isFetching || statsQuery.isFetching
-  const latestUpdateAt = Math.max(healthQuery.dataUpdatedAt, statsQuery.dataUpdatedAt)
+  const isRefreshing = healthQuery.isFetching || statsQuery.isFetching || backupStatusQuery.isFetching
+  const latestUpdateAt = Math.max(
+    healthQuery.dataUpdatedAt,
+    statsQuery.dataUpdatedAt,
+    backupStatusQuery.dataUpdatedAt,
+  )
 
   async function refreshAll(): Promise<void> {
-    await Promise.all([healthQuery.refetch(), statsQuery.refetch()])
+    await Promise.all([healthQuery.refetch(), statsQuery.refetch(), backupStatusQuery.refetch()])
+  }
+
+  async function runBackupNow(): Promise<void> {
+    await backupRunMutation.mutateAsync()
+    await backupStatusQuery.refetch()
   }
 
   async function submitApiKey(apiKey: string): Promise<void> {
     saveApiKey(apiKey)
-    await statsQuery.refetch()
+    await Promise.all([statsQuery.refetch(), backupStatusQuery.refetch()])
   }
 
   async function clearStoredApiKey(): Promise<void> {
     clearApiKey()
-    await statsQuery.refetch()
+    await Promise.all([statsQuery.refetch(), backupStatusQuery.refetch()])
   }
 
   const showLoadingState = healthQuery.isPending && !healthQuery.data && statsQuery.isPending && !statsQuery.data
   const statsUnauthorized = isUnauthorizedAPIError(statsQuery.error)
   const statsAPIError = isAPIError(statsQuery.error) ? statsQuery.error : null
   const healthAPIError = isAPIError(healthQuery.error) ? healthQuery.error : null
+  const backupAPIError = isAPIError(backupStatusQuery.error) ? backupStatusQuery.error : null
+  const backupRunAPIError = isAPIError(backupRunMutation.error) ? backupRunMutation.error : null
+  const backupStatus = backupStatusQuery.data
+  const backupButtonDisabled =
+    !backupStatus?.enabled
+    || backupStatus.running
+    || !backupStatus.available
+    || backupRunMutation.isPending
+
+  const backupDestination = backupStatus?.last_uploaded_uri ?? backupStatus?.last_local_path ?? 'None yet'
+  const backupState = backupStatus
+    ? backupStatus.running
+      ? 'Running'
+      : backupStatus.enabled
+        ? backupStatus.available
+          ? 'Enabled'
+          : 'Unavailable'
+        : 'Disabled'
+    : 'Unknown'
 
   return (
     <section className="page fade-in-up">
@@ -126,6 +158,56 @@ export function DashboardPage() {
             </Card>
           </div>
         ) : null}
+      </Card>
+
+      <Card title="Database backups" subtitle={backupState}>
+        {backupStatusQuery.isPending && !backupStatus ? (
+          <p className="muted">Fetching backup status...</p>
+        ) : null}
+
+        {backupAPIError ? (
+          <p className="error-text">{describeAPIError(backupAPIError)}</p>
+        ) : null}
+
+        {backupStatus ? (
+          <div className="grid grid--cards">
+            <div className="info-tile">
+              <p className="subtle">Last success</p>
+              <p className="metric">
+                {backupStatus.last_success_at
+                  ? new Date(backupStatus.last_success_at).toLocaleString()
+                  : 'Never'}
+              </p>
+            </div>
+            <div className="info-tile">
+              <p className="subtle">Destination</p>
+              <p className="muted">{backupDestination}</p>
+            </div>
+            <div className="info-tile">
+              <p className="subtle">Next run</p>
+              <p className="metric">
+                {backupStatus.next_run_at
+                  ? new Date(backupStatus.next_run_at).toLocaleString()
+                  : 'Not scheduled'}
+              </p>
+            </div>
+            <div className="info-tile">
+              <p className="subtle">Pending deletes</p>
+              <p className="metric">{backupStatus.pending_remote_delete_count}</p>
+            </div>
+          </div>
+        ) : null}
+
+        {backupStatus?.last_error ? <p className="error-text">{backupStatus.last_error}</p> : null}
+        {backupStatus?.unavailable_reason ? (
+          <p className="muted">{backupStatus.unavailable_reason}</p>
+        ) : null}
+        {backupRunAPIError ? (
+          <p className="error-text">{describeAPIError(backupRunAPIError)}</p>
+        ) : null}
+        <Button onClick={runBackupNow} disabled={backupButtonDisabled}>
+          {backupStatus?.running || backupRunMutation.isPending ? 'Running...' : 'Back up now'}
+        </Button>
       </Card>
     </section>
   )

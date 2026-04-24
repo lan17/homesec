@@ -5,6 +5,7 @@ export const QUERY_KEYS = {
   cameraPreview: (cameraName: string) => ['camera-preview', cameraName] as const,
   setupStatus: ['setup-status'] as const,
   runtimeStatus: ['runtime-status'] as const,
+  postgresBackupStatus: ['postgres-backup-status'] as const,
   health: ['health'] as const,
   stats: ['stats'] as const,
   clips: (query: ListClipsQuery) => ['clips', query] as const,

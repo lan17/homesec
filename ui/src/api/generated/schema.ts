@@ -203,6 +203,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance/postgres-backups/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Postgres Backup Now
+         * @description Trigger a manual Postgres backup.
+         */
+        post: operations["run_postgres_backup_now_api_v1_maintenance_postgres_backups_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/postgres-backups/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Postgres Backup Status
+         * @description Return current Postgres backup subsystem status.
+         */
+        get: operations["get_postgres_backup_status_api_v1_maintenance_postgres_backups_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/onvif/discover": {
         parameters: {
             query?: never;
@@ -848,6 +888,38 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+        };
+        /** PostgresBackupRunResponse */
+        PostgresBackupRunResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /** Message */
+            message: string;
+        };
+        /** PostgresBackupStatusResponse */
+        PostgresBackupStatusResponse: {
+            /** Available */
+            available: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Last Attempted At */
+            last_attempted_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Local Path */
+            last_local_path: string | null;
+            /** Last Success At */
+            last_success_at: string | null;
+            /** Last Uploaded Uri */
+            last_uploaded_uri: string | null;
+            /** Next Run At */
+            next_run_at: string | null;
+            /** Pending Remote Delete Count */
+            pending_remote_delete_count: number;
+            /** Running */
+            running: boolean;
+            /** Unavailable Reason */
+            unavailable_reason: string | null;
         };
         /**
          * PreflightCheckResponse
@@ -1534,6 +1606,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    run_postgres_backup_now_api_v1_maintenance_postgres_backups_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostgresBackupRunResponse"];
+                };
+            };
+        };
+    };
+    get_postgres_backup_status_api_v1_maintenance_postgres_backups_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostgresBackupStatusResponse"];
                 };
             };
         };

@@ -14,6 +14,7 @@ from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
+from homesec.maintenance.postgres_backup import PostgresBackupManager
 from homesec.models.config import FastAPIServerConfig
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.runtime.bootstrap import (
@@ -89,6 +90,7 @@ class Application:
         self._state_store: StateStore = NoopStateStore()
         self._event_store: EventStore = NoopEventStore()
         self._repository: ClipRepository | None = None
+        self._postgres_backup_manager: PostgresBackupManager | None = None
         self._api_server: APIServer | None = None
         self._runtime_manager: RuntimeManager | None = None
         self._runtime_heartbeat_stale_s = 10.0
@@ -200,31 +202,41 @@ class Application:
             self._create_runtime_controller(),
             on_runtime_activated=self._bind_active_runtime,
         )
+        postgres_backup_manager = PostgresBackupManager(
+            config=config,
+            storage=persistence.storage,
+        )
+        backup_manager_started = False
         try:
             await runtime_manager.start_initial_runtime(config)
+            await postgres_backup_manager.start()
+            backup_manager_started = True
+
+            api_server = self._api_server
+            if configure_api_server:
+                server_cfg = config.server
+                if server_cfg.enabled:
+                    api_app = create_app(self)
+                    api_server = APIServer(
+                        app=api_app,
+                        host=server_cfg.host,
+                        port=server_cfg.port,
+                    )
+                else:
+                    api_server = None
         except Exception:
+            if backup_manager_started:
+                await postgres_backup_manager.shutdown(timeout=10.0)
             await runtime_manager.shutdown()
             await persistence.state_store.shutdown()
             await persistence.storage.shutdown()
             raise
 
-        api_server = self._api_server
-        if configure_api_server:
-            server_cfg = config.server
-            if server_cfg.enabled:
-                api_app = create_app(self)
-                api_server = APIServer(
-                    app=api_app,
-                    host=server_cfg.host,
-                    port=server_cfg.port,
-                )
-            else:
-                api_server = None
-
         self._storage = persistence.storage
         self._state_store = persistence.state_store
         self._event_store = persistence.event_store
         self._repository = persistence.repository
+        self._postgres_backup_manager = postgres_backup_manager
         self._runtime_manager = runtime_manager
         self._api_server = api_server
 
@@ -431,6 +443,10 @@ class Application:
         if self._runtime_manager:
             await self._runtime_manager.shutdown()
 
+        # Stop backup scheduler before closing shared storage.
+        if self._postgres_backup_manager:
+            await self._postgres_backup_manager.shutdown(timeout=10.0)
+
         # Close state store
         if self._state_store:
             await self._state_store.shutdown()
@@ -466,6 +482,12 @@ class Application:
         if self._storage is None:
             raise RuntimeError("Storage not initialized")
         return self._storage
+
+    @property
+    def postgres_backup_manager(self) -> PostgresBackupManager:
+        if self._postgres_backup_manager is None:
+            raise RuntimeError("Postgres backup manager not initialized")
+        return self._postgres_backup_manager
 
     @property
     def sources(self) -> list[_CameraSourceSnapshot]:

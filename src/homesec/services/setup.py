@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 from pydantic import ValidationError
 
 from homesec.config.loader import ConfigError, ConfigErrorCode
+from homesec.maintenance.postgres_backup import run_pg_dump_available, run_pg_dump_version
 from homesec.models.config import (
     AlertPolicyConfig,
     Config,
     FastAPIServerConfig,
+    MaintenanceConfig,
     StateStoreConfig,
     StorageConfig,
 )
@@ -120,6 +122,7 @@ async def run_preflight(app: Application) -> PreflightResponse:
         _run_preflight_check(name="disk_space", check=_disk_space_check(app)),
         _run_preflight_check(name="network", check=_network_check()),
         _run_preflight_check(name="config_env", check=_config_env_check(app)),
+        _run_preflight_check(name="pg_dump", check=_pg_dump_check(app)),
     )
     return PreflightResponse(
         checks=list(checks),
@@ -533,6 +536,7 @@ async def _build_finalize_config(
         key="server",
         defaults_applied=defaults_applied,
     )
+    maintenance = existing.maintenance if existing is not None else MaintenanceConfig()
 
     version = existing.version if existing is not None else 1
     return Config(
@@ -545,6 +549,7 @@ async def _build_finalize_config(
         vlm=vlm,
         alert_policy=alert_policy,
         server=server,
+        maintenance=maintenance,
     ), defaults_applied
 
 
@@ -742,6 +747,54 @@ def shutil_which_ffmpeg() -> str | None:
     from shutil import which
 
     return which("ffmpeg")
+
+
+async def _pg_dump_check(app: Application) -> PreflightCheckResponse:
+    """Check pg_dump availability only when Postgres backups are enabled."""
+    start = time.perf_counter()
+    config = _active_config(app)
+    if config is None:
+        config = await _existing_config_or_none(app)
+    if not _postgres_backup_enabled(config):
+        return PreflightCheckResponse(
+            name="pg_dump",
+            passed=True,
+            message="Postgres backups disabled; pg_dump not required",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
+        )
+
+    available = await asyncio.to_thread(run_pg_dump_available)
+    latency_ms = (time.perf_counter() - start) * 1000.0
+    if not available:
+        return PreflightCheckResponse(
+            name="pg_dump",
+            passed=False,
+            message="pg_dump not found in PATH; Postgres backups unavailable",
+            latency_ms=latency_ms,
+        )
+
+    version = await asyncio.to_thread(run_pg_dump_version)
+    latency_ms = (time.perf_counter() - start) * 1000.0
+    if version.returncode != 0:
+        return PreflightCheckResponse(
+            name="pg_dump",
+            passed=False,
+            message="pg_dump found but version check failed",
+            latency_ms=latency_ms,
+        )
+
+    return PreflightCheckResponse(
+        name="pg_dump",
+        passed=True,
+        message=version.stdout.strip() or "pg_dump found in PATH",
+        latency_ms=latency_ms,
+    )
+
+
+def _postgres_backup_enabled(config: Config | None) -> bool:
+    maintenance = getattr(config, "maintenance", None)
+    postgres_backup = getattr(maintenance, "postgres_backup", None)
+    return bool(getattr(postgres_backup, "enabled", False))
 
 
 async def _disk_space_check(app: Application) -> PreflightCheckResponse:

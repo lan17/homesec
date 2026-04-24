@@ -100,6 +100,17 @@ def _write_existing_config(path: Path) -> ConfigManager:
             "config": {"api_key_env": "OPENAI_API_KEY", "model": "gpt-4o"},
         },
         "alert_policy": {"backend": "default", "config": {"min_risk_level": "high"}},
+        "maintenance": {
+            "postgres_backup": {
+                "enabled": True,
+                "interval": "12h",
+                "keep_count": 7,
+                "local_dir": "./existing-backups",
+                "timeout_s": 1200,
+                "compression_level": 4,
+                "upload": {"enabled": False, "storage_backend": "primary"},
+            }
+        },
         "server": {"enabled": True, "host": "0.0.0.0", "port": 8081},
     }
     path.write_text(yaml.safe_dump(payload, sort_keys=False))
@@ -268,6 +279,44 @@ async def test_run_preflight_probes_postgres_via_dsn_in_bootstrap_mode(
     assert by_name["network"].passed is True
     assert by_name["config_env"].passed is True
     assert response.all_passed is True
+
+
+@pytest.mark.asyncio
+async def test_run_preflight_checks_pg_dump_from_existing_config_in_bootstrap_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preflight should honor persisted backup config when runtime config is absent."""
+    # Given: A bootstrap app with an existing config that enables Postgres backups
+    monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
+    config_path = tmp_path / "config.yaml"
+    manager = _write_existing_config(config_path)
+    app = _StubApp(
+        bootstrap_mode=True,
+        pipeline_running=False,
+        has_cameras=False,
+        repository=None,
+        server_config=_server_config(auth_enabled=False),
+        config_manager=manager,
+    )
+    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        setup_service,
+        "shutil_disk_usage",
+        lambda path: (10_000_000_000, 2_000_000_000, 8_000_000_000),
+    )
+    monkeypatch.setattr(setup_service, "_network_probe", lambda: (True, "DNS resolution succeeded"))
+    monkeypatch.setattr(setup_service, "_probe_postgres_dsn", lambda dsn: asyncio.sleep(0, True))
+    monkeypatch.setattr(setup_service, "run_pg_dump_available", lambda: False)
+
+    # When: Running setup preflight
+    response = await setup_service.run_preflight(app)
+
+    # Then: The pg_dump check fails instead of treating backups as disabled
+    by_name = {check.name: check for check in response.checks}
+    assert by_name["postgres"].passed is True
+    assert by_name["pg_dump"].passed is False
+    assert "pg_dump not found" in by_name["pg_dump"].message
+    assert response.all_passed is False
 
 
 @pytest.mark.asyncio
@@ -548,6 +597,10 @@ async def test_finalize_setup_reuses_existing_sections_when_payload_omits_them(
     assert response.defaults_applied == []
     persisted = manager.get_config()
     assert persisted.cameras[0].name == "existing"
+    assert persisted.maintenance.postgres_backup.enabled is True
+    assert persisted.maintenance.postgres_backup.interval == "12h"
+    assert persisted.maintenance.postgres_backup.keep_count == 7
+    assert persisted.maintenance.postgres_backup.upload.enabled is False
 
 
 @pytest.mark.asyncio

@@ -1015,6 +1015,139 @@
         "title": "NotifierConfig",
         "type": "object"
       },
+      "PostgresBackupRunResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accepted",
+          "message"
+        ],
+        "title": "PostgresBackupRunResponse",
+        "type": "object"
+      },
+      "PostgresBackupStatusResponse": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_attempted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempted At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_local_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Local Path"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "last_uploaded_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Uploaded Uri"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "pending_remote_delete_count": {
+            "title": "Pending Remote Delete Count",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "enabled",
+          "running",
+          "available",
+          "unavailable_reason",
+          "last_attempted_at",
+          "last_success_at",
+          "last_error",
+          "last_local_path",
+          "last_uploaded_uri",
+          "next_run_at",
+          "pending_remote_delete_count"
+        ],
+        "title": "PostgresBackupStatusResponse",
+        "type": "object"
+      },
       "PreflightCheckResponse": {
         "description": "Single preflight check outcome.",
         "properties": {
@@ -2406,6 +2539,50 @@
         "summary": "Get Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/maintenance/postgres-backups/run": {
+      "post": {
+        "description": "Trigger a manual Postgres backup.",
+        "operationId": "run_postgres_backup_now_api_v1_maintenance_postgres_backups_run_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostgresBackupRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Postgres Backup Now",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
+    "/api/v1/maintenance/postgres-backups/status": {
+      "get": {
+        "description": "Return current Postgres backup subsystem status.",
+        "operationId": "get_postgres_backup_status_api_v1_maintenance_postgres_backups_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostgresBackupStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Postgres Backup Status",
+        "tags": [
+          "maintenance"
         ]
       }
     },
