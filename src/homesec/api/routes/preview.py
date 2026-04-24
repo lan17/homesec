@@ -158,6 +158,59 @@ def _read_playlist_text(playlist_path: Path) -> str:
     return playlist_text
 
 
+def _preview_headers(*, content_length: int | None = None) -> dict[str, str]:
+    headers = dict(_PREVIEW_CACHE_HEADERS)
+    if content_length is not None:
+        headers["Content-Length"] = str(content_length)
+    return headers
+
+
+async def _read_active_preview_playlist(
+    app: Application,
+    camera_name: str,
+    *,
+    preview_token: str | None,
+) -> str:
+    await _ensure_preview_playback_enabled(app, camera_name)
+    await _ensure_preview_media_active(app, camera_name)
+    playlist_text = _read_playlist_text(
+        preview_playlist_path(_preview_storage_dir(app), camera_name)
+    )
+    return _rewrite_playlist_for_token(playlist_text, preview_token)
+
+
+async def _active_preview_segment_path(
+    app: Application,
+    camera_name: str,
+    segment_name: str,
+) -> Path:
+    if not is_preview_segment_name(segment_name):
+        raise APIError(
+            "Not Found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.NOT_FOUND,
+        )
+
+    await _ensure_preview_playback_enabled(app, camera_name)
+    await _ensure_preview_media_active(app, camera_name)
+    try:
+        segment_path = preview_segment_path(_preview_storage_dir(app), camera_name, segment_name)
+    except ValueError as exc:
+        raise APIError(
+            "Not Found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code=APIErrorCode.NOT_FOUND,
+        ) from exc
+
+    if not segment_path.is_file():
+        raise APIError(
+            "Preview media unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        )
+    return segment_path
+
+
 def _rewrite_playlist_for_token(playlist_text: str, token: str | None) -> str:
     if token is None:
         return playlist_text
@@ -363,15 +416,36 @@ async def get_preview_playlist(
     app: Application = Depends(get_homesec_app),
 ) -> Response:
     """Return the live HLS playlist for a camera preview session."""
-    await _ensure_preview_playback_enabled(app, camera_name)
-    await _ensure_preview_media_active(app, camera_name)
-    playlist_text = _read_playlist_text(
-        preview_playlist_path(_preview_storage_dir(app), camera_name)
+    playlist_text = await _read_active_preview_playlist(
+        app,
+        camera_name,
+        preview_token=preview_token,
     )
     return Response(
-        content=_rewrite_playlist_for_token(playlist_text, preview_token),
+        content=playlist_text,
         media_type="application/vnd.apple.mpegurl",
-        headers=_PREVIEW_CACHE_HEADERS,
+        headers=_preview_headers(content_length=len(playlist_text.encode("utf-8"))),
+    )
+
+
+@playback_router.head(
+    "/api/v1/preview/cameras/{camera_name}/playlist.m3u8",
+    include_in_schema=False,
+)
+async def head_preview_playlist(
+    camera_name: str,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> Response:
+    """Return live HLS playlist metadata for native media probes."""
+    playlist_text = await _read_active_preview_playlist(
+        app,
+        camera_name,
+        preview_token=preview_token,
+    )
+    return Response(
+        media_type="application/vnd.apple.mpegurl",
+        headers=_preview_headers(content_length=len(playlist_text.encode("utf-8"))),
     )
 
 
@@ -383,31 +457,7 @@ async def get_preview_segment(
     app: Application = Depends(get_homesec_app),
 ) -> FileResponse:
     """Return a live HLS transport-stream segment for a camera preview session."""
-    if not is_preview_segment_name(segment_name):
-        raise APIError(
-            "Not Found",
-            status_code=status.HTTP_404_NOT_FOUND,
-            error_code=APIErrorCode.NOT_FOUND,
-        )
-
-    await _ensure_preview_playback_enabled(app, camera_name)
-    await _ensure_preview_media_active(app, camera_name)
-    try:
-        segment_path = preview_segment_path(_preview_storage_dir(app), camera_name, segment_name)
-    except ValueError as exc:
-        raise APIError(
-            "Not Found",
-            status_code=status.HTTP_404_NOT_FOUND,
-            error_code=APIErrorCode.NOT_FOUND,
-        ) from exc
-
-    if not segment_path.is_file():
-        raise APIError(
-            "Preview media unavailable",
-            status_code=status.HTTP_409_CONFLICT,
-            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
-        )
-
+    segment_path = await _active_preview_segment_path(app, camera_name, segment_name)
     _schedule_preview_viewer_activity_best_effort(
         app,
         camera_name,
@@ -417,4 +467,23 @@ async def get_preview_segment(
         path=segment_path,
         media_type="video/mp2t",
         headers=_PREVIEW_CACHE_HEADERS,
+    )
+
+
+@playback_router.head(
+    "/api/v1/preview/cameras/{camera_name}/{segment_name}",
+    include_in_schema=False,
+)
+async def head_preview_segment(
+    camera_name: str,
+    segment_name: str,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> Response:
+    """Return live HLS transport-stream segment metadata for native media probes."""
+    _ = preview_token
+    segment_path = await _active_preview_segment_path(app, camera_name, segment_name)
+    return Response(
+        media_type="video/mp2t",
+        headers=_preview_headers(content_length=segment_path.stat().st_size),
     )

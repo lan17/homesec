@@ -386,7 +386,7 @@ def test_preview_tokenized_playlist_url_is_playable_end_to_end(
     )
     client = _client(app)
 
-    # When: Starting preview, fetching the returned playlist, then fetching a segment from it
+    # When: Starting preview, probing media metadata, then fetching playlist and segment media
     create_response = client.post(
         "/api/v1/preview/cameras/front door",
         headers={"Authorization": "Bearer secret"},
@@ -394,17 +394,31 @@ def test_preview_tokenized_playlist_url_is_playable_end_to_end(
     assert create_response.status_code == 200
     create_payload = create_response.json()
 
+    head_playlist_response = client.head(create_payload["playlist_url"])
     playlist_response = client.get(create_payload["playlist_url"])
     playlist_lines = [line for line in playlist_response.text.splitlines() if line]
     segment_url = next(line for line in playlist_lines if not line.startswith("#"))
+    head_segment_response = client.head(
+        f"/api/v1/preview/cameras/front door/{segment_url}",
+    )
     segment_response = client.get(
         f"/api/v1/preview/cameras/front door/{segment_url}",
     )
 
-    # Then: Playback succeeds and the segment request records viewer activity using the preview token
+    # Then: Native media probes and playback succeed, while only the segment GET records activity
+    assert head_playlist_response.status_code == 200
+    assert head_playlist_response.headers["content-type"].startswith(
+        "application/vnd.apple.mpegurl"
+    )
+    assert head_playlist_response.headers["content-length"] == str(len(playlist_response.content))
+    assert head_playlist_response.content == b""
     assert playlist_response.status_code == 200
     assert playlist_response.headers["content-type"].startswith("application/vnd.apple.mpegurl")
     assert "segment_000000.ts?token=" in playlist_response.text
+    assert head_segment_response.status_code == 200
+    assert head_segment_response.headers["content-type"].startswith("video/mp2t")
+    assert head_segment_response.headers["content-length"] == str(len(b"segment-bytes"))
+    assert head_segment_response.content == b""
     assert segment_response.status_code == 200
     assert segment_response.content == b"segment-bytes"
     assert app.viewer_activity_calls == [("front door", create_payload["token"])]
