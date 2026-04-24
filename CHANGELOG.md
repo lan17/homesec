@@ -2,6 +2,62 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-04-24)
+
+### Bug Fixes
+
+- Classify RTSP concurrent preview support ([#63](https://github.com/lan17/homesec/pull/63),
+  [`eaa585f`](https://github.com/lan17/homesec/commit/eaa585fd3dea782d2b2786fbd4052ea2428a8914))
+
+- Count alerts from alert decision events ([#45](https://github.com/lan17/homesec/pull/45),
+  [`51f216a`](https://github.com/lan17/homesec/commit/51f216a2d48d4b106a14ac6a9ddd4f9a257bd9e5))
+
+- Make runtime resilient for dev/CI environments ([#43](https://github.com/lan17/homesec/pull/43),
+  [`c89ea3d`](https://github.com/lan17/homesec/commit/c89ea3d77d148b80297bdb47f21cbe9f57ceea50))
+
+- Update agents.md and uv.lock ([#47](https://github.com/lan17/homesec/pull/47),
+  [`04521ba`](https://github.com/lan17/homesec/commit/04521ba9113b1064822539b7951b43e90eb6772c))
+
+### Continuous Integration
+
+- Publish compose artifact alongside docker image ([#39](https://github.com/lan17/homesec/pull/39),
+  [`dd4a946`](https://github.com/lan17/homesec/commit/dd4a94669e8ba317ecd312fa2b67c7fc494cd3c4))
+
+### Features
+
+- Add configurable Postgres backups
+  ([`6222c9e`](https://github.com/lan17/homesec/commit/6222c9ebe0b3ae1d6f776a0119cf6ebfcdaa4290))
+
+- Add fake ONVIF + RTSP camera for local development
+  ([#41](https://github.com/lan17/homesec/pull/41),
+  [`f2f32a7`](https://github.com/lan17/homesec/commit/f2f32a77e6f3400a77da8c09797e8182dc995da2))
+
+- Integrate RTSP live preview stack ([#62](https://github.com/lan17/homesec/pull/62),
+  [`8717d2b`](https://github.com/lan17/homesec/commit/8717d2b407702e8e62882c8dc4ff846af8c70c09))
+
+- Make notifiers optional in Config model ([#42](https://github.com/lan17/homesec/pull/42),
+  [`d0a725b`](https://github.com/lan17/homesec/commit/d0a725be360fd9ec4f124227199896ef0560d26c))
+
+### Refactoring
+
+- Add setup probe registry for setup flow ([#46](https://github.com/lan17/homesec/pull/46),
+  [`8ddc25a`](https://github.com/lan17/homesec/commit/8ddc25a81ed0fcc284091b501f83056bf94be972))
+
+- Centralize clip status transitions ([#49](https://github.com/lan17/homesec/pull/49),
+  [`20c0484`](https://github.com/lan17/homesec/commit/20c0484149715decfcb79b29376f0ea97fe8d329))
+
+- Move setup probes beside backends ([#51](https://github.com/lan17/homesec/pull/51),
+  [`9cbd920`](https://github.com/lan17/homesec/commit/9cbd920bc1dca142ad4127fb5a6775d83c80fcf3))
+
+- Share runtime persistence bootstrap wiring ([#48](https://github.com/lan17/homesec/pull/48),
+  [`298a5c5`](https://github.com/lan17/homesec/commit/298a5c54072856500bddcea9776746a7628bab3d))
+
+### Testing
+
+- Isolate parallel postgres test runs ([#52](https://github.com/lan17/homesec/pull/52),
+  [`61c1568`](https://github.com/lan17/homesec/commit/61c15688c5d7d6d2897be18e846b562906f9c9b0))
+
+
 ## v1.8.0 (2026-02-27)
 
 ### Features
