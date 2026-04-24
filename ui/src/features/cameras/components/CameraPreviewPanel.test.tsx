@@ -6,6 +6,9 @@ import userEvent from '@testing-library/user-event'
 
 import { CameraPreviewPanel } from './CameraPreviewPanel'
 
+const DEFAULT_PLAYLIST_URL =
+  'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token'
+
 const {
   useCameraPreviewMock,
   hlsAttachMediaMock,
@@ -48,6 +51,41 @@ vi.mock('hls.js', () => {
   return { default: MockHls }
 })
 
+function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
+  useCameraPreviewMock.mockReturnValue({
+    status: {
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    },
+    session: {
+      camera_name: 'front',
+      state: 'ready',
+      viewer_count: 1,
+      token: 'preview-token',
+      token_expires_at: null,
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+      idle_timeout_s: 30,
+      warning: null,
+      httpStatus: 200,
+    },
+    playlistUrl,
+    warning: null,
+    error: null,
+    isPending: false,
+    isStarting: false,
+    isStopping: false,
+    start: vi.fn(),
+    stop: vi.fn(),
+    refreshStatus: vi.fn(),
+  })
+}
+
 describe('CameraPreviewPanel', () => {
   beforeEach(() => {
     useCameraPreviewMock.mockReset()
@@ -79,6 +117,10 @@ describe('CameraPreviewPanel', () => {
     Object.defineProperty(HTMLMediaElement.prototype, 'load', {
       configurable: true,
       value: vi.fn(),
+    })
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(undefined),
     })
   })
 
@@ -174,43 +216,13 @@ describe('CameraPreviewPanel', () => {
 
   it('initializes hls.js playback when a playlist URL becomes ready', async () => {
     // Given: A ready preview session with a tokenized playlist URL
-    useCameraPreviewMock.mockReturnValue({
-      status: {
-        camera_name: 'front',
-        enabled: true,
-        state: 'ready',
-        viewer_count: 1,
-        degraded_reason: null,
-        last_error: null,
-        idle_shutdown_at: null,
-        httpStatus: 200,
-      },
-      session: {
-        camera_name: 'front',
-        state: 'ready',
-        viewer_count: 1,
-        token: 'preview-token',
-        token_expires_at: null,
-        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
-        idle_timeout_s: 30,
-        warning: null,
-        httpStatus: 200,
-      },
-      playlistUrl: 'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
-      warning: null,
-      error: null,
-      isPending: false,
-      isStarting: false,
-      isStopping: false,
-      start: vi.fn(),
-      stop: vi.fn(),
-      refreshStatus: vi.fn(),
-    })
+    mockReadyPreviewSession()
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
 
     // When: Rendering the preview panel
     render(<CameraPreviewPanel cameraName="front" />)
 
-    // Then: The player probes the playlist URL and initializes hls.js
+    // Then: The player probes the playlist URL, initializes hls.js, and requests playback
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
@@ -221,6 +233,96 @@ describe('CameraPreviewPanel', () => {
         'http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
       )
       expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+      expect(play).toHaveBeenCalled()
+    })
+  })
+
+  it('uses hls.js before native HLS when both playback paths are available', async () => {
+    // Given: Safari-like native HLS support and hls.js support are both available
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The player takes the hls.js path instead of short-circuiting to native HLS
+    await waitFor(() => {
+      expect(hlsConstructMock).toHaveBeenCalledTimes(1)
+      expect(hlsLoadSourceMock).toHaveBeenCalledWith(DEFAULT_PLAYLIST_URL)
+      expect(HTMLMediaElement.prototype.canPlayType).not.toHaveBeenCalled()
+    })
+  })
+
+  it('falls back to native HLS when hls.js is unavailable', async () => {
+    // Given: hls.js cannot run but the browser supports native HLS playback
+    hlsIsSupportedMock.mockReturnValue(false)
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The player assigns the playlist directly to the video element
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video?.getAttribute('src')).toBe(DEFAULT_PLAYLIST_URL)
+      expect(hlsConstructMock).not.toHaveBeenCalled()
+    })
+  })
+
+  it('renders attached previews with only a fullscreen playback control', async () => {
+    // Given: A ready preview session with playable live media
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The attached video does not expose browser play or pause controls
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video).toBeTruthy()
+      expect(video?.hasAttribute('controls')).toBe(false)
+      expect(video?.getAttribute('preload')).toBe('auto')
+      expect(video?.getAttribute('muted')).toBe('')
+      expect(video?.getAttribute('playsinline')).toBe('')
+      expect(video?.getAttribute('webkit-playsinline')).toBe('')
+      expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeTruthy()
+    })
+  })
+
+  it('requests fullscreen for the preview viewport', async () => {
+    // Given: A ready preview session with a fullscreen-capable viewport
+    mockReadyPreviewSession()
+    const user = userEvent.setup()
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // When: Entering fullscreen from the preview overlay control
+    await user.click(await screen.findByRole('button', { name: 'Enter fullscreen' }))
+
+    // Then: The browser fullscreen API is invoked without enabling native video controls
+    expect(HTMLElement.prototype.requestFullscreen).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeTruthy()
+  })
+
+  it('resumes playback when the attached video pauses', async () => {
+    // Given: A ready preview session with an attached hls.js player
+    mockReadyPreviewSession()
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    await waitFor(() => {
+      expect(hlsAttachMediaMock).toHaveBeenCalledTimes(1)
+      expect(play).toHaveBeenCalled()
+    })
+    play.mockClear()
+    const video = container.querySelector('video')
+
+    // When: The browser pauses the live video element
+    video?.dispatchEvent(new Event('pause'))
+
+    // Then: The panel requests playback again while the preview remains attached
+    await waitFor(() => {
+      expect(play).toHaveBeenCalled()
     })
   })
 
