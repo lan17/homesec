@@ -11,6 +11,7 @@ from unittest.mock import patch
 from homesec.sources.rtsp.discovery import CameraProbeResult, ProbeStreamInfo
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.live_publisher import (
+    CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
     HLSLivePublisher,
     LivePublisherRefusalReason,
     LivePublisherStartRefusal,
@@ -784,6 +785,662 @@ def test_allow_during_recording_allows_start_while_recording_is_active(tmp_path:
     )
     assert len(calls) == 1
     assert publisher.status() == result
+
+
+def test_concurrent_preview_downgrade_blocks_only_while_recording(tmp_path: Path) -> None:
+    """A process-local downgrade should preserve preview outside recording windows."""
+    # Given: A concurrent-preview publisher downgraded by startup preflight
+    reason = "concurrent_preview_unsupported_by_startup_preflight"
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.downgrade_concurrent_preview(reason)
+
+    # When: Preview starts while the camera is not recording
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        started = publisher.ensure_active()
+        proc = calls[0]["proc"]
+        assert isinstance(proc, FakeProc)
+        publisher.sync_recording_active(True)
+        refused = publisher.ensure_active()
+
+    # Then: Preview is allowed before recording and blocked with an API-visible reason during recording
+    assert started == LivePublisherStatus(
+        state=LivePublisherState.DEGRADED,
+        viewer_count=0,
+        degraded_reason=reason,
+        idle_shutdown_at=5.0,
+    )
+    assert proc.terminate_calls == 1
+    assert isinstance(refused, LivePublisherStartRefusal)
+    assert refused.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert "downgraded" in refused.message
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=reason,
+    )
+
+    # When: Recording ends
+    publisher.sync_recording_active(False)
+
+    # Then: The downgrade reason remains visible while idle preview can start later
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=reason,
+    )
+
+
+def test_downgraded_preview_crash_reports_error_when_not_recording(tmp_path: Path) -> None:
+    """A downgraded camera should still report local preview crashes as errors."""
+    # Given: A downgraded concurrent-preview publisher running outside a recording window
+    reason = "concurrent_preview_unsupported_by_startup_preflight"
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.downgrade_concurrent_preview(reason)
+
+    # When: Preview starts because recording is inactive, then ffmpeg exits unexpectedly
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            stderr_text="Encoder died after startup.\n",
+        ),
+    ):
+        started = publisher.ensure_active()
+        proc = calls[0]["proc"]
+        assert isinstance(proc, FakeProc)
+        proc.returncode = 1
+        status_after_exit = publisher.status()
+
+    # Then: The downgrade reason remains visible but the dead preview is not reported as playable
+    assert isinstance(started, LivePublisherStatus)
+    assert started.state == LivePublisherState.DEGRADED
+    assert status_after_exit == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        degraded_reason=reason,
+        last_error="Encoder died after startup.",
+    )
+
+
+def test_repeated_start_failures_while_recording_downgrade_concurrent_preview(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    """Two preview startup failures during recording should trigger a runtime downgrade."""
+    # Given: A concurrent-preview publisher whose ffmpeg start fails while recording is active
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    # When: Preview startup fails twice during the same recording window
+    with (
+        caplog.at_level(logging.WARNING, logger="homesec.sources.rtsp.live_publisher"),
+        patch(
+            "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+            side_effect=_fake_popen_factory(
+                calls,
+                make_output=False,
+                returncode=1,
+                stderr_text="Too many clients already connected.\n",
+            ),
+        ),
+    ):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        third = publisher.ensure_active()
+
+    # Then: The first noisy failure is returned directly, the second downgrades, and later starts are blocked
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert isinstance(second, LivePublisherStartRefusal)
+    assert second.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert isinstance(third, LivePublisherStartRefusal)
+    assert third.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert len(calls) == 2
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+    )
+    assert any(
+        "Downgrading concurrent preview while recording" in record.message
+        for record in caplog.records
+    )
+
+
+def test_temporary_start_failures_while_recording_do_not_downgrade_concurrent_preview(
+    tmp_path: Path,
+) -> None:
+    """Local preview setup failures should not classify the camera as concurrency-limited."""
+    # Given: A concurrent-preview publisher whose start failures are local preview errors
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(
+            pid=905_000_000 + call_index,
+            returncode=1 if call_index < 2 else None,
+        )
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if call_index < 2:
+            return proc
+        playlist_path = Path(cmd[-1])
+        segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+        _write_live_output(
+            playlist_path=playlist_path,
+            segment_pattern=segment_pattern,
+        )
+        return proc
+
+    # When: Preview startup fails twice without a session-budget signal, then succeeds
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        third = publisher.ensure_active()
+
+    # Then: The local failures remain temporary refusals and do not force recording-priority mode
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert isinstance(second, LivePublisherStartRefusal)
+    assert second.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert isinstance(third, LivePublisherStatus)
+    assert third.state == LivePublisherState.READY
+    assert publisher.status().degraded_reason is None
+
+
+def test_successful_start_resets_recording_failure_counter(tmp_path: Path) -> None:
+    """A successful concurrent preview start should break a failure streak."""
+    # Given: A concurrent-preview publisher with one session-budget failure followed by success
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(
+            pid=910_000_000 + call_index,
+            returncode=1 if call_index in (0, 2) else None,
+        )
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if call_index == 1:
+            playlist_path = Path(cmd[-1])
+            segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+            _write_live_output(
+                playlist_path=playlist_path,
+                segment_pattern=segment_pattern,
+            )
+        elif hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write("Too many clients already connected.\n")
+            stderr_handle.flush()
+        return proc
+
+    # When: A start failure is separated from the next failure by a successful preview
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        publisher.request_stop()
+        third = publisher.ensure_active()
+
+    # Then: The later failure is treated as a new streak, not the second consecutive strike
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert isinstance(second, LivePublisherStatus)
+    assert second.state == LivePublisherState.READY
+    assert isinstance(third, LivePublisherStartRefusal)
+    assert third.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        last_error="Too many clients already connected.",
+    )
+    assert len(calls) == 3
+
+
+def test_intervening_temporary_start_failure_resets_recording_failure_counter(
+    tmp_path: Path,
+) -> None:
+    """A non-session start failure should break a session-budget failure streak."""
+    # Given: A concurrent-preview publisher with mixed start failures while recording
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+    stderr_by_call = [
+        "Too many clients already connected.\n",
+        "Encoder failed before producing the first segment.\n",
+        "Too many clients already connected.\n",
+    ]
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(pid=916_000_000 + call_index, returncode=1)
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write(stderr_by_call[call_index])
+            stderr_handle.flush()
+        return proc
+
+    # When: A generic preview failure lands between two session-budget failures
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        third = publisher.ensure_active()
+
+    # Then: The later session-budget failure starts a new streak instead of downgrading
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert isinstance(second, LivePublisherStartRefusal)
+    assert second.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+    assert isinstance(third, LivePublisherStartRefusal)
+    assert third.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert publisher.status() == LivePublisherStatus(
+        state=LivePublisherState.ERROR,
+        viewer_count=0,
+        last_error="Too many clients already connected.",
+    )
+    assert len(calls) == 3
+
+
+def test_successful_start_separates_start_failure_from_early_exit(
+    tmp_path: Path,
+) -> None:
+    """A start failure followed by a successful preview should not combine with an early exit."""
+    # Given: A concurrent-preview publisher with one session-budget failure followed by success
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(
+            pid=915_000_000 + call_index,
+            returncode=1 if call_index == 0 else None,
+        )
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if call_index == 0 and hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write("Too many clients already connected.\n")
+            stderr_handle.flush()
+        elif call_index == 1:
+            playlist_path = Path(cmd[-1])
+            segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+            _write_live_output(
+                playlist_path=playlist_path,
+                segment_pattern=segment_pattern,
+            )
+        return proc
+
+    # When: The successful preview exits early after the initial start failure
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first = publisher.ensure_active()
+        second = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        status_after_exit = publisher.status()
+
+    # Then: The early exit starts its own streak instead of downgrading immediately
+    assert isinstance(first, LivePublisherStartRefusal)
+    assert first.reason == LivePublisherRefusalReason.SESSION_BUDGET_EXHAUSTED
+    assert isinstance(second, LivePublisherStatus)
+    assert second.state == LivePublisherState.READY
+    assert status_after_exit.state == LivePublisherState.ERROR
+    assert status_after_exit.degraded_reason is None
+    assert len(calls) == 2
+
+
+def test_repeated_early_exits_while_recording_downgrade_concurrent_preview(
+    tmp_path: Path,
+) -> None:
+    """Two early preview exits during recording should trigger a runtime downgrade."""
+    # Given: A concurrent-preview publisher where startup succeeds during recording
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    # When: Two started preview ffmpeg processes exit early while recording is active
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            stderr_text="Too many clients already connected.\n",
+        ),
+    ):
+        first_start = publisher.ensure_active()
+        first_proc = calls[0]["proc"]
+        assert isinstance(first_proc, FakeProc)
+        first_proc.returncode = 1
+        first_status = publisher.status()
+
+        second_start = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        second_status = publisher.status()
+        after_downgrade = publisher.ensure_active()
+        publisher.sync_recording_active(False)
+        after_recording = publisher.status()
+        restarted = publisher.ensure_active()
+
+    # Then: The second early exit downgrades concurrent preview without a sticky error state
+    assert isinstance(first_start, LivePublisherStatus)
+    assert first_start.state == LivePublisherState.READY
+    assert first_status.state == LivePublisherState.ERROR
+    assert first_status.degraded_reason is None
+    assert isinstance(second_start, LivePublisherStatus)
+    assert second_start.state == LivePublisherState.READY
+    assert second_status == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+        last_error="Too many clients already connected.",
+    )
+    assert isinstance(after_downgrade, LivePublisherStartRefusal)
+    assert after_downgrade.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
+    assert after_recording == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+    )
+    assert isinstance(restarted, LivePublisherStatus)
+    assert restarted.state == LivePublisherState.DEGRADED
+    assert restarted.degraded_reason == CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON
+    assert len(calls) == 3
+
+
+def test_non_session_early_exits_while_recording_do_not_downgrade_concurrent_preview(
+    tmp_path: Path,
+) -> None:
+    """Early exits without session-limit signals should not force recording-priority mode."""
+    # Given: A concurrent-preview publisher whose preview exits early with local ffmpeg errors
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    # When: Two started preview ffmpeg processes exit early for non-session reasons
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            stderr_text="Encoder failed before producing the next segment.\n",
+        ),
+    ):
+        first_start = publisher.ensure_active()
+        first_proc = calls[0]["proc"]
+        assert isinstance(first_proc, FakeProc)
+        first_proc.returncode = 1
+        first_status = publisher.status()
+
+        second_start = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        second_status = publisher.status()
+
+        third_start = publisher.ensure_active()
+
+    # Then: The exits remain ordinary preview errors and concurrent preview is still attempted
+    assert isinstance(first_start, LivePublisherStatus)
+    assert first_start.state == LivePublisherState.READY
+    assert first_status.state == LivePublisherState.ERROR
+    assert first_status.degraded_reason is None
+    assert isinstance(second_start, LivePublisherStatus)
+    assert second_start.state == LivePublisherState.READY
+    assert second_status.state == LivePublisherState.ERROR
+    assert second_status.degraded_reason is None
+    assert isinstance(third_start, LivePublisherStatus)
+    assert third_start.state == LivePublisherState.READY
+    assert len(calls) == 3
+
+
+def test_intervening_non_session_early_exit_resets_recording_failure_counter(
+    tmp_path: Path,
+) -> None:
+    """A non-session early exit should break a session-budget early-exit streak."""
+    # Given: A concurrent-preview publisher with mixed early exits while recording
+    publisher = _make_publisher(tmp_path, recording_policy="allow_during_recording")
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+    stderr_by_call = [
+        "Too many clients already connected.\n",
+        "Encoder failed after startup.\n",
+        "Too many clients already connected.\n",
+    ]
+
+    def fake_popen(
+        cmd: list[str],
+        *,
+        stdout: object = None,
+        stderr: object = None,
+        start_new_session: bool = False,
+        **_: object,
+    ) -> FakeProc:
+        call_index = len(calls)
+        proc = FakeProc(pid=925_000_000 + call_index)
+        calls.append(
+            {
+                "cmd": list(cmd),
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+                "proc": proc,
+            }
+        )
+        if hasattr(stderr, "write") and hasattr(stderr, "flush"):
+            stderr_handle = cast(_Writable, stderr)
+            stderr_handle.write(stderr_by_call[call_index])
+            stderr_handle.flush()
+        playlist_path = Path(cmd[-1])
+        segment_pattern = Path(cmd[cmd.index("-hls_segment_filename") + 1])
+        _write_live_output(
+            playlist_path=playlist_path,
+            segment_pattern=segment_pattern,
+        )
+        return proc
+
+    # When: A generic early exit lands between two session-budget early exits
+    with patch("homesec.sources.rtsp.live_publisher.subprocess.Popen", side_effect=fake_popen):
+        first_start = publisher.ensure_active()
+        first_proc = calls[0]["proc"]
+        assert isinstance(first_proc, FakeProc)
+        first_proc.returncode = 1
+        first_status = publisher.status()
+
+        second_start = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        second_status = publisher.status()
+
+        third_start = publisher.ensure_active()
+        third_proc = calls[2]["proc"]
+        assert isinstance(third_proc, FakeProc)
+        third_proc.returncode = 1
+        third_status = publisher.status()
+
+    # Then: The later session-budget early exit starts a new streak instead of downgrading
+    assert isinstance(first_start, LivePublisherStatus)
+    assert first_start.state == LivePublisherState.READY
+    assert first_status.state == LivePublisherState.ERROR
+    assert first_status.degraded_reason is None
+    assert isinstance(second_start, LivePublisherStatus)
+    assert second_start.state == LivePublisherState.READY
+    assert second_status.state == LivePublisherState.ERROR
+    assert second_status.degraded_reason is None
+    assert isinstance(third_start, LivePublisherStatus)
+    assert third_start.state == LivePublisherState.READY
+    assert third_status.state == LivePublisherState.ERROR
+    assert third_status.degraded_reason is None
+    assert len(calls) == 3
+
+
+def test_recording_activation_starts_early_exit_window_for_existing_preview(
+    tmp_path: Path,
+) -> None:
+    """A stable preview should still count if it exits right after recording starts."""
+    # Given: A concurrent-preview publisher with preview already stable before recording starts
+    clock = FakeClock()
+    publisher = _make_publisher(
+        tmp_path,
+        clock=clock,
+        idle_timeout_s=20.0,
+        recording_policy="allow_during_recording",
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: recording starts after the preview is stable, then two previews exit immediately
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(
+            calls,
+            stderr_text="Too many clients already connected.\n",
+        ),
+    ):
+        first_start = publisher.ensure_active()
+        first_proc = calls[0]["proc"]
+        assert isinstance(first_proc, FakeProc)
+        clock.sleep(7.0)
+        publisher.sync_recording_active(True)
+        first_proc.returncode = 1
+        first_status = publisher.status()
+
+        second_start = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        second_proc.returncode = 1
+        second_status = publisher.status()
+
+    # Then: the recording transition starts the failure window and the second exit downgrades
+    assert isinstance(first_start, LivePublisherStatus)
+    assert first_start.state == LivePublisherState.READY
+    assert first_status.state == LivePublisherState.ERROR
+    assert first_status.degraded_reason is None
+    assert isinstance(second_start, LivePublisherStatus)
+    assert second_start.state == LivePublisherState.READY
+    assert second_status == LivePublisherStatus(
+        state=LivePublisherState.IDLE,
+        viewer_count=0,
+        degraded_reason=CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
+        last_error="Too many clients already connected.",
+    )
+    assert len(calls) == 2
+
+
+def test_later_preview_exits_while_recording_do_not_downgrade_concurrent_preview(
+    tmp_path: Path,
+) -> None:
+    """Stable previews should not be treated as noisy concurrent-preview failures."""
+    # Given: A concurrent-preview publisher with a preview that stays up past the early-exit window
+    clock = FakeClock()
+    publisher = _make_publisher(
+        tmp_path,
+        clock=clock,
+        recording_policy="allow_during_recording",
+    )
+    calls: list[dict[str, object]] = []
+    publisher.sync_recording_active(True)
+
+    # When: Two preview processes exit after they have been stable for a while
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        first_start = publisher.ensure_active()
+        first_proc = calls[0]["proc"]
+        assert isinstance(first_proc, FakeProc)
+        clock.sleep(7.0)
+        first_proc.returncode = 1
+        first_status = publisher.status()
+
+        second_start = publisher.ensure_active()
+        second_proc = calls[1]["proc"]
+        assert isinstance(second_proc, FakeProc)
+        clock.sleep(7.0)
+        second_proc.returncode = 1
+        second_status = publisher.status()
+
+        third_start = publisher.ensure_active()
+
+    # Then: Later exits remain ordinary preview errors and concurrent preview is still attempted
+    assert isinstance(first_start, LivePublisherStatus)
+    assert first_start.state == LivePublisherState.READY
+    assert first_status.state == LivePublisherState.ERROR
+    assert first_status.degraded_reason is None
+    assert isinstance(second_start, LivePublisherStatus)
+    assert second_start.state == LivePublisherState.READY
+    assert second_status.state == LivePublisherState.ERROR
+    assert second_status.degraded_reason is None
+    assert isinstance(third_start, LivePublisherStatus)
+    assert third_start.state == LivePublisherState.READY
+    assert len(calls) == 3
 
 
 def test_start_failure_maps_session_budget_refusal_and_cleans_storage(tmp_path: Path) -> None:

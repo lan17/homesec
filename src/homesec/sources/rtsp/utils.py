@@ -6,6 +6,18 @@ import shlex
 
 logger = logging.getLogger(__name__)
 
+_SESSION_LIMIT_HINTS: tuple[str, ...] = (
+    "too many clients",
+    "too many connections",
+    "too many sessions",
+    "max number of clients",
+    "maximum number of clients",
+    "maximum number of connections",
+    "session limit",
+    "max sessions",
+    "maximum sessions",
+)
+
 
 def _redact_rtsp_url(url: str) -> str:
     if "://" not in url:
@@ -30,6 +42,11 @@ def _is_timeout_option_error(stderr_text: str) -> bool:
     return ("rw_timeout" in text and ("not found" in text or "unrecognized option" in text)) or (
         "stimeout" in text and ("not found" in text or "unrecognized option" in text)
     )
+
+
+def _is_rtsp_session_limit_error(stderr_text: str) -> bool:
+    text = stderr_text.lower()
+    return any(hint in text for hint in _SESSION_LIMIT_HINTS)
 
 
 def _build_timeout_attempts(timeout_args: list[str]) -> list[tuple[str, list[str]]]:

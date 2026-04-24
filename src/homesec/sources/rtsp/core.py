@@ -308,6 +308,19 @@ class RTSPSource(ThreadedClipSource):
             timeout_capabilities=self._timeout_capabilities,
         )
         self._preflight_outcome: CameraPreflightOutcome | None = None
+        self._preview_concurrency_requested = (
+            config.runtime_preview is not None
+            and config.runtime_preview.enabled
+            and config.runtime_preview.recording_policy == "allow_during_recording"
+        )
+        self._preview_startup_probe_required = False
+        self._preview_audio_enabled = False
+        if config.runtime_preview is not None:
+            preview_hls_config = config.runtime_preview.config
+            self._preview_audio_enabled = preview_hls_config.audio_enabled
+            self._preview_startup_probe_required = preview_hls_config.video_codec == "auto" or (
+                preview_hls_config.audio_enabled and preview_hls_config.audio_codec == "auto"
+            )
 
         if config.stream.disable_hwaccel:
             logger.info("Hardware acceleration manually disabled")
@@ -469,6 +482,15 @@ class RTSPSource(ThreadedClipSource):
             camera_name=self.camera_name,
             primary_rtsp_url=self.rtsp_url,
             detect_rtsp_url=self.detect_rtsp_url,
+            preview_rtsp_url=self.rtsp_url if self._preview_concurrency_requested else None,
+            preview_probe_rtsp_url=(
+                self.rtsp_url
+                if self._preview_concurrency_requested and self._preview_startup_probe_required
+                else None
+            ),
+            preview_audio_enabled=(
+                self._preview_concurrency_requested and self._preview_audio_enabled
+            ),
         )
         match result:
             case CameraPreflightOutcome() as outcome:
@@ -525,6 +547,26 @@ class RTSPSource(ThreadedClipSource):
             self._frame_pipeline.set_motion_profile(outcome.motion_profile)
         if self._owns_recorder and isinstance(self._recorder, FfmpegRecorder):
             self._recorder.configure_profile(outcome.recording_profile)
+
+        if outcome.concurrent_preview_supported is False:
+            reason = (
+                outcome.concurrent_preview_downgrade_reason
+                or "concurrent_preview_unsupported_by_startup_preflight"
+            )
+            logger.warning(
+                "RTSP concurrent preview while recording unavailable; "
+                "downgrading preview policy for this process: camera=%s reason=%s",
+                self.camera_name,
+                reason,
+            )
+            try:
+                self._live_publisher.downgrade_concurrent_preview(reason)
+            except Exception as exc:
+                logger.warning(
+                    "Preview concurrent downgrade sync failed: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         if self._motion_rtsp_url != self.detect_rtsp_url:
             # Motion stream is pinned away from detect stream, so runtime fallback probing

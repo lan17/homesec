@@ -217,6 +217,30 @@ def test_get_preview_status_returns_runtime_status() -> None:
     assert payload["idle_shutdown_at"] == 123.0
 
 
+def test_get_preview_status_surfaces_concurrent_preview_downgrade_reason() -> None:
+    """GET preview status should expose why concurrent preview while recording is unavailable."""
+    # Given: A camera downgraded to recording-first preview behavior for this process
+    app = _StubPreviewApp(
+        status=CameraPreviewStatus(
+            camera_name="front",
+            enabled=True,
+            state=PreviewState.IDLE,
+            viewer_count=0,
+            degraded_reason="concurrent_preview_unsupported_by_startup_preflight",
+        )
+    )
+    client = _client(app)
+
+    # When: Requesting preview status
+    response = client.get("/api/v1/preview/cameras/front")
+
+    # Then: The status payload includes the process-local downgrade reason
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "idle"
+    assert payload["degraded_reason"] == "concurrent_preview_unsupported_by_startup_preflight"
+
+
 def test_get_preview_status_returns_404_for_missing_camera() -> None:
     """GET /preview/cameras/{camera_name} should return 404 when camera is unknown."""
     # Given: A preview app that reports unknown camera
@@ -679,7 +703,7 @@ def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_prev
     tmp_path: Path,
 ) -> None:
     """Preview playback should fail closed when runtime status says the session is inactive."""
-    # Given: Stale preview artifacts on disk after the runtime has already marked preview idle
+    # Given: Stale preview artifacts after a downgraded camera has no active preview session
     _write_preview_files(tmp_path, "front")
     app = _StubPreviewApp(
         status=CameraPreviewStatus(
@@ -687,6 +711,7 @@ def test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_prev
             enabled=True,
             state=PreviewState.IDLE,
             viewer_count=0,
+            degraded_reason="concurrent_preview_unsupported_by_startup_preflight",
         ),
         preview_config=PreviewConfig(
             enabled=True,
