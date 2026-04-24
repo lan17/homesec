@@ -11,6 +11,19 @@ const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
 const PREVIEW_DISPLAY_STATUS_STATES = new Set(['starting', 'ready', 'degraded', 'stopping'])
 
+type WebKitFullscreenDocument = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void
+  webkitFullscreenElement?: Element | null
+}
+
+type WebKitFullscreenElement = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+
+type WebKitVideoElement = HTMLVideoElement & {
+  webkitEnterFullscreen?: () => void
+}
+
 interface CameraPreviewPanelProps {
   cameraName: string
 }
@@ -59,6 +72,35 @@ function startLabel(statusState: string | undefined): string {
   return 'Start preview'
 }
 
+function activeFullscreenElement(): Element | null {
+  const fullscreenDocument = document as WebKitFullscreenDocument
+  return document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement ?? null
+}
+
+async function requestElementFullscreen(element: HTMLElement): Promise<boolean> {
+  const fullscreenElement = element as WebKitFullscreenElement
+  if (fullscreenElement.requestFullscreen) {
+    await fullscreenElement.requestFullscreen()
+    return true
+  }
+  if (fullscreenElement.webkitRequestFullscreen) {
+    await fullscreenElement.webkitRequestFullscreen()
+    return true
+  }
+  return false
+}
+
+async function exitActiveFullscreen(): Promise<void> {
+  const fullscreenDocument = document as WebKitFullscreenDocument
+  if (document.exitFullscreen) {
+    await document.exitFullscreen()
+    return
+  }
+  if (fullscreenDocument.webkitExitFullscreen) {
+    await fullscreenDocument.webkitExitFullscreen()
+  }
+}
+
 export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
   const {
     error,
@@ -73,8 +115,10 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
     stop,
     warning,
   } = useCameraPreview(cameraName)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [playlistReady, setPlaylistReady] = useState(false)
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
   const effectiveState =
     session && (!status || !PREVIEW_DISPLAY_STATUS_STATES.has(status.state))
@@ -142,6 +186,21 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
       }
     }
   }, [playlistUrl])
+
+  useEffect(() => {
+    const syncFullscreenState = (): void => {
+      setIsPreviewFullscreen(activeFullscreenElement() === viewportRef.current)
+    }
+
+    syncFullscreenState()
+    document.addEventListener('fullscreenchange', syncFullscreenState)
+    document.addEventListener('webkitfullscreenchange', syncFullscreenState)
+
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreenState)
+      document.removeEventListener('webkitfullscreenchange', syncFullscreenState)
+    }
+  }, [])
 
   useEffect(() => {
     const video = videoRef.current
@@ -237,6 +296,29 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
     return cleanupPlayback
   }, [playlistReady, playlistUrl])
 
+  const toggleFullscreen = async (): Promise<void> => {
+    const viewport = viewportRef.current
+    if (!viewport) {
+      return
+    }
+
+    try {
+      if (isPreviewFullscreen) {
+        await exitActiveFullscreen()
+      } else {
+        const fullscreenRequested = await requestElementFullscreen(viewport)
+        if (!fullscreenRequested) {
+          const video = videoRef.current as WebKitVideoElement | null
+          video?.webkitEnterFullscreen?.()
+        }
+      }
+    } catch {
+      return
+    }
+
+    void videoRef.current?.play().catch(() => {})
+  }
+
   const statusMessage = useMemo(() => {
     if (warning) {
       return warning
@@ -274,16 +356,29 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
         </div>
       </header>
 
-      <div className="camera-preview__viewport">
+      <div className="camera-preview__viewport" ref={viewportRef}>
         {playlistUrl && playlistReady && !playerError ? (
-          <video
-            ref={videoRef}
-            className="camera-preview__video"
-            muted
-            autoPlay
-            playsInline
-            preload="auto"
-          />
+          <>
+            <video
+              ref={videoRef}
+              className="camera-preview__video"
+              muted
+              autoPlay
+              playsInline
+              preload="auto"
+            />
+            <button
+              type="button"
+              className="camera-preview__fullscreen-button"
+              aria-label={isPreviewFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              title={isPreviewFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              onClick={() => {
+                void toggleFullscreen()
+              }}
+            >
+              <span className="camera-preview__fullscreen-icon" aria-hidden="true" />
+            </button>
+          </>
         ) : (
           <div className="camera-preview__placeholder">
             {statusMessage ?? 'Start preview to attach to the live stream.'}

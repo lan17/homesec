@@ -118,6 +118,10 @@ describe('CameraPreviewPanel', () => {
       configurable: true,
       value: vi.fn(),
     })
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(undefined),
+    })
   })
 
   afterEach(() => {
@@ -264,7 +268,7 @@ describe('CameraPreviewPanel', () => {
     })
   })
 
-  it('renders attached previews without native playback controls', async () => {
+  it('renders attached previews with only a fullscreen playback control', async () => {
     // Given: A ready preview session with playable live media
     mockReadyPreviewSession()
 
@@ -277,7 +281,22 @@ describe('CameraPreviewPanel', () => {
       expect(video).toBeTruthy()
       expect(video?.hasAttribute('controls')).toBe(false)
       expect(video?.getAttribute('preload')).toBe('auto')
+      expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeTruthy()
     })
+  })
+
+  it('requests fullscreen for the preview viewport', async () => {
+    // Given: A ready preview session with a fullscreen-capable viewport
+    mockReadyPreviewSession()
+    const user = userEvent.setup()
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // When: Entering fullscreen from the preview overlay control
+    await user.click(await screen.findByRole('button', { name: 'Enter fullscreen' }))
+
+    // Then: The browser fullscreen API is invoked without enabling native video controls
+    expect(HTMLElement.prototype.requestFullscreen).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeTruthy()
   })
 
   it('resumes playback when the attached video pauses', async () => {
