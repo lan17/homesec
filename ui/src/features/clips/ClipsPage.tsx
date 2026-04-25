@@ -11,6 +11,8 @@ import {
   CLIP_LIMIT_OPTIONS,
   CLIP_STATUS_OPTIONS,
   DEFAULT_CLIPS_LIMIT,
+  DEFAULT_DETECTED_FILTER,
+  formStateToSearchParams,
   formStateToQuery,
   parseClipsQuery,
   queryToFormState,
@@ -223,13 +225,14 @@ export function ClipsPage() {
 
   function applyFilters(formState: ClipsFilterFormState): void {
     const nextQuery = formStateToQuery(formState)
-    const nextParams = queryToSearchParams(queryWithoutCursor(nextQuery))
-    clearCursorHistory(nextParams.toString())
+    const nextParams = formStateToSearchParams(formState)
+    clearCursorHistory(queryToSearchParams(queryWithoutCursor(nextQuery)).toString())
     setSearchParams(nextParams)
   }
 
   function resetFilters(): void {
     const resetQuery = {
+      detected: DEFAULT_DETECTED_FILTER,
       limit: DEFAULT_CLIPS_LIMIT,
     }
     const nextParams = queryToSearchParams(resetQuery)
@@ -251,18 +254,21 @@ export function ClipsPage() {
     await Promise.all([clipsQuery.refetch(), camerasQuery.refetch()])
   }
 
+  function queryToRouteSearchParams(nextQuery: ReturnType<typeof queryWithoutCursor>): URLSearchParams {
+    const params = queryToSearchParams(nextQuery)
+    if (query.detected === undefined && searchParams.get('detected') === 'any') {
+      params.set('detected', 'any')
+    }
+    return params
+  }
+
   function goToNextCursor(): void {
     const nextCursor = clipsQuery.data?.next_cursor
     if (!nextCursor) {
       return
     }
     setCursorState((current) => pushCursorHistory(current, filterSignature, query.cursor))
-    setSearchParams(
-      queryToSearchParams({
-        ...query,
-        cursor: nextCursor,
-      }),
-    )
+    setSearchParams(queryToRouteSearchParams({ ...query, cursor: nextCursor }))
   }
 
   function goToPreviousCursor(): void {
@@ -271,12 +277,7 @@ export function ClipsPage() {
       return
     }
     setCursorState(popped.state)
-    setSearchParams(
-      queryToSearchParams({
-        ...query,
-        cursor: popped.previousCursor,
-      }),
-    )
+    setSearchParams(queryToRouteSearchParams({ ...query, cursor: popped.previousCursor }))
   }
 
   return (

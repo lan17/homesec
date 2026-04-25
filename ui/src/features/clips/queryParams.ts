@@ -1,6 +1,7 @@
 import type { ClipStatus, ListClipsQuery } from '../../api/generated/types'
 
 export const DEFAULT_CLIPS_LIMIT = 25
+export const DEFAULT_DETECTED_FILTER = true
 const MIN_CLIPS_LIMIT = 1
 const MAX_CLIPS_LIMIT = 100
 
@@ -50,6 +51,16 @@ function isClipStatus(value: string | null): value is ClipStatus {
   return (CLIP_STATUS_OPTIONS as readonly string[]).includes(value)
 }
 
+function parseDetectedFilter(value: string | null): boolean | undefined {
+  if (value === 'any') {
+    return undefined
+  }
+  if (value === 'false') {
+    return false
+  }
+  return DEFAULT_DETECTED_FILTER
+}
+
 function toIsoUtc(localValue: string): string | undefined {
   if (!localValue.trim()) {
     return undefined
@@ -80,15 +91,13 @@ function toLocalDateTimeInput(isoValue: string | null | undefined): string {
 export function parseClipsQuery(searchParams: URLSearchParams): ListClipsQuery {
   const alertedRaw = searchParams.get('alerted')
   const alerted = alertedRaw === 'true' ? true : alertedRaw === 'false' ? false : undefined
-  const detectedRaw = searchParams.get('detected')
-  const detected = detectedRaw === 'true' ? true : detectedRaw === 'false' ? false : undefined
   const statusRaw = searchParams.get('status')
 
   return {
     camera: searchParams.get('camera')?.trim() || undefined,
     status: isClipStatus(statusRaw) ? statusRaw : undefined,
     alerted,
-    detected,
+    detected: parseDetectedFilter(searchParams.get('detected')),
     risk_level: searchParams.get('risk_level')?.trim() || undefined,
     activity_type: searchParams.get('activity_type')?.trim().toLowerCase() || undefined,
     since: searchParams.get('since')?.trim() || undefined,
@@ -124,6 +133,14 @@ export function formStateToQuery(form: ClipsFilterFormState): ListClipsQuery {
     until: toIsoUtc(form.untilLocal),
     limit: form.limit,
   }
+}
+
+export function formStateToSearchParams(form: ClipsFilterFormState): URLSearchParams {
+  const params = queryToSearchParams(formStateToQuery(form))
+  if (form.detected === 'any') {
+    params.set('detected', 'any')
+  }
+  return params
 }
 
 export function queryToSearchParams(query: ListClipsQuery): URLSearchParams {
