@@ -644,7 +644,13 @@ class HLSLivePublisher(LivePublisher):
             stream_info=stream_info,
         )
 
-        if self._video_codec == "copy":
+        source_video_codec = (
+            (stream_info.video_codec or "").strip().lower() if stream_info is not None else None
+        )
+
+        if self._video_codec == "copy" or (
+            self._video_codec in ("auto", "h264") and source_video_codec == "h264"
+        ):
             return (
                 _CodecPlan(
                     codec_name="copy",
@@ -653,17 +659,6 @@ class HLSLivePublisher(LivePublisher):
                     audio_args=audio_args,
                 ),
             )
-
-        if self._video_codec == "auto" and stream_info is not None:
-            if (stream_info.video_codec or "").strip().lower() == "h264":
-                return (
-                    _CodecPlan(
-                        codec_name="copy",
-                        ffmpeg_global_args=(),
-                        video_args=("-c:v", "copy"),
-                        audio_args=audio_args,
-                    ),
-                )
 
         software_plan = _CodecPlan(
             codec_name="libx264",
@@ -695,7 +690,7 @@ class HLSLivePublisher(LivePublisher):
         )
 
     def _probe_stream_info(self) -> ProbeStreamInfo | None:
-        needs_probe = self._video_codec == "auto" or (
+        needs_probe = self._video_codec in ("auto", "h264") or (
             self._audio_enabled and self._audio_codec == "auto"
         )
         if not needs_probe:

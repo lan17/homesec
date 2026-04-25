@@ -359,6 +359,38 @@ def test_auto_codec_transcodes_mp4_safe_but_hls_unsafe_audio(tmp_path: Path) -> 
     assert cmd[cmd.index("-b:a") + 1] == "128k"
 
 
+def test_h264_codec_copies_already_h264_video(tmp_path: Path) -> None:
+    """h264 video mode should avoid transcoding sources that already satisfy the output codec."""
+    # Given: A forced-H.264 preview whose source video is already H.264
+    publisher = _make_publisher(
+        tmp_path,
+        discovery=FakeDiscovery(_probe_stream(video_codec="h264", audio_codec="aac")),
+        audio_codec="aac",
+        video_codec="h264",
+    )
+    calls: list[dict[str, object]] = []
+
+    # When: Activating preview
+    with patch(
+        "homesec.sources.rtsp.live_publisher.subprocess.Popen",
+        side_effect=_fake_popen_factory(calls),
+    ):
+        result = publisher.ensure_active()
+
+    # Then: The publisher copy-remuxes video while preserving the requested AAC output
+    assert result == LivePublisherStatus(
+        state=LivePublisherState.READY,
+        viewer_count=0,
+        idle_shutdown_at=5.0,
+    )
+    cmd = calls[0]["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:a") + 1] == "aac"
+    assert "libx264" not in cmd
+    assert "-preset" not in cmd
+
+
 def test_auto_codec_transcodes_non_browser_safe_source(tmp_path: Path) -> None:
     """auto codec mode should transcode unsupported source codecs to browser-safe outputs."""
     # Given: A publisher whose source probe reports H.265 video and PCMA audio
