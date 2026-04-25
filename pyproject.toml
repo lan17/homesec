@@ -125,6 +125,8 @@ ignore = [
 known-first-party = ["homesec"]
 
 [tool.semantic_release]
+assets = ["uv.lock"]
+build_command = "uv lock"
 version_toml = ["pyproject.toml:project.version"]
 version_source = "tag"
 commit_message = "chore(release): v{version}"

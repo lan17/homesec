@@ -15,6 +15,7 @@
 - **Tests must use Given/When/Then comments**: Every test must include these comments and follow behavioral testing principles (see `TESTING.md`).
 - **Run `make check` before pushing code or opening/updating a PR**: Targeted checks are not enough for publish flow unless the user explicitly asks for a narrower validation scope.
 - **PR titles must satisfy repo CI**: Use semantic PR titles such as `fix: ...`, `refactor: ...`, or `docs: ...`. Do not use `[codex] ...` in this repository because CI rejects non-semantic PR titles.
+- **Respect `uv.lock`**: Validation commands run with `--locked`. If `uv` reports the lockfile is stale, run `uv lock`, inspect the diff, and commit the lockfile sync intentionally. Do not revert `uv.lock` churn without checking whether `pyproject.toml` or dependency metadata changed.
 - **Import from canonical source**: Import types from their defining module, not re-exports. For example, import `RiskLevel` from `models.enums`, not from `models.vlm`. Avoid creating re-exports in `__all__`.
 - **Postgres for state**: Use `clip_states` table with `clip_id` (primary key) + `data` (jsonb) for evolvable schema.
 - **Pydantic everywhere**: Validate config, DB payloads, VLM outputs, and MQTT payloads with Pydantic models.
