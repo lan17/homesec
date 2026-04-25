@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_CLIPS_LIMIT,
+  DEFAULT_DETECTED_FILTER,
+  formStateToSearchParams,
   formStateToQuery,
   parseClipsQuery,
   queryToFormState,
@@ -57,9 +59,33 @@ describe('parseClipsQuery', () => {
     // Then: Unsupported values should be dropped or clamped to defaults
     expect(query.status).toBeUndefined()
     expect(query.alerted).toBeUndefined()
-    expect(query.detected).toBeUndefined()
+    expect(query.detected).toBe(DEFAULT_DETECTED_FILTER)
     expect(query.limit).toBe(1)
     expect(query.cursor).toBeUndefined()
+  })
+
+  it('defaults missing detected filter to true', () => {
+    // Given: URL search params without an explicit detected filter
+    const params = new URLSearchParams()
+
+    // When: Parsing into query object
+    const query = parseClipsQuery(params)
+
+    // Then: Clips are filtered to detected results by default
+    expect(query.detected).toBe(true)
+  })
+
+  it('parses explicit detected any as no API detected filter', () => {
+    // Given: URL search params representing the UI's explicit Any selection
+    const params = new URLSearchParams({
+      detected: 'any',
+    })
+
+    // When: Parsing into query object
+    const query = parseClipsQuery(params)
+
+    // Then: The API query omits the detected filter
+    expect(query.detected).toBeUndefined()
   })
 })
 
@@ -96,5 +122,30 @@ describe('form/query conversion', () => {
     expect(hydratedForm.detected).toBe('false')
     expect(hydratedForm.activityType).toBe('vehicle')
     expect(hydratedForm.limit).toBe(DEFAULT_CLIPS_LIMIT)
+  })
+
+  it('preserves explicit detected any in route search params', () => {
+    // Given: Form state with the detected filter set to Any
+    const formState = {
+      camera: '',
+      status: '',
+      alerted: 'any',
+      detected: 'any',
+      riskLevel: '',
+      activityType: '',
+      sinceLocal: '',
+      untilLocal: '',
+      limit: DEFAULT_CLIPS_LIMIT,
+    } as const
+
+    // When: Converting form state to URL search params
+    const params = formStateToSearchParams(formState)
+    const parsed = parseClipsQuery(params)
+    const hydratedForm = queryToFormState(parsed)
+
+    // Then: The route keeps Any distinct from the default detected=true filter
+    expect(params.get('detected')).toBe('any')
+    expect(parsed.detected).toBeUndefined()
+    expect(hydratedForm.detected).toBe('any')
   })
 })
