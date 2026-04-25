@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.9.2 (2026-04-25)
+
+### Bug Fixes
+
+- Avoid preview transcode for H.264 sources ([#68](https://github.com/lan17/homesec/pull/68),
+  [`b1535e8`](https://github.com/lan17/homesec/commit/b1535e82084150a53d3c625623ebbe1acbd1f6d5))
+
+### Refactoring
+
+- Decouple state and event store wiring ([#67](https://github.com/lan17/homesec/pull/67),
+  [`93d2219`](https://github.com/lan17/homesec/commit/93d22198a5a4bb85dc506781ba16cd7a3863ac27))
+
+
 ## v1.9.1 (2026-04-24)
 
 ### Bug Fixes
