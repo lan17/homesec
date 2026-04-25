@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.9.4 (2026-04-25)
+
+### Bug Fixes
+
+- Clean up telemetry log payload shaping ([#70](https://github.com/lan17/homesec/pull/70),
+  [`23d2fd1`](https://github.com/lan17/homesec/commit/23d2fd1296e7bbff05d86db9d5bde5a1d8b20d11))
+
+### Continuous Integration
+
+- Keep uv lockfile synchronized ([#71](https://github.com/lan17/homesec/pull/71),
+  [`95de677`](https://github.com/lan17/homesec/commit/95de6770b48a49067aada2c4c59045f9217e2b7c))
+
+
 ## v1.9.3 (2026-04-25)
 
 ### Bug Fixes
