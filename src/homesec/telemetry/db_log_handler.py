@@ -16,7 +16,7 @@ from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import homesec.postgres_support as postgres_support
-from homesec.log_records import extract_log_record_extras
+from homesec.log_records import extract_log_record_extras, log_record_kind
 from homesec.telemetry.db.log_table import logs
 from homesec.telemetry.db.log_table import metadata as db_metadata
 from homesec.telemetry.postgres_settings import PostgresConfig
@@ -35,7 +35,7 @@ def _record_to_payload(record: logging.LogRecord) -> dict[str, Any]:
         recording_id = None
 
     event_type = getattr(record, "event_type", None)
-    kind = getattr(record, "kind", None) or ("event" if event_type else "log")
+    kind = log_record_kind(record)
 
     msg_obj: Any
     if isinstance(record.msg, str):

@@ -42,6 +42,16 @@ def extract_log_record_extras(
     return {key: value for key, value in record.__dict__.items() if key not in excluded}
 
 
+def log_record_kind(record: logging.LogRecord) -> str:
+    """Return the canonical telemetry kind for a log record."""
+    kind = getattr(record, "kind", None)
+    if kind == "event" or bool(getattr(record, "event_type", None)):
+        return "event"
+    if kind:
+        return str(kind)
+    return "log"
+
+
 def is_event_log_record(record: logging.LogRecord) -> bool:
     """Return true when a log record should be treated as structured event telemetry."""
-    return getattr(record, "kind", None) == "event" or bool(getattr(record, "event_type", None))
+    return log_record_kind(record) == "event"

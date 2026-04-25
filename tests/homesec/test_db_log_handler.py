@@ -57,9 +57,9 @@ def test_record_to_payload_excludes_formatter_created_standard_fields() -> None:
     assert payload["fields"] == {"custom": "value"}
 
 
-def test_record_to_payload_treats_event_type_as_event_kind() -> None:
-    """DB payload should classify event_type-only records as event telemetry."""
-    # Given: A log record with event_type but no explicit kind
+def test_record_to_payload_treats_event_type_as_canonical_event_kind() -> None:
+    """DB payload should classify event_type records as event telemetry."""
+    # Given: A log record with event_type and a conflicting explicit kind
     record = logging.getLogger("homesec.test").makeRecord(
         "homesec.test",
         logging.INFO,
@@ -68,13 +68,13 @@ def test_record_to_payload_treats_event_type_as_event_kind() -> None:
         "usage",
         (),
         None,
-        extra={"event_type": "vlm_usage", "total_tokens": 12},
+        extra={"event_type": "vlm_usage", "kind": "log", "total_tokens": 12},
     )
 
     # When: Converting the record to a DB telemetry payload
     payload = _record_to_payload(record)
 
-    # Then: The payload is classified as an event and custom fields are preserved
+    # Then: The payload uses the same event classification as DB filtering
     assert payload["kind"] == "event"
     assert payload["event_type"] == "vlm_usage"
     assert payload["fields"] == {"total_tokens": 12}
