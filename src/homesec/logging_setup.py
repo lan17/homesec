@@ -5,35 +5,11 @@ import logging
 import logging.config
 import os
 
+from homesec.log_records import extract_log_record_extras, is_event_log_record
 from homesec.telemetry.postgres_settings import PostgresConfig
 
 _CURRENT_CAMERA_NAME = "-"
 _CURRENT_RECORDING_ID: str | None = None
-_STANDARD_LOGRECORD_ATTRS = {
-    "name",
-    "msg",
-    "message",
-    "asctime",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-    "taskName",
-}
 
 
 class _CameraNameFilter(logging.Filter):
@@ -56,7 +32,7 @@ class _DbLevelFilter(logging.Filter):
         self._min_level = min_level
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if getattr(record, "kind", None) == "event":
+        if is_event_log_record(record):
             return True
         return record.levelno >= logging.WARNING or record.levelno >= self._min_level
 
@@ -72,14 +48,7 @@ class _JsonExtraFormatter(logging.Formatter):
 
 
 def _extract_extras(record: logging.LogRecord) -> dict[str, object]:
-    extras: dict[str, object] = {}
-    for key, value in record.__dict__.items():
-        if key in _STANDARD_LOGRECORD_ATTRS:
-            continue
-        if key in {"camera_name", "recording_id"}:
-            continue
-        extras[key] = value
-    return extras
+    return extract_log_record_extras(record, exclude={"camera_name", "recording_id"})
 
 
 def set_camera_name(name: str | None) -> None:
