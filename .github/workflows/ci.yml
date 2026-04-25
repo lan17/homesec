@@ -43,8 +43,11 @@ jobs:
           path: .venv
           key: venv-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock') }}
 
+      - name: Check uv lockfile
+        run: uv lock --check
+
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --locked
 
       # Lint and typecheck run while Postgres boots
       - name: Lint
@@ -63,7 +66,7 @@ jobs:
           done
 
       - name: Run migrations
-        run: uv run alembic -c alembic.ini upgrade head
+        run: uv run --locked alembic -c alembic.ini upgrade head
 
       - name: Test with coverage
         run: make coverage

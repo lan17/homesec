@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint check db-migrate db-migration publish ui-% fake-camera
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint lock-check check db-migrate db-migration publish ui-% fake-camera
 
 help:
 	@echo "Targets:"
@@ -19,6 +19,7 @@ help:
 	@echo "    make coverage      Run tests and generate HTML coverage report"
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
+	@echo "    make lock-check    Verify uv.lock is up to date"
 	@echo "    make check         Run lint + typecheck + test + ui-check"
 	@echo "    make fake-camera   Start a mock ONVIF + RTSP camera (requires ffmpeg, mediamtx)"
 	@echo ""
@@ -38,6 +39,7 @@ HOMESEC_LOG_LEVEL ?= INFO
 DOCKER_IMAGE ?= homesec
 DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
+UV_RUN ?= uv run --locked
 
 # Docker
 up:
@@ -62,31 +64,34 @@ docker-push: docker-build
 # Local dev
 run:
 	@echo "Running database migrations..."
-	@uv run alembic -c alembic.ini upgrade head
-	uv run python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
+	@$(UV_RUN) alembic -c alembic.ini upgrade head
+	$(UV_RUN) python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
 
 db:
 	docker compose up -d postgres
 
 test:
-	uv run pytest tests/homesec/ -v --cov=homesec --cov-report=term-missing
+	$(UV_RUN) pytest tests/homesec/ -v --cov=homesec --cov-report=term-missing
 
 coverage:
-	uv run pytest tests/homesec/ -v --cov=homesec --cov-report=html --cov-report=xml
+	$(UV_RUN) pytest tests/homesec/ -v --cov=homesec --cov-report=html --cov-report=xml
 	@echo "Coverage report: htmlcov/index.html"
 
 typecheck:
-	uv run mypy --package homesec --strict
+	$(UV_RUN) mypy --package homesec --strict
 
 lint:
-	uv run ruff check src tests
-	uv run ruff format --check src tests
+	$(UV_RUN) ruff check src tests
+	$(UV_RUN) ruff format --check src tests
 
 lint-fix:
-	uv run ruff check --fix src tests
-	uv run ruff format src tests
+	$(UV_RUN) ruff check --fix src tests
+	$(UV_RUN) ruff format src tests
 
-check: lint typecheck test ui-check
+lock-check:
+	uv lock --check
+
+check: lock-check lint typecheck test ui-check
 
 fake-camera:
 	@echo "Starting mock ONVIF server on port 8000..."
@@ -99,21 +104,21 @@ fake-camera:
 
 # Database
 db-migrate:
-	uv run --with alembic --with sqlalchemy --with asyncpg --with python-dotenv alembic -c alembic.ini upgrade head
+	$(UV_RUN) --with alembic --with sqlalchemy --with asyncpg --with python-dotenv alembic -c alembic.ini upgrade head
 
 db-migration:
 	@if [ -z "$(m)" ]; then \
 		echo "Error: message required. Run: make db-migration m=\"your description\""; \
 		exit 1; \
 	fi
-	uv run --with alembic --with sqlalchemy --with asyncpg --with python-dotenv alembic -c alembic.ini revision --autogenerate -m "$(m)"
+	$(UV_RUN) --with alembic --with sqlalchemy --with asyncpg --with python-dotenv alembic -c alembic.ini revision --autogenerate -m "$(m)"
 
 # Release
 publish: check
 	rm -rf dist build
-	uv run --with build python -m build
-	uv run --with twine python -m twine check dist/*
-	uv run --with twine python -m twine upload dist/*
+	$(UV_RUN) --with build python -m build
+	$(UV_RUN) --with twine python -m twine check dist/*
+	$(UV_RUN) --with twine python -m twine upload dist/*
 
 # Proxy any ui-* target to the UI Makefile (e.g., ui-api-generate -> make -C ui api-generate).
 ui-%:
