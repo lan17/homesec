@@ -168,15 +168,19 @@ class TestDbHandlerFilter:
         configure_logging(log_level="DEBUG")
         handler = _FakeDbHandler.instances[-1]
 
-        # When: Logging an event and a debug message
+        # When: Logging events and non-event messages
         logger = logging.getLogger()
         logger.debug("event", extra={"kind": "event"})
+        logger.debug("event type", extra={"event_type": "vlm_usage"})
+        logger.debug("event type conflict", extra={"event_type": "vlm_usage", "kind": "log"})
         logger.debug("debug")
         logger.info("info")
 
-        # Then: Event debug passes, non-event debug is filtered
+        # Then: Event debug records pass, non-event debug is filtered
         messages = [record.getMessage() for record in handler.records]
         assert "event" in messages
+        assert "event type" in messages
+        assert "event type conflict" in messages
         assert "debug" not in messages
         assert "info" in messages
 

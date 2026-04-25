@@ -16,33 +16,12 @@ from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import homesec.postgres_support as postgres_support
+from homesec.log_records import extract_log_record_extras, log_record_kind
 from homesec.telemetry.db.log_table import logs
 from homesec.telemetry.db.log_table import metadata as db_metadata
 from homesec.telemetry.postgres_settings import PostgresConfig
 
-_STANDARD_LOGRECORD_ATTRS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-    "taskName",
-}
+_PROMOTED_PAYLOAD_ATTRS = frozenset({"camera_name", "recording_id", "event_type", "kind"})
 
 
 def _utc_iso(ts: float) -> str:
@@ -56,7 +35,7 @@ def _record_to_payload(record: logging.LogRecord) -> dict[str, Any]:
         recording_id = None
 
     event_type = getattr(record, "event_type", None)
-    kind = getattr(record, "kind", None) or ("event" if event_type else "log")
+    kind = log_record_kind(record)
 
     msg_obj: Any
     if isinstance(record.msg, str):
@@ -65,11 +44,7 @@ def _record_to_payload(record: logging.LogRecord) -> dict[str, Any]:
         msg_obj = record.msg
 
     fields: dict[str, Any] = {}
-    for k, v in record.__dict__.items():
-        if k in _STANDARD_LOGRECORD_ATTRS:
-            continue
-        if k in {"camera_name", "recording_id", "event_type", "kind"}:
-            continue
+    for k, v in extract_log_record_extras(record, exclude=_PROMOTED_PAYLOAD_ATTRS).items():
         try:
             json.dumps(v, default=str)
             fields[k] = v

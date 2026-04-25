@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import cast
 
-from homesec.telemetry.db_log_handler import AsyncPostgresJsonLogHandler
+from homesec.telemetry.db_log_handler import AsyncPostgresJsonLogHandler, _record_to_payload
 from homesec.telemetry.postgres_settings import PostgresConfig
 
 
@@ -21,6 +22,62 @@ class _FakeThread:
         assert timeout is not None
         self.join_calls.append(timeout)
         self._alive = False
+
+
+def test_record_to_payload_excludes_formatter_created_standard_fields() -> None:
+    """DB payload fields should only contain caller custom extras."""
+    # Given: A log record with custom extras that has already been formatted
+    record = logging.getLogger("homesec.test").makeRecord(
+        "homesec.test",
+        logging.INFO,
+        "/tmp/source.py",
+        42,
+        "hello %s",
+        ("world",),
+        None,
+        extra={
+            "camera_name": "front",
+            "recording_id": "clip-1.mp4",
+            "event_type": "recording_start",
+            "kind": "event",
+            "custom": "value",
+        },
+    )
+    logging.Formatter("%(asctime)s %(levelname)s %(message)s").format(record)
+
+    # When: Converting the record to a DB telemetry payload
+    payload = _record_to_payload(record)
+
+    # Then: Formatter-created and promoted fields do not leak into nested fields
+    assert payload["message"] == "hello world"
+    assert payload["camera_name"] == "front"
+    assert payload["recording_id"] == "clip-1.mp4"
+    assert payload["kind"] == "event"
+    assert payload["event_type"] == "recording_start"
+    assert payload["fields"] == {"custom": "value"}
+
+
+def test_record_to_payload_treats_event_type_as_canonical_event_kind() -> None:
+    """DB payload should classify event_type records as event telemetry."""
+    # Given: A log record with event_type and a conflicting explicit kind
+    record = logging.getLogger("homesec.test").makeRecord(
+        "homesec.test",
+        logging.INFO,
+        "/tmp/source.py",
+        42,
+        "usage",
+        (),
+        None,
+        extra={"event_type": "vlm_usage", "kind": "log", "total_tokens": 12},
+    )
+
+    # When: Converting the record to a DB telemetry payload
+    payload = _record_to_payload(record)
+
+    # Then: The payload uses the same event classification as DB filtering
+    assert payload["kind"] == "event"
+    assert payload["event_type"] == "vlm_usage"
+    assert payload["fields"] == {"total_tokens": 12}
 
 
 def test_db_log_handler_close_joins_writer_thread_when_started() -> None:
