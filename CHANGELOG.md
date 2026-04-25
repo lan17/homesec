@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.3 (2026-04-25)
+
+### Bug Fixes
+
+- Default clips detected filter to true ([#69](https://github.com/lan17/homesec/pull/69),
+  [`fbc540f`](https://github.com/lan17/homesec/commit/fbc540f40a8af07f338cb68b38c826efc5c93943))
+
+
 ## v1.9.2 (2026-04-25)
 
 ### Bug Fixes
