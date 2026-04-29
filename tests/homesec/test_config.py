@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from homesec.config import (
     ConfigError,
@@ -854,3 +854,54 @@ def test_preview_rejects_v2_and_legacy_extra_fields() -> None:
     assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
     assert "mode" in str(exc_info.value)
     assert "publish_rtsp_base_url" in str(exc_info.value)
+
+
+def test_talk_config_defaults() -> None:
+    """Talk config defaults should be disabled and frame-sized for 20ms PCM16 mono."""
+    # Given: A minimal config without talk settings
+    data = minimal_config()
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: Talk defaults are applied
+    assert config.talk.enabled is False
+    assert config.talk.token_ttl_s == 30
+    assert config.talk.max_session_s == 60
+    assert config.talk.input.codec == "pcm_s16le"
+    assert config.talk.input.expected_bytes_per_frame == 640
+
+
+def test_camera_talk_backend_normalized() -> None:
+    """Camera talk backend names should normalize to lowercase."""
+    # Given: A config with uppercase talk backend
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {"enabled": True, "backend": "ONVIF_RTSP_BACKCHANNEL", "config": {}}
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: backend is normalized
+    assert config.cameras[0].talk.backend == "onvif_rtsp_backchannel"
+
+
+def test_talk_input_forbids_extra_fields() -> None:
+    """Talk input format should reject unknown fields."""
+    # Given: A config with extra talk input fields
+    data = minimal_config()
+    data["talk"] = {
+        "enabled": True,
+        "input": {
+            "codec": "pcm_s16le",
+            "sample_rate": 16000,
+            "channels": 1,
+            "frame_ms": 20,
+            "unexpected": "value",
+        },
+    }
+
+    # When / Then: Validation rejects extra fields
+    with pytest.raises(ValidationError):
+        Config.model_validate(data)
