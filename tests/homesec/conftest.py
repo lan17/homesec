@@ -8,10 +8,61 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 # Add src to sys.path for imports
 src_path = Path(__file__).parent.parent.parent / "src"
 if str(src_path.resolve()) not in sys.path:
     sys.path.insert(0, str(src_path.resolve()))
+
+try:
+    import cv2 as _cv2  # noqa: F401
+except Exception:
+
+    class _CV2Stub:
+        COLOR_BGR2GRAY = 6
+        THRESH_BINARY = 0
+
+        @staticmethod
+        def cvtColor(frame: np.ndarray, code: int) -> np.ndarray:
+            _ = code
+            if frame.ndim == 3:
+                return frame.mean(axis=2).astype(np.uint8)
+            return frame
+
+        @staticmethod
+        def GaussianBlur(frame: np.ndarray, kernel: tuple[int, int], sigma: float) -> np.ndarray:
+            _ = sigma
+            k_h, k_w = kernel
+            if k_h <= 1 and k_w <= 1:
+                return frame
+            pad_h = k_h // 2
+            pad_w = k_w // 2
+            padded = np.pad(frame, ((pad_h, pad_h), (pad_w, pad_w)), mode="edge")
+            out = np.empty_like(frame)
+            for y in range(frame.shape[0]):
+                for x in range(frame.shape[1]):
+                    window = padded[y : y + k_h, x : x + k_w]
+                    out[y, x] = np.uint8(window.mean())
+            return out
+
+        @staticmethod
+        def absdiff(prev: np.ndarray, curr: np.ndarray) -> np.ndarray:
+            return np.abs(prev.astype(np.int16) - curr.astype(np.int16)).astype(np.uint8)
+
+        @staticmethod
+        def threshold(
+            diff: np.ndarray, thresh: int, maxval: int, typ: int
+        ) -> tuple[int, np.ndarray]:
+            _ = typ
+            mask = (diff > thresh).astype(np.uint8) * np.uint8(maxval)
+            return thresh, mask
+
+        @staticmethod
+        def countNonZero(mask: np.ndarray) -> int:
+            return int(np.count_nonzero(mask))
+
+    sys.modules["cv2"] = _CV2Stub()
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine

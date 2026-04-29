@@ -404,6 +404,8 @@ class RTSPSource(ThreadedClipSource):
         """Check if source is healthy."""
         if not self._thread_is_healthy():
             return False
+        if self._preflight_outcome is None:
+            return False
 
         age = self._clock.now() - self.last_successful_frame
         return age < (self.frame_timeout_s * 3)
@@ -460,13 +462,84 @@ class RTSPSource(ThreadedClipSource):
 
     def _on_start(self) -> None:
         logger.info("Starting RTSPSource: %s", self.camera_name)
-        self._run_startup_preflight()
 
     def _on_stop(self) -> None:
         logger.info("Stopping RTSPSource...")
 
     def _on_stopped(self) -> None:
         logger.info("RTSPSource stopped")
+
+    def _run_startup_preflight_until_ready(self) -> bool:
+        """Run startup preflight inside the source worker until it succeeds.
+
+        Camera network liveness is runtime state, not a process startup invariant. The
+        RTSP source should therefore keep its worker thread alive and retry preflight
+        instead of raising from start(), which causes the runtime worker process to fail
+        before the control plane can report or recover from the offline camera.
+        """
+        if self._preflight_outcome is not None:
+            return True
+
+        attempt = 0
+        backoff_s = self.reconnect_backoff_s
+        backoff_cap_s = 10.0
+        first_attempt = True
+
+        while not self._stop_event.is_set():
+            attempt += 1
+            try:
+                self._run_startup_preflight()
+            except Exception as exc:
+                max_attempts: int | None = self.max_reconnect_attempts or None
+                if max_attempts is not None and attempt >= max_attempts:
+                    logger.error(
+                        "RTSP startup preflight exhausted: camera=%s attempts=%s error=%s",
+                        self.camera_name,
+                        attempt,
+                        exc,
+                        exc_info=exc,
+                        extra=self._event_extra(
+                            "rtsp_startup_preflight_exhausted",
+                            attempt=attempt,
+                            max_attempts=max_attempts,
+                        ),
+                    )
+                    return False
+
+                self._set_run_state(RTSPRunState.RECONNECTING)
+                logger.warning(
+                    "RTSP startup preflight failed; retrying in background: "
+                    "camera=%s attempt=%s max_attempts=%s error=%s",
+                    self.camera_name,
+                    attempt,
+                    "inf" if max_attempts is None else max_attempts,
+                    exc,
+                    exc_info=exc,
+                    extra=self._event_extra(
+                        "rtsp_startup_preflight_retry",
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    ),
+                )
+
+                sleep_s = self._reconnect_sleep_s(
+                    backoff_s=backoff_s,
+                    aggressive=True,
+                    first_attempt=first_attempt,
+                )
+                first_attempt = False
+                if sleep_s > 0:
+                    self._clock.sleep(sleep_s)
+                backoff_s = self._bump_reconnect_backoff(
+                    backoff_s,
+                    backoff_cap_s,
+                    aggressive=True,
+                )
+                continue
+
+            return True
+
+        return False
 
     def _run_startup_preflight(self) -> None:
         if self._preflight_outcome is not None:
@@ -504,7 +577,7 @@ class RTSPSource(ThreadedClipSource):
                     fallback = self._build_fallback_preflight_outcome(err.camera_key)
                     self._apply_preflight_outcome(fallback)
                 else:
-                    logger.error(
+                    logger.warning(
                         "RTSP startup preflight failed: camera=%s key=%s stage=%s reason=%s",
                         self.camera_name,
                         err.camera_key,
@@ -1660,9 +1733,11 @@ class RTSPSource(ThreadedClipSource):
     # Recording -> Idle (no motion for stop_delay)
     def _run(self) -> None:
         """Start monitoring camera for motion and recording videos."""
-        self._log_startup_info()
-
         try:
+            if not self._run_startup_preflight_until_ready():
+                return
+
+            self._log_startup_info()
             try:
                 self._start_frame_pipeline()
             except Exception as exc:

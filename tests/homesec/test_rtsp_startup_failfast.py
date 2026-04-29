@@ -83,3 +83,46 @@ async def test_runtime_bundle_startup_fails_fast_when_any_source_fails() -> None
 
     # Then: Already-started sources are cleanly shut down
     assert good_source.shutdown_called
+
+
+@pytest.mark.asyncio
+async def test_runtime_bundle_startup_allows_background_rtsp_preflight_retries() -> None:
+    """Runtime startup should succeed when source preflight degrades in background."""
+
+    class _BackgroundPreflightSource(_StubSource):
+        async def start(self) -> None:
+            # Given: source startup no longer raises on transient preflight failures
+            return
+
+    # Given: bundle with a source that handles preflight failures asynchronously
+    source = _BackgroundPreflightSource(camera_name="garage")
+    assembler = RuntimeAssembler(
+        storage=cast(Any, _NoopShutdown()),
+        repository=cast(Any, object()),
+        notifier_factory=lambda _config: (
+            cast(Any, _NoopShutdown()),
+            [],
+        ),
+        notifier_health_logger=cast(Any, _noop_notifier_health),
+        alert_policy_factory=lambda _config: cast(Any, object()),
+        source_factory=lambda _config: ([], {}),
+    )
+    runtime = RuntimeBundle(
+        generation=1,
+        config=cast(Any, object()),
+        config_signature="cfgsig",
+        notifier=cast(Any, object()),
+        notifier_entries=[],
+        filter_plugin=cast(Any, object()),
+        vlm_plugin=cast(Any, object()),
+        alert_policy=cast(Any, object()),
+        pipeline=cast(Any, object()),
+        sources=[source],
+        sources_by_camera={"garage": source},
+    )
+
+    # When: starting the runtime bundle
+    await assembler.start_bundle(runtime)
+
+    # Then: startup should not fail fast
+    assert not source.shutdown_called
