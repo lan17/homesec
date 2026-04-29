@@ -481,7 +481,7 @@ class RTSPSource(ThreadedClipSource):
             return True
 
         attempt = 0
-        backoff_s = 0.2
+        backoff_s = self.reconnect_backoff_s
         backoff_cap_s = 10.0
         first_attempt = True
 
