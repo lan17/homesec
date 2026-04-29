@@ -1517,6 +1517,23 @@ def test_recording_survives_short_stall(tmp_path: Path) -> None:
         recorder=recorder,
         clock=clock,
     )
+    source._apply_preflight_outcome(  # noqa: SLF001
+        CameraPreflightOutcome(
+            camera_key="cam-key",
+            motion_profile=MotionProfile(input_url=source.detect_rtsp_url),
+            recording_profile=build_default_recording_profile(source.rtsp_url),
+            diagnostics=CameraPreflightDiagnostics(
+                attempted_urls=[source.rtsp_url, source.detect_rtsp_url],
+                probes=[],
+                selected_motion_url=source.detect_rtsp_url,
+                selected_recording_url=source.rtsp_url,
+                selected_recording_profile=build_default_recording_profile(
+                    source.rtsp_url
+                ).profile_id(),
+                session_mode="dual_stream",
+            ),
+        )
+    )
     pipeline._on_empty = source._stop_event.set
     source._stop_event.clear()
 
