@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -470,6 +471,116 @@ def test_startup_preflight_fallback_keeps_concurrent_preview_unclassified(
     assert source._preflight_outcome.concurrent_preview_supported is None  # noqa: SLF001
     assert source._preflight_outcome.concurrent_preview_downgrade_reason is None  # noqa: SLF001
     assert publisher.concurrent_preview_downgrades == []
+
+
+@pytest.mark.asyncio
+async def test_rtsp_start_degrades_when_startup_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    """RTSP start() should not raise just because the camera is offline."""
+
+    class _FailingPreflight:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+            preview_rtsp_url: str | None = None,
+            preview_probe_rtsp_url: str | None = None,
+            preview_audio_enabled: bool = False,
+        ) -> PreflightError:
+            _ = camera_name, primary_rtsp_url, detect_rtsp_url
+            _ = preview_rtsp_url, preview_probe_rtsp_url, preview_audio_enabled
+            self.calls += 1
+            return PreflightError(
+                camera_key="cam-key",
+                stage="connect",
+                message="camera unavailable",
+            )
+
+    # Given: RTSP source with a startup preflight that always fails
+    pipeline = FakeFramePipeline(frames=[b"0000"])
+    recorder = FakeRecorder()
+    config = _make_config(tmp_path, reconnect={"max_attempts": 1})
+    source = RTSPSource(
+        config,
+        camera_name="cam",
+        frame_pipeline=pipeline,
+        recorder=recorder,
+    )
+    failing_preflight = _FailingPreflight()
+    source._preflight = failing_preflight  # noqa: SLF001
+
+    # When: starting the RTSP source
+    await source.start()
+
+    deadline = time.monotonic() + 1.0
+    while source._thread is not None and time.monotonic() < deadline:  # noqa: SLF001
+        time.sleep(0.01)
+
+    # Then: startup should degrade without raising and without starting the frame pipeline
+    assert failing_preflight.calls == 1
+    assert pipeline.start_calls == []
+    assert not source.is_healthy()
+    await source.shutdown()
+
+
+def test_startup_preflight_retries_until_ready(tmp_path: Path) -> None:
+    """Transient RTSP preflight failures should retry inside the source thread path."""
+
+    class _FlakyPreflight:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(
+            self,
+            *,
+            camera_name: str,
+            primary_rtsp_url: str,
+            detect_rtsp_url: str,
+            preview_rtsp_url: str | None = None,
+            preview_probe_rtsp_url: str | None = None,
+            preview_audio_enabled: bool = False,
+        ) -> CameraPreflightOutcome | PreflightError:
+            _ = camera_name, preview_rtsp_url, preview_probe_rtsp_url, preview_audio_enabled
+            self.calls += 1
+            if self.calls == 1:
+                return PreflightError(
+                    camera_key="cam-key",
+                    stage="connect",
+                    message="temporary camera outage",
+                )
+            recording_profile = build_default_recording_profile(primary_rtsp_url)
+            return CameraPreflightOutcome(
+                camera_key="cam-key",
+                motion_profile=MotionProfile(input_url=detect_rtsp_url),
+                recording_profile=recording_profile,
+                diagnostics=CameraPreflightDiagnostics(
+                    attempted_urls=[primary_rtsp_url, detect_rtsp_url],
+                    probes=[],
+                    selected_motion_url=detect_rtsp_url,
+                    selected_recording_url=primary_rtsp_url,
+                    selected_recording_profile=recording_profile.profile_id(),
+                    session_mode="dual_stream",
+                ),
+            )
+
+    # Given: an RTSP source with fake clock and flaky startup preflight
+    config = _make_config(tmp_path)
+    source = RTSPSource(config, camera_name="cam", clock=FakeClock())
+    flaky_preflight = _FlakyPreflight()
+    source._preflight = flaky_preflight  # noqa: SLF001
+
+    # When: preflight retries until ready
+    assert source._run_startup_preflight_until_ready()  # noqa: SLF001
+
+    # Then: preflight should succeed on retry and persist its outcome
+    assert flaky_preflight.calls == 2
+    assert source._preflight_outcome is not None  # noqa: SLF001
 
 
 def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requested(
