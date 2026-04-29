@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from homesec.models.filter import FilterConfig
+from homesec.models.talk import TalkInputFormat
 from homesec.models.vlm import VLMConfig
 
 
@@ -251,6 +252,35 @@ class PreviewConfig(BaseModel):
         return value
 
 
+class TalkConfig(BaseModel):
+    """Top-level push-to-talk feature configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    token_ttl_s: int = Field(default=30, ge=1, le=300)
+    max_session_s: int = Field(default=60, ge=1, le=300)
+    idle_timeout_s: float = Field(default=2.0, ge=0.1, le=30.0)
+    input: TalkInputFormat = Field(default_factory=TalkInputFormat)
+
+
+class CameraTalkConfig(BaseModel):
+    """Per-camera talk backend configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    backend: str = "onvif_rtsp_backchannel"
+    config: dict[str, Any] | BaseModel = Field(default_factory=dict)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
+
+
 class FastAPIServerConfig(BaseModel):
     """Configuration for the FastAPI server."""
 
@@ -314,6 +344,7 @@ class CameraConfig(BaseModel):
     name: str
     enabled: bool = True
     source: CameraSourceConfig
+    talk: CameraTalkConfig = Field(default_factory=CameraTalkConfig)
 
 
 class Config(BaseModel):
@@ -332,6 +363,7 @@ class Config(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     server: FastAPIServerConfig = Field(default_factory=FastAPIServerConfig)
     preview: PreviewConfig = Field(default_factory=PreviewConfig)
+    talk: TalkConfig = Field(default_factory=TalkConfig)
     filter: FilterConfig
     vlm: VLMConfig
     alert_policy: AlertPolicyConfig
