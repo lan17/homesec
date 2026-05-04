@@ -530,6 +530,7 @@ export interface components {
             /** Name */
             name: string;
             source: components["schemas"]["CameraSourceConfig"];
+            talk?: components["schemas"]["CameraTalkConfig"];
         };
         /** CameraCreate */
         CameraCreate: {
@@ -584,6 +585,26 @@ export interface components {
             healthy: boolean;
             /** Last Heartbeat */
             last_heartbeat: number | null;
+        };
+        /**
+         * CameraTalkConfig
+         * @description Per-camera talk backend configuration.
+         */
+        CameraTalkConfig: {
+            /**
+             * Backend
+             * @default onvif_rtsp_backchannel
+             */
+            backend: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
         };
         /** CameraUpdate */
         CameraUpdate: {
