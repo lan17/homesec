@@ -177,7 +177,7 @@ def select_audio_backchannel(
                 if _normalize_codec_name(codec.normalized_name) != preference:
                     continue
                 control = media.control or description.session_control or "*"
-                if base_control_url is not None and control != "*":
+                if base_control_url is not None:
                     control = _join_control_url(base_control_url, control)
                 return SelectedBackchannel(
                     control=control,
