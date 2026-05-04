@@ -82,6 +82,7 @@ def test_onvif_backchannel_config_normalizes_supported_codec_names() -> None:
         ("transport", "udp", "rtsp_tcp_interleaved"),
         ("connect_timeout_s", 0, "greater than 0"),
         ("io_timeout_s", 31, "less than or equal to 30"),
+        ("require_onvif_backchannel", False, "Extra inputs"),
         ("extra_field", True, "Extra inputs"),
     ],
 )

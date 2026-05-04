@@ -62,7 +62,6 @@ class ONVIFBackchannelConfig(BaseModel):
     connect_timeout_s: float = Field(default=5.0, gt=0.0, le=30.0)
     io_timeout_s: float = Field(default=5.0, gt=0.0, le=30.0)
     user_agent: str = "HomeSec/PushToTalk"
-    require_onvif_backchannel: bool = True
 
     @field_validator("preferred_codecs")
     @classmethod

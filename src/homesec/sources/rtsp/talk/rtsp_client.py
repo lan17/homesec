@@ -245,17 +245,29 @@ class RTSPClient:
 
     async def _read_response(self) -> RTSPResponse:
         reader = self._require_reader()
-        head = await asyncio.wait_for(
-            reader.readuntil(_HEADER_SEPARATOR), timeout=self._io_timeout_s
-        )
-        header_text = head.decode("iso-8859-1")
-        content_length = _content_length_from_header_text(header_text)
-        body = b""
-        if content_length:
-            body = await asyncio.wait_for(
-                reader.readexactly(content_length), timeout=self._io_timeout_s
+        while True:
+            first = await asyncio.wait_for(reader.readexactly(1), timeout=self._io_timeout_s)
+            if first == b"$":
+                await self._read_interleaved_frame(reader)
+                continue
+
+            head = first + await asyncio.wait_for(
+                reader.readuntil(_HEADER_SEPARATOR), timeout=self._io_timeout_s
             )
-        return RTSPResponse.parse(head + body)
+            header_text = head.decode("iso-8859-1")
+            content_length = _content_length_from_header_text(header_text)
+            body = b""
+            if content_length:
+                body = await asyncio.wait_for(
+                    reader.readexactly(content_length), timeout=self._io_timeout_s
+                )
+            return RTSPResponse.parse(head + body)
+
+    async def _read_interleaved_frame(self, reader: asyncio.StreamReader) -> bytes:
+        _channel = await asyncio.wait_for(reader.readexactly(1), timeout=self._io_timeout_s)
+        length_bytes = await asyncio.wait_for(reader.readexactly(2), timeout=self._io_timeout_s)
+        length = int.from_bytes(length_bytes, "big")
+        return await asyncio.wait_for(reader.readexactly(length), timeout=self._io_timeout_s)
 
     def _require_reader(self) -> asyncio.StreamReader:
         if self._reader is None:

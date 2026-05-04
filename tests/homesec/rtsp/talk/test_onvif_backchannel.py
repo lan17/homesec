@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import re
 import struct
 from dataclasses import dataclass, field
 
@@ -48,9 +50,15 @@ class _FakeRTSPBackchannelServer:
     play_status: int = 200
     teardown_status: int = 200
     require_basic_auth: bool = False
+    require_digest_auth: bool = False
+    digest_qop: str | None = "auth"
     basic_username: str = "alice"
     basic_password: str = "s3cr@t"
     transport_header: str = "RTP/AVP/TCP;unicast;interleaved=0-1"
+    setup_session_header: str | None = "homesec-talk;timeout=60"
+    content_base_header: str | None = None
+    content_location_header: str | None = None
+    interleaved_before_response_methods: set[str] = field(default_factory=set)
     sdp_body: bytes = field(default_factory=lambda: _BACKCHANNEL_SDP.encode())
     requests: list[_RTSPRequest] = field(default_factory=list)
     interleaved_before_play: list[tuple[int, bytes]] = field(default_factory=list)
@@ -102,6 +110,8 @@ class _FakeRTSPBackchannelServer:
                 request = await self._read_request(first, reader)
                 self.requests.append(request)
                 response = self._response_for(request)
+                if request.method in self.interleaved_before_response_methods:
+                    writer.write(_interleaved_frame(channel=1, payload=b"rtcp"))
                 writer.write(response)
                 await writer.drain()
                 if request.method == "PLAY" and self.play_status == 200:
@@ -133,6 +143,12 @@ class _FakeRTSPBackchannelServer:
             await reader.readexactly(content_length)
         return _RTSPRequest(method=method, uri=uri, headers=headers)
 
+    def _digest_challenge_header(self) -> str:
+        parts = ['Digest realm="homesec-fake"', 'nonce="digest-nonce"']
+        if self.digest_qop is not None:
+            parts.append(f'qop="{self.digest_qop}"')
+        return ", ".join(parts)
+
     def _response_for(self, request: _RTSPRequest) -> bytes:
         cseq = request.headers.get("cseq", "1")
         if request.method == "DESCRIBE":
@@ -147,24 +163,36 @@ class _FakeRTSPBackchannelServer:
                         reason="Unauthorized",
                         headers={"WWW-Authenticate": 'Basic realm="homesec-fake"'},
                     )
+            if self.require_digest_auth and not _digest_authorization_matches(request, self):
+                return _rtsp_response(
+                    cseq=cseq,
+                    status=401,
+                    reason="Unauthorized",
+                    headers={"WWW-Authenticate": self._digest_challenge_header()},
+                )
             if self.describe_status != 200:
                 return _rtsp_response(
                     cseq=cseq, status=self.describe_status, reason="Option Not Supported"
                 )
+            headers = {"Content-Type": "application/sdp"}
+            if self.content_base_header is not None:
+                headers["Content-Base"] = self.content_base_header
+            if self.content_location_header is not None:
+                headers["Content-Location"] = self.content_location_header
             return _rtsp_response(
                 cseq=cseq,
-                headers={"Content-Type": "application/sdp"},
+                headers=headers,
                 body=self.sdp_body,
             )
         if request.method == "SETUP":
             if self.setup_status != 200:
                 return _rtsp_response(cseq=cseq, status=self.setup_status, reason="Setup Failed")
+            headers = {"Transport": self.transport_header}
+            if self.setup_session_header is not None:
+                headers["Session"] = self.setup_session_header
             return _rtsp_response(
                 cseq=cseq,
-                headers={
-                    "Transport": self.transport_header,
-                    "Session": "homesec-talk;timeout=60",
-                },
+                headers=headers,
             )
         if request.method == "PLAY":
             if self.play_status == 200:
@@ -222,6 +250,52 @@ def _rtsp_response(
     lines = [f"RTSP/1.0 {status} {reason}"]
     lines.extend(f"{name}: {value}" for name, value in merged.items())
     return ("\r\n".join(lines) + "\r\n\r\n").encode("iso-8859-1") + body
+
+
+def _interleaved_frame(*, channel: int, payload: bytes) -> bytes:
+    return b"$" + bytes([channel]) + len(payload).to_bytes(2, "big") + payload
+
+
+def _digest_authorization_matches(
+    request: _RTSPRequest,
+    server: _FakeRTSPBackchannelServer,
+) -> bool:
+    authorization = request.headers.get("authorization")
+    if authorization is None or not authorization.startswith("Digest "):
+        return False
+    values = _parse_digest_values(authorization.removeprefix("Digest "))
+    if values.get("username") != server.basic_username:
+        return False
+    if values.get("realm") != "homesec-fake" or values.get("nonce") != "digest-nonce":
+        return False
+    if values.get("uri") != request.uri:
+        return False
+
+    algorithm = values.get("algorithm", "MD5")
+    if algorithm.upper() != "MD5":
+        return False
+    ha1 = _md5(f"{server.basic_username}:homesec-fake:{server.basic_password}")
+    ha2 = _md5(f"{request.method}:{request.uri}")
+    qop = values.get("qop")
+    if qop:
+        expected = _md5(f"{ha1}:digest-nonce:{values.get('nc')}:{values.get('cnonce')}:{qop}:{ha2}")
+    else:
+        expected = _md5(f"{ha1}:digest-nonce:{ha2}")
+    return values.get("response") == expected
+
+
+def _parse_digest_values(value: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for match in re.finditer(r'(\w+)=("(?:[^"\\]|\\.)*"|[^,]+)', value):
+        raw = match.group(2).strip()
+        if raw.startswith('"') and raw.endswith('"'):
+            raw = raw[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        result[match.group(1).lower()] = raw
+    return result
+
+
+def _md5(value: str) -> str:
+    return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _pcm_frame_16khz_20ms() -> bytes:
@@ -308,6 +382,52 @@ async def test_onvif_backchannel_uses_camera_selected_interleaved_channel() -> N
 
 
 @pytest.mark.asyncio
+async def test_onvif_backchannel_skips_interleaved_frames_before_control_response() -> None:
+    server = _FakeRTSPBackchannelServer(interleaved_before_response_methods={"PLAY"})
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
+@pytest.mark.parametrize("header_attr", ["content_base_header", "content_location_header"])
+@pytest.mark.asyncio
+async def test_onvif_backchannel_uses_response_base_for_relative_controls(
+    header_attr: str,
+) -> None:
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    setattr(server, header_attr, f"{server.url}/response-base/")
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    setup_request = next(request for request in server.requests if request.method == "SETUP")
+    assert setup_request.uri == f"{server.url}/response-base/trackID=backchannel"
+
+
+@pytest.mark.asyncio
 async def test_onvif_backchannel_maps_describe_551_to_unsupported() -> None:
     server = _FakeRTSPBackchannelServer(describe_status=551)
     await server.start()
@@ -375,6 +495,40 @@ async def test_onvif_backchannel_retries_basic_auth_from_url_credentials() -> No
     assert server.interleaved_after_play == []
 
 
+@pytest.mark.parametrize("digest_qop", [None, "auth"])
+@pytest.mark.asyncio
+async def test_onvif_backchannel_retries_digest_auth_from_config_credentials(
+    digest_qop: str | None,
+) -> None:
+    server = _FakeRTSPBackchannelServer(require_digest_auth=True, digest_qop=digest_qop)
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(
+                rtsp_url=server.url,
+                username="alice",
+                password="s3cr@t",
+            ),
+            camera_name="front_door",
+        )
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+    assert server.requests[1].headers["authorization"].startswith("Digest ")
+    assert "@" not in server.requests[1].uri
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
 @pytest.mark.asyncio
 async def test_onvif_backchannel_fails_auth_when_credentials_are_missing() -> None:
     server = _FakeRTSPBackchannelServer(require_basic_auth=True)
@@ -415,6 +569,29 @@ async def test_onvif_backchannel_fails_auth_when_camera_rejects_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_onvif_backchannel_fails_digest_auth_when_camera_rejects_retry() -> None:
+    server = _FakeRTSPBackchannelServer(require_digest_auth=True)
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(
+                rtsp_url=server.url,
+                username="alice",
+                password="wrong",
+            ),
+            camera_name="front_door",
+        )
+        with pytest.raises(RTSPAuthenticationError, match="rejected"):
+            await adapter.open_session(session_id="talk-1")
+    finally:
+        await server.stop()
+
+    assert [request.method for request in server.requests] == ["DESCRIBE", "DESCRIBE"]
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
 async def test_onvif_backchannel_rejects_setup_failure_before_audio() -> None:
     server = _FakeRTSPBackchannelServer(setup_status=454)
     await server.start()
@@ -424,6 +601,25 @@ async def test_onvif_backchannel_rejects_setup_failure_before_audio() -> None:
             camera_name="front_door",
         )
         with pytest.raises(CameraRejectedTalkSessionError):
+            await adapter.open_session(session_id="talk-1")
+    finally:
+        await server.stop()
+
+    assert [request.method for request in server.requests] == ["DESCRIBE", "SETUP"]
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_rejects_setup_200_without_session_before_play() -> None:
+    server = _FakeRTSPBackchannelServer(setup_session_header=None)
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        with pytest.raises(CameraRejectedTalkSessionError, match="Session"):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
@@ -447,7 +643,12 @@ async def test_onvif_backchannel_rejects_play_failure_before_audio() -> None:
     finally:
         await server.stop()
 
-    assert [request.method for request in server.requests] == ["DESCRIBE", "SETUP", "PLAY"]
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
 

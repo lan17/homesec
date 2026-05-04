@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit, urlunsplit
 
 from homesec.sources.rtsp.talk.errors import (
     CameraBackchannelUnsupportedError,
@@ -176,9 +177,11 @@ def select_audio_backchannel(
                     continue
                 if _normalize_codec_name(codec.normalized_name) != preference:
                     continue
-                control = media.control or description.session_control or "*"
-                if base_control_url is not None:
-                    control = _join_control_url(base_control_url, control)
+                control = _resolve_control_url(
+                    description=description,
+                    media=media,
+                    base_control_url=base_control_url,
+                )
                 return SelectedBackchannel(
                     control=control,
                     payload_type=payload_type,
@@ -233,6 +236,21 @@ def _apply_fmtp(media: SDPMediaDescription, attr: str) -> None:
     )
 
 
+def _resolve_control_url(
+    *,
+    description: SDPDescription,
+    media: SDPMediaDescription,
+    base_control_url: str | None,
+) -> str:
+    control = media.control or description.session_control or "*"
+    if base_control_url is None:
+        return control
+    if media.control is not None and description.session_control:
+        session_base = _join_control_url(base_control_url, description.session_control)
+        return _join_control_url(session_base, media.control)
+    return _join_control_url(base_control_url, control)
+
+
 def _normalize_codec_name(value: str) -> str:
     parts = value.strip().split("/")
     if len(parts) < 2:
@@ -246,9 +264,38 @@ def _normalize_codec_name(value: str) -> str:
 
 
 def _join_control_url(base_url: str, control: str) -> str:
+    control = control.strip()
     if "://" in control:
         return control
     if control == "*":
         return base_url
-    separator = "" if base_url.endswith("/") else "/"
-    return f"{base_url}{separator}{control}"
+
+    base = urlsplit(base_url)
+    control_parts = urlsplit(control)
+    if control.startswith("/"):
+        return urlunsplit(
+            (
+                base.scheme,
+                base.netloc,
+                control_parts.path,
+                control_parts.query,
+                control_parts.fragment,
+            )
+        )
+
+    base_path = base.path or ""
+    if not base_path:
+        joined_path = f"/{control_parts.path}"
+    elif base_path.endswith("/"):
+        joined_path = f"{base_path}{control_parts.path}"
+    else:
+        joined_path = f"{base_path}/{control_parts.path}"
+    return urlunsplit(
+        (
+            base.scheme,
+            base.netloc,
+            joined_path,
+            control_parts.query,
+            control_parts.fragment,
+        )
+    )

@@ -112,6 +112,49 @@ def test_select_audio_backchannel_maps_aggregate_control_to_base_url() -> None:
     assert selected.control == "rtsp://camera.example/live"
 
 
+def test_select_audio_backchannel_handles_leading_slash_control_path() -> None:
+    sdp = _BACKCHANNEL_SDP.replace(
+        "a=control:trackID=backchannel",
+        "a=control:/Streaming/Channels/101/trackID=backchannel",
+    )
+
+    selected = select_audio_backchannel(
+        sdp,
+        preferred_codecs=["PCMU/8000"],
+        base_control_url="rtsp://camera.example/live?profile=main",
+    )
+
+    assert selected.control == "rtsp://camera.example/Streaming/Channels/101/trackID=backchannel"
+
+
+def test_select_audio_backchannel_appends_relative_control_before_base_query() -> None:
+    selected = select_audio_backchannel(
+        _BACKCHANNEL_SDP,
+        preferred_codecs=["PCMU/8000"],
+        base_control_url="rtsp://camera.example/live?profile=main",
+    )
+
+    assert selected.control == "rtsp://camera.example/live/trackID=backchannel"
+
+
+def test_select_audio_backchannel_uses_session_control_as_base_for_media_control() -> None:
+    sdp = """v=0
+s=session control base
+a=sendonly
+a=control:rtsp://camera.example/base/
+m=audio 0 RTP/AVP 0
+a=control:trackID=backchannel
+"""
+
+    selected = select_audio_backchannel(
+        sdp,
+        preferred_codecs=["PCMU/8000"],
+        base_control_url="rtsp://camera.example/fallback",
+    )
+
+    assert selected.control == "rtsp://camera.example/base/trackID=backchannel"
+
+
 def test_parse_sdp_ignores_malformed_lines_and_applies_fmtp_to_known_codec() -> None:
     sdp = """v=0
 s=malformed resilience

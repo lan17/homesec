@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 
 from homesec.sources.rtsp.talk.errors import (
@@ -112,6 +113,7 @@ class ONVIFBackchannelAdapter:
                 io_timeout_s=self._config.io_timeout_s,
             )
         )
+        setup_completed = False
         await client.connect()
         try:
             describe = await client.describe(headers=_require_header())
@@ -123,10 +125,15 @@ class ONVIFBackchannelAdapter:
                 raise CameraRejectedTalkSessionError(
                     f"Camera rejected backchannel DESCRIBE with RTSP {describe.status_code}"
                 )
+            base_control_url = (
+                describe.header("content-base")
+                or describe.header("content-location")
+                or self._rtsp_url
+            )
             selected = select_audio_backchannel(
                 describe.body.decode("utf-8", errors="replace"),
                 preferred_codecs=self._config.preferred_codecs,
-                base_control_url=self._rtsp_url,
+                base_control_url=base_control_url,
             )
             setup = await client.setup_interleaved(
                 selected.control,
@@ -137,6 +144,11 @@ class ONVIFBackchannelAdapter:
                 raise CameraRejectedTalkSessionError(
                     f"Camera rejected backchannel SETUP with RTSP {setup.status_code}"
                 )
+            if not client.session_id:
+                raise CameraRejectedTalkSessionError(
+                    "Camera accepted backchannel SETUP without an RTSP Session header"
+                )
+            setup_completed = True
             rtp_channel = _rtp_channel_from_setup(setup.header("transport"))
             play = await client.play(headers=_require_header())
             if play.status_code != 200:
@@ -151,20 +163,20 @@ class ONVIFBackchannelAdapter:
                 input_sample_rate=input_sample_rate,
                 rtp_channel=rtp_channel,
             )
-        except (
-            CameraBackchannelUnsupportedError,
-            UnsupportedTalkCodecError,
-            CameraRejectedTalkSessionError,
-        ):
-            await client.close()
-            raise
         except Exception:
+            if setup_completed:
+                await _best_effort_teardown(client)
             await client.close()
             raise
 
 
 def _require_header() -> dict[str, str]:
     return {"Require": _ONVIF_BACKCHANNEL_REQUIRE}
+
+
+async def _best_effort_teardown(client: RTSPClient) -> None:
+    with suppress(Exception):
+        await client.teardown(headers=_require_header())
 
 
 def _rtp_channel_from_setup(transport_header: str | None) -> int:
