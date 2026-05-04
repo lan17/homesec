@@ -198,6 +198,7 @@
         "description": "Per-camera talk backend configuration.",
         "properties": {
           "backend": {
+            "const": "onvif_rtsp_backchannel",
             "default": "onvif_rtsp_backchannel",
             "title": "Backend",
             "type": "string"

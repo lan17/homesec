@@ -905,3 +905,39 @@ def test_talk_input_forbids_extra_fields() -> None:
     # When / Then: Validation rejects extra fields
     with pytest.raises(ValidationError):
         Config.model_validate(data)
+
+
+def test_talk_input_rejects_unsupported_codec() -> None:
+    """Talk input format should only accept the browser PCM16 contract."""
+    # Given: A config with a deferred/unsupported browser input codec
+    data = minimal_config()
+    data["talk"] = {
+        "enabled": True,
+        "input": {
+            "codec": "opus",
+            "sample_rate": 16000,
+            "channels": 1,
+            "frame_ms": 20,
+        },
+    }
+
+    # When / Then: Validation rejects unsupported codecs in the v1 contract
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(data)
+
+    assert "pcm_s16le" in str(exc_info.value)
+
+
+def test_camera_talk_rejects_unsupported_backend() -> None:
+    """Camera talk config should reject deferred backends in the v1 contract."""
+    # Given: A config using a backend that is intentionally out of scope for MVP
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {"enabled": True, "backend": "mediamtx", "config": {}}
+
+    # When / Then: Validation rejects unsupported per-camera talk backends
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(data)
+
+    assert "onvif_rtsp_backchannel" in str(exc_info.value)

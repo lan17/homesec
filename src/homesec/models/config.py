@@ -270,7 +270,7 @@ class CameraTalkConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     enabled: bool = False
-    backend: str = "onvif_rtsp_backchannel"
+    backend: Literal["onvif_rtsp_backchannel"] = "onvif_rtsp_backchannel"
     config: dict[str, Any] | BaseModel = Field(default_factory=dict)
 
     @field_validator("backend", mode="before")

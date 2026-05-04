@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,7 +42,7 @@ class TalkInputFormat(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    codec: str = "pcm_s16le"
+    codec: Literal["pcm_s16le"] = "pcm_s16le"
     sample_rate: int = Field(default=16000, ge=8000, le=48000)
     channels: int = Field(default=1, ge=1, le=1)
     frame_ms: int = Field(default=20, ge=10, le=60)

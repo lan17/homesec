@@ -594,8 +594,9 @@ export interface components {
             /**
              * Backend
              * @default onvif_rtsp_backchannel
+             * @constant
              */
-            backend: string;
+            backend: "onvif_rtsp_backchannel";
             /** Config */
             config?: {
                 [key: string]: unknown;
