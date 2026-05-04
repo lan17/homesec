@@ -1,0 +1,15 @@
+{
+  "runs": [
+    {
+      "date": "2026-05-04T03:54:25.547761+00:00",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "backend": "codex-oauth",
+      "files": 395,
+      "retry_timeout_seconds": 1200,
+      "chunk_failures": 0
+    }
+  ],
+  "total_input_tokens": 0,
+  "total_output_tokens": 0
+}

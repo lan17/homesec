@@ -1,0 +1,1582 @@
+{
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/preview_paths.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "1f90e4fe21c4ed5d04942388f6fc434c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/cli.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "e5c551b7e9312fa650e41df127f8eeca"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/postgres_support.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "30fa1f87ea58748feb72cf4feeb4ece4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/interfaces.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "93c00139787c070073cd9687dc6e3c01"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/storage_paths.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "af375dcb33e8b03af48bd151a612bd83"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/errors.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "4254a69263329ae1924eb159ddba75c5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "9df85ca8a91a7547e91ef5fd7ad8b7c1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/log_records.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "44307fd48a5575d8007a6b192fe2620c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/app.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "183a82ea772b92ea55f3d15f37fb9f2d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/logging_setup.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "cc2daed5cdb4c4adcb2d64d19842cf0c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/services/setup_probe_support.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "5de8b63bf02d135d3ae8c85608e6873f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/services/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "aba9327560aa4ad88a3a10393f4eefd1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/services/setup_probes.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "8c275d59ad0ea6b26f3bc3a4ced1f185"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/services/setup.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "f11dd322f1c1d6ea02106da68fd7a8d7"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d44cf84771a8cc6b6397fd1a4ce69429"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/utils.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "0c798fa6bc99e998ab22d9bb47a50326"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/registry.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "5e9e877c6f60ef4ebf3d2ab7987ab689"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/analyzers/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "9455fe5804d30b294908c41bb5877937"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/analyzers/openai.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "175d03e92768a73bd49d78c89141c97a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/storage/dropbox.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "c93c7bc9c5141698dd22645572f0c662"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/storage/local.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "e5e24b88433c626db5cd06672a55d906"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/storage/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "a9004d5a3e5ecf02ce4b02bd1346f381"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/storage/local_setup_probe.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "046194992258a90ebde7014ae927331b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/alert_policies/noop.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "093cd1c2a653468be73493a0270f317a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/alert_policies/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d44fe48a9279902de6520d50d5ee2434"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/alert_policies/default.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "57610660885c948cb79dff166018d7d6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/notifiers/mqtt.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "bb58c420c4ffae72e7c8d95eb566ab6c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/notifiers/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "0218876f892d15d18db5efbb0a3d7e63"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/notifiers/sendgrid_email.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "4372a9a85a476f136ef7484698c02f11"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/filters/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "aaec54e844f6f767716399acf4a37bcf"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/filters/yolo.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "7092e72390959084ee495022c88611a9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/sources/ftp.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "e27203219539d017d21740c52ef7d8e1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/sources/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "f6faadae8360f1a53bd5d28506ff7f06"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/sources/local_folder.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "ef91a0e00dd6b5ea1d9d5150d3fd77fe"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/plugins/sources/rtsp.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "73394cd081b809d22d7b8b12ab8cea74"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/pipeline/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d0b93f992371316117a816ac51c30676"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/pipeline/core.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "a5323bfa5b0a3ef852fafdd68708bce6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/config/loader.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "901b6e68595f185a91e9c8f676486941"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/config/errors.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "c774d59885cb9cb59805d7a0071dfb87"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/config/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "5e92358393b47012dea3ac4a3ef3172b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/config/validation.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "7064281a0f2fe595b237e4ba9d20ed37"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/config/manager.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "3ef25a8959add4f41fccf5a5e513dbb2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/redaction.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "a9c2a0504bed6f34ed6a71638f9bd449"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/errors.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "cfd2babed9efb051dec1d24fbb37aaca"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "959f117c6f897c33f74a2f7e44af4ee5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/server.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "fc4e8c7d6b94031a53b957d15c86378f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/dependencies.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "a6ebcd0d06ef8e19e4e00fc0f364ed77"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/openapi_export.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "b7daa3c967dd5fb34db65b2a14a0fef2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/pagination.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "ea4d2e47a0874678b46265806fbe977c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/maintenance.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "7c8d99f061e1e8702456bcbcfc8a34ef"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/onvif.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d42630090e6df11aca92378538064a62"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/media.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "77848412d51a42695e434439d45c0f94"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/stats.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d1f83b81e21b153b18c2f7ed9141396e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/runtime.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "8451dc2d6a2c8221950332a7ba34aa64"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/clips.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "5981d96a06c91915bcbc3a625448223c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/preview.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "59ad04b4e685a5f754345fc2dc45e7fe"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "0e4696ab4e90e1fa43222327383687c6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/cameras.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "0b14fc890af038d44499d91cc56933d6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/setup.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "144db2f24de98a34065d4fe0014731ab"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/health.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "7ed53af487c8b01886fb7976bd115e94"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/routes/config.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "39fdf908dacc8493897a4a45c33ad999"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/notifiers/multiplex.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "2ae1df51a142d47e9faceb9390f2f1fe"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/state/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "c2dc24082d476bcf21fe99e2138214b1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/state/postgres.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "2025fcedf4f2032c86adf42db68bf148"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/maintenance/cleanup_clips.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d8a22fec3aa3849d2d7e98e41d6a43ed"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/maintenance/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "e5f4452daa945767b5aefc24036e7191"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/maintenance/postgres_backup.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "3d6df17a13efcc7e0dabaa0759098d58"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/controller.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "e2c36808c7a0f104fa284791f35ee75d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/test_worker_harness.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "3f70349a5dafabd4180303e56894c84e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/disabled_vlm.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "bba94c26d16988ecf7c535dda6d2c000"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/bootstrap.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "8c5e5b87c0668406bfa7566feba01344"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/models.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "9dd318909a4b6239158e4d44612429d8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/worker.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "2687730e8e5057648a83c30b7eb6450a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/subprocess_controller.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "60020da673761beb45bd9e8d5f53e519"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/assembly.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "bd40448c7208c7da4eb60bc99bbe7aa8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/subprocess_protocol.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "7666f7417794da89f8f5f5dc3b254fc7"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/errors.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "a24060b1b2dc6e56825ae0456625cb42"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "8d1270fdc06069dff6c17df70d5aea65"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/runtime/manager.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "1165adf879bbd4e7048c36bf181cc083"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/service.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "977ff061d0801bb349cb90f6df326dc8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/cli.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "d0eba472937fe0727db629920071d64e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/discovery.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "18d0a1adec2306de83cb01040f637c2f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/client.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "0b73685038b9d0d840b21e48b1221ffb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/__main__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "e396c3b62e1526e095e2845d5b7a5d51"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/setup_probe.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "537121f494c3c1d0cc5ed40ebcbd9a3a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/onvif/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "db495521d7907c00c9390eb09f63be4a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/telemetry/db_log_handler.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "29410d5b3c0dc24b8460576c05c6c99e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/telemetry/postgres_settings.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "f58a8ef83c558eb115d7625d681b664e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/telemetry/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/telemetry/db/log_table.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "ca428350eff12ea935412858fc15be5f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/telemetry/db/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "68b329da9893e34099c7d8ad5cb9c940"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/ftp.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "a6daf79f6579a4ea2ab87f35ee346e25"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "9ae6e52cb72033c78eabaa7bdd96a0e6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/base.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "de66cb3e6b60f14d9ac2b7f500d1cb66"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/local_folder_setup_probe.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "0bc829e2390c60250f0b936b161e733a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/local_folder.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "a81623401d65902efe43fe157ea49124"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/ftp_setup_probe.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "bd272a890e15453cd93cb27460f69d78"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/capabilities.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "ed828a478c2c7e38813a29e6b0a9d625"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/preflight.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "53628dc48c43a2cc2c90d2e2124d9212"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/url_derivation.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "1ce7b36601bc86e88678073d0ce04918"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/recording_profile.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "5e33f6fe60192ca0a5c91b7c76aa7d36"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/discovery.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "7bcfda02738ce3ead64a2abccbf46eb6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/hardware.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "8dbb887b9ffd8a27c64e22fe4cc4a36d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/recorder.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "853a485e35b9b00d964750fa1f9646c9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/setup_probe.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "0aaff460f9aebebc38e5e41ad37eecb0"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/live_publisher.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "272cb9f362b3684f8242b3bda69beb6a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/clock.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "2d977e83450fcf6580a19003714b9fd5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "bdcba4c66baaade66baa452005b1338a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/utils.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "d4633e7c92cf615549bd602a5795808f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/frame_pipeline.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "ba785008a34ae0297ce3028e426d80b1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/motion.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "e057a161490abe205668426019a9ead8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/sources/rtsp/core.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "e5eac4b1e316ef290ffd134134435f58"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/retention/wiring.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "990a22d88205264a7611ba2a4bc35c5b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/retention/pruner.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "3e601af3198370ada7e758829e167d32"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/retention/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "d874974c2c3595c9e0731c9e59513b0e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/vlm.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "4335437ba60c9aeb23217efdc0530169"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/filter.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "e0c9a1e0e36b13c73d0395d90077cb1e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/storage.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "3ff70000609343f1f6be4eb55f41006e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/__init__.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "2d4b3999f97d79e1a4eb4946318b5837"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/alert.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "1d7591c72114fad4f877647cc42a67b4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/enums.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "c1342beadc5debb9ed968d03586cf8aa"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/clip.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "a59aba0aa94998282a0c1ac75fdd6961"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/events.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "3c425a6b91e0cd7cc9fcfdf3339475f5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/setup.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "aac1da2e99b32ca3711e7f5a937a8452"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/models/config.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "8774571a9d8ad814faa3b30d4242135f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/repository/clip_repository.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "a1f1a3cea8d947cbb5b5367143ab01aa"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/repository/__init__.py": {
+    "mtime": 1777698642.6157305,
+    "hash": "a694cd8768b48e2573b1aa70efdc26df"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/vite.config.ts": {
+    "mtime": 1777698642.6257305,
+    "hash": "35be26d6b1b16ea03f4af1ac5d466b0c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/eslint.config.js": {
+    "mtime": 1777698642.6217306,
+    "hash": "b8893da386a89dfd3672dad848f4ec7e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/App.tsx": {
+    "mtime": 1777698642.6217306,
+    "hash": "cb2fe0b1c5620a7e6b4e41c506884ac2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/main.tsx": {
+    "mtime": 1777698642.6257305,
+    "hash": "90568ac67873a63f1634ad0c7cbfec7d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/app/providers/theme-context.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "54877d8fd97deba42b31841e49111ce4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/app/providers/QueryProvider.tsx": {
+    "mtime": 1777698642.6217306,
+    "hash": "a976ba281c06e19410edc72bc2e56b1b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/app/providers/ThemeProvider.tsx": {
+    "mtime": 1777698642.6217306,
+    "hash": "e62fe50c4f68f5729aef1871f305a7c2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/app/layout/AppShell.tsx": {
+    "mtime": 1777698642.6217306,
+    "hash": "f750c2a46263c926e00cb3b76391570c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/not-found/NotFoundPage.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "19f18e52a7c035cd31e2a99d740e55ba"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/SetupWizardShell.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "575c5b08b48fba0b6ee86033170a3fb4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/SetupPage.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "7877337355a99543b4ff5a6e7841db6b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/SetupPage.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "1bd2c50e41ce8e5367321775a64587a6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/useSetupRedirect.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "9309bc3b0aebb1bc6242dca0f95177b6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/review.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "2c2080e7102fb3cbb174abbf3e49fd7b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/review.test.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "2fc7a23ef48a21a0e290bf23dea0d765"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/useSetupRedirect.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "49b1f87ac2482530ab583300e365e148"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/types.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "60529cda6a13785581e2669a02924169"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/stepDrafts.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "ddef668cf3b5d44a4412bb8fc4cd0066"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/SetupWizardShell.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "85f23f513075067b071dc6cdd0ca9c74"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/stepDrafts.test.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "378a5240abcd825ada70f66ab0ff2bd2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/useWizardState.ts": {
+    "mtime": 1777698642.6257305,
+    "hash": "2fa9fbcadf0576a15b5bcc965ebf224f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/useWizardState.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "75e06beece1ead5e8f1dbe65e96ab828"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/ReviewStep.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "09c8a13a4fe541cbaf7b4abab01ee88a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/CameraStep.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "5abd5f9fa76f62ddb30d6ecd4aed1cc2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/LaunchProgress.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "ae31acd95adbb1f80e42da661ace94fb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/WelcomeStep.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "ad6091ad9636ee262324188ef96aa4b7"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/StorageStep.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "a7d5033f595b0fd93f065d275b9a2ab6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/LaunchProgress.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "0a87ab81ffc8005f4b014215d14baaa4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/NotificationStep.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "3a98099ee7fc896a1b242754ecf9a5dc"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/CameraStep.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "ba170dfe29408d20eca3b6924f413109"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/WelcomeStep.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "c30a61147d480b078aa4244454909e7b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/StorageStep.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "50a300b7edd09d710a9b98741ba49819"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/DetectionStep.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "67fd8a587c338a10f33b5784150454b6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/ReviewStep.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "d70c11eb7cfa5afd362e5e8d611124ce"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/NotificationStep.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "c336097a4547d3527f7dcd146c2e7121"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/DetectionStep.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "9f4ae4ffd80d342673b705c0f5812c66"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/setup/steps/ReviewSummaryCard.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "dd84a2b9fc391a084bbe189641be8e15"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/cursorState.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "7f26e01d87daabd970e82d47eda3843d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/presentation.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "7ef98a62db0c233af756ee427cf09998"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/playbackRetry.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "4562ba64c1d9d41fcb26a55a5943561c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/queryParams.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "dd90303c886d52ef0560e8472ac03383"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/cursorState.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "bed4dd9fccf9b65d9780213f0ec7be8e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/ClipsPage.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "f0dd4a957faef7ca7f88f88418f2f5f4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/queryParams.test.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "e1b50dca316bb7a1e3d8f9bf277077ee"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/presentation.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "4f800e6c7492173cbbfa99a5039eeea4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/playbackRetry.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "51234c8ac7977a780c2f355328281b7e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/clips/ClipDetailPage.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "da6dd2f9d6f7e59cc73a0a8ef7928ac7"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/types.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "56288eb3b2a53cc6bbf4933d5154d729"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/StorageConfigForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "1e499766dd22633d7e05ad6d89e1cf8e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/StorageConfigForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "0737e4679e9e56321d96e417bc1d0cbf"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/backends/index.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "d9815d84685bf8e91ed2c7188d3c48d6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/backends/LocalStorageForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "c1b4ab3ffc47f2fa1e4e4e97f6204578"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/backends/configReaders.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "241883614a63ed480a7b1e6e9850ffda"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/storage/backends/DropboxStorageForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "c918024ef46127a561e4f33e75169a32"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/detection/VlmConfigForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "ab5585ffa8b890eebceb5edf4359b3fe"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/detection/types.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "c2d44e9e56425fbe6663511ad5ad6953"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/detection/FilterConfigForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "5ae8d4dabf1468c54cd9e950554a0fac"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/detection/types.test.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "c4dfe54da2807810e738c72549babf2a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/detection/VlmConfigForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "998a03b8cd5f3f43bba59745ff30e946"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/detection/FilterConfigForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "c8e5cc19f9e0d5eef9428d12e59c8edb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/NotifierConfigForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "456a10987fae4c3c20538a3af4521d73"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/types.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "3b4e68faa8e3dc649712b030252d955d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/NotifierConfigForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "41a9a29ef20140133d83cedd2c88fa49"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/types.test.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "c0993793b4afb19404f0c96274fb5fda"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/backends/MqttForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "fbb2acaf65064fd2906121166b33c79a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/backends/SendgridForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "40663997fcd10519f2929ae020c985a8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/backends/MqttForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "b35a712ac543f1584279bea79d83481d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/backends/SendgridForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "038901a7732e7078e580cd306244b4bd"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/backends/index.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "cf68c695914098e346ee6b2ba943cc56"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/notifiers/backends/configReaders.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "81841908e30904eee29f5941d9a30fe4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/alerts/AlertPolicyForm.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "49756d51920cbe9c2135dbdbb90d4328"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/settings/alerts/AlertPolicyForm.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "dff1375b5affa90588b7d93c4bb5d1e3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/presentationOnvif.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "f07358e7fe63d0b721380d0e7a734cbc"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/presentation.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "d32e67a52044c53c39811b76d8ee6ca8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/CamerasPage.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "fd669564e690a4926dc793bd3a0d1695"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/CamerasPage.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "0823bb762a5e0812346a917c3538445a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/presentationOnvif.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "d6db1b9b4cc85fd071bfdc7a93b5c41c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/onvifDefaults.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "fc662e46a513156b6e983d0511e8460f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/actions.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "3720495a2b22c244d39c60070a707b5c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/forms.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "1d88cf19dcf3ee25674990f40d0275d5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/forms.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "f9c07f0b1b03ce37330d3e81f84701ec"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/presentation.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "13545f70aef82a0c7e0c7d231defc292"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/onvifApi.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "a3ee7ba06bc44b4b1b4f78f5c8ff7b64"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/OnvifStreamSelectStep.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "3f8d7c47908ccaa963e263cf0b818219"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/CameraSourceConfigEditor.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "cd9dc1f11f8bab38bc275108baf88b30"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/CameraPreviewPanel.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "6f36f8cf3047da9e38f7130efc17e0c5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/OnvifDiscoveryWizard.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "e5650e6db2dabe86b2e5ab245087aae3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/CameraPreviewPanel.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "fe58b286ee43fa24ba3817099f38a0c3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/OnvifDiscoveryWizard.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "51e346cdc8a27d92569443f2ec8ce64d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/CameraList.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "e1877a3dc1dbbaede4859ef02b187596"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/OnvifDiscoverStep.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "dff777fc87f7a8893dee1dac14c658c4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/OnvifProbeStep.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "329d2723fc55b6da91c2cfde1e49771e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/components/RuntimeReloadBanner.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "7b5ff61df6d7f7441c82c3405993e60c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/hooks/useCameraPreview.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "1ea377527df2a9d8a5c32be2e9a2f466"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/hooks/useCameraActions.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "c11378800adaa3fb3f96ab68a95d909d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/hooks/useCameraPreview.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "27c2fc8b4a054ea60433f4a94e15f540"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/useCameraAddState.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "59ed04c2f614afa5f4152e3374eb54a2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/BackendPicker.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "66c1cd471e69567daad76484f39821f0"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/ConfirmStep.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "fb66252ca496985b3076012498365f40"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/CameraAddFlow.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "77b47b5530a670247365437ecfaba03a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/CameraAddFlow.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "36c2f6e5c55680d4f1f4c7f0bf2c7662"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/TestConnectionStep.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "72d3716f0ce2b886244a21c9288169cc"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/validation.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "270f9d541218c5c6dd1a0eb6adf41768"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/types.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "7d394c24a3adfb2aa288922edf7c61da"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/BackendPicker.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "da2aeb5ee92584a7a682e1f3ec832cb2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/validation.test.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "b1ece8a3576d08e3a1e2608a439690a2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/useCameraAddState.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "eace968de0eb7f227086dd392c4c6208"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/LocalFolderForm.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "6008d53a0f252fe8d3c8da2e80973d28"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/FtpForm.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "23cb060c3fff8553d8167da770fb1bfb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/RtspForm.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "58c070a952a0f276d4a62378f2731a98"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/index.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "cd36439e975cd21312d0710f6d675f9d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/types.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "24a5972360d9dcf1242abd030b01d1d9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/RtspForm.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "3ebc42456e64deceee94a1880e6ef770"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/configReaders.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "0ebeefe4da0ea6ddf060038aefb2503c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/OnvifForm.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "03e3a1f113630248ba01d35b599c2701"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/LocalFolderForm.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "42f965250db9fe3ed6ac1e8259b34cbf"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/FtpForm.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "e11536380a4dddf17cca300ce4e43c71"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/cameras/add-flow/backends/OnvifForm.test.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "4034957dc7c7502838fd7d8a6b0646dd"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/dashboard/status.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "e6ba6585a2bff8a1b2a21441c8a13b28"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/dashboard/DashboardPage.test.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "ab07d5e6eac1d9dabfd7d2cebf1215bb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/dashboard/status.test.ts": {
+    "mtime": 1777698642.6247303,
+    "hash": "82dedf4b83d37892994d009fa6f81c58"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/dashboard/DashboardPage.tsx": {
+    "mtime": 1777698642.6247303,
+    "hash": "b72aac3a0e0dfe0cf4b7275e8cb4ee4b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/shared/errorPresentation.test.ts": {
+    "mtime": 1777698642.6257305,
+    "hash": "1d46c71fd7d7e86ba3da86b00e040171"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/shared/errorPresentation.ts": {
+    "mtime": 1777698642.6257305,
+    "hash": "724a8c19778c87bf4d28cf51b29639f9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/features/shared/TestConnectionButton.tsx": {
+    "mtime": 1777698642.6257305,
+    "hash": "7efe045ee1e4f22090ba1f93a8629056"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/components/ui/ApiKeyGate.tsx": {
+    "mtime": 1777698642.6217306,
+    "hash": "1940d9c2245405837f728d0fde24951f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/components/ui/Card.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "a8767afd0e374f1b229bbdeb592be36d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/components/ui/Button.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "2818da2549c29242075f572ae16b642a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/components/ui/ApiKeyGate.test.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "9a6ff0f32d7deb5de683b10d45d44297"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/components/ui/apiKeyGateErrors.ts": {
+    "mtime": 1777698642.6227305,
+    "hash": "d4bdc5bfc7dc69ee30267ec07c636371"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/components/ui/StatusBadge.tsx": {
+    "mtime": 1777698642.6227305,
+    "hash": "3c76c72727c63eda278c5aeaada8a13f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/routes/AppRouter.tsx": {
+    "mtime": 1777698642.6257305,
+    "hash": "5dc47a56dc8fada739b6ed0d7ec3564e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/errors.test.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "0e3070f856de4543d4ecd820f737f329"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/parsing.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "527aa7d43a7aa071e58aa4c12db59ad4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/http.test.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "8dcff05f350aa356bd4bdb68641bc6b7"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/apiKeyStorage.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "8a6ef1f4624c94dec04ddbb694037d89"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/client.test.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "556673913daf8fe012e5f74d35fbc1c4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/errors.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "ac2c869081ddca59962a6c73d1b2980c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/http.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "99cdd3e2af2b8804296dbab06bdf2d78"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/client.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "344e0ad134bec5770b9f28c9995e22e2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/apiKeyStorage.test.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "211c4036a6da9911c3dad4986520141e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useRuntimeStatusQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "bf5e1db11247ef1c80926f994989d0f9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useSetupStatusQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "75f9b904e61df18350eb4b5a5402f356"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useStatsQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "8a8bfd59c044038ea9bd92778816a96f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useSetupTestConnectionMutation.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "824d05a728e097cef1ce051804e1d4ed"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/usePostgresBackupStatusQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "15c35497a8749fa412a0bdb8052b4342"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useRuntimeReloadMutation.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "69e7d5f8807c5ab90267b1898b8f1453"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useCamerasQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "8a4441a03bf6fae972a2fad23561a029"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useCameraMutations.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "0bb226394a24dc209cd2005b8da1904f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/usePostgresBackupRunMutation.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "9b0b5eb1316e1acd45d5c0845f94dd7a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/usePreflightMutation.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "4475dd53d3083e0c9977b8863f51e526"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useClipMediaUrl.test.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "6b302d6bb0be18cacf444eef9990bb60"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/queryKeys.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "b5b57f341adbefaa2ac38192cb11e646"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useClipQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "c02350ddea25540dbf6d866637ab2d3f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useClipMediaUrl.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "4fe0fb9121c5c4a13a324c565f2b40c2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useClipsQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "742c9c2025a4fd4a3a5baf23b2ace692"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useFinalizeMutation.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "077b2b1f7c8f4cdefb4fc064831d853f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/hooks/useHealthQuery.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "53fca8454466ea98e541dad3e85c36e0"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/generated/schema.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "a296cc254122d7d2b71886b642a69ffb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/generated/types.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "70e4da890829d04b3a2ce0ab5c71ddf9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/api/generated/client.ts": {
+    "mtime": 1777698642.6217306,
+    "hash": "82522c05e39e7dc830ad962e36d56a7a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/scripts/api_codegen.mjs": {
+    "mtime": 1777698642.6217306,
+    "hash": "a401431bfc299b188840a2efe4346f07"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/dev/fake-camera/mock_onvif.py": {
+    "mtime": 1777698642.6137304,
+    "hash": "d6472ee47cf0dbdd52d3ad7926f2a44c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/alembic/env.py": {
+    "mtime": 1777698642.6137304,
+    "hash": "65ea21731388bc964fff6d0d4e365367"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/alembic/versions/d936851f725a_add_clip_query_expression_indexes.py": {
+    "mtime": 1777698642.6137304,
+    "hash": "27896bbb68b9cccc80a0ade3ee87b921"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/alembic/versions/e6f25df0df90_initial.py": {
+    "mtime": 1777698642.6137304,
+    "hash": "12be01c17e3568a6109bf3a14d3edaac"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/conftest.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "d62468000b89d81b12477bbeb513e9e1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "3a72ef38a22b2320622106219a6a6b42"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_pipeline.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "726b554aeb484e8725f7a40207f8cad5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_pagination.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "eab10456e38dc0c9e1810ef455cd0175"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_postgres_support.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "bf4676402bb3c0663052ddc1eb84a104"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_enums.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "d3398769719116b7a20ecce8c6b01c2c"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_clip_sources.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "c0cb45aaadaf128611e44f04ff732942"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_logging_setup.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "5c849908ac0dc94b636f7494532b81ac"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_rtsp_discovery.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "0f37e60d6ab97d35bf84f349faffa487"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_setup_routes.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "15919ed03df31aebc84a36e212c5dab5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_rtsp_startup_failfast.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "aaaf9aa7a6dfafd10588056b3c96dcbc"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_integration.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "0f5424be9b3ce965064c478001312a80"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_rtsp_preflight.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "8d446dbaba5d9b415ffdfc34d68a331f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_notifiers.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "f973a7c00d67cf319b13bf1cd2c7b503"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_config_manager.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "ec08e138827714d21b34798d82390416"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/conftest.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "5ec69d73ec1ae2e7aee3fe43044ef916"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_runtime_worker.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "6e687da5ef8d4a66bbe5f65aebacfaa4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_dropbox_storage.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "c135013f7a72ca855fc58b4ca499b9e1"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_config.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "ce2fa6b901ff8b0dccdc153b3448f704"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_retention_wiring.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "5dc737bbc1d13b23139b3702e3c5888a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_state_store.py": {
+    "mtime": 1777698642.6217306,
+    "hash": "d83eda3b98102925c9954a587e8281e9"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_media_route_helpers.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "c0eb50634e37c15477ed2cd08a33bf2d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_local_storage.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "345aab398029dc5b69f49f781b89f3e0"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_bootstrap_matrix.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "fc531a47778559be60e25fb5e1851857"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_runtime_bootstrap.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "3eda95e81e445ebf32175949a8da6c38"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_retention_pruner.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "030bb83ba610f7b2b300463493d875d6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_routes.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "f6faf4b51976a8d2594d532c4abadc75"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_maintenance_routes.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "08df88eb7091c5763a7b6e2a91523842"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_mqtt_notifier.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "2ca4b4b5f2f7da1a584866ef523661c3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_errors.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "ed0d701c59c0d5ca41f7062c594668a2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_rtsp_capabilities.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "0045e6dc5f1850c1b9999bd64f4f8f23"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_server.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "223203002c7aa2a51600d8fcc8d79b5b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_runtime_assembly.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "cefda1790f3ed2d920674b2eef5c906f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_app.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "f824515fbc15a4965d089bff87fa032b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_runtime_manager.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "64a3711dd6516c34333a215eb1b98e96"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_source_health.py": {
+    "mtime": 1777698642.6217306,
+    "hash": "a43423e4934f5e332bcf88efcece0469"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_rtsp_recording_profile.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "afe2f0e6f599532796aeaea21a63b711"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_onvif_service.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "1033959e7966d2812dc433de2813051a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_ftp_source.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "e1aa0f7440796e3da380fedf88aa7b0f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_postgres_backup.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "8da5782ce27a2c59515527653ddf280d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_onvif_client.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "d01fb8443bca5ee484b5a312843c4a8b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_setup_probes.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "6bfd440ec2405214c25fdcfda7d3a033"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_plugin_registration.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "0a9a9cc7a9000efa0764fed68d512d3f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_cleanup_clips.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "adfaf819d423078e2d4d0f09b06f5b89"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_setup_service.py": {
+    "mtime": 1777698642.6217306,
+    "hash": "9a3dfba5504f01173f51ba23c02c26b5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_onvif_discovery.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "15d3e05c2885292828af62eef94d1251"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_alembic_env.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "4a2182070314d12075d9452192c2bbe6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_openapi_export.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "eaf5f80d77f07f4c2f9807c4c820f572"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_preview_routes.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "605057de257e676c7992ccbf3b6f79b8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "9d71548bd5418eaf849a6372c91fdc7e"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_pipeline_events.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "34dacfae84196dee195e4f5ea90782ca"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_onvif_cli.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "3c77c078cd39ce1ce5599ab405592160"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_alert_policy.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "1401ee099809e1b14aca02383abdc923"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_cli.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "a30177105a99f93df8eda991ff19b077"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_runtime_subprocess_controller.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "c861fbfbd90532eda790864e6f34e9ac"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_yolo_filter.py": {
+    "mtime": 1777698642.6217306,
+    "hash": "481429eda45e61f84e5c6be5e57d140d"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_openai_vlm.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "10f9e5c3952f1208502e2f8481bf7fae"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_runtime_routes.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "bead7f5d60ba2c05c6b862e57389d459"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_event_store.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "038adde17688d830dcb601f9e087506b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_clip_repository.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "a7ba2224db0ef3afe81d45e588062842"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_db_log_handler.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "e460df9b3d8a0aeae4777a4c364d30ba"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_setup_test_connection_service.py": {
+    "mtime": 1777698642.6217306,
+    "hash": "804a7cecf93a6a6258d09d94619dbe30"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/postgres_test_support.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "56fa720e2049508b352bfaed09abb643"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_onvif.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "21c10014a7b6ff6a63920a16a8606936"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/ui_dist_stub.py": {
+    "mtime": 1777698642.6217306,
+    "hash": "16fa7b4531f7ed85e5740c46075e8718"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_plugin_utils.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "50d3f627729f0a01ea1adcfd2d7ad580"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_sendgrid_notifier.py": {
+    "mtime": 1777698642.6197305,
+    "hash": "d07c4491ef476a29574dc2584e8319b8"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/rtsp/test_live_publisher.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "33009ba88e919122befbb0c9dcc191a6"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/rtsp/test_frame_pipeline.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "4df0a677077aa20b262f8625b0bd5e38"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/rtsp/test_runtime.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "2fbb4b60a8ba69e70169ef8f63ac9d49"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/rtsp/test_helpers.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "01cbaf53190a23906dbe0e94fb535bb3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/rtsp/test_hardware.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "10530618faed3c2198731268e5ea3aef"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/state_store.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "c624ac038d902979850f3cfb93b21e6a"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/event_store.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "08f3d9640bc7bb11da01a8a9244134d5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/vlm.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "ec6e3317a9b0a5f496b321150f0d27be"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/filter.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "1053a029b72295faf339fa89e40f3de4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/storage.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "aa671184c23861b3f1e5d6a73b8a88ce"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/__init__.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "18aa6070c4590095bcaf1fa6914cf668"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/retention_pruner.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "dff3655b1c525b7b9e0d8cf90def14f5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/mocks/notifier.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "c237912903fc99616edc0055d936e700"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/preview_tokens.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "37fed6140eb5fe3d28577766282756a5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/api/media_tokens.py": {
+    "mtime": 1777698642.6147304,
+    "hash": "4785a7e0bb6229ebb8d721fea9bac879"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/src/styles/tokens.css": {
+    "mtime": 1777698642.6257305,
+    "hash": "de55c16d93f72437aa24b19c7d1486f5"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_media_tokens.py": {
+    "mtime": 1777698642.6177304,
+    "hash": "2e0a9ae0c614caf29296447e424940d4"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/tests/homesec/test_api_preview_tokens.py": {
+    "mtime": 1777698642.6187305,
+    "hash": "c8aca012a47951a1ebbc56207b74fbee"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/CHANGELOG.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "062456f15985da1d7f08456cb091cb01"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/DESIGN.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "0a2e7385dae27231f0c528daf8f06ad3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/PLUGIN_DEVELOPMENT.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "fbf85bdb4e6c4fa97cb87b08f5d443bb"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/README.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "bc927f2d9ed3c7ae11827f170a3e65da"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/docker-compose.yml": {
+    "mtime": 1777698642.6137304,
+    "hash": "0bbe5bfbe3c5019e05cb95add7ab420b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/TESTING.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "8ac9ed2f647c9aca67cba24deebf49a3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/AGENTS.md": {
+    "mtime": 1777698642.6127305,
+    "hash": "8ede23ae8b7fe496a370c00768363668"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/docs/postgres-backups.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "e42e80e5fb52453e121eedd5eddf1786"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/docs/preview-deployment.md": {
+    "mtime": 1777698642.6137304,
+    "hash": "3bc7121e17508a618a8b54daed358d9f"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/src/homesec/services/AGENTS.md": {
+    "mtime": 1777698642.6157305,
+    "hash": "2bc9c46ccd2d4ffe21366d0f1c28cc19"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/skills/local/homesec-db-logs/SKILL.md": {
+    "mtime": 1777698642.6147304,
+    "hash": "e5e7f1b305e8b34a181622b889dc0d23"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/config/example.yaml": {
+    "mtime": 1777698642.6137304,
+    "hash": "c3c4d7073044dd3728c3e54ab71fbce3"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/index.html": {
+    "mtime": 1777698642.6217306,
+    "hash": "5da359a13c8c7e8a0e2672e666e4048b"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/README.md": {
+    "mtime": 1777698642.6217306,
+    "hash": "51ef17f0240813b98c19274946270cf2"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/AGENTS.md": {
+    "mtime": 1777698642.6217306,
+    "hash": "b7a3929f6d9a20ff0f93abef65b9e930"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/dev/fake-camera/mediamtx.yml": {
+    "mtime": 1777698642.6137304,
+    "hash": "71d8e5b94e37f466dff807366972be28"
+  },
+  "/home/entheogen/code/claw_dev/repos/homesec/ui/public/vite.svg": {
+    "mtime": 1777698642.6217306,
+    "hash": "8e3a10e157f75ada21ab742c022d5430"
+  }
+}
