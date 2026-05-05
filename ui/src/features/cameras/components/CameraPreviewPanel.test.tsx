@@ -11,6 +11,7 @@ const DEFAULT_PLAYLIST_URL =
 
 const {
   useCameraPreviewMock,
+  usePushToTalkMock,
   hlsAttachMediaMock,
   hlsConstructMock,
   hlsDestroyMock,
@@ -19,6 +20,7 @@ const {
   hlsOnMock,
 } = vi.hoisted(() => ({
   useCameraPreviewMock: vi.fn(),
+  usePushToTalkMock: vi.fn(),
   hlsConstructMock: vi.fn(),
   hlsLoadSourceMock: vi.fn(),
   hlsAttachMediaMock: vi.fn(),
@@ -29,6 +31,10 @@ const {
 
 vi.mock('../hooks/useCameraPreview', () => ({
   useCameraPreview: (...args: unknown[]) => useCameraPreviewMock(...args),
+}))
+
+vi.mock('../hooks/usePushToTalk', () => ({
+  usePushToTalk: (...args: unknown[]) => usePushToTalkMock(...args),
 }))
 
 vi.mock('hls.js', () => {
@@ -50,6 +56,33 @@ vi.mock('hls.js', () => {
 
   return { default: MockHls }
 })
+
+
+function mockIdlePushToTalk(overrides: Record<string, unknown> = {}) {
+  usePushToTalkMock.mockReturnValue({
+    status: {
+      camera_name: 'front',
+      enabled: true,
+      state: 'idle',
+      active_session_id: null,
+      supported_codecs: ['pcm_s16le'],
+      selected_codec: 'pcm_s16le',
+      last_error: null,
+      httpStatus: 200,
+    },
+    session: null,
+    error: null,
+    isPending: false,
+    isStarting: false,
+    isStopping: false,
+    isStreaming: false,
+    canStart: true,
+    start: vi.fn(),
+    stop: vi.fn(),
+    refreshStatus: vi.fn(),
+    ...overrides,
+  })
+}
 
 function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
   useCameraPreviewMock.mockReturnValue({
@@ -89,6 +122,7 @@ function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
 describe('CameraPreviewPanel', () => {
   beforeEach(() => {
     useCameraPreviewMock.mockReset()
+    usePushToTalkMock.mockReset()
     hlsConstructMock.mockReset()
     hlsLoadSourceMock.mockReset()
     hlsAttachMediaMock.mockReset()
@@ -96,6 +130,7 @@ describe('CameraPreviewPanel', () => {
     hlsDestroyMock.mockReset()
     hlsIsSupportedMock.mockReset()
     hlsIsSupportedMock.mockReturnValue(true)
+    mockIdlePushToTalk()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('#EXTM3U', {
         status: 200,
@@ -404,4 +439,100 @@ describe('CameraPreviewPanel', () => {
     expect(screen.getByText('READY')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Attach preview' })).toBeTruthy()
   })
+
+  it('wires push-to-talk hold and release actions', async () => {
+    // Given: A talk-capable camera and hook handlers
+    const startTalk = vi.fn().mockResolvedValue(undefined)
+    const stopTalk = vi.fn().mockResolvedValue(undefined)
+    useCameraPreviewMock.mockReturnValue({
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'idle',
+        viewer_count: null,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      },
+      session: null,
+      playlistUrl: null,
+      warning: null,
+      error: null,
+      isPending: false,
+      isStarting: false,
+      isStopping: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refreshStatus: vi.fn(),
+    })
+    const user = userEvent.setup()
+
+    // When: Pressing the talk hotkey from the idle state
+    mockIdlePushToTalk({ start: startTalk, stop: stopTalk })
+    render(<CameraPreviewPanel cameraName="front" />)
+    screen.getByRole('button', { name: 'Hold to talk' }).focus()
+    await user.keyboard('[Space>]')
+
+    // Then: The control starts the talk stream
+    expect(startTalk).toHaveBeenCalledTimes(1)
+
+    // When: Releasing the hotkey while a stream is active
+    cleanup()
+    mockIdlePushToTalk({
+      start: startTalk,
+      stop: stopTalk,
+      isStreaming: true,
+      canStart: false,
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'active',
+        active_session_id: 'tk_active',
+        supported_codecs: ['pcm_s16le'],
+        selected_codec: 'pcm_s16le',
+        last_error: null,
+        httpStatus: 200,
+      },
+    })
+    render(<CameraPreviewPanel cameraName="front" />)
+    screen.getByRole('button', { name: 'Release to stop' }).focus()
+    await user.keyboard('[Space>]')
+    await user.keyboard('[/Space]')
+
+    // Then: Push-to-talk forwards stop to the hook
+    expect(stopTalk).toHaveBeenCalledTimes(1)
+  })
+
+
+  it('keeps preview video muted while talk is active', async () => {
+    // Given: A ready preview and an active talk session
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'active',
+        active_session_id: 'tk_active',
+        supported_codecs: ['pcm_s16le'],
+        selected_codec: 'pcm_s16le',
+        last_error: null,
+        httpStatus: 200,
+      },
+      isStreaming: true,
+      canStart: false,
+    })
+
+    // When: Rendering the active preview/talk controls
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The playback element remains muted so camera preview audio cannot feed back
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video?.muted).toBe(true)
+      expect(video?.getAttribute('muted')).toBe('')
+      expect(screen.getByText('TALKING')).toBeTruthy()
+    })
+  })
+
 })

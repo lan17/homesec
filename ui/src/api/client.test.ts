@@ -1352,3 +1352,109 @@ describe('HomeSecApiClient ONVIF methods', () => {
     ).rejects.toBeInstanceOf(APIError)
   })
 })
+
+describe('HomeSecApiClient push-to-talk', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns structured talk status data', async () => {
+    // Given: A talk status endpoint response for a camera
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          camera_name: 'front',
+          enabled: true,
+          state: 'idle',
+          active_session_id: null,
+          supported_codecs: ['pcm_s16le'],
+          selected_codec: 'pcm_s16le',
+          last_error: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting talk status
+    const result = await client.getCameraTalkStatus('front')
+
+    // Then: The payload is parsed and carries HTTP status metadata
+    expect(result).toEqual({
+      camera_name: 'front',
+      enabled: true,
+      state: 'idle',
+      active_session_id: null,
+      supported_codecs: ['pcm_s16le'],
+      selected_codec: 'pcm_s16le',
+      last_error: null,
+      httpStatus: 200,
+    })
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8081/api/v1/talk/cameras/front',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('prepares and stops talk sessions with typed payloads', async () => {
+    // Given: The prepare and stop endpoints return session lifecycle payloads
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            camera_name: 'front',
+            session_id: 'tk_123',
+            state: 'starting',
+            input: { codec: 'pcm_s16le', sample_rate: 16000, channels: 1, frame_ms: 20 },
+            websocket_url: '/api/v1/talk/cameras/front/sessions/tk_123/stream?token=talk-token',
+            stream_url: '/api/v1/talk/cameras/front/sessions/tk_123/stream?token=talk-token',
+            token: 'talk-token',
+            token_expires_at: null,
+            max_session_s: 30,
+            idle_timeout_s: 5,
+          }),
+          {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ accepted: true, state: 'stopping' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Preparing and stopping a talk session
+    const session = await client.prepareCameraTalkSession('front', {
+      input: { codec: 'pcm_s16le', sample_rate: 16000, channels: 1, frame_ms: 20 },
+    })
+    const stop = await client.stopCameraTalkSession('front', session.session_id)
+
+    // Then: The client targets the Phase 3 control-plane endpoints
+    expect(session.httpStatus).toBe(201)
+    expect(session.websocket_url).toContain('/stream?token=talk-token')
+    expect(stop).toEqual({ accepted: true, state: 'stopping', httpStatus: 202 })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://localhost:8081/api/v1/talk/cameras/front/sessions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          input: { codec: 'pcm_s16le', sample_rate: 16000, channels: 1, frame_ms: 20 },
+        }),
+      }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://localhost:8081/api/v1/talk/cameras/front/sessions/tk_123',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+})
