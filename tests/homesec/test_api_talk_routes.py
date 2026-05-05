@@ -673,6 +673,7 @@ def test_talk_websocket_cleans_up_reserved_session_on_invalid_start_message() ->
         (b"not json", 1003),
         ("not json", 1008),
         (json.dumps(["not", "an", "object"]), 1008),
+        (json.dumps({"type": "start"}), 1008),
         (json.dumps({"type": "start", "unexpected": True}), 1008),
     ],
 )
@@ -933,6 +934,30 @@ def test_talk_websocket_accepts_bearer_api_key_when_auth_enabled(
     assert app.open_calls == [("front", "session-1", TalkInputFormat())]
 
 
+def test_talk_websocket_rejects_wrong_bearer_api_key_without_runtime_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wrong bearer credentials should fail auth without stopping a reserved session."""
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream",
+            headers={"Authorization": "Bearer wrong-secret"},
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert app.open_calls == []
+    assert app.stop_calls == []
+
+
 def test_talk_websocket_rejects_auth_when_api_key_missing() -> None:
     """Auth-enabled WebSockets should not fall back open if the API key is absent."""
     app = _StubTalkApp(
@@ -953,7 +978,7 @@ def test_talk_websocket_rejects_auth_when_api_key_missing() -> None:
 
     assert disconnect.value.code == 1011
     assert app.open_calls == []
-    assert app.stop_calls == [("front", "session-1")]
+    assert app.stop_calls == []
 
 
 def test_talk_websocket_rejects_missing_token_when_auth_enabled(
@@ -976,7 +1001,7 @@ def test_talk_websocket_rejects_missing_token_when_auth_enabled(
 
     assert disconnect.value.code == 1008
     assert app.open_calls == []
-    assert app.stop_calls == [("front", "session-1")]
+    assert app.stop_calls == []
 
 
 def test_talk_websocket_rejects_expired_token_when_auth_enabled(
@@ -1006,7 +1031,7 @@ def test_talk_websocket_rejects_expired_token_when_auth_enabled(
 
     assert disconnect.value.code == 1008
     assert app.open_calls == []
-    assert app.stop_calls == [("front", "session-1")]
+    assert app.stop_calls == []
 
 
 def test_talk_websocket_rejects_wrong_purpose_token_when_auth_enabled(
@@ -1045,4 +1070,4 @@ def test_talk_websocket_rejects_wrong_purpose_token_when_auth_enabled(
 
     assert disconnect.value.code == 1008
     assert app.open_calls == []
-    assert app.stop_calls == [("front", "session-1")]
+    assert app.stop_calls == []

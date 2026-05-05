@@ -84,10 +84,10 @@ class TalkWebSocketStartMessage(BaseModel):
     model_config = {"extra": "forbid"}
 
     type: Literal["start"]
-    codec: Literal["pcm_s16le"] = "pcm_s16le"
-    sample_rate: int = Field(default=16000, ge=8000, le=48000)
-    channels: int = Field(default=1, ge=1, le=1)
-    frame_ms: int = Field(default=20, ge=10, le=60)
+    codec: Literal["pcm_s16le"]
+    sample_rate: int = Field(ge=8000, le=48000)
+    channels: int = Field(ge=1, le=1)
+    frame_ms: int = Field(ge=10, le=60)
 
     def input_format(self) -> TalkInputFormat:
         return TalkInputFormat(
@@ -308,7 +308,6 @@ async def stream_talk_audio(
 
     await websocket.accept()
     if not await _authorize_talk_websocket(websocket, app, camera_name, session_id):
-        await _stop_talk_session_best_effort(app, camera_name, session_id)
         return
 
     input_format = await _receive_talk_start_message(websocket)
