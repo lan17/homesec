@@ -281,6 +281,7 @@ async def stream_talk_audio(
         return
     input_format = await _talk_input_from_websocket(websocket, app)
     if input_format is None:
+        await _stop_talk_session_best_effort(app, camera_name, session_id)
         return
 
     await websocket.accept()

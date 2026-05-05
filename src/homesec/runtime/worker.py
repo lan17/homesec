@@ -131,7 +131,7 @@ class _TalkCapableSource(Protocol):
 
     async def write_talk_frame(self, session_id: str, frame: bytes) -> None: ...
 
-    async def stop_talk_session(self, session_id: str) -> None: ...
+    async def stop_talk_session(self, session_id: str) -> bool: ...
 
 
 class _NoopNotifier(Notifier):
@@ -531,6 +531,11 @@ class _RuntimeWorkerService:
                 )
             case WorkerCommandType.TALK_STOP_SESSION:
                 stop_result = await self._stop_talk_session(command)
+                state = (
+                    TalkState.STOPPING
+                    if stop_result
+                    else self._talk_status(command.camera_name).state
+                )
                 return WorkerCommandResult(
                     command=command.command,
                     command_id=command.command_id,
@@ -539,7 +544,7 @@ class _RuntimeWorkerService:
                     camera_name=command.camera_name,
                     talk_stop_result=WorkerTalkStopPayload(
                         accepted=stop_result,
-                        state=TalkState.STOPPING if stop_result else TalkState.ERROR,
+                        state=state,
                     ),
                 )
             case _:
@@ -762,8 +767,7 @@ class _RuntimeWorkerService:
         if source is None:
             return False
         try:
-            await source.stop_talk_session(session_id)
-            return True
+            return bool(await source.stop_talk_session(session_id))
         except Exception as exc:
             logger.warning(
                 "Talk stop failed for camera=%s session=%s: %s",

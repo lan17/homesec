@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -18,6 +20,8 @@ from homesec.models.talk import (
     TalkSessionPrepareResult,
     TalkState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TalkSession(Protocol):
@@ -62,6 +66,7 @@ class _SessionRecord:
     created_at: float
     last_activity_at: float
     session: TalkSession | None = None
+    opening: bool = False
     selected_codec: str | None = None
     stats: TalkStats = field(default_factory=TalkStats)
     timeout_task: asyncio.Task[None] | None = None
@@ -90,6 +95,7 @@ class TalkManager:
         self._record: _SessionRecord | None = None
         self._lock = asyncio.Lock()
         self._last_error: str | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def status(self) -> CameraTalkStatus:
         """Return current source-level talk status."""
@@ -115,6 +121,7 @@ class TalkManager:
         request: TalkSessionPrepareRequest,
     ) -> TalkSessionPrepareResult:
         """Reserve a talk slot before the browser attaches the WebSocket stream."""
+        self._bind_loop()
         async with self._lock:
             if not self._enabled:
                 return TalkSessionPrepareResult(
@@ -150,6 +157,7 @@ class TalkManager:
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         """Open the camera session for a reserved talk session id."""
+        self._bind_loop()
         async with self._lock:
             record = self._record
             if record is None or record.session_id != request.session_id:
@@ -157,7 +165,7 @@ class TalkManager:
                     "Talk session is not reserved",
                     reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
                 )
-            if record.session is not None:
+            if record.session is not None or record.opening:
                 raise TalkManagerError(
                     "Talk session is already active",
                     reason=TalkRefusalReason.SESSION_ALREADY_ACTIVE,
@@ -167,28 +175,49 @@ class TalkManager:
                     "Talk input format does not match the reserved session",
                     reason=TalkRefusalReason.INVALID_AUDIO_FRAME,
                 )
+            record.opening = True
 
-            try:
-                session = await self._open_session_factory(request)
-            except Exception as exc:
-                self._last_error = str(exc) or type(exc).__name__
-                self._clear_record_locked(record, close_reason="open_failed")
-                raise
+        try:
+            session = await self._open_session_factory(request)
+        except asyncio.CancelledError:
+            await self._clear_opening_record(request.session_id, close_reason="open_cancelled")
+            raise
+        except Exception as exc:
+            self._last_error = str(exc) or type(exc).__name__
+            await self._clear_opening_record(request.session_id, close_reason="open_failed")
+            raise
 
-            record.session = session
-            record.state = TalkState.ACTIVE
-            record.selected_codec = session.selected_codec
-            record.stats.start_time = time.monotonic()
-            record.stats.selected_codec = session.selected_codec
-            if record.timeout_task is None:
-                record.timeout_task = asyncio.create_task(
-                    self._max_duration_watch(record.session_id)
-                )
-            record.idle_task = asyncio.create_task(self._idle_watch(record.session_id))
-            return session
+        async with self._lock:
+            record = self._record
+            if record is None or record.session_id != request.session_id:
+                close_unclaimed_session = True
+            else:
+                close_unclaimed_session = False
+                record.opening = False
+                record.session = session
+                record.state = TalkState.ACTIVE
+                record.selected_codec = session.selected_codec
+                record.stats.start_time = time.monotonic()
+                record.stats.selected_codec = session.selected_codec
+                if record.timeout_task is None:
+                    record.timeout_task = asyncio.create_task(
+                        self._max_duration_watch(record.session_id)
+                    )
+                record.idle_task = asyncio.create_task(self._idle_watch(record.session_id))
+                return session
+
+        if close_unclaimed_session:
+            await _close_session_safely(session)
+            raise TalkManagerError(
+                "Talk session is no longer reserved",
+                reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+            )
+
+        raise AssertionError("unreachable talk session open state")
 
     async def write_pcm_frame(self, session_id: str, frame: bytes) -> None:
         """Validate and forward one PCM input frame to the active camera session."""
+        self._bind_loop()
         record = self._require_active_record(session_id)
         expected = record.input.expected_bytes_per_frame
         if len(frame) != expected:
@@ -205,18 +234,21 @@ class TalkManager:
         record.stats.frames_sent += 1
         record.stats.bytes_sent += len(frame)
 
-    async def stop_session(self, session_id: str, *, reason: str = "client_stop") -> None:
+    async def stop_session(self, session_id: str, *, reason: str = "client_stop") -> bool:
         """Stop a reserved or active talk session if it matches the current one."""
+        self._bind_loop()
         record: _SessionRecord | None
         async with self._lock:
             record = self._record
             if record is None or record.session_id != session_id:
-                return
+                return False
             self._clear_record_locked(record, close_reason=reason)
         await _close_record(record)
+        return True
 
     async def shutdown(self) -> None:
         """Close any current talk session during source/runtime shutdown."""
+        self._bind_loop()
         record: _SessionRecord | None
         async with self._lock:
             record = self._record
@@ -224,6 +256,41 @@ class TalkManager:
                 return
             self._clear_record_locked(record, close_reason="shutdown")
         await _close_record(record)
+
+    def shutdown_sync(self, *, timeout_s: float) -> None:
+        """Synchronously close the manager from a source thread."""
+        loop = self._loop
+        running_loop: asyncio.AbstractEventLoop | None
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if loop is not None and loop.is_running():
+            if loop is running_loop:
+                raise RuntimeError("Cannot synchronously stop talk manager from its event loop")
+            future = asyncio.run_coroutine_threadsafe(self.shutdown(), loop)
+            try:
+                future.result(timeout=timeout_s)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                raise
+            return
+
+        if running_loop is not None:
+            raise RuntimeError("Cannot synchronously stop talk manager from a running event loop")
+        asyncio.run(self.shutdown())
+
+    def _bind_loop(self) -> None:
+        loop = asyncio.get_running_loop()
+        if self._loop is None:
+            self._loop = loop
+            return
+        if self._loop is not loop:
+            raise TalkManagerError(
+                "Talk manager cannot be used from multiple event loops",
+                reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+            )
 
     def _require_active_record(self, session_id: str) -> _SessionRecord:
         record = self._record
@@ -248,6 +315,14 @@ class TalkManager:
                 await self.stop_session(session_id, reason="idle_timeout")
                 return
 
+    async def _clear_opening_record(self, session_id: str, *, close_reason: str) -> None:
+        async with self._lock:
+            record = self._record
+            if record is None or record.session_id != session_id:
+                return
+            record.opening = False
+            self._clear_record_locked(record, close_reason=close_reason)
+
     def _clear_record_locked(self, record: _SessionRecord, *, close_reason: str) -> None:
         if self._record is record:
             self._record = None
@@ -271,6 +346,13 @@ async def _close_record(record: _SessionRecord) -> None:
     if session is None:
         return
     await session.close()
+
+
+async def _close_session_safely(session: TalkSession) -> None:
+    try:
+        await session.close()
+    except Exception as exc:  # pragma: no cover - defensive orphan cleanup
+        logger.warning("Failed to close unclaimed talk session: %s", exc, exc_info=True)
 
 
 def _new_session_id() -> str:

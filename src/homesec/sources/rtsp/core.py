@@ -5,7 +5,6 @@ Ported from motion_recorder.py to keep functionality within homesec.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -391,6 +390,7 @@ class RTSPSource(ThreadedClipSource):
         self._live_publisher_shutdown = False
         self._talk_adapter: ONVIFBackchannelAdapter | None = None
         self._talk_manager = self._build_talk_manager(config, camera_name=camera_name)
+        self._talk_manager_shutdown = False
         self._owns_recorder = recorder is None
 
         self._frame_pipeline: FramePipeline = frame_pipeline or FfmpegFramePipeline(
@@ -524,11 +524,17 @@ class RTSPSource(ThreadedClipSource):
             )
         await manager.write_pcm_frame(session_id, frame)
 
-    async def stop_talk_session(self, session_id: str) -> None:
+    async def stop_talk_session(self, session_id: str) -> bool:
         """Stop a push-to-talk session for this source."""
         manager = self._talk_manager
-        if manager is not None:
-            await manager.stop_session(session_id)
+        if manager is None:
+            return False
+        return await manager.stop_session(session_id)
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        """Stop talk state on the runtime loop before the threaded source shuts down."""
+        await self._shutdown_talk_manager_async()
+        await super().shutdown(timeout)
 
     def stop(self, timeout: float | None = None) -> None:
         """Stop the source and release preview resources even if start never ran."""
@@ -1565,14 +1571,33 @@ class RTSPSource(ThreadedClipSource):
         self._shutdown_live_publisher_once()
         self._shutdown_talk_manager_once()
 
-    def _shutdown_talk_manager_once(self) -> None:
+    async def _shutdown_talk_manager_async(self) -> None:
+        if self._talk_manager_shutdown:
+            return
         manager = self._talk_manager
         if manager is None:
+            self._talk_manager_shutdown = True
             return
         try:
-            asyncio.run(manager.shutdown())
+            await manager.shutdown()
         except Exception:
             logger.exception("Error stopping talk manager")
+        finally:
+            self._talk_manager_shutdown = True
+
+    def _shutdown_talk_manager_once(self) -> None:
+        if self._talk_manager_shutdown:
+            return
+        manager = self._talk_manager
+        if manager is None:
+            self._talk_manager_shutdown = True
+            return
+        try:
+            manager.shutdown_sync(timeout_s=self._stop_timeout())
+        except Exception:
+            logger.exception("Error stopping talk manager")
+        finally:
+            self._talk_manager_shutdown = True
 
     def _shutdown_live_publisher_once(self) -> None:
         if self._live_publisher_shutdown:

@@ -77,9 +77,63 @@ async def test_talk_manager_opens_and_writes_valid_pcm_frames() -> None:
     assert manager.status().state == TalkState.ACTIVE
     assert manager.status().selected_codec == "PCMU/8000"
 
-    await manager.stop_session("tk_1")
+    stopped = await manager.stop_session("tk_1")
+    assert stopped is True
     assert session.closed is True
     assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_stop_returns_false_for_wrong_session() -> None:
+    manager = _manager()
+
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    session = await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+
+    stopped = await manager.stop_session("tk_missing")
+
+    assert stopped is False
+    assert session.closed is False
+    assert manager.status().state == TalkState.ACTIVE
+
+    await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_stop_does_not_wait_for_slow_open() -> None:
+    opened = asyncio.Event()
+    release = asyncio.Event()
+    opened_sessions: list[_FakeSession] = []
+
+    async def _open_slow_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        opened.set()
+        await release.wait()
+        session = _FakeSession(session_id=request.session_id)
+        opened_sessions.append(session)
+        return session
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_slow_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    open_task = asyncio.create_task(manager.open_session(TalkSessionOpenRequest(session_id="tk_1")))
+    await opened.wait()
+
+    stopped = await asyncio.wait_for(manager.stop_session("tk_1"), timeout=0.1)
+    release.set()
+
+    with pytest.raises(TalkManagerError) as error:
+        await open_task
+
+    assert stopped is True
+    assert error.value.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert manager.status().state == TalkState.IDLE
+    assert opened_sessions[0].closed is True
 
 
 @pytest.mark.asyncio

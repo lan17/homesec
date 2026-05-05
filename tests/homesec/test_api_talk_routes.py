@@ -425,6 +425,23 @@ def test_talk_websocket_rejects_invalid_audio_frame_length() -> None:
     assert app.stop_calls == [("front", "session-1")]
 
 
+def test_talk_websocket_cleans_up_reserved_session_on_invalid_input_query() -> None:
+    """Invalid attach parameters should not leave a reserved talk slot behind."""
+    app = _StubTalkApp()
+    client = _client(app)
+
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream?sample_rate=not-an-int"
+        ),
+    ):
+        pass
+
+    assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
 def test_talk_websocket_cleans_up_when_runtime_stream_open_fails() -> None:
     """Runtime restart/stale-socket failures during attach should stop the reservation."""
     app = _StubTalkApp(open_error=TalkRuntimeUnavailableError("stale runtime socket"))
