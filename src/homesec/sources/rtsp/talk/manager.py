@@ -69,6 +69,7 @@ class _SessionRecord:
     opening: bool = False
     selected_codec: str | None = None
     stats: TalkStats = field(default_factory=TalkStats)
+    io_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     timeout_task: asyncio.Task[None] | None = None
     idle_task: asyncio.Task[None] | None = None
 
@@ -199,10 +200,14 @@ class TalkManager:
                 record.selected_codec = session.selected_codec
                 record.stats.start_time = time.monotonic()
                 record.stats.selected_codec = session.selected_codec
-                if record.timeout_task is None:
-                    record.timeout_task = asyncio.create_task(
-                        self._max_duration_watch(record.session_id)
-                    )
+                if (
+                    record.timeout_task is not None
+                    and record.timeout_task is not asyncio.current_task()
+                ):
+                    record.timeout_task.cancel()
+                record.timeout_task = asyncio.create_task(
+                    self._max_duration_watch(record.session_id)
+                )
                 record.idle_task = asyncio.create_task(self._idle_watch(record.session_id))
                 return session
 
@@ -218,21 +223,34 @@ class TalkManager:
     async def write_pcm_frame(self, session_id: str, frame: bytes) -> None:
         """Validate and forward one PCM input frame to the active camera session."""
         self._bind_loop()
-        record = self._require_active_record(session_id)
-        expected = record.input.expected_bytes_per_frame
-        if len(frame) != expected:
-            record.stats.dropped_frames += 1
-            raise TalkManagerError(
-                f"Invalid PCM frame length: expected {expected} bytes, got {len(frame)}",
-                reason=TalkRefusalReason.INVALID_AUDIO_FRAME,
-            )
-        assert record.session is not None
-        await record.session.write_pcm_frame(frame)
-        now = time.monotonic()
-        record.last_activity_at = now
-        record.stats.last_frame_time = now
-        record.stats.frames_sent += 1
-        record.stats.bytes_sent += len(frame)
+        async with self._lock:
+            record = self._require_active_record(session_id)
+            expected = record.input.expected_bytes_per_frame
+            if len(frame) != expected:
+                record.stats.dropped_frames += 1
+                raise TalkManagerError(
+                    f"Invalid PCM frame length: expected {expected} bytes, got {len(frame)}",
+                    reason=TalkRefusalReason.INVALID_AUDIO_FRAME,
+                )
+
+        async with record.io_lock:
+            async with self._lock:
+                if self._record is not record or record.session is None:
+                    raise TalkManagerError(
+                        "Talk session is not active",
+                        reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                    )
+                session = record.session
+
+            await session.write_pcm_frame(frame)
+
+            now = time.monotonic()
+            async with self._lock:
+                if self._record is record and record.session is session:
+                    record.last_activity_at = now
+                    record.stats.last_frame_time = now
+                    record.stats.frames_sent += 1
+                    record.stats.bytes_sent += len(frame)
 
     async def stop_session(self, session_id: str, *, reason: str = "client_stop") -> bool:
         """Stop a reserved or active talk session if it matches the current one."""
@@ -342,10 +360,11 @@ class TalkManagerError(RuntimeError):
 
 
 async def _close_record(record: _SessionRecord) -> None:
-    session = record.session
-    if session is None:
-        return
-    await session.close()
+    async with record.io_lock:
+        session = record.session
+        if session is None:
+            return
+        await session.close()
 
 
 async def _close_session_safely(session: TalkSession) -> None:

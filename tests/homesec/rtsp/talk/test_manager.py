@@ -137,6 +137,158 @@ async def test_talk_manager_stop_does_not_wait_for_slow_open() -> None:
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_timeout_does_not_wait_for_slow_open() -> None:
+    opened = asyncio.Event()
+    release = asyncio.Event()
+    opened_sessions: list[_FakeSession] = []
+
+    async def _open_slow_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        opened.set()
+        await release.wait()
+        session = _FakeSession(session_id=request.session_id)
+        opened_sessions.append(session)
+        return session
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_slow_session,
+        max_session_s=0.01,
+        idle_timeout_s=60.0,
+    )
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    open_task = asyncio.create_task(manager.open_session(TalkSessionOpenRequest(session_id="tk_1")))
+    await opened.wait()
+
+    await asyncio.sleep(0.05)
+    assert manager.status().state == TalkState.IDLE
+
+    release.set()
+    with pytest.raises(TalkManagerError) as error:
+        await open_task
+
+    assert error.value.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert opened_sessions[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_stop_waits_for_in_flight_write_before_close() -> None:
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+
+    @dataclass(slots=True)
+    class _BlockingSession:
+        session_id: str
+        camera_name: str = "front"
+        selected_codec: str = "PCMU/8000"
+        frames: list[bytes] = field(default_factory=list)
+        closed_count: int = 0
+
+        async def write_pcm_frame(self, frame: bytes) -> None:
+            write_started.set()
+            await release_write.wait()
+            self.frames.append(frame)
+
+        async def close(self) -> None:
+            self.closed_count += 1
+
+    opened_session: _BlockingSession | None = None
+
+    async def _open_blocking_session(request: TalkSessionOpenRequest) -> _BlockingSession:
+        nonlocal opened_session
+        opened_session = _BlockingSession(session_id=request.session_id)
+        return opened_session
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_blocking_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+    frame = b"\x33" * TalkInputFormat().expected_bytes_per_frame
+
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+    assert opened_session is not None
+
+    write_task = asyncio.create_task(manager.write_pcm_frame("tk_1", frame))
+    await write_started.wait()
+    stop_task = asyncio.create_task(manager.stop_session("tk_1"))
+    await asyncio.sleep(0)
+
+    assert stop_task.done() is False
+    assert opened_session.closed_count == 0
+
+    release_write.set()
+    await write_task
+    assert await stop_task is True
+
+    assert opened_session.frames == [frame]
+    assert opened_session.closed_count == 1
+    assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_timeout_waits_for_in_flight_write_before_close() -> None:
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+
+    @dataclass(slots=True)
+    class _BlockingSession:
+        session_id: str
+        camera_name: str = "front"
+        selected_codec: str = "PCMU/8000"
+        frames: list[bytes] = field(default_factory=list)
+        closed_count: int = 0
+
+        async def write_pcm_frame(self, frame: bytes) -> None:
+            write_started.set()
+            await release_write.wait()
+            self.frames.append(frame)
+
+        async def close(self) -> None:
+            self.closed_count += 1
+
+    opened_session: _BlockingSession | None = None
+
+    async def _open_blocking_session(request: TalkSessionOpenRequest) -> _BlockingSession:
+        nonlocal opened_session
+        opened_session = _BlockingSession(session_id=request.session_id)
+        return opened_session
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_blocking_session,
+        max_session_s=0.01,
+        idle_timeout_s=60.0,
+    )
+    frame = b"\x44" * TalkInputFormat().expected_bytes_per_frame
+
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+    assert opened_session is not None
+
+    write_task = asyncio.create_task(manager.write_pcm_frame("tk_1", frame))
+    await write_started.wait()
+    await asyncio.sleep(0.05)
+
+    assert opened_session.closed_count == 0
+
+    release_write.set()
+    await write_task
+    await asyncio.sleep(0)
+
+    assert opened_session.frames == [frame]
+    assert opened_session.closed_count == 1
+    assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_rejects_wrong_sized_pcm_frame() -> None:
     manager = _manager()
 
@@ -148,6 +300,21 @@ async def test_talk_manager_rejects_wrong_sized_pcm_frame() -> None:
 
     assert error.value.reason == TalkRefusalReason.INVALID_AUDIO_FRAME
     await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_write_after_stop_fails_cleanly() -> None:
+    manager = _manager()
+    frame = b"\x55" * TalkInputFormat().expected_bytes_per_frame
+
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+    assert await manager.stop_session("tk_1") is True
+
+    with pytest.raises(TalkManagerError) as error:
+        await manager.write_pcm_frame("tk_1", frame)
+
+    assert error.value.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
 
 
 @pytest.mark.asyncio

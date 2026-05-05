@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from homesec.models.talk import TalkRefusalReason
+
 
 def sanitize_runtime_error(exc: Exception, *, max_length: int = 512) -> str:
     """Return a bounded runtime error message for status surfaces."""
@@ -80,3 +82,11 @@ class TalkRuntimeUnavailableError(RuntimeTalkError):
             message,
             error_code="TALK_RUNTIME_UNAVAILABLE",
         )
+
+
+class TalkStreamOpenRefused(TalkRuntimeUnavailableError):
+    """Raised when a worker refuses a talk stream open with a typed reason."""
+
+    def __init__(self, message: str, *, reason: TalkRefusalReason) -> None:
+        super().__init__(message)
+        self.reason = reason

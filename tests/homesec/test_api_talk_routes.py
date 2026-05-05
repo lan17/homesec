@@ -15,7 +15,11 @@ from homesec.api.server import create_app
 from homesec.api.talk_tokens import validate_camera_talk_token
 from homesec.models.config import FastAPIServerConfig, TalkConfig
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
-from homesec.runtime.errors import TalkCameraNotFoundError, TalkRuntimeUnavailableError
+from homesec.runtime.errors import (
+    TalkCameraNotFoundError,
+    TalkRuntimeUnavailableError,
+    TalkStreamOpenRefused,
+)
 from homesec.runtime.models import (
     CameraTalkSessionPrepared,
     CameraTalkStartRefusal,
@@ -455,6 +459,30 @@ def test_talk_websocket_cleans_up_when_runtime_stream_open_fails() -> None:
     ):
         websocket.receive_text()
 
+    assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_maps_typed_stream_open_refusal_to_policy_close() -> None:
+    """Attach-time typed refusals should survive to WebSocket close semantics."""
+    app = _StubTalkApp(
+        open_error=TalkStreamOpenRefused(
+            "Talk session is not reserved",
+            reason=TalkRefusalReason.INVALID_AUDIO_FRAME,
+        )
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert disconnect.value.reason == "Talk stream refused"
     assert app.open_calls == []
     assert app.stop_calls == [("front", "session-1")]
 

@@ -24,6 +24,7 @@ from homesec.runtime.errors import (
     PreviewRuntimeUnavailableError,
     TalkCameraNotFoundError,
     TalkRuntimeUnavailableError,
+    TalkStreamOpenRefused,
     sanitize_runtime_error,
 )
 from homesec.runtime.models import (
@@ -764,7 +765,10 @@ class SubprocessRuntimeController(RuntimeController):
                 )
             result = self._parse_command_result(raw_response, command)
             if result.talk_refusal is not None:
-                raise TalkRuntimeUnavailableError(result.talk_refusal.message)
+                raise TalkStreamOpenRefused(
+                    result.talk_refusal.message,
+                    reason=result.talk_refusal.reason,
+                )
             if result.error_code is not None:
                 raise TalkRuntimeUnavailableError(
                     result.error_message or f"Runtime talk command failed: {result.error_code}"

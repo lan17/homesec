@@ -16,20 +16,32 @@ from homesec.models.config import (
     AlertPolicyConfig,
     CameraConfig,
     CameraSourceConfig,
+    CameraTalkConfig,
     Config,
     HLSPreviewConfig,
     NotifierConfig,
     PreviewConfig,
     StateStoreConfig,
     StorageConfig,
+    TalkConfig,
 )
 from homesec.models.enums import VLMRunMode
 from homesec.models.filter import FilterConfig
+from homesec.models.talk import (
+    CameraTalkStatus,
+    TalkInputFormat,
+    TalkSessionOpenRequest,
+    TalkSessionPrepareRequest,
+    TalkSessionPrepareResult,
+    TalkState,
+)
 from homesec.models.vlm import VLMConfig
 from homesec.runtime.bootstrap import RuntimePersistenceStack
+from homesec.runtime.ipc_stream import write_length_prefixed_frame
 from homesec.runtime.models import PreviewRefusalReason, PreviewState
 from homesec.runtime.subprocess_protocol import (
     WorkerCommand,
+    WorkerCommandResult,
     WorkerCommandType,
 )
 from homesec.sources.rtsp.live_publisher import (
@@ -81,12 +93,15 @@ def _make_config(
     run_mode: VLMRunMode = VLMRunMode.TRIGGER_ONLY,
     source_backend: str = "local_folder",
     preview_enabled: bool = False,
+    talk_enabled: bool = False,
+    talk_input: TalkInputFormat | None = None,
     camera_names: list[str] | None = None,
 ) -> Config:
     cameras = [
         CameraConfig(
             name=name,
             source=CameraSourceConfig(backend=source_backend, config={}),
+            talk=CameraTalkConfig(enabled=talk_enabled),
         )
         for name in (camera_names or ["front"])
     ]
@@ -99,6 +114,7 @@ def _make_config(
         vlm=VLMConfig(backend="openai", run_mode=run_mode, config={}),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
         preview={"enabled": preview_enabled},
+        talk=TalkConfig(enabled=talk_enabled, input=talk_input or TalkInputFormat()),
     )
 
 
@@ -115,6 +131,146 @@ def _make_service(
         command_socket_path=Path("/tmp/homesec-worker-test.sock"),
         emitter=cast(Any, emitter or _StubEmitter()),
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
+    tmp_path: Path,
+) -> None:
+    """TALK_STREAM_OPEN should drive the real worker IPC frame loop."""
+
+    class _TalkSource:
+        def __init__(self) -> None:
+            self.prepared: list[TalkSessionPrepareRequest] = []
+            self.opened: list[TalkSessionOpenRequest] = []
+            self.frames: list[tuple[str, bytes]] = []
+            self.stopped: list[str] = []
+            self.active_session_id: str | None = None
+            self.stop_event = asyncio.Event()
+
+        def talk_status(self) -> CameraTalkStatus:
+            return CameraTalkStatus(
+                camera_name="front",
+                enabled=True,
+                state=TalkState.ACTIVE if self.active_session_id is not None else TalkState.IDLE,
+                active_session_id=self.active_session_id,
+                supported_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000" if self.active_session_id is not None else None,
+            )
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            self.prepared.append(request)
+            return TalkSessionPrepareResult(
+                accepted=True,
+                session_id=request.session_id,
+                input=request.input,
+            )
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            self.opened.append(request)
+            self.active_session_id = request.session_id
+            return SimpleNamespace(
+                session_id=request.session_id,
+                camera_name="front",
+                selected_codec="PCMU/8000",
+            )
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            self.frames.append((session_id, frame))
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            self.stopped.append(session_id)
+            self.active_session_id = None
+            self.stop_event.set()
+            return True
+
+    async def _send_command(command: WorkerCommand) -> WorkerCommandResult:
+        reader, writer = await asyncio.open_unix_connection(str(socket_path))
+        try:
+            writer.write(command.model_dump_json().encode("utf-8") + b"\n")
+            await writer.drain()
+            raw_response = await reader.readline()
+            return WorkerCommandResult.model_validate_json(raw_response.decode("utf-8"))
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    config = _make_config(
+        notifiers=[],
+        talk_enabled=True,
+        talk_input=input_format,
+    )
+    service = _make_service(config)
+    source = _TalkSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    socket_path = tmp_path / "worker-talk.sock"
+    server = await asyncio.start_unix_server(
+        service._handle_command_connection,
+        path=str(socket_path),
+    )
+
+    try:
+        prepare = await _send_command(
+            WorkerCommand(
+                command=WorkerCommandType.TALK_PREPARE_SESSION,
+                command_id="cmd-prepare-talk",
+                generation=1,
+                correlation_id="test-correlation-id",
+                camera_name="front",
+                session_id="tk_1",
+                talk_input=input_format,
+            )
+        )
+        assert prepare.talk_prepare is not None
+        assert prepare.talk_prepare.session_id == "tk_1"
+
+        reader, writer = await asyncio.open_unix_connection(str(socket_path))
+        try:
+            writer.write(
+                WorkerCommand(
+                    command=WorkerCommandType.TALK_STREAM_OPEN,
+                    command_id="cmd-open-talk",
+                    generation=1,
+                    correlation_id="test-correlation-id",
+                    camera_name="front",
+                    session_id="tk_1",
+                    talk_input=input_format,
+                )
+                .model_dump_json()
+                .encode("utf-8")
+                + b"\n"
+            )
+            await writer.drain()
+            opened = WorkerCommandResult.model_validate_json(
+                (await reader.readline()).decode("utf-8")
+            )
+            assert opened.talk_refusal is None
+            assert opened.talk_status is not None
+
+            first_frame = b"\x11" * input_format.expected_bytes_per_frame
+            second_frame = b"\x22" * input_format.expected_bytes_per_frame
+            await write_length_prefixed_frame(writer, first_frame)
+            await write_length_prefixed_frame(writer, second_frame)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+        await asyncio.wait_for(source.stop_event.wait(), timeout=1.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert source.prepared == [TalkSessionPrepareRequest(session_id="tk_1", input=input_format)]
+    assert source.opened == [TalkSessionOpenRequest(session_id="tk_1", input=input_format)]
+    assert source.frames == [("tk_1", first_frame), ("tk_1", second_frame)]
+    assert source.stopped == ["tk_1"]
 
 
 def test_worker_main_uses_shared_logging_configuration(monkeypatch) -> None:

@@ -19,7 +19,11 @@ from homesec.api.talk_tokens import (
     validate_camera_talk_token,
 )
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
-from homesec.runtime.errors import TalkCameraNotFoundError, TalkRuntimeUnavailableError
+from homesec.runtime.errors import (
+    TalkCameraNotFoundError,
+    TalkRuntimeUnavailableError,
+    TalkStreamOpenRefused,
+)
 from homesec.runtime.ipc_stream import IPCFrameError, write_length_prefixed_frame
 from homesec.runtime.models import (
     CameraTalkStartRefusal,
@@ -298,6 +302,19 @@ async def stream_talk_audio(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Camera not found")
             stop_best_effort = False
             return
+        except TalkStreamOpenRefused as exc:
+            logger.info(
+                "Talk WebSocket open refused for camera=%s session=%s reason=%s: %s",
+                camera_name,
+                session_id,
+                exc.reason.value,
+                exc,
+            )
+            await _stop_talk_session_best_effort(app, camera_name, session_id)
+            stop_best_effort = False
+            close_code, close_reason = _talk_stream_refusal_close(exc.reason)
+            await websocket.close(code=close_code, reason=close_reason)
+            return
         except TalkRuntimeUnavailableError as exc:
             logger.info(
                 "Talk WebSocket open refused for camera=%s session=%s: %s",
@@ -331,6 +348,28 @@ async def stream_talk_audio(
 
 def _stop_response(result: CameraTalkStopResult) -> TalkStopResponse:
     return TalkStopResponse(accepted=result.accepted, state=result.state)
+
+
+def _talk_stream_refusal_close(reason: TalkRefusalReason) -> tuple[int, str]:
+    """Map typed stream-open refusals to WebSocket close semantics."""
+    match reason:
+        case (
+            TalkRefusalReason.CAMERA_NOT_FOUND
+            | TalkRefusalReason.TALK_DISABLED
+            | TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE
+            | TalkRefusalReason.SESSION_ALREADY_ACTIVE
+            | TalkRefusalReason.SESSION_BUDGET_EXHAUSTED
+            | TalkRefusalReason.UNSUPPORTED_CAMERA
+            | TalkRefusalReason.UNSUPPORTED_CODEC
+            | TalkRefusalReason.INVALID_AUDIO_FRAME
+        ):
+            return status.WS_1008_POLICY_VIOLATION, "Talk stream refused"
+        case (
+            TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+            | TalkRefusalReason.RUNTIME_UNAVAILABLE
+            | TalkRefusalReason.BACKPRESSURE
+        ):
+            return status.WS_1011_INTERNAL_ERROR, "Talk stream unavailable"
 
 
 async def _get_websocket_app(websocket: WebSocket) -> Application | None:
