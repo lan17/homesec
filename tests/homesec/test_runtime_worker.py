@@ -30,6 +30,7 @@ from homesec.models.filter import FilterConfig
 from homesec.models.talk import (
     CameraTalkStatus,
     TalkInputFormat,
+    TalkRefusalReason,
     TalkSessionOpenRequest,
     TalkSessionPrepareRequest,
     TalkSessionPrepareResult,
@@ -41,6 +42,7 @@ from homesec.runtime.ipc_stream import write_length_prefixed_frame
 from homesec.runtime.models import PreviewRefusalReason, PreviewState
 from homesec.runtime.subprocess_protocol import (
     WorkerCommand,
+    WorkerCommandErrorCode,
     WorkerCommandResult,
     WorkerCommandType,
 )
@@ -270,6 +272,177 @@ async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
     assert source.prepared == [TalkSessionPrepareRequest(session_id="tk_1", input=input_format)]
     assert source.opened == [TalkSessionOpenRequest(session_id="tk_1", input=input_format)]
     assert source.frames == [("tk_1", first_frame), ("tk_1", second_frame)]
+    assert source.stopped == ["tk_1"]
+
+
+def test_runtime_worker_talk_status_reports_unsupported_for_non_talk_capable_source() -> None:
+    """TALK_STATUS should use structural capability checks instead of source imports."""
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": object()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STATUS,
+        command_id="cmd-talk-status",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+
+    result = service._handle_command(command)
+
+    assert result.talk_status is not None
+    assert result.talk_status.enabled is True
+    assert result.talk_status.state == TalkState.UNSUPPORTED
+    assert result.talk_status.last_error == "Source is not talk-capable"
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_prepare_refuses_non_talk_capable_source() -> None:
+    """Talk preparation should return a typed refusal for unsupported camera sources."""
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": object()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_PREPARE_SESSION,
+        command_id="cmd-prepare-unsupported",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+        session_id="tk_unsupported",
+    )
+
+    result = await service._handle_async_command(command)
+
+    assert result.talk_refusal is not None
+    assert result.talk_refusal.reason == TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE
+    assert result.talk_refusal.message == "Camera source is not talk-capable"
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_stream_open_returns_camera_not_found_error() -> None:
+    """TALK_STREAM_OPEN should fail before streaming when the camera is unknown."""
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STREAM_OPEN,
+        command_id="cmd-open-missing",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="missing",
+        session_id="tk_missing",
+    )
+
+    result = await service._open_talk_stream(command)
+
+    assert result.error_code == WorkerCommandErrorCode.CAMERA_NOT_FOUND
+    assert result.error_message == "Camera 'missing' not found"
+    assert result.talk_refusal is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_stream_invalid_frame_stops_source_session(
+    tmp_path: Path,
+) -> None:
+    """Oversized IPC frames should close the source session instead of buffering audio."""
+
+    class _TalkSource:
+        def __init__(self) -> None:
+            self.frames: list[tuple[str, bytes]] = []
+            self.stopped: list[str] = []
+            self.stop_event = asyncio.Event()
+
+        def talk_status(self) -> CameraTalkStatus:
+            return CameraTalkStatus(
+                camera_name="front",
+                enabled=True,
+                state=TalkState.ACTIVE,
+                active_session_id="tk_1",
+                supported_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000",
+            )
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            return TalkSessionPrepareResult(
+                accepted=True,
+                session_id=request.session_id,
+                input=request.input,
+            )
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            return SimpleNamespace(
+                session_id=request.session_id,
+                camera_name="front",
+                selected_codec="PCMU/8000",
+            )
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            self.frames.append((session_id, frame))
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            self.stopped.append(session_id)
+            self.stop_event.set()
+            return True
+
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    config = _make_config(notifiers=[], talk_enabled=True, talk_input=input_format)
+    service = _make_service(config)
+    source = _TalkSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    socket_path = tmp_path / "worker-talk-invalid-frame.sock"
+    server = await asyncio.start_unix_server(
+        service._handle_command_connection,
+        path=str(socket_path),
+    )
+
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(socket_path))
+        try:
+            writer.write(
+                WorkerCommand(
+                    command=WorkerCommandType.TALK_STREAM_OPEN,
+                    command_id="cmd-open-talk-invalid-frame",
+                    generation=1,
+                    correlation_id="test-correlation-id",
+                    camera_name="front",
+                    session_id="tk_1",
+                    talk_input=input_format,
+                )
+                .model_dump_json()
+                .encode("utf-8")
+                + b"\n"
+            )
+            await writer.drain()
+            opened = WorkerCommandResult.model_validate_json(
+                (await reader.readline()).decode("utf-8")
+            )
+            assert opened.talk_refusal is None
+
+            await write_length_prefixed_frame(
+                writer,
+                b"x" * (input_format.expected_bytes_per_frame + 1),
+            )
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+        await asyncio.wait_for(source.stop_event.wait(), timeout=1.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert source.frames == []
     assert source.stopped == ["tk_1"]
 
 
