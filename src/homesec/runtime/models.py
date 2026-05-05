@@ -146,6 +146,7 @@ class RuntimeTalkStream:
     input: TalkInputFormat
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
+    selected_codec: str | None = None
 
 
 @dataclass(slots=True)

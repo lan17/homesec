@@ -1813,6 +1813,10 @@
               }
             ],
             "title": "Token Expires At"
+          },
+          "websocket_url": {
+            "title": "Websocket Url",
+            "type": "string"
           }
         },
         "required": [
@@ -1820,6 +1824,7 @@
           "session_id",
           "state",
           "input",
+          "websocket_url",
           "stream_url",
           "max_session_s",
           "idle_timeout_s"
