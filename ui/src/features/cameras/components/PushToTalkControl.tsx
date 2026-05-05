@@ -115,9 +115,6 @@ export function PushToTalkControl({ cameraName }: PushToTalkControlProps) {
   }
 
   const endTalk = (): void => {
-    if (!isStarting && !isStreaming) {
-      return
-    }
     void stop()
   }
 

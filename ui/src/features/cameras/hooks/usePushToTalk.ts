@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { apiClient } from '../../../api/client'
+import {
+  expectedPcmFrameBytes,
+  frameSampleCount,
+  PcmFrameEncoder,
+} from '../audio/pcm'
 import type {
   TalkInputFormat,
   TalkSessionResponse,
@@ -18,6 +23,7 @@ const DEFAULT_TALK_INPUT: TalkInputFormat = {
 const TALK_WS_READY_TYPE = 'ready'
 const TALK_WS_STOP_TYPE = 'stop'
 const TALK_AUDIO_WORKLET_URL = new URL('../audio/talkPcmProcessor.js', import.meta.url)
+const TALK_MAX_BUFFERED_AUDIO_MS = 500
 
 type TalkReadyMessage = {
   type: typeof TALK_WS_READY_TYPE
@@ -75,32 +81,30 @@ function closeMediaStream(stream: MediaStream | null): void {
   })
 }
 
-function frameSampleCount(input: TalkInputFormat): number {
-  return Math.round((input.sample_rate * input.frame_ms) / 1000)
-}
-
-function floatToPcm16(frame: Float32Array): ArrayBuffer {
-  const pcm = new Int16Array(frame.length)
-  for (let index = 0; index < frame.length; index += 1) {
-    const clamped = Math.max(-1, Math.min(1, frame[index] ?? 0))
-    pcm[index] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff
-  }
-  return pcm.buffer
-}
-
 async function startAudioPipeline(
   stream: MediaStream,
   input: TalkInputFormat,
   socket: WebSocket,
+  onBackpressure: () => void,
 ): Promise<AudioPipeline> {
   const context = new AudioContext({ sampleRate: input.sample_rate })
   const source = context.createMediaStreamSource(stream)
-  const samplesPerFrame = frameSampleCount(input)
+  const samplesPerFrame = frameSampleCount(input.sample_rate, input.frame_ms)
+  const maxBufferedBytes = expectedPcmFrameBytes(
+    input.sample_rate,
+    input.frame_ms,
+    input.channels,
+  ) * Math.max(1, Math.ceil(TALK_MAX_BUFFERED_AUDIO_MS / input.frame_ms))
 
   const sendFrame = (frame: ArrayBuffer): void => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(frame)
+    if (socket.readyState !== WebSocket.OPEN) {
+      return
     }
+    if (socket.bufferedAmount > maxBufferedBytes) {
+      onBackpressure()
+      return
+    }
+    socket.send(frame)
   }
 
   if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
@@ -108,7 +112,11 @@ async function startAudioPipeline(
     const worklet = new AudioWorkletNode(context, 'talk-pcm-processor', {
       numberOfInputs: 1,
       numberOfOutputs: 0,
-      processorOptions: { frameSamples: samplesPerFrame },
+      processorOptions: {
+        frameSamples: samplesPerFrame,
+        sourceSampleRate: context.sampleRate,
+        targetSampleRate: input.sample_rate,
+      },
     })
     worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
       sendFrame(event.data)
@@ -123,14 +131,11 @@ async function startAudioPipeline(
   const scriptNode = context.createScriptProcessor(1024, input.channels, 1) as ScriptProcessorNodeWithHandler
   const silentGain = context.createGain()
   silentGain.gain.value = 0
-  let samples: number[] = []
+  const encoder = new PcmFrameEncoder(context.sampleRate, input.sample_rate, samplesPerFrame)
   scriptNode.onaudioprocess = (event) => {
     const channel = event.inputBuffer.getChannelData(0)
-    samples = samples.concat(Array.from(channel))
-    while (samples.length >= samplesPerFrame) {
-      const frame = new Float32Array(samples.slice(0, samplesPerFrame))
-      samples = samples.slice(samplesPerFrame)
-      sendFrame(floatToPcm16(frame))
+    for (const frame of encoder.push(channel)) {
+      sendFrame(frame)
     }
   }
   source.connect(scriptNode)
@@ -197,6 +202,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   const sessionRef = useRef<TalkSessionResponse | null>(null)
   const intentionalStopRef = useRef(false)
   const mountedRef = useRef(true)
+  const startGenerationRef = useRef(0)
+  const startInFlightRef = useRef(false)
+  const startAbortRef = useRef<AbortController | null>(null)
 
   const cleanupSocketAndAudio = useCallback(async () => {
     const socket = socketRef.current
@@ -231,7 +239,11 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   }, [cameraName])
 
   const openTalkSocket = useCallback(
-    (nextSession: TalkSessionResponse, stream: MediaStream): Promise<void> => {
+    (
+      nextSession: TalkSessionResponse,
+      stream: MediaStream,
+      isStartCancelled: () => boolean,
+    ): Promise<void> => {
       return new Promise((resolve, reject) => {
         const socket = new WebSocket(resolveTalkWebSocketUrl(nextSession.websocket_url))
         socket.binaryType = 'arraybuffer'
@@ -239,6 +251,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         let settled = false
 
         const settleResolve = (): void => {
+          if (settled) {
+            return
+          }
           settled = true
           resolve()
         }
@@ -251,6 +266,11 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         }
 
         socket.onopen = () => {
+          if (isStartCancelled()) {
+            socket.close(1000, 'Talk start cancelled')
+            settleReject(new Error('Talk start cancelled'))
+            return
+          }
           socket.send(
             JSON.stringify({
               type: 'start',
@@ -274,8 +294,24 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
           if (!isReadyMessage(parsed)) {
             return
           }
-          void startAudioPipeline(stream, nextSession.input, socket)
+          if (isStartCancelled()) {
+            socket.close(1000, 'Talk start cancelled')
+            settleReject(new Error('Talk start cancelled'))
+            return
+          }
+          void startAudioPipeline(stream, nextSession.input, socket, () => {
+            socket.close(1011, 'Talk backpressure')
+            if (mountedRef.current) {
+              setError(new Error('Talk audio fell behind; stopped the session.'))
+            }
+          })
             .then((pipeline) => {
+              if (isStartCancelled()) {
+                void stopAudioPipeline(pipeline)
+                socket.close(1000, 'Talk start cancelled')
+                settleReject(new Error('Talk start cancelled'))
+                return
+              }
               pendingStreamRef.current = null
               audioPipelineRef.current = pipeline
               if (mountedRef.current) {
@@ -298,6 +334,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
           audioPipelineRef.current = null
           closeMediaStream(pendingStreamRef.current)
           pendingStreamRef.current = null
+          if (!intentionalStopRef.current && event.code !== 1000) {
+            void apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+          }
           if (mountedRef.current) {
             setIsStreaming(false)
             setSession(null)
@@ -315,9 +354,20 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   )
 
   const start = useCallback(async () => {
-    if (isStarting || isStreaming || isStopping) {
+    if (startInFlightRef.current || isStreaming || isStopping) {
       return
     }
+    const generation = startGenerationRef.current + 1
+    startGenerationRef.current = generation
+    startInFlightRef.current = true
+    const abortController = new AbortController()
+    startAbortRef.current = abortController
+    const isStartCancelled = (): boolean => (
+      startGenerationRef.current !== generation
+      || abortController.signal.aborted
+      || !mountedRef.current
+    )
+
     setIsStarting(true)
     setError(null)
     intentionalStopRef.current = false
@@ -329,6 +379,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          autoGainControl: true,
           channelCount: DEFAULT_TALK_INPUT.channels,
           echoCancellation: true,
           noiseSuppression: true,
@@ -336,40 +387,65 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         },
         video: false,
       })
+      if (isStartCancelled()) {
+        closeMediaStream(mediaStream)
+        return
+      }
       pendingStreamRef.current = mediaStream
-      const nextSession = await apiClient.prepareCameraTalkSession(cameraName, {
-        input: DEFAULT_TALK_INPUT,
-      })
+      const nextSession = await apiClient.prepareCameraTalkSession(
+        cameraName,
+        { input: DEFAULT_TALK_INPUT },
+        { signal: abortController.signal },
+      )
       preparedSession = nextSession
+      if (isStartCancelled()) {
+        closeMediaStream(mediaStream)
+        pendingStreamRef.current = null
+        await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+        return
+      }
       setSession(nextSession)
       sessionRef.current = nextSession
       setStatus((previous) => nextStatusFromState(cameraName, 'starting', nextSession.session_id, previous))
-      await openTalkSocket(nextSession, mediaStream)
+      await openTalkSocket(nextSession, mediaStream, isStartCancelled)
+      if (isStartCancelled()) {
+        await cleanupSocketAndAudio()
+        await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+      }
     } catch (nextError) {
       closeMediaStream(mediaStream)
       pendingStreamRef.current = null
       await cleanupSocketAndAudio()
-      if (preparedSession) {
+      if (preparedSession && !intentionalStopRef.current) {
         await apiClient.stopCameraTalkSession(cameraName, preparedSession.session_id).catch(() => {})
       }
-      if (mountedRef.current) {
+      if (mountedRef.current && !isStartCancelled()) {
         setError(nextError)
+      }
+      if (mountedRef.current) {
         setSession(null)
         sessionRef.current = null
         setIsStreaming(false)
       }
     } finally {
+      startInFlightRef.current = false
+      if (startAbortRef.current === abortController) {
+        startAbortRef.current = null
+      }
       if (mountedRef.current) {
         setIsStarting(false)
       }
     }
-  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming, openTalkSocket])
+  }, [cameraName, cleanupSocketAndAudio, isStopping, isStreaming, openTalkSocket])
 
   const stop = useCallback(async () => {
     const activeSession = sessionRef.current
-    if (isStopping || (!activeSession && !isStreaming && !isStarting)) {
+    const hasStartInFlight = startInFlightRef.current
+    if (isStopping || (!activeSession && !isStreaming && !isStarting && !hasStartInFlight)) {
       return
     }
+    startGenerationRef.current += 1
+    startAbortRef.current?.abort()
     intentionalStopRef.current = true
     setIsStopping(true)
     setError(null)
@@ -380,9 +456,10 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       await cleanupSocketAndAudio()
       if (activeSession) {
-        const stopResponse = await apiClient.stopCameraTalkSession(cameraName, activeSession.session_id)
+        await apiClient.stopCameraTalkSession(cameraName, activeSession.session_id)
         if (mountedRef.current) {
-          setStatus((previous) => nextStatusFromState(cameraName, stopResponse.state, null, previous))
+          setStatus((previous) => nextStatusFromState(cameraName, 'idle', null, previous))
+          void refreshStatus()
         }
       }
     } catch (nextError) {
@@ -399,13 +476,15 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       intentionalStopRef.current = false
     }
-  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming])
+  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming, refreshStatus])
 
   useEffect(() => {
     mountedRef.current = true
     void refreshStatus()
     return () => {
       mountedRef.current = false
+      startGenerationRef.current += 1
+      startAbortRef.current?.abort()
       intentionalStopRef.current = true
       const activeSession = sessionRef.current
       void cleanupSocketAndAudio()
