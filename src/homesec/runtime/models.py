@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
+from homesec.models.talk import TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
 
@@ -106,6 +108,44 @@ class CameraPreviewStopResult:
     camera_name: str
     accepted: bool
     state: PreviewState
+
+
+@dataclass(frozen=True, slots=True)
+class CameraTalkStartRefusal:
+    """Machine-readable refusal when talk cannot be reserved or started."""
+
+    camera_name: str
+    reason: TalkRefusalReason
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CameraTalkSessionPrepared:
+    """Runtime acknowledgement for a prepared talk session slot."""
+
+    camera_name: str
+    session_id: str
+    input: TalkInputFormat
+
+
+@dataclass(frozen=True, slots=True)
+class CameraTalkStopResult:
+    """Runtime acknowledgement for a talk session stop request."""
+
+    camera_name: str
+    accepted: bool
+    state: TalkState
+
+
+@dataclass(slots=True)
+class RuntimeTalkStream:
+    """Open binary stream to a runtime worker talk session."""
+
+    camera_name: str
+    session_id: str
+    input: TalkInputFormat
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
 
 
 @dataclass(slots=True)

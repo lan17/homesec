@@ -10,20 +10,29 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from homesec.runtime.controller import RuntimeController
-from homesec.runtime.errors import PreviewRuntimeUnavailableError, sanitize_runtime_error
+from homesec.runtime.errors import (
+    PreviewRuntimeUnavailableError,
+    TalkRuntimeUnavailableError,
+    sanitize_runtime_error,
+)
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
     CameraPreviewStatus,
     CameraPreviewStopResult,
+    CameraTalkSessionPrepared,
+    CameraTalkStartRefusal,
+    CameraTalkStopResult,
     ManagedRuntime,
     RuntimeReloadRequest,
     RuntimeReloadResult,
     RuntimeState,
     RuntimeStatusSnapshot,
+    RuntimeTalkStream,
 )
 
 if TYPE_CHECKING:
     from homesec.models.config import Config
+    from homesec.models.talk import CameraTalkStatus, TalkInputFormat
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +190,56 @@ class RuntimeManager:
             viewer_id=viewer_id,
         )
 
+    async def get_talk_status(self, camera_name: str) -> CameraTalkStatus:
+        """Return talk status for a camera in the active runtime."""
+        return await self._controller.get_talk_status(
+            self._require_active_runtime_for_talk(),
+            camera_name,
+        )
+
+    async def prepare_talk_session(
+        self,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> CameraTalkSessionPrepared | CameraTalkStartRefusal:
+        """Reserve a talk session slot in the active runtime."""
+        return await self._controller.prepare_talk_session(
+            self._require_active_runtime_for_talk(),
+            camera_name,
+            session_id=session_id,
+            input_format=input_format,
+        )
+
+    async def open_talk_stream(
+        self,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> RuntimeTalkStream:
+        """Open a binary talk stream in the active runtime."""
+        return await self._controller.open_talk_stream(
+            self._require_active_runtime_for_talk(),
+            camera_name,
+            session_id=session_id,
+            input_format=input_format,
+        )
+
+    async def stop_talk_session(
+        self,
+        camera_name: str,
+        *,
+        session_id: str,
+    ) -> CameraTalkStopResult:
+        """Stop a talk session in the active runtime."""
+        return await self._controller.stop_talk_session(
+            self._require_active_runtime_for_talk(),
+            camera_name,
+            session_id=session_id,
+        )
+
     async def shutdown(self) -> None:
         """Shutdown reload task (if any) and active runtime."""
         if self._reload_task is not None and not self._reload_task.done():
@@ -307,6 +366,12 @@ class RuntimeManager:
         runtime = self._active_runtime
         if runtime is None:
             raise PreviewRuntimeUnavailableError("Runtime is not active")
+        return runtime
+
+    def _require_active_runtime_for_talk(self) -> ManagedRuntime:
+        runtime = self._active_runtime
+        if runtime is None:
+            raise TalkRuntimeUnavailableError("Runtime is not active")
         return runtime
 
     def _rollback_to_previous_runtime(

@@ -65,3 +65,33 @@ class CameraTalkStatus(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
     last_error: str | None = None
+
+
+class TalkSessionPrepareRequest(BaseModel):
+    """Runtime/source request to reserve a talk session slot."""
+
+    model_config = {"extra": "forbid"}
+
+    session_id: str | None = None
+    input: TalkInputFormat = Field(default_factory=TalkInputFormat)
+
+
+class TalkSessionPrepareResult(BaseModel):
+    """Result of reserving a talk session slot."""
+
+    model_config = {"extra": "forbid"}
+
+    accepted: bool
+    session_id: str | None = None
+    refusal_reason: TalkRefusalReason | None = None
+    message: str | None = None
+    input: TalkInputFormat = Field(default_factory=TalkInputFormat)
+
+
+class TalkSessionOpenRequest(BaseModel):
+    """Runtime/source request to open an already reserved talk session."""
+
+    model_config = {"extra": "forbid"}
+
+    session_id: str
+    input: TalkInputFormat = Field(default_factory=TalkInputFormat)
