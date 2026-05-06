@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { CameraPreviewPanel } from './CameraPreviewPanel'
@@ -510,6 +510,25 @@ describe('CameraPreviewPanel', () => {
     expect(stopTalk).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores repeated push-to-talk hotkey events while the key is held', () => {
+    // Given: A talk-capable camera and hook handlers
+    const startTalk = vi.fn().mockResolvedValue(undefined)
+    const stopTalk = vi.fn().mockResolvedValue(undefined)
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({ start: startTalk, stop: stopTalk })
+
+    // When: Holding the keyboard hotkey generates an initial keydown and a repeat keydown
+    render(<CameraPreviewPanel cameraName="front" />)
+    const talkButton = screen.getByRole('button', { name: 'Hold to talk' })
+    talkButton.focus()
+    fireEvent.keyDown(talkButton, { key: ' ', repeat: false })
+    fireEvent.keyDown(talkButton, { key: ' ', repeat: true })
+    fireEvent.keyUp(talkButton, { key: ' ' })
+
+    // Then: The control starts once and stops once for the single held interaction
+    expect(startTalk).toHaveBeenCalledTimes(1)
+    expect(stopTalk).toHaveBeenCalledTimes(1)
+  })
 
   it('keeps preview video muted while talk is active', async () => {
     // Given: A ready preview and an active talk session

@@ -673,6 +673,21 @@ def test_talk_websocket_cleans_up_reserved_session_on_invalid_start_message() ->
     assert app.stop_calls == [("front", "session-1")]
 
 
+def test_talk_websocket_disconnect_before_start_releases_reserved_session() -> None:
+    """A browser closing before start should release the prepared talk slot."""
+    app = _StubTalkApp()
+    client = _client(app)
+
+    # Given: A prepared talk WebSocket that is accepted by the API
+    # When: The browser disconnects before sending the required start control message
+    with client.websocket_connect("/api/v1/talk/cameras/front/sessions/session-1/stream"):
+        pass
+
+    # Then: The reservation is stopped without opening the runtime audio stream
+    assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
 @pytest.mark.parametrize(
     ("payload", "expected_code"),
     [

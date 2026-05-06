@@ -130,6 +130,50 @@ async def test_talk_manager_prepare_forces_probe_and_rejects_unsupported_codec()
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_probe_failure_recovers_on_later_success() -> None:
+    """Capability errors should be transient once a later camera probe succeeds."""
+    probe_results: list[TalkCapabilityProbeResult | Exception] = [
+        RuntimeError("camera backchannel timed out"),
+        TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.SUPPORTED,
+            offered_codecs=["PCMU/8000"],
+            selected_codec="PCMU/8000",
+        ),
+    ]
+
+    async def _probe() -> TalkCapabilityProbeResult:
+        result = probe_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_probe,
+    )
+
+    # Given: A talk-capable camera whose first capability probe fails transiently
+    failed = await manager.refresh_status(force=True)
+
+    # When: A later refresh succeeds
+    recovered = await manager.refresh_status(force=True)
+
+    # Then: The manager exposes the recovered capability instead of the stale error
+    assert failed.capability == TalkCapabilityState.ERROR
+    assert failed.state == TalkState.ERROR
+    assert failed.last_error == "camera backchannel timed out"
+    assert recovered.capability == TalkCapabilityState.SUPPORTED
+    assert recovered.state == TalkState.IDLE
+    assert recovered.last_error is None
+    assert recovered.selected_codec == "PCMU/8000"
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_reports_policy_separately_from_effective_enabled() -> None:
     """Status should distinguish product disablement from per-camera policy."""
     manager = TalkManager(
@@ -172,6 +216,180 @@ async def test_talk_manager_enforces_one_reserved_or_active_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_generates_session_id_when_prepare_omits_one() -> None:
+    """Prepared sessions should get an opaque manager-generated id by default."""
+    manager = _manager()
+
+    # Given: A browser prepare request that does not provide a session id
+    # When: Reserving a talk session
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest())
+
+    # Then: The manager returns an opaque talk session id and tracks it as starting
+    assert prepared.accepted is True
+    assert prepared.session_id is not None
+    assert prepared.session_id.startswith("tk_")
+    assert manager.status().active_session_id == prepared.session_id
+    await manager.stop_session(prepared.session_id)
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_refresh_skips_probe_while_session_is_reserved() -> None:
+    """Capability refresh should avoid camera probing while a session slot is held."""
+    probe_calls = 0
+
+    async def _probe() -> TalkCapabilityProbeResult:
+        nonlocal probe_calls
+        probe_calls += 1
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.SUPPORTED,
+            offered_codecs=["PCMU/8000"],
+            selected_codec="PCMU/8000",
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_probe,
+    )
+
+    # Given: A prepared session after an initial capability probe
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+
+    # When: Status refresh is requested while the reservation is held
+    status = await manager.refresh_status(force=True)
+
+    # Then: The cached capability is returned without a second camera probe
+    assert probe_calls == 1
+    assert status.state == TalkState.STARTING
+    assert status.capability == TalkCapabilityState.SUPPORTED
+    await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_rejects_open_without_matching_reservation() -> None:
+    """Open should require the exact session id reserved by prepare."""
+    open_calls: list[TalkSessionOpenRequest] = []
+
+    async def _open_unexpected_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        open_calls.append(request)
+        return _FakeSession(session_id=request.session_id)
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_unexpected_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+
+    # Given: No prepared talk reservation for the requested session id
+    # When: The runtime attempts to open a stream
+    with pytest.raises(TalkManagerError) as error:
+        await manager.open_session(TalkSessionOpenRequest(session_id="tk_missing"))
+
+    # Then: The request is refused before the camera adapter is called
+    assert error.value.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert open_calls == []
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_rejects_duplicate_open_for_active_session() -> None:
+    """Open should be idempotently refused once the reserved session is active."""
+    manager = _manager()
+
+    # Given: An already active talk session
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    session = await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+
+    # When: The runtime tries to open the same session again
+    with pytest.raises(TalkManagerError) as error:
+        await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+
+    # Then: The duplicate open is refused without closing the active session
+    assert error.value.reason == TalkRefusalReason.SESSION_ALREADY_ACTIVE
+    assert isinstance(session, _FakeSession)
+    assert session.closed is False
+    await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_open_failure_releases_reserved_session() -> None:
+    """Failed camera session opens should not strand the one-session reservation."""
+
+    async def _open_failing_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        _ = request
+        raise TalkManagerError(
+            "camera rejected SETUP",
+            reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_failing_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+
+    # Given: A reserved talk session whose camera open fails
+    first = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+
+    # When: Opening that session raises from the camera adapter
+    with pytest.raises(TalkManagerError) as error:
+        await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+
+    # Then: The reservation is cleared and a later session can prepare cleanly
+    assert first.accepted is True
+    assert error.value.reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+    assert manager.status().state == TalkState.IDLE
+    retry = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_2"))
+    assert retry.accepted is True
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_rejects_input_mismatch_before_opening_camera_session() -> None:
+    """Browser input format must match the prepared session before camera I/O starts."""
+    open_calls: list[TalkSessionOpenRequest] = []
+
+    async def _open_unexpected_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        open_calls.append(request)
+        return _FakeSession(session_id=request.session_id)
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_unexpected_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+
+    # Given: A talk session prepared for the default browser PCM format
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+
+    # When: The WebSocket attaches with a different input format
+    with pytest.raises(TalkManagerError) as error:
+        await manager.open_session(
+            TalkSessionOpenRequest(
+                session_id="tk_1",
+                input=TalkInputFormat(sample_rate=8000),
+            )
+        )
+
+    # Then: The manager refuses before opening a camera backchannel session
+    assert error.value.reason == TalkRefusalReason.INVALID_AUDIO_FRAME
+    assert open_calls == []
+    assert manager.status().state == TalkState.STARTING
+    await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_opens_and_writes_valid_pcm_frames() -> None:
     manager = _manager()
     frame = b"\x00" * TalkInputFormat().expected_bytes_per_frame
@@ -205,6 +423,24 @@ async def test_talk_manager_stop_returns_false_for_wrong_session() -> None:
     assert manager.status().state == TalkState.ACTIVE
 
     await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_shutdown_closes_active_session() -> None:
+    """Runtime shutdown should close the current camera talk session."""
+    manager = _manager()
+
+    # Given: An active talk session
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    session = await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+
+    # When: The source/runtime shuts down
+    await manager.shutdown()
+
+    # Then: The active camera session is closed and manager state is idle
+    assert isinstance(session, _FakeSession)
+    assert session.closed is True
+    assert manager.status().state == TalkState.IDLE
 
 
 @pytest.mark.asyncio
@@ -448,3 +684,23 @@ async def test_talk_manager_timeout_cleanup_closes_active_session() -> None:
     assert isinstance(session, _FakeSession)
     assert session.closed is True
     assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_idle_cleanup_closes_active_session_after_silence() -> None:
+    """Idle sessions should close when the browser stops sending audio frames."""
+    manager = _manager(max_session_s=60.0, idle_timeout_s=0.01)
+
+    # Given: An active talk session with no audio frame activity
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    session = await manager.open_session(TalkSessionOpenRequest(session_id="tk_1"))
+
+    # When: The idle timeout elapses
+    await asyncio.sleep(0.05)
+
+    # Then: The session is closed and the talk slot is available again
+    assert isinstance(session, _FakeSession)
+    assert session.closed is True
+    assert manager.status().state == TalkState.IDLE
+    retry = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_2"))
+    assert retry.accepted is True

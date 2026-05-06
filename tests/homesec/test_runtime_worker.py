@@ -384,6 +384,59 @@ async def test_runtime_worker_talk_status_reports_unsupported_for_non_talk_capab
 
 
 @pytest.mark.asyncio
+async def test_runtime_worker_talk_status_reports_disabled_before_source_lookup() -> None:
+    """TALK_STATUS should honor global talk disablement before source capability checks."""
+
+    class _SourceThatShouldNotBeRead:
+        def talk_status(self) -> CameraTalkStatus:
+            raise AssertionError("disabled talk status should not inspect the source")
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            _ = request
+            raise AssertionError("disabled talk status should not prepare sessions")
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            _ = request
+            raise AssertionError("disabled talk status should not open sessions")
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            _ = session_id, frame
+            raise AssertionError("disabled talk status should not write frames")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            _ = session_id
+            raise AssertionError("disabled talk status should not stop sessions")
+
+    config = _make_config(notifiers=[], talk_enabled=False)
+    config.cameras[0].talk = CameraTalkConfig(mode="auto")
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": _SourceThatShouldNotBeRead()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STATUS,
+        command_id="cmd-talk-status-disabled",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+
+    # Given: Global talk is disabled even though the source is structurally talk-capable
+    # When: The worker handles TALK_STATUS
+    result = await service._handle_async_command(command)
+
+    # Then: Disabled state is returned without consulting camera source methods
+    assert result.talk_status is not None
+    assert result.talk_status.enabled is False
+    assert result.talk_status.policy_enabled is True
+    assert result.talk_status.state == TalkState.DISABLED
+
+
+@pytest.mark.asyncio
 async def test_runtime_worker_talk_status_uses_refreshable_source_status() -> None:
     """TALK_STATUS should let sources refresh discovered talk capability."""
 
@@ -453,6 +506,59 @@ async def test_runtime_worker_talk_status_uses_refreshable_source_status() -> No
     assert result.talk_status.capability == TalkCapabilityState.SUPPORTED
     assert result.talk_status.state == TalkState.IDLE
     assert result.talk_status.offered_codecs == ["PCMA/8000"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_status_reports_error_when_source_status_raises() -> None:
+    """TALK_STATUS should fail closed when a talk-capable source status lookup raises."""
+
+    class _TalkSource:
+        def talk_status(self) -> CameraTalkStatus:
+            raise RuntimeError("status socket failed")
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            _ = request
+            raise AssertionError("status should not prepare sessions")
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            _ = request
+            raise AssertionError("status should not open sessions")
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            _ = session_id, frame
+            raise AssertionError("status should not write frames")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            _ = session_id
+            raise AssertionError("status should not stop sessions")
+
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": _TalkSource()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STATUS,
+        command_id="cmd-talk-status-raises",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+    )
+
+    # Given: A structurally talk-capable source whose cached status lookup fails
+    # When: The worker handles TALK_STATUS
+    result = await service._handle_async_command(command)
+
+    # Then: The failure is serialized as an error status instead of escaping the worker
+    assert result.talk_status is not None
+    assert result.talk_status.enabled is True
+    assert result.talk_status.policy_enabled is True
+    assert result.talk_status.state == TalkState.ERROR
+    assert result.talk_status.last_error == "Talk status unavailable"
 
 
 @pytest.mark.asyncio
@@ -549,6 +655,62 @@ async def test_runtime_worker_talk_prepare_refuses_non_talk_capable_source() -> 
 
 
 @pytest.mark.asyncio
+async def test_runtime_worker_talk_prepare_converts_source_exception_to_refusal() -> None:
+    """TALK_PREPARE_SESSION should serialize source failures as typed refusals."""
+
+    class _TalkSource:
+        def talk_status(self) -> CameraTalkStatus:
+            return CameraTalkStatus(
+                camera_name="front",
+                enabled=True,
+                state=TalkState.IDLE,
+            )
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            _ = request
+            raise RuntimeError("camera probe failed")
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            _ = request
+            raise AssertionError("prepare failure should not open sessions")
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            _ = session_id, frame
+            raise AssertionError("prepare failure should not write frames")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            _ = session_id
+            raise AssertionError("prepare failure should not stop sessions")
+
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": _TalkSource()}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_PREPARE_SESSION,
+        command_id="cmd-prepare-source-error",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+        session_id="tk_prepare_error",
+    )
+
+    # Given: A talk-capable source whose prepare path raises
+    # When: The worker handles TALK_PREPARE_SESSION
+    result = await service._handle_async_command(command)
+
+    # Then: The source failure is returned as a runtime-unavailable talk refusal
+    assert result.talk_refusal is not None
+    assert result.talk_refusal.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert result.talk_refusal.message == "Talk session prepare failed"
+
+
+@pytest.mark.asyncio
 async def test_runtime_worker_talk_stream_open_returns_camera_not_found_error() -> None:
     """TALK_STREAM_OPEN should fail before streaming when the camera is unknown."""
     config = _make_config(notifiers=[], talk_enabled=True)
@@ -567,6 +729,73 @@ async def test_runtime_worker_talk_stream_open_returns_camera_not_found_error() 
     assert result.error_code == WorkerCommandErrorCode.CAMERA_NOT_FOUND
     assert result.error_message == "Camera 'missing' not found"
     assert result.talk_refusal is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_stream_open_requires_session_id_without_source_side_effects() -> (
+    None
+):
+    """TALK_STREAM_OPEN should refuse malformed opens before touching the camera source."""
+
+    class _TalkSource:
+        def __init__(self) -> None:
+            self.opened: list[TalkSessionOpenRequest] = []
+
+        def talk_status(self) -> CameraTalkStatus:
+            return CameraTalkStatus(
+                camera_name="front",
+                enabled=True,
+                state=TalkState.IDLE,
+            )
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            _ = request
+            raise AssertionError("open validation should not prepare sessions")
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            self.opened.append(request)
+            return SimpleNamespace(
+                session_id=request.session_id,
+                camera_name="front",
+                selected_codec="PCMU/8000",
+            )
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            _ = session_id, frame
+            raise AssertionError("open validation should not write frames")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            _ = session_id
+            raise AssertionError("open validation should not stop sessions")
+
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    source = _TalkSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STREAM_OPEN,
+        command_id="cmd-open-no-session",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+        session_id=None,
+    )
+
+    # Given: A TALK_STREAM_OPEN command without the reserved session id
+    # When: The worker validates the command
+    result = await service._open_talk_stream(command)
+
+    # Then: The worker returns a typed refusal and never opens the camera backchannel
+    assert result.talk_refusal is not None
+    assert result.talk_refusal.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert result.talk_refusal.message == "Talk stream requires a session_id"
+    assert source.opened == []
 
 
 @pytest.mark.asyncio

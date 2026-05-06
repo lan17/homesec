@@ -27,12 +27,17 @@ from homesec.models.vlm import VLMConfig
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
-from homesec.runtime.errors import PreviewRuntimeUnavailableError, TalkStreamOpenRefused
+from homesec.runtime.errors import (
+    PreviewRuntimeUnavailableError,
+    TalkRuntimeUnavailableError,
+    TalkStreamOpenRefused,
+)
 from homesec.runtime.manager import RuntimeManager
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
     CameraPreviewStatus,
     CameraTalkSessionPrepared,
+    CameraTalkStartRefusal,
     PreviewRefusalReason,
     PreviewState,
 )
@@ -42,6 +47,7 @@ from homesec.runtime.subprocess_controller import (
     _WorkerEventProtocol,
 )
 from homesec.runtime.subprocess_protocol import (
+    WorkerCommand,
     WorkerCommandResult,
     WorkerCommandType,
     WorkerEvent,
@@ -588,6 +594,239 @@ async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
 
         assert error.value.reason == TalkRefusalReason.INVALID_AUDIO_FRAME
         assert str(error.value) == "Talk input format does not match the reserved session"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_talk_prepare_rejects_stale_worker_without_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk prepare should fail fast when the worker heartbeat is stale."""
+    controller = SubprocessRuntimeController(heartbeat_stale_s=0.01)
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-prepare-stale",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    async def _unexpected_send_command(*_: object, **__: object) -> WorkerCommandResult:
+        raise AssertionError("stale workers should not receive talk prepare commands")
+
+    monkeypatch.setattr(controller, "_send_command", _unexpected_send_command)
+
+    try:
+        # Given: A runtime worker whose heartbeat is stale
+        # When: Preparing a talk session through the subprocess controller
+        result = await controller.prepare_talk_session(
+            runtime,
+            "front",
+            session_id="tk_stale",
+            input_format=TalkInputFormat(),
+        )
+
+        # Then: The request is refused locally without writing to the dead worker socket
+        assert isinstance(result, CameraTalkStartRefusal)
+        assert result.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+        assert "heartbeat timed out" in result.message
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_talk_status_reports_stale_worker_without_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk status should report stale runtime state without touching worker IPC."""
+    controller = SubprocessRuntimeController(heartbeat_stale_s=0.01)
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-status-stale",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    async def _unexpected_send_command(*_: object, **__: object) -> WorkerCommandResult:
+        raise AssertionError("stale workers should not receive talk status commands")
+
+    monkeypatch.setattr(controller, "_send_command", _unexpected_send_command)
+
+    try:
+        # Given: A runtime worker whose heartbeat is stale
+        # When: Reading talk status through the subprocess controller
+        status = await controller.get_talk_status(runtime, "front")
+
+        # Then: Status reports runtime error state without writing to the dead worker socket
+        assert status.enabled is True
+        assert status.policy_enabled is True
+        assert status.state == TalkState.ERROR
+        assert status.last_error == "runtime worker heartbeat timed out"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_open_talk_stream_rejects_stale_worker_without_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk stream attach should fail fast when the active worker heartbeat is stale."""
+    controller = SubprocessRuntimeController(heartbeat_stale_s=0.01)
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-open-stale",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    async def _unexpected_open_unix_connection(*_: object, **__: object) -> object:
+        raise AssertionError("stale workers should not open talk command sockets")
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _unexpected_open_unix_connection)
+
+    try:
+        # Given: A runtime worker whose heartbeat is stale
+        # When/Then: Opening a talk stream fails before command-socket attachment
+        with pytest.raises(TalkRuntimeUnavailableError, match="heartbeat timed out"):
+            await controller.open_talk_stream(
+                runtime,
+                "front",
+                session_id="tk_stale",
+                input_format=TalkInputFormat(),
+            )
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.parametrize(
+    ("response_updates", "expected_message"),
+    [
+        ({"generation": 2}, "wrong generation"),
+        ({"correlation_id": "wrong-correlation"}, "wrong correlation id"),
+        ({"command_id": "wrong-command-id"}, "wrong command"),
+        ({"command": WorkerCommandType.PREVIEW_STATUS}, "wrong command type"),
+        ({"camera_name": "back"}, "wrong camera"),
+    ],
+)
+def test_subprocess_controller_rejects_mismatched_worker_talk_responses(
+    response_updates: dict[str, object],
+    expected_message: str,
+) -> None:
+    """Worker responses must match the request before they affect runtime state."""
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STATUS,
+        command_id="cmd-talk-status",
+        generation=1,
+        correlation_id="expected-correlation",
+        camera_name="front",
+    )
+    response = WorkerCommandResult(
+        command=WorkerCommandType.TALK_STATUS,
+        command_id="cmd-talk-status",
+        generation=1,
+        correlation_id="expected-correlation",
+        camera_name="front",
+        talk_status=WorkerTalkStatusPayload(
+            enabled=True,
+            policy_enabled=True,
+            state=TalkState.IDLE,
+        ),
+    ).model_copy(update=response_updates)
+
+    # Given: A talk command response whose protocol identity does not match the request
+    raw_response = response.model_dump_json().encode("utf-8")
+
+    # When/Then: The controller rejects it before using the worker payload
+    with pytest.raises(RuntimeError, match=expected_message):
+        SubprocessRuntimeController._parse_command_result(raw_response, command)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_open_talk_stream_closes_writer_when_worker_returns_no_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead worker stream should not leak the controller-side command socket."""
+    controller = SubprocessRuntimeController(command_timeout_s=1.0)
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-open-no-response",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+
+    class _NoResponseReader:
+        async def readline(self) -> bytes:
+            return b""
+
+    class _CapturingWriter:
+        def __init__(self) -> None:
+            self.closed = False
+            self.waited_closed = False
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            self.waited_closed = True
+
+    writer = _CapturingWriter()
+
+    async def _fake_open_unix_connection(path: str) -> tuple[_NoResponseReader, _CapturingWriter]:
+        _ = path
+        return _NoResponseReader(), writer
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _fake_open_unix_connection)
+
+    try:
+        # Given: A worker command socket that closes without returning TALK_STREAM_OPEN
+        # When: The controller attaches a talk stream
+        with pytest.raises(TalkRuntimeUnavailableError, match="without a response"):
+            await controller.open_talk_stream(
+                runtime,
+                "front",
+                session_id="tk_1",
+                input_format=TalkInputFormat(),
+            )
+
+        # Then: The command socket writer is closed instead of being leaked
+        assert writer.writes
+        assert writer.closed is True
+        assert writer.waited_closed is True
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)
