@@ -29,11 +29,11 @@ a=control:trackID=backchannel
 
 
 def test_parse_sdp_collects_sendonly_audio_codecs() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP that advertises sendonly PCMU and PCMA audio backchannel payloads.
+    # When: HomeSec parses the SDP.
     description = parse_sdp(_BACKCHANNEL_SDP)
 
+    # Then: The audio media section exposes direction, payload IDs, and codec mappings.
     audio = description.media[1]
     assert audio.media == "audio"
     assert audio.direction == "sendonly"
@@ -55,24 +55,22 @@ def test_advertised_audio_backchannel_codecs_returns_sendonly_audio_codecs() -> 
 
 
 def test_select_audio_backchannel_honors_codec_order_and_control_url() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A camera SDP offers PCMU and PCMA backchannel audio.
+    # When: HomeSec prefers PCMA and resolves the media control URL from a base URL.
     selected = select_audio_backchannel(
         _BACKCHANNEL_SDP,
         preferred_codecs=["PCMA/8000", "PCMU/8000"],
         base_control_url="rtsp://camera.example/Streaming/Channels/101",
     )
 
+    # Then: The selected payload honors HomeSec preference order and uses the resolved URL.
     assert selected.payload_type == 8
     assert selected.selected_codec == "PCMA/8000"
     assert selected.control == "rtsp://camera.example/Streaming/Channels/101/trackID=backchannel"
 
 
 def test_select_audio_backchannel_uses_session_level_sendonly() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP where sendonly direction is declared at session level.
     sdp = """v=0
 s=session-level direction
 
@@ -82,20 +80,20 @@ m=audio 0 RTP/AVP 0
 a=control:trackID=backchannel
 """
 
+    # When: HomeSec selects an audio backchannel from the SDP.
     selected = select_audio_backchannel(
         sdp,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/base",
     )
 
+    # Then: The session-level direction applies to the audio media section.
     assert selected.payload_type == 0
     assert selected.control == "rtsp://camera.example/base/trackID=backchannel"
 
 
 def test_select_audio_backchannel_uses_static_payload_type_without_rtpmap() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP uses static PCMU payload type 0 without an explicit rtpmap.
     sdp = """v=0
 s=static payload
 m=audio 0 RTP/AVP 0
@@ -103,84 +101,84 @@ a=sendonly
 a=control:backchannel
 """
 
+    # When: HomeSec selects a PCMU backchannel from the SDP.
     selected = select_audio_backchannel(
         sdp,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/live",
     )
 
+    # Then: Static payload type 0 resolves to PCMU and a relative control URL.
     assert selected.selected_codec == "PCMU/8000"
     assert selected.control == "rtsp://camera.example/live/backchannel"
 
 
 def test_select_audio_backchannel_preserves_absolute_control_url() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP advertises an absolute talk media control URL.
     sdp = _BACKCHANNEL_SDP.replace(
         "a=control:trackID=backchannel",
         "a=control:rtsp://media.example/talk",
     )
 
+    # When: HomeSec selects the audio backchannel.
     selected = select_audio_backchannel(
         sdp,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/live",
     )
 
+    # Then: The absolute control URL is preserved.
     assert selected.control == "rtsp://media.example/talk"
 
 
 def test_select_audio_backchannel_maps_aggregate_control_to_base_url() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP uses aggregate control for the talk media section.
     sdp = _BACKCHANNEL_SDP.replace("a=control:trackID=backchannel", "a=control:*")
 
+    # When: HomeSec selects the audio backchannel.
     selected = select_audio_backchannel(
         sdp,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/live",
     )
 
+    # Then: The aggregate control resolves to the base RTSP URL.
     assert selected.control == "rtsp://camera.example/live"
 
 
 def test_select_audio_backchannel_handles_leading_slash_control_path() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP advertises a root-relative talk media control path.
     sdp = _BACKCHANNEL_SDP.replace(
         "a=control:trackID=backchannel",
         "a=control:/Streaming/Channels/101/trackID=backchannel",
     )
 
+    # When: HomeSec resolves the talk media control URL from a queried base URL.
     selected = select_audio_backchannel(
         sdp,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/live?profile=main",
     )
 
+    # Then: The path resolves against the RTSP origin without inheriting the query string.
     assert selected.control == "rtsp://camera.example/Streaming/Channels/101/trackID=backchannel"
 
 
 def test_select_audio_backchannel_appends_relative_control_before_base_query() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP advertises a relative talk media control path.
+    # When: HomeSec resolves it against a base URL with a query string.
     selected = select_audio_backchannel(
         _BACKCHANNEL_SDP,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/live?profile=main",
     )
 
+    # Then: The relative path is appended before the query component.
     assert selected.control == "rtsp://camera.example/live/trackID=backchannel"
 
 
 def test_select_audio_backchannel_uses_session_control_as_base_for_media_control() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP declares a session-level control URL and a relative media control path.
     sdp = """v=0
 s=session control base
 a=sendonly
@@ -189,19 +187,19 @@ m=audio 0 RTP/AVP 0
 a=control:trackID=backchannel
 """
 
+    # When: HomeSec selects the audio backchannel.
     selected = select_audio_backchannel(
         sdp,
         preferred_codecs=["PCMU/8000"],
         base_control_url="rtsp://camera.example/fallback",
     )
 
+    # Then: The media control path is resolved against the session-level control URL.
     assert selected.control == "rtsp://camera.example/base/trackID=backchannel"
 
 
 def test_parse_sdp_ignores_malformed_lines_and_applies_fmtp_to_known_codec() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP includes malformed payload mappings alongside valid audio metadata.
     sdp = """v=0
 s=malformed resilience
 m=audio nope RTP/AVP 0
@@ -220,8 +218,10 @@ a=fmtp:98 mode=probe
 a=control:talk
 """
 
+    # When: HomeSec parses the SDP.
     description = parse_sdp(sdp)
 
+    # Then: Malformed lines are ignored while valid payload and fmtp metadata remains.
     assert len(description.media) == 1
     audio = description.media[0]
     assert audio.payload_types == [99, 98, 0]
@@ -232,26 +232,25 @@ a=control:talk
 
 
 def test_select_audio_backchannel_rejects_missing_sendonly_audio() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: SDP does not advertise a sendonly audio section for camera talk.
     sdp = _BACKCHANNEL_SDP.replace("a=sendonly", "a=recvonly")
 
+    # When: HomeSec tries to select a talk backchannel.
+    # Then: Selection rejects the camera as lacking ONVIF backchannel support.
     with pytest.raises(CameraBackchannelUnsupportedError):
         select_audio_backchannel(sdp, preferred_codecs=["PCMU/8000"])
 
 
 def test_select_audio_backchannel_rejects_unsupported_codec() -> None:
-    # Given/When/Then: The error includes both camera-advertised and requested codecs.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A camera SDP advertises only G.711 backchannel codecs.
+    # When: HomeSec requests only an unsupported codec.
+    # Then: The error includes both camera-advertised and requested codecs.
     with pytest.raises(UnsupportedTalkCodecError, match="advertised: PCMU/8000, PCMA/8000"):
         select_audio_backchannel(_BACKCHANNEL_SDP, preferred_codecs=["OPUS/48000"])
 
 
 def test_select_audio_backchannel_rejects_payloads_without_codec_mapping() -> None:
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A backchannel SDP advertises a dynamic payload without an RTP codec mapping.
     sdp = """v=0
 s=unknown dynamic payload
 m=audio 0 RTP/AVP 121
@@ -259,6 +258,7 @@ a=sendonly
 a=control:talk
 """
 
-    # Given/When/Then: Unknown dynamic payloads remain visible in diagnostics.
+    # When: HomeSec selects a supported backchannel from that SDP.
+    # Then: Unknown dynamic payloads remain visible in diagnostics.
     with pytest.raises(UnsupportedTalkCodecError, match="payload:121"):
         select_audio_backchannel(sdp, preferred_codecs=["PCMU/8000"])

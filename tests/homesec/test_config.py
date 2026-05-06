@@ -104,11 +104,11 @@ def minimal_config() -> dict[str, object]:
 
 def test_load_config_from_dict_success() -> None:
     """Test loading valid config from dict."""
-    # Given a minimal valid config dict
-    # When loading the config
+    # Given: a minimal valid config dict
+    # When: loading the config
     config = load_config_from_dict(minimal_config())
 
-    # Then it loads successfully
+    # Then: it loads successfully
     assert config.filter.backend == "yolo"
     assert isinstance(config.filter.config, dict)
     assert config.vlm.backend == "openai"
@@ -118,39 +118,39 @@ def test_load_config_from_dict_success() -> None:
 
 def test_load_config_from_dict_missing_required_field() -> None:
     """Test that missing required field raises ConfigError."""
-    # Given a config missing required sections
+    # Given: a config missing required sections
     invalid = {"filter": {"backend": "yolo"}}  # Missing vlm and alert_policy
 
-    # When loading the config
+    # When: loading the config
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(invalid)  # type: ignore[arg-type]
 
-    # Then a validation error is raised
+    # Then: a validation error is raised
     assert "validation failed" in str(exc_info.value).lower()
     assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
 
 
 def test_load_config_from_dict_invalid_risk_level() -> None:
     """Test that invalid enum value raises ConfigError."""
-    # Given a config with an invalid risk level
+    # Given: a config with an invalid risk level
     data = minimal_config()
     data["alert_policy"] = {
         "backend": "default",
         "config": {"min_risk_level": "extreme"},
     }  # Invalid value
 
-    # When loading the config
+    # When: loading the config
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then a validation error references the field
+    # Then: a validation error references the field
     assert exc_info.value.code is ConfigErrorCode.PLUGIN_CONFIG_INVALID
     assert "min_risk_level" in str(exc_info.value)
 
 
 def test_load_config_from_yaml_file() -> None:
     """Test loading config from YAML file."""
-    # Given a valid YAML config file
+    # Given: a valid YAML config file
     yaml_content = """
 cameras:
   - name: front_door
@@ -194,9 +194,9 @@ alert_policy:
         path = Path(f.name)
 
     try:
-        # When loading the config
+        # When: loading the config
         config = load_config(path)
-        # Then fields are parsed and validated
+        # Then: fields are parsed and validated
         assert config.cameras[0].name == "front_door"
         assert config.storage.backend == "dropbox"
         assert config.filter.backend == "yolo"
@@ -212,7 +212,7 @@ def test_load_config_warns_when_permissions_are_too_open(caplog: pytest.LogCaptu
     if os.name != "posix":
         pytest.skip("Permission warnings are POSIX-specific")
 
-    # Given a valid config file with permissive mode
+    # Given: a valid config file with permissive mode
     yaml_content = """
 cameras:
   - name: front_door
@@ -257,11 +257,11 @@ alert_policy:
     os.chmod(path, 0o644)
 
     try:
-        # When loading the config
+        # When: loading the config
         with caplog.at_level("WARNING"):
             config = load_config(path)
 
-        # Then loading succeeds and a permissions warning is emitted
+        # Then: loading succeeds and a permissions warning is emitted
         assert config.cameras[0].name == "front_door"
         assert any("permissions are too permissive" in rec.message for rec in caplog.records)
     finally:
@@ -275,7 +275,7 @@ def test_load_config_does_not_warn_when_permissions_are_restrictive(
     if os.name != "posix":
         pytest.skip("Permission warnings are POSIX-specific")
 
-    # Given a valid config file with restrictive mode
+    # Given: a valid config file with restrictive mode
     yaml_content = """
 cameras:
   - name: front_door
@@ -320,11 +320,11 @@ alert_policy:
     os.chmod(path, 0o600)
 
     try:
-        # When loading the config
+        # When: loading the config
         with caplog.at_level("WARNING"):
             config = load_config(path)
 
-        # Then loading succeeds without a permissions warning
+        # Then: loading succeeds without a permissions warning
         assert config.cameras[0].name == "front_door"
         assert all("permissions are too permissive" not in rec.message for rec in caplog.records)
     finally:
@@ -333,29 +333,29 @@ alert_policy:
 
 def test_load_config_file_not_found() -> None:
     """Test that missing file raises ConfigError."""
-    # Given a nonexistent path
+    # Given: a nonexistent path
     with pytest.raises(ConfigError) as exc_info:
-        # When loading the config
+        # When: loading the config
         load_config(Path("/nonexistent/config.yaml"))
 
-    # Then a not found error is raised
+    # Then: a not found error is raised
     assert "not found" in str(exc_info.value).lower()
     assert exc_info.value.code is ConfigErrorCode.FILE_NOT_FOUND
 
 
 def test_load_config_invalid_yaml() -> None:
     """Test that invalid YAML raises ConfigError."""
-    # Given a malformed YAML file
+    # Given: a malformed YAML file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write("invalid: yaml: content: [")
         f.flush()
         path = Path(f.name)
 
     try:
-        # When loading the config
+        # When: loading the config
         with pytest.raises(ConfigError) as exc_info:
             load_config(path)
-        # Then an invalid YAML error is raised
+        # Then: an invalid YAML error is raised
         assert "invalid yaml" in str(exc_info.value).lower()
         assert exc_info.value.code is ConfigErrorCode.YAML_INVALID
     finally:
@@ -364,17 +364,17 @@ def test_load_config_invalid_yaml() -> None:
 
 def test_load_config_empty_file() -> None:
     """Test that empty file raises ConfigError."""
-    # Given an empty YAML file
+    # Given: an empty YAML file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write("")
         f.flush()
         path = Path(f.name)
 
     try:
-        # When loading the config
+        # When: loading the config
         with pytest.raises(ConfigError) as exc_info:
             load_config(path)
-        # Then an empty file error is raised
+        # Then: an empty file error is raised
         assert "empty" in str(exc_info.value).lower()
         assert exc_info.value.code is ConfigErrorCode.EMPTY_FILE
     finally:
@@ -383,25 +383,25 @@ def test_load_config_empty_file() -> None:
 
 def test_load_config_rejects_legacy_health_block() -> None:
     """Config loading should fail fast when legacy health block is provided."""
-    # Given a config payload still using retired health server settings
+    # Given: a config payload still using retired health server settings
     data = minimal_config()
     data["health"] = {
         "host": "0.0.0.0",
         "port": 8080,
     }
 
-    # When loading the config
+    # When: loading the config
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then validation fails and surfaces the unknown key
+    # Then: validation fails and surfaces the unknown key
     assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
     assert "health" in str(exc_info.value)
 
 
 def test_per_camera_override_merge() -> None:
     """Test that per-camera overrides are preserved in config."""
-    # Given a config with per-camera alert overrides
+    # Given: a config with per-camera alert overrides
     data = minimal_config()
     data["alert_policy"]["config"]["overrides"] = {
         "front_door": {
@@ -410,10 +410,10 @@ def test_per_camera_override_merge() -> None:
         }
     }
 
-    # When loading the config
+    # When: loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then overrides remain available in the alert policy config
+    # Then: overrides remain available in the alert policy config
     overrides = config.alert_policy.config["overrides"]
     assert overrides["front_door"]["min_risk_level"] == "low"
     assert overrides["front_door"]["notify_on_activity_types"] == ["delivery"]
@@ -421,12 +421,12 @@ def test_per_camera_override_merge() -> None:
 
 def test_resolve_env_var_success() -> None:
     """Test resolving existing environment variable."""
-    # Given an environment variable set
+    # Given: an environment variable set
     os.environ["TEST_VAR_12345"] = "test_value"
     try:
-        # When resolving it
+        # When: resolving it
         value = resolve_env_var("TEST_VAR_12345")
-        # Then the value is returned
+        # Then: the value is returned
         assert value == "test_value"
     finally:
         del os.environ["TEST_VAR_12345"]
@@ -434,49 +434,49 @@ def test_resolve_env_var_success() -> None:
 
 def test_resolve_env_var_missing_required() -> None:
     """Test that missing required env var raises ConfigError."""
-    # Given a missing env var
+    # Given: a missing env var
     with pytest.raises(ConfigError) as exc_info:
-        # When resolving as required
+        # When: resolving as required
         resolve_env_var("DEFINITELY_NOT_SET_VAR_XYZ")
 
-    # Then a ConfigError is raised
+    # Then: a ConfigError is raised
     assert "not set" in str(exc_info.value).lower()
     assert exc_info.value.code is ConfigErrorCode.ENV_VAR_MISSING
 
 
 def test_resolve_env_var_missing_optional() -> None:
     """Test that missing optional env var returns None."""
-    # Given a missing env var
-    # When resolving as optional
+    # Given: a missing env var
+    # When: resolving as optional
     result = resolve_env_var("DEFINITELY_NOT_SET_VAR_XYZ", required=False)
-    # Then None is returned
+    # Then: None is returned
     assert result is None
 
 
 def test_validate_camera_references_valid() -> None:
     """Test validation passes when camera names are valid."""
-    # Given per-camera overrides for known cameras
+    # Given: per-camera overrides for known cameras
     data = minimal_config()
     data["alert_policy"]["config"]["overrides"] = {"front_door": {"min_risk_level": "low"}}
 
-    # When loading the config
+    # When: loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then validation passes
+    # Then: validation passes
     validate_camera_references(config, ["front_door", "back_door"])
 
 
 def test_validate_camera_references_invalid() -> None:
     """Test validation fails when camera names are invalid."""
-    # Given per-camera overrides for unknown cameras
+    # Given: per-camera overrides for unknown cameras
     data = minimal_config()
     data["alert_policy"]["config"]["overrides"] = {"unknown_camera": {"min_risk_level": "low"}}
 
-    # When loading the config
+    # When: loading the config
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then the camera reference validation code is surfaced
+    # Then: the camera reference validation code is surfaced
     assert exc_info.value.code is ConfigErrorCode.CAMERA_REFERENCES_INVALID
     assert "unknown_camera" in str(exc_info.value)
 
@@ -523,10 +523,10 @@ def test_validate_config_rejects_unknown_plugin_backend() -> None:
 
 def test_validate_plugin_names_valid() -> None:
     """Test validation passes when plugin names are valid."""
-    # Given a valid config
+    # Given: a valid config
     config = load_config_from_dict(minimal_config())
 
-    # When validating plugin names
+    # When: validating plugin names
     validate_plugin_names(
         config,
         valid_filters=["yolo"],
@@ -535,16 +535,16 @@ def test_validate_plugin_names_valid() -> None:
         valid_notifiers=["mqtt", "sendgrid_email"],
         valid_alert_policies=["default"],
     )
-    # Then validation succeeds without errors
+    # Then: validation succeeds without errors
     assert config.filter.backend == "yolo"
 
 
 def test_validate_plugin_names_invalid() -> None:
     """Test validation fails when plugin names are invalid."""
-    # Given a config with unsupported notifier
+    # Given: a config with unsupported notifier
     config = load_config_from_dict(minimal_config())
 
-    # When validating plugin names
+    # When: validating plugin names
     with pytest.raises(ConfigError) as exc_info:
         validate_plugin_names(
             config,
@@ -555,14 +555,14 @@ def test_validate_plugin_names_invalid() -> None:
             valid_alert_policies=["default"],
         )
 
-    # Then the missing backend is reported
+    # Then: the missing backend is reported
     assert exc_info.value.code is ConfigErrorCode.PLUGIN_NAMES_INVALID
     assert "mqtt" in str(exc_info.value)
 
 
 def test_validate_plugin_names_case_insensitive() -> None:
     """Test validation allows plugin names with different casing."""
-    # Given a config with uppercase plugin names
+    # Given: a config with uppercase plugin names
     data = minimal_config()
     data["filter"]["backend"] = "YOLO"
     data["vlm"]["backend"] = "OPENAI"
@@ -572,7 +572,7 @@ def test_validate_plugin_names_case_insensitive() -> None:
     data["cameras"][0]["source"]["backend"] = "LOCAL_FOLDER"
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # When validating plugin names
+    # When: validating plugin names
     validate_plugin_names(
         config,
         valid_filters=["yolo"],
@@ -583,7 +583,7 @@ def test_validate_plugin_names_case_insensitive() -> None:
         valid_sources=["local_folder"],
     )
 
-    # Then validation succeeds regardless of casing
+    # Then: validation succeeds regardless of casing
     assert config.filter.backend == "yolo"
     assert config.vlm.backend == "openai"
     assert config.storage.backend == "dropbox"
@@ -594,14 +594,14 @@ def test_validate_plugin_names_case_insensitive() -> None:
 
 def test_load_example_config() -> None:
     """Test that the example config file loads successfully."""
-    # Given an example config file on disk
+    # Given: an example config file on disk
     example_path = Path(__file__).parent.parent.parent / "config" / "example.yaml"
     if not example_path.exists():
         pytest.skip("Example config not found")
 
-    # When loading the config
+    # When: loading the config
     config = load_config(example_path)
-    # Then expected fields are present
+    # Then: expected fields are present
     assert config.preview.backend == "hls"
     assert config.filter.backend == "yolo"
     assert config.vlm.backend == "openai"
@@ -613,7 +613,7 @@ def test_third_party_filter_config_preserved_through_config_load() -> None:
     This tests the fix for the bug where third-party configs were silently dropped
     because FilterConfig.config accepted BaseModel which created empty objects.
     """
-    # Given a config with a third-party filter plugin (not yolo)
+    # Given: a config with a third-party filter plugin (not yolo)
     data = minimal_config()
     data["filter"] = {
         "backend": "custom_filter",
@@ -624,10 +624,10 @@ def test_third_party_filter_config_preserved_through_config_load() -> None:
         },
     }
 
-    # When loading the config
+    # When: loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then the filter config should be preserved as a dict (not empty BaseModel)
+    # Then: the filter config should be preserved as a dict (not empty BaseModel)
     assert isinstance(config.filter.config, dict)
     assert config.filter.config["custom_field_1"] == "value1"
     assert config.filter.config["custom_field_2"] == 42
@@ -640,7 +640,7 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
     This tests the fix for the bug where third-party configs were silently dropped
     because VLMConfig.config accepted BaseModel which created empty objects.
     """
-    # Given a config with a third-party VLM plugin (not openai)
+    # Given: a config with a third-party VLM plugin (not openai)
     data = minimal_config()
     data["vlm"] = {
         "backend": "custom_vlm",
@@ -651,10 +651,10 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
         },
     }
 
-    # When loading the config
+    # When: loading the config
     config = load_config_from_dict(data)  # type: ignore[arg-type]
 
-    # Then the config should be preserved as a dict (not empty BaseModel)
+    # Then: the config should be preserved as a dict (not empty BaseModel)
     assert isinstance(config.vlm.config, dict)
     assert config.vlm.config["custom_api_key"] == "secret123"
     assert config.vlm.config["custom_model"] == "custom-model-v1"
@@ -663,44 +663,44 @@ def test_third_party_vlm_config_preserved_through_config_load() -> None:
 
 def test_server_ui_env_defaults_apply_when_fields_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Server UI dist path should default from env when config omits it."""
-    # Given an env-configured UI dist path and config without explicit server block
+    # Given: an env-configured UI dist path and config without explicit server block
     monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
     data = minimal_config()
 
-    # When loading config
+    # When: loading config
     config = load_config_from_dict(data)
 
-    # Then server UI dist path comes from env default
+    # Then: server UI dist path comes from env default
     assert config.server.ui_dist_dir == "/app/ui/dist"
 
 
 def test_server_ui_config_values_override_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicit ui_dist_dir config should win over env defaults."""
-    # Given env defaults and explicit ui_dist_dir config value
+    # Given: env defaults and explicit ui_dist_dir config value
     monkeypatch.setenv("HOMESEC_SERVER_UI_DIST_DIR", "/app/ui/dist")
     data = minimal_config()
     data["server"] = {
         "ui_dist_dir": "./custom-ui-dist",
     }
 
-    # When loading config
+    # When: loading config
     config = load_config_from_dict(data)
 
-    # Then explicit config value is preserved
+    # Then: explicit config value is preserved
     assert config.server.ui_dist_dir == "./custom-ui-dist"
 
 
 def test_server_config_rejects_legacy_serve_ui_field() -> None:
     """Legacy `server.serve_ui` should fail validation after toggle removal."""
-    # Then: The observable result should match the expected contract.
-    # Given a config payload with removed legacy server.serve_ui key
+    # Given: a config payload with removed legacy server.serve_ui key
     data = minimal_config()
     data["server"] = {
         "serve_ui": True,
         "ui_dist_dir": "./ui/dist",
     }
 
-    # When/Then: Loading config fails with schema validation error
+    # When: loading the config.
+    # Then: schema validation rejects the removed key.
     with pytest.raises(ConfigError) as exc_info:
         _ = load_config_from_dict(data)
 
@@ -710,13 +710,13 @@ def test_server_config_rejects_legacy_serve_ui_field() -> None:
 
 def test_preview_defaults_apply_when_preview_block_is_absent() -> None:
     """Preview config should default to the accepted v1 HLS contract surface."""
-    # Given a valid config payload without a preview block
+    # Given: a valid config payload without a preview block
     data = minimal_config()
 
-    # When loading the config
+    # When: loading the config
     config = load_config_from_dict(data)
 
-    # Then preview defaults match the v1 contract
+    # Then: preview defaults match the v1 contract
     assert config.preview.enabled is False
     assert config.preview.backend == "hls"
     assert config.preview.token_ttl_s == 60
@@ -732,7 +732,7 @@ def test_preview_defaults_apply_when_preview_block_is_absent() -> None:
 
 def test_preview_hls_config_parses_explicit_values() -> None:
     """Preview config should parse the accepted HLS override surface."""
-    # Given a config payload with explicit preview overrides
+    # Given: a config payload with explicit preview overrides
     data = minimal_config()
     data["preview"] = {
         "enabled": True,
@@ -750,10 +750,10 @@ def test_preview_hls_config_parses_explicit_values() -> None:
         },
     }
 
-    # When loading the config
+    # When: loading the config
     config = load_config_from_dict(data)
 
-    # Then preview config is normalized and typed correctly
+    # Then: preview config is normalized and typed correctly
     assert config.preview.enabled is True
     assert config.preview.backend == "hls"
     assert config.preview.token_ttl_s == 120
@@ -807,7 +807,7 @@ def test_preview_rejects_camera_names_that_alias_same_storage_path() -> None:
 
 def test_preview_rejects_unsupported_backend() -> None:
     """Preview config should reject deferred backends in the v1 contract."""
-    # Given a config payload using the deferred MediaMTX backend and its native field
+    # Given: a config payload using the deferred MediaMTX backend and its native field
     data = minimal_config()
     data["preview"] = {
         "enabled": True,
@@ -817,11 +817,11 @@ def test_preview_rejects_unsupported_backend() -> None:
         },
     }
 
-    # When loading the config
+    # When: loading the config
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)
 
-    # Then validation rejects the backend before HLS-only config validation noise
+    # Then: validation rejects the backend before HLS-only config validation noise
     assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
     assert "preview.backend" in str(exc_info.value) or "preview -> backend" in str(exc_info.value)
     assert "hls" in str(exc_info.value)
@@ -830,7 +830,7 @@ def test_preview_rejects_unsupported_backend() -> None:
 
 def test_preview_rejects_v2_and_legacy_extra_fields() -> None:
     """Preview config should reject fields outside the accepted v1 contract."""
-    # Given a config payload with deferred and legacy preview keys
+    # Given: a config payload with deferred and legacy preview keys
     data = minimal_config()
     data["preview"] = {
         "enabled": True,
@@ -847,11 +847,11 @@ def test_preview_rejects_v2_and_legacy_extra_fields() -> None:
         },
     }
 
-    # When loading the config
+    # When: loading the config
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)
 
-    # Then validation surfaces the unknown v1-forbidden keys
+    # Then: validation surfaces the unknown v1-forbidden keys
     assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
     assert "mode" in str(exc_info.value)
     assert "publish_rtsp_base_url" in str(exc_info.value)
@@ -951,7 +951,6 @@ def test_camera_talk_mode_sets_enabled_compatibility_alias() -> None:
 
 def test_talk_input_forbids_extra_fields() -> None:
     """Talk input format should reject unknown fields."""
-    # Then: The observable result should match the expected contract.
     # Given: A config with extra talk input fields
     data = minimal_config()
     data["talk"] = {
@@ -965,14 +964,14 @@ def test_talk_input_forbids_extra_fields() -> None:
         },
     }
 
-    # When / Then: Validation rejects extra fields
+    # When: validating the config.
+    # Then: validation rejects extra fields.
     with pytest.raises(ValidationError):
         Config.model_validate(data)
 
 
 def test_talk_input_rejects_unsupported_codec() -> None:
     """Talk input format should only accept the browser PCM16 contract."""
-    # Then: The observable result should match the expected contract.
     # Given: A config with a deferred/unsupported browser input codec
     data = minimal_config()
     data["talk"] = {
@@ -985,7 +984,8 @@ def test_talk_input_rejects_unsupported_codec() -> None:
         },
     }
 
-    # When / Then: Validation rejects unsupported codecs in the v1 contract
+    # When: validating the config.
+    # Then: validation rejects unsupported codecs in the v1 contract.
     with pytest.raises(ValidationError) as exc_info:
         Config.model_validate(data)
 
@@ -994,7 +994,6 @@ def test_talk_input_rejects_unsupported_codec() -> None:
 
 def test_talk_input_rejects_fractional_frame_size() -> None:
     """Talk input should reject frame sizes that browser and server could round differently."""
-    # Then: The observable result should match the expected contract.
     # Given: A PCM input format whose sample rate and frame duration produce fractional samples
     data = minimal_config()
     data["talk"] = {
@@ -1007,7 +1006,8 @@ def test_talk_input_rejects_fractional_frame_size() -> None:
         },
     }
 
-    # When / Then: Validation rejects the ambiguous frame size
+    # When: validating the config.
+    # Then: validation rejects the ambiguous frame size.
     with pytest.raises(ValidationError) as exc_info:
         Config.model_validate(data)
 
@@ -1016,14 +1016,14 @@ def test_talk_input_rejects_fractional_frame_size() -> None:
 
 def test_camera_talk_rejects_unsupported_backend() -> None:
     """Camera talk config should reject deferred backends in the v1 contract."""
-    # Then: The observable result should match the expected contract.
     # Given: A config using a backend that is intentionally out of scope for MVP
     data = minimal_config()
     camera = data["cameras"][0]
     assert isinstance(camera, dict)
     camera["talk"] = {"enabled": True, "backend": "mediamtx", "config": {}}
 
-    # When / Then: Validation rejects unsupported per-camera talk backends
+    # When: validating the config.
+    # Then: validation rejects unsupported per-camera talk backends.
     with pytest.raises(ValidationError) as exc_info:
         Config.model_validate(data)
 
@@ -1032,7 +1032,6 @@ def test_camera_talk_rejects_unsupported_backend() -> None:
 
 def test_rtsp_talk_backend_config_is_validated_during_config_load() -> None:
     """RTSP talk backend config errors should be caught before runtime startup."""
-    # Then: The observable result should match the expected contract.
     # Given: An RTSP camera with an invalid ONVIF talk codec preference
     data = minimal_config()
     camera = data["cameras"][0]
@@ -1046,7 +1045,8 @@ def test_rtsp_talk_backend_config_is_validated_during_config_load() -> None:
         "config": {"preferred_codecs": ["AAC/8000"]},
     }
 
-    # When / Then: Config validation rejects the talk backend shape before reload
+    # When: loading the config.
+    # Then: config validation rejects the talk backend shape before reload.
     with pytest.raises(ConfigError) as exc_info:
         load_config_from_dict(data)
 

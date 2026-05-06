@@ -190,7 +190,6 @@ async def test_subprocess_controller_preview_commands_round_trip_to_worker() -> 
 @pytest.mark.subprocess
 async def test_subprocess_controller_preview_stop_rejects_stale_worker() -> None:
     """Force-stop should fail explicitly when the worker heartbeat is stale."""
-    # Then: The observable result should match the expected contract.
     # Given: A running worker whose cached heartbeat has gone stale
     controller = SubprocessRuntimeController(
         startup_timeout_s=3.0,
@@ -217,7 +216,8 @@ async def test_subprocess_controller_preview_stop_rejects_stale_worker() -> None
         assert runtime.last_heartbeat_at is not None
         runtime.last_heartbeat_at = runtime.last_heartbeat_at - timedelta(seconds=60)
 
-        # When/Then: Force-stop fails because the runtime can no longer accept preview commands
+        # When: Force-stopping preview on the stale runtime.
+        # Then: The controller rejects the command as runtime-unavailable.
         with pytest.raises(PreviewRuntimeUnavailableError, match="heartbeat timed out"):
             await controller.force_stop_preview(runtime, "front")
     finally:
@@ -535,9 +535,7 @@ async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Worker talk_refusal payloads should not collapse to generic runtime errors."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A worker returns a typed talk stream refusal payload.
     controller = SubprocessRuntimeController(command_timeout_s=1.0)
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -591,6 +589,7 @@ async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
     monkeypatch.setattr(controller, "_parse_command_result", _fake_parse_command_result)
 
     try:
+        # When: Opening the talk stream through the subprocess controller.
         with pytest.raises(TalkStreamOpenRefused) as error:
             await controller.open_talk_stream(
                 runtime,
@@ -599,6 +598,7 @@ async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
                 input_format=TalkInputFormat(),
             )
 
+        # Then: The refusal reason and message are preserved for API/UI mapping.
         assert error.value.reason == TalkRefusalReason.INVALID_AUDIO_FRAME
         assert str(error.value) == "Talk input format does not match the reserved session"
     finally:
@@ -699,7 +699,7 @@ async def test_subprocess_controller_maps_talk_stream_open_camera_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """TALK_STREAM_OPEN should preserve worker camera-not-found responses."""
-    # Then: The observable result should match the expected contract.
+    # Given: A worker that reports the requested talk stream camera disappeared.
     controller = SubprocessRuntimeController()
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -752,8 +752,8 @@ async def test_subprocess_controller_maps_talk_stream_open_camera_not_found(
     monkeypatch.setattr(controller, "_parse_command_result", _fake_parse_command_result)
 
     try:
-        # Given: The worker reports that the talk stream camera disappeared
-        # When / Then: The controller raises the typed camera-not-found error
+        # When: Opening a talk stream through the subprocess controller.
+        # Then: The controller raises the typed camera-not-found error.
         with pytest.raises(TalkCameraNotFoundError):
             await controller.open_talk_stream(
                 runtime,
@@ -934,7 +934,7 @@ async def test_subprocess_controller_open_talk_stream_rejects_stale_worker_witho
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Talk stream attach should fail fast when the active worker heartbeat is stale."""
-    # Then: The observable result should match the expected contract.
+    # Given: A runtime worker whose heartbeat is stale.
     controller = SubprocessRuntimeController(heartbeat_stale_s=0.01)
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -955,8 +955,8 @@ async def test_subprocess_controller_open_talk_stream_rejects_stale_worker_witho
     monkeypatch.setattr(asyncio, "open_unix_connection", _unexpected_open_unix_connection)
 
     try:
-        # Given: A runtime worker whose heartbeat is stale
-        # When/Then: Opening a talk stream fails before command-socket attachment
+        # When: Opening a talk stream through the subprocess controller.
+        # Then: The controller fails before command-socket attachment.
         with pytest.raises(TalkRuntimeUnavailableError, match="heartbeat timed out"):
             await controller.open_talk_stream(
                 runtime,
@@ -984,7 +984,7 @@ def test_subprocess_controller_rejects_mismatched_worker_talk_responses(
     expected_message: str,
 ) -> None:
     """Worker responses must match the request before they affect runtime state."""
-    # Then: The observable result should match the expected contract.
+    # Given: A talk command response whose protocol identity does not match the request.
     command = WorkerCommand(
         command=WorkerCommandType.TALK_STATUS,
         command_id="cmd-talk-status",
@@ -1005,10 +1005,10 @@ def test_subprocess_controller_rejects_mismatched_worker_talk_responses(
         ),
     ).model_copy(update=response_updates)
 
-    # Given: A talk command response whose protocol identity does not match the request
     raw_response = response.model_dump_json().encode("utf-8")
 
-    # When/Then: The controller rejects it before using the worker payload
+    # When: Parsing the response for the original command.
+    # Then: The controller rejects it before using the worker payload.
     with pytest.raises(RuntimeError, match=expected_message):
         SubprocessRuntimeController._parse_command_result(raw_response, command)
 
