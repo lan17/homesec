@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -240,7 +241,8 @@ def test_rtsp_url_env_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("MISSING_RTSP_URL", raising=False)
     config = _make_config(tmp_path, rtsp_url=None, rtsp_url_env="MISSING_RTSP_URL")
 
-    # When/Then: initialization fails due to missing URL
+    # When: Initializing the source
+    # Then: Missing URL configuration fails before runtime startup
     with pytest.raises(ValueError, match="rtsp_url_env or rtsp_url required"):
         RTSPSource(config, camera_name="cam")
 
@@ -1021,7 +1023,7 @@ async def test_talk_backchannel_open_io_failure_reports_camera_backchannel_error
             input_sample_rate: int,
         ) -> object:
             _ = session_id, input_sample_rate
-            raise TimeoutError("RTSP DESCRIBE timed out")
+            raise asyncio.TimeoutError("RTSP DESCRIBE timed out")
 
     monkeypatch.setattr(
         "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
@@ -1043,8 +1045,10 @@ async def test_talk_backchannel_open_io_failure_reports_camera_backchannel_error
         TalkSessionPrepareRequest(session_id="tk_io_failure", input=input_format)
     )
 
-    # When / Then: The source maps raw I/O failure to a camera-backchannel refusal reason
     assert prepared.accepted is True
+
+    # When: Opening the reserved talk session
+    # Then: The source maps raw I/O failure to a camera-backchannel refusal reason
     with pytest.raises(TalkManagerError) as exc_info:
         await source.open_talk_session(
             TalkSessionOpenRequest(session_id="tk_io_failure", input=input_format)

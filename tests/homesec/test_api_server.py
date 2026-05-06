@@ -202,6 +202,7 @@ async def test_wait_until_started_requires_initialized_server() -> None:
     server = APIServer(FastAPI(), host="127.0.0.1", port=8130, startup_timeout_s=0.2)
 
     # When: Waiting on startup state directly
+    # Then: The API server reports the invalid lifecycle state before hanging
     with pytest.raises(RuntimeError, match="task not initialized"):
         await server._wait_until_started()
 
@@ -249,19 +250,34 @@ def test_redact_token_query_param_from_url_strips_only_token_values() -> None:
     assert redacted == "/api/v1/preview/cameras/front/playlist.m3u8?foo=bar"
 
 
+def test_redact_token_query_param_from_url_strips_encoded_token_keys() -> None:
+    """Access-log URL redaction should decode query keys before deciding what to strip."""
+    # Given: A WebSocket URL whose token query key is percent-encoded in the raw log path
+    url = "/api/v1/talk/cameras/front/stream?to%6Ben=secret&foo=bar"
+
+    # When: Redacting token query parameters for access logging
+    redacted = api_server._redact_token_query_param_from_url(url)
+
+    # Then: The decoded token key is still removed from the logged URL
+    assert redacted == "/api/v1/talk/cameras/front/stream?foo=bar"
+
+
 def test_redact_token_query_param_from_url_leaves_non_token_paths_unchanged() -> None:
     """Access-log URL redaction should leave unrelated paths and empty queries untouched."""
     # Given: URLs without a token query parameter and a path that happens to contain the word token
     no_query_url = "/api/v1/preview/cameras/front/playlist.m3u8"
     empty_query_url = "/api/v1/preview/cameras/token?"
+    encoded_query_url = "/api/v1/preview/cameras/front/playlist.m3u8?foo=hello%20world"
 
     # When: Redacting token query parameters for access logging
     redacted_no_query = api_server._redact_token_query_param_from_url(no_query_url)
     redacted_empty_query = api_server._redact_token_query_param_from_url(empty_query_url)
+    redacted_encoded_query = api_server._redact_token_query_param_from_url(encoded_query_url)
 
     # Then: The original URLs are preserved because there is no token query parameter to strip
     assert redacted_no_query == no_query_url
     assert redacted_empty_query == empty_query_url
+    assert redacted_encoded_query == encoded_query_url
 
 
 def test_token_redacting_access_log_filter_rewrites_uvicorn_path_argument() -> None:

@@ -36,18 +36,18 @@ _ACCESS_LOG_TOKEN_PARAM = "token"
 
 def _redact_token_query_param_from_url(url: str) -> str:
     """Return a URL/path string with token query parameters removed."""
-    if "?" not in url or _ACCESS_LOG_TOKEN_PARAM not in url:
+    if "?" not in url:
         return url
 
     parsed = urlsplit(url)
     if not parsed.query:
         return url
 
-    filtered_query = [
-        (key, value)
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key != _ACCESS_LOG_TOKEN_PARAM
-    ]
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    if all(key != _ACCESS_LOG_TOKEN_PARAM for key, _ in query_items):
+        return url
+
+    filtered_query = [(key, value) for key, value in query_items if key != _ACCESS_LOG_TOKEN_PARAM]
     redacted_query = urlencode(filtered_query, doseq=True)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment))
 

@@ -8,6 +8,9 @@ from homesec.sources.rtsp.talk.rtsp_auth import RTSPCredentials
 
 
 def test_onvif_backchannel_config_resolves_url_and_credentials_from_env() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     config = ONVIFBackchannelConfig(
         rtsp_url_env="TALK_RTSP_URL",
         username_env="TALK_RTSP_USER",
@@ -26,6 +29,9 @@ def test_onvif_backchannel_config_resolves_url_and_credentials_from_env() -> Non
 
 
 def test_onvif_backchannel_config_prefers_explicit_url_and_credentials() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     config = ONVIFBackchannelConfig(
         rtsp_url="rtsp://camera.local/explicit",
         rtsp_url_env="TALK_RTSP_URL",
@@ -47,11 +53,17 @@ def test_onvif_backchannel_config_prefers_explicit_url_and_credentials() -> None
 
 
 def test_onvif_backchannel_config_requires_rtsp_url_source() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValidationError, match="rtsp_url_env or rtsp_url"):
         ONVIFBackchannelConfig()
 
 
 def test_onvif_backchannel_config_requires_credential_pairs() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValidationError, match="username and password"):
         ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/talk", username="alice")
 
@@ -61,6 +73,7 @@ def test_onvif_backchannel_config_requires_credential_pairs() -> None:
 
 def test_onvif_backchannel_config_defaults_to_supported_g711_codecs() -> None:
     # Given/When: An ONVIF talk config omits an explicit codec preference list.
+    # When: The behavior under test is exercised.
     config = ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/talk")
 
     # Then: HomeSec negotiates both G.711 variants by default.
@@ -69,6 +82,8 @@ def test_onvif_backchannel_config_defaults_to_supported_g711_codecs() -> None:
 
 def test_onvif_backchannel_config_rejects_unsupported_codecs() -> None:
     # Given/When/Then: A codec without an encoder is rejected at config validation time.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValidationError, match="PCMU/8000 and PCMA/8000"):
         ONVIFBackchannelConfig(
             rtsp_url="rtsp://camera.local/talk",
@@ -78,6 +93,7 @@ def test_onvif_backchannel_config_rejects_unsupported_codecs() -> None:
 
 def test_onvif_backchannel_config_normalizes_supported_codec_names() -> None:
     # Given: Supported codecs use lowercase names and explicit mono channels.
+    # When: The behavior under test is exercised.
     config = ONVIFBackchannelConfig(
         rtsp_url="rtsp://camera.local/talk",
         preferred_codecs=["pcmu/8000/1", "pcma/8000/1"],
@@ -102,6 +118,9 @@ def test_onvif_backchannel_config_rejects_invalid_shape(
     value: object,
     match: str,
 ) -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     kwargs: dict[str, object] = {"rtsp_url": "rtsp://camera.local/talk", field: value}
 
     with pytest.raises(ValidationError, match=match):
@@ -109,6 +128,9 @@ def test_onvif_backchannel_config_rejects_invalid_shape(
 
 
 def test_onvif_backchannel_config_reports_missing_env_values() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     config = ONVIFBackchannelConfig(
         rtsp_url_env="TALK_RTSP_URL",
         username_env="TALK_RTSP_USER",

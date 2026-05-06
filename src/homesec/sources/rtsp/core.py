@@ -11,6 +11,7 @@ import os
 import random
 import subprocess
 import time
+from asyncio import TimeoutError as AsyncioTimeoutError
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from enum import Enum
@@ -978,7 +979,7 @@ class RTSPSource(ThreadedClipSource):
             )
         except TalkProtocolError as exc:
             raise _talk_manager_error_from_protocol_error(exc) from exc
-        except (EOFError, OSError) as exc:
+        except (AsyncioTimeoutError, TimeoutError, EOFError, OSError) as exc:
             raise TalkManagerError(
                 "Camera talk backchannel failed",
                 reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,

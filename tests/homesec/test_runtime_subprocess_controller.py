@@ -190,6 +190,7 @@ async def test_subprocess_controller_preview_commands_round_trip_to_worker() -> 
 @pytest.mark.subprocess
 async def test_subprocess_controller_preview_stop_rejects_stale_worker() -> None:
     """Force-stop should fail explicitly when the worker heartbeat is stale."""
+    # Then: The observable result should match the expected contract.
     # Given: A running worker whose cached heartbeat has gone stale
     controller = SubprocessRuntimeController(
         startup_timeout_s=3.0,
@@ -534,6 +535,9 @@ async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Worker talk_refusal payloads should not collapse to generic runtime errors."""
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     controller = SubprocessRuntimeController(command_timeout_s=1.0)
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -695,6 +699,7 @@ async def test_subprocess_controller_maps_talk_stream_open_camera_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """TALK_STREAM_OPEN should preserve worker camera-not-found responses."""
+    # Then: The observable result should match the expected contract.
     controller = SubprocessRuntimeController()
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -929,6 +934,7 @@ async def test_subprocess_controller_open_talk_stream_rejects_stale_worker_witho
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Talk stream attach should fail fast when the active worker heartbeat is stale."""
+    # Then: The observable result should match the expected contract.
     controller = SubprocessRuntimeController(heartbeat_stale_s=0.01)
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -978,6 +984,7 @@ def test_subprocess_controller_rejects_mismatched_worker_talk_responses(
     expected_message: str,
 ) -> None:
     """Worker responses must match the request before they affect runtime state."""
+    # Then: The observable result should match the expected contract.
     command = WorkerCommand(
         command=WorkerCommandType.TALK_STATUS,
         command_id="cmd-talk-status",

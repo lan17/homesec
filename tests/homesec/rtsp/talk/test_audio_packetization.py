@@ -14,12 +14,18 @@ def _pcm(*samples: int) -> bytes:
 
 
 def test_pcmu_encode_known_vectors() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     samples = (-32768, -32124, -1, 0, 1, 32124, 32767)
 
     assert encode_pcmu(_pcm(*samples)) == bytes([0x00, 0x00, 0x7E, 0xFF, 0xFF, 0x80, 0x80])
 
 
 def test_pcmu_encode_clips_out_of_range_extremes() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     assert encode_pcmu(_pcm(-32768, 32767)) == bytes([0x00, 0x80])
 
 
@@ -35,11 +41,17 @@ def test_pcma_encode_known_vectors() -> None:
 
 
 def test_g711_rejects_odd_pcm_input() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValueError, match="even"):
         encode_pcmu(b"\x00")
 
 
 def test_resample_16khz_to_8khz_uses_box_averaging() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     resampled = resample_pcm_s16le_mono(
         _pcm(0, 2, 10, 12, -4, -2, 100, 104),
         input_rate=16000,
@@ -50,6 +62,9 @@ def test_resample_16khz_to_8khz_uses_box_averaging() -> None:
 
 
 def test_resample_same_rate_and_empty_input_are_passthrough() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     pcm = _pcm(1, -2, 3)
 
     assert resample_pcm_s16le_mono(pcm, input_rate=8000, output_rate=8000) == pcm
@@ -57,6 +72,9 @@ def test_resample_same_rate_and_empty_input_are_passthrough() -> None:
 
 
 def test_resample_rejects_invalid_rates_and_odd_input() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValueError, match="positive"):
         resample_pcm_s16le_mono(_pcm(1), input_rate=0, output_rate=8000)
 
@@ -68,6 +86,9 @@ def test_resample_rejects_invalid_rates_and_odd_input() -> None:
 
 
 def test_resample_non_integer_ratio_uses_linear_interpolation() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     resampled = resample_pcm_s16le_mono(
         _pcm(0, 100, 200),
         input_rate=2,
@@ -78,10 +99,16 @@ def test_resample_non_integer_ratio_uses_linear_interpolation() -> None:
 
 
 def test_resample_returns_empty_when_integer_downsample_has_too_few_samples() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     assert resample_pcm_s16le_mono(_pcm(10), input_rate=16000, output_rate=8000) == b""
 
 
 def test_rtp_packetizer_header_fields_and_timestamp_increments() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     packetizer = RTPPacketizer(
         payload_type=0,
         sequence_number=0xFFFF,
@@ -113,6 +140,9 @@ def test_rtp_packetizer_header_fields_and_timestamp_increments() -> None:
 
 
 def test_rtp_packetizer_defaults_timestamp_increment_to_payload_length() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     packetizer = RTPPacketizer(
         payload_type=0,
         sequence_number=1,
@@ -126,6 +156,9 @@ def test_rtp_packetizer_defaults_timestamp_increment_to_payload_length() -> None
 
 
 def test_rtp_packetizer_validates_configuration_and_increment() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValueError, match="payload type"):
         RTPPacketizer(payload_type=128)
 
@@ -137,5 +170,8 @@ def test_rtp_packetizer_validates_configuration_and_increment() -> None:
 
 
 def test_parse_rtp_header_rejects_short_packets() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(ValueError, match="shorter"):
         parse_rtp_header(b"\x80")

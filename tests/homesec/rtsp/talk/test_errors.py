@@ -32,5 +32,8 @@ def test_protocol_errors_expose_stable_machine_codes(
     error: TalkProtocolError,
     code: TalkProtocolErrorCode,
 ) -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     assert error.code == code
     assert str(error)

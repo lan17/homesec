@@ -29,6 +29,9 @@ a=control:trackID=backchannel
 
 
 def test_parse_sdp_collects_sendonly_audio_codecs() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     description = parse_sdp(_BACKCHANNEL_SDP)
 
     audio = description.media[1]
@@ -52,6 +55,9 @@ def test_advertised_audio_backchannel_codecs_returns_sendonly_audio_codecs() -> 
 
 
 def test_select_audio_backchannel_honors_codec_order_and_control_url() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     selected = select_audio_backchannel(
         _BACKCHANNEL_SDP,
         preferred_codecs=["PCMA/8000", "PCMU/8000"],
@@ -64,6 +70,9 @@ def test_select_audio_backchannel_honors_codec_order_and_control_url() -> None:
 
 
 def test_select_audio_backchannel_uses_session_level_sendonly() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = """v=0
 s=session-level direction
 
@@ -84,6 +93,9 @@ a=control:trackID=backchannel
 
 
 def test_select_audio_backchannel_uses_static_payload_type_without_rtpmap() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = """v=0
 s=static payload
 m=audio 0 RTP/AVP 0
@@ -102,6 +114,9 @@ a=control:backchannel
 
 
 def test_select_audio_backchannel_preserves_absolute_control_url() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = _BACKCHANNEL_SDP.replace(
         "a=control:trackID=backchannel",
         "a=control:rtsp://media.example/talk",
@@ -117,6 +132,9 @@ def test_select_audio_backchannel_preserves_absolute_control_url() -> None:
 
 
 def test_select_audio_backchannel_maps_aggregate_control_to_base_url() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = _BACKCHANNEL_SDP.replace("a=control:trackID=backchannel", "a=control:*")
 
     selected = select_audio_backchannel(
@@ -129,6 +147,9 @@ def test_select_audio_backchannel_maps_aggregate_control_to_base_url() -> None:
 
 
 def test_select_audio_backchannel_handles_leading_slash_control_path() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = _BACKCHANNEL_SDP.replace(
         "a=control:trackID=backchannel",
         "a=control:/Streaming/Channels/101/trackID=backchannel",
@@ -144,6 +165,9 @@ def test_select_audio_backchannel_handles_leading_slash_control_path() -> None:
 
 
 def test_select_audio_backchannel_appends_relative_control_before_base_query() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     selected = select_audio_backchannel(
         _BACKCHANNEL_SDP,
         preferred_codecs=["PCMU/8000"],
@@ -154,6 +178,9 @@ def test_select_audio_backchannel_appends_relative_control_before_base_query() -
 
 
 def test_select_audio_backchannel_uses_session_control_as_base_for_media_control() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = """v=0
 s=session control base
 a=sendonly
@@ -172,6 +199,9 @@ a=control:trackID=backchannel
 
 
 def test_parse_sdp_ignores_malformed_lines_and_applies_fmtp_to_known_codec() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = """v=0
 s=malformed resilience
 m=audio nope RTP/AVP 0
@@ -202,6 +232,9 @@ a=control:talk
 
 
 def test_select_audio_backchannel_rejects_missing_sendonly_audio() -> None:
+    # Given: The test setup represents the scenario named by this test.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = _BACKCHANNEL_SDP.replace("a=sendonly", "a=recvonly")
 
     with pytest.raises(CameraBackchannelUnsupportedError):
@@ -210,11 +243,15 @@ def test_select_audio_backchannel_rejects_missing_sendonly_audio() -> None:
 
 def test_select_audio_backchannel_rejects_unsupported_codec() -> None:
     # Given/When/Then: The error includes both camera-advertised and requested codecs.
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     with pytest.raises(UnsupportedTalkCodecError, match="advertised: PCMU/8000, PCMA/8000"):
         select_audio_backchannel(_BACKCHANNEL_SDP, preferred_codecs=["OPUS/48000"])
 
 
 def test_select_audio_backchannel_rejects_payloads_without_codec_mapping() -> None:
+    # When: The behavior under test is exercised.
+    # Then: The observable result should match the expected contract.
     sdp = """v=0
 s=unknown dynamic payload
 m=audio 0 RTP/AVP 121

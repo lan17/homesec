@@ -692,6 +692,7 @@ def test_server_ui_config_values_override_env_defaults(monkeypatch: pytest.Monke
 
 def test_server_config_rejects_legacy_serve_ui_field() -> None:
     """Legacy `server.serve_ui` should fail validation after toggle removal."""
+    # Then: The observable result should match the expected contract.
     # Given a config payload with removed legacy server.serve_ui key
     data = minimal_config()
     data["server"] = {
@@ -950,6 +951,7 @@ def test_camera_talk_mode_sets_enabled_compatibility_alias() -> None:
 
 def test_talk_input_forbids_extra_fields() -> None:
     """Talk input format should reject unknown fields."""
+    # Then: The observable result should match the expected contract.
     # Given: A config with extra talk input fields
     data = minimal_config()
     data["talk"] = {
@@ -970,6 +972,7 @@ def test_talk_input_forbids_extra_fields() -> None:
 
 def test_talk_input_rejects_unsupported_codec() -> None:
     """Talk input format should only accept the browser PCM16 contract."""
+    # Then: The observable result should match the expected contract.
     # Given: A config with a deferred/unsupported browser input codec
     data = minimal_config()
     data["talk"] = {
@@ -991,6 +994,7 @@ def test_talk_input_rejects_unsupported_codec() -> None:
 
 def test_talk_input_rejects_fractional_frame_size() -> None:
     """Talk input should reject frame sizes that browser and server could round differently."""
+    # Then: The observable result should match the expected contract.
     # Given: A PCM input format whose sample rate and frame duration produce fractional samples
     data = minimal_config()
     data["talk"] = {
@@ -1012,6 +1016,7 @@ def test_talk_input_rejects_fractional_frame_size() -> None:
 
 def test_camera_talk_rejects_unsupported_backend() -> None:
     """Camera talk config should reject deferred backends in the v1 contract."""
+    # Then: The observable result should match the expected contract.
     # Given: A config using a backend that is intentionally out of scope for MVP
     data = minimal_config()
     camera = data["cameras"][0]
@@ -1027,6 +1032,7 @@ def test_camera_talk_rejects_unsupported_backend() -> None:
 
 def test_rtsp_talk_backend_config_is_validated_during_config_load() -> None:
     """RTSP talk backend config errors should be caught before runtime startup."""
+    # Then: The observable result should match the expected contract.
     # Given: An RTSP camera with an invalid ONVIF talk codec preference
     data = minimal_config()
     camera = data["cameras"][0]

@@ -443,6 +443,7 @@ async def test_onvif_backchannel_probe_reports_missing_backchannel() -> None:
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_sends_no_rtp_before_play_200_ok() -> None:
+    # Given: A fake camera accepting the ONVIF RTSP backchannel handshake
     server = _FakeRTSPBackchannelServer()
     await server.start()
     try:
@@ -451,11 +452,14 @@ async def test_onvif_backchannel_sends_no_rtp_before_play_200_ok() -> None:
             camera_name="front_door",
         )
         session = await adapter.open_session(session_id="talk-1")
+
+        # When: Sending one PCM frame after the adapter has completed PLAY
         await session.write_pcm_frame(_pcm_frame_16khz_20ms())
         await session.close()
     finally:
         await server.stop()
 
+    # Then: RTP is emitted only after DESCRIBE, SETUP, and PLAY complete
     assert [request.method for request in server.requests] == [
         "DESCRIBE",
         "SETUP",
@@ -479,6 +483,7 @@ async def test_onvif_backchannel_sends_no_rtp_before_play_200_ok() -> None:
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_uses_camera_selected_interleaved_channel() -> None:
+    # Given: A camera that selects a non-default RTP interleaved channel during SETUP
     server = _FakeRTSPBackchannelServer(
         transport_header="RTP/AVP/TCP;unicast;interleaved=2-3",
     )
@@ -489,11 +494,14 @@ async def test_onvif_backchannel_uses_camera_selected_interleaved_channel() -> N
             camera_name="front_door",
         )
         session = await adapter.open_session(session_id="talk-1")
+
+        # When: Sending a PCM frame through the negotiated session
         await session.write_pcm_frame(_pcm_frame_16khz_20ms())
         await session.close()
     finally:
         await server.stop()
 
+    # Then: HomeSec offers the default channels but writes RTP on the camera-selected channel
     setup_request = next(request for request in server.requests if request.method == "SETUP")
     assert setup_request.headers["transport"] == "RTP/AVP/TCP;unicast;interleaved=0-1"
     assert server.interleaved_after_play[0][0] == 2
@@ -501,6 +509,7 @@ async def test_onvif_backchannel_uses_camera_selected_interleaved_channel() -> N
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_skips_interleaved_frames_before_control_response() -> None:
+    # Given: A camera that sends interleaved bytes before the PLAY control response
     server = _FakeRTSPBackchannelServer(interleaved_before_response_methods={"PLAY"})
     await server.start()
     try:
@@ -508,11 +517,14 @@ async def test_onvif_backchannel_skips_interleaved_frames_before_control_respons
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening and closing a talk session without writing audio
         session = await adapter.open_session(session_id="talk-1")
         await session.close()
     finally:
         await server.stop()
 
+    # Then: Pre-response interleaved bytes are ignored and no RTP is recorded as post-PLAY audio
     assert [request.method for request in server.requests] == [
         "DESCRIBE",
         "SETUP",
@@ -528,6 +540,7 @@ async def test_onvif_backchannel_skips_interleaved_frames_before_control_respons
 async def test_onvif_backchannel_uses_response_base_for_relative_controls(
     header_attr: str,
 ) -> None:
+    # Given: A camera SDP with relative media controls and a response base header
     server = _FakeRTSPBackchannelServer()
     await server.start()
     setattr(server, header_attr, f"{server.url}/response-base/")
@@ -536,17 +549,21 @@ async def test_onvif_backchannel_uses_response_base_for_relative_controls(
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session from that SDP
         session = await adapter.open_session(session_id="talk-1")
         await session.close()
     finally:
         await server.stop()
 
+    # Then: The SETUP URI resolves the relative control against the response base
     setup_request = next(request for request in server.requests if request.method == "SETUP")
     assert setup_request.uri == f"{server.url}/response-base/trackID=backchannel"
 
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_maps_describe_551_to_unsupported() -> None:
+    # Given: A camera that rejects the ONVIF backchannel DESCRIBE requirement
     server = _FakeRTSPBackchannelServer(describe_status=551)
     await server.start()
     try:
@@ -554,11 +571,14 @@ async def test_onvif_backchannel_maps_describe_551_to_unsupported() -> None:
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(CameraBackchannelUnsupportedError):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter stops at DESCRIBE and reports unsupported backchannel
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -566,6 +586,7 @@ async def test_onvif_backchannel_maps_describe_551_to_unsupported() -> None:
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_maps_describe_non_551_failure_to_rejected() -> None:
+    # Given: A camera that rejects DESCRIBE with a generic RTSP failure
     server = _FakeRTSPBackchannelServer(describe_status=403)
     await server.start()
     try:
@@ -573,11 +594,14 @@ async def test_onvif_backchannel_maps_describe_non_551_failure_to_rejected() -> 
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(CameraRejectedTalkSessionError):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter classifies the failure as a rejected talk session
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -585,6 +609,7 @@ async def test_onvif_backchannel_maps_describe_non_551_failure_to_rejected() -> 
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_retries_basic_auth_from_url_credentials() -> None:
+    # Given: A camera that requires Basic auth and credentials embedded in the RTSP URL
     server = _FakeRTSPBackchannelServer(require_basic_auth=True)
     await server.start()
     try:
@@ -593,11 +618,14 @@ async def test_onvif_backchannel_retries_basic_auth_from_url_credentials() -> No
             ONVIFBackchannelConfig(rtsp_url=credentialed_url),
             camera_name="front_door",
         )
+
+        # When: Opening and closing a talk session
         session = await adapter.open_session(session_id="talk-1")
         await session.close()
     finally:
         await server.stop()
 
+    # Then: The adapter retries DESCRIBE with redacted URI and Basic credentials
     assert [request.method for request in server.requests] == [
         "DESCRIBE",
         "DESCRIBE",
@@ -618,6 +646,7 @@ async def test_onvif_backchannel_retries_basic_auth_from_url_credentials() -> No
 async def test_onvif_backchannel_retries_digest_auth_from_config_credentials(
     digest_qop: str | None,
 ) -> None:
+    # Given: A camera that requires Digest auth and credentials from adapter config
     server = _FakeRTSPBackchannelServer(require_digest_auth=True, digest_qop=digest_qop)
     await server.start()
     try:
@@ -629,11 +658,14 @@ async def test_onvif_backchannel_retries_digest_auth_from_config_credentials(
             ),
             camera_name="front_door",
         )
+
+        # When: Opening and closing a talk session
         session = await adapter.open_session(session_id="talk-1")
         await session.close()
     finally:
         await server.stop()
 
+    # Then: The adapter retries DESCRIBE with a Digest authorization header
     assert [request.method for request in server.requests] == [
         "DESCRIBE",
         "DESCRIBE",
@@ -649,6 +681,7 @@ async def test_onvif_backchannel_retries_digest_auth_from_config_credentials(
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_fails_auth_when_credentials_are_missing() -> None:
+    # Given: A camera that requires auth but the adapter has no credentials
     server = _FakeRTSPBackchannelServer(require_basic_auth=True)
     await server.start()
     try:
@@ -656,11 +689,14 @@ async def test_onvif_backchannel_fails_auth_when_credentials_are_missing() -> No
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(RTSPAuthenticationError, match="no credentials"):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter fails after the challenged DESCRIBE without setup or RTP
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -668,6 +704,7 @@ async def test_onvif_backchannel_fails_auth_when_credentials_are_missing() -> No
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_fails_auth_when_camera_rejects_retry() -> None:
+    # Given: A Basic-auth camera and wrong URL credentials
     server = _FakeRTSPBackchannelServer(require_basic_auth=True)
     await server.start()
     try:
@@ -676,11 +713,14 @@ async def test_onvif_backchannel_fails_auth_when_camera_rejects_retry() -> None:
             ONVIFBackchannelConfig(rtsp_url=credentialed_url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(RTSPAuthenticationError, match="rejected"):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter retries once and maps the second challenge to auth failure
     assert [request.method for request in server.requests] == ["DESCRIBE", "DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -688,6 +728,7 @@ async def test_onvif_backchannel_fails_auth_when_camera_rejects_retry() -> None:
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_fails_digest_auth_when_camera_rejects_retry() -> None:
+    # Given: A Digest-auth camera and wrong configured credentials
     server = _FakeRTSPBackchannelServer(require_digest_auth=True)
     await server.start()
     try:
@@ -699,11 +740,14 @@ async def test_onvif_backchannel_fails_digest_auth_when_camera_rejects_retry() -
             ),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(RTSPAuthenticationError, match="rejected"):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter retries once and maps the second challenge to auth failure
     assert [request.method for request in server.requests] == ["DESCRIBE", "DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -711,6 +755,7 @@ async def test_onvif_backchannel_fails_digest_auth_when_camera_rejects_retry() -
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_rejects_setup_failure_before_audio() -> None:
+    # Given: A camera whose backchannel SETUP request fails
     server = _FakeRTSPBackchannelServer(setup_status=454)
     await server.start()
     try:
@@ -718,11 +763,14 @@ async def test_onvif_backchannel_rejects_setup_failure_before_audio() -> None:
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(CameraRejectedTalkSessionError):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter never reaches PLAY or sends RTP
     assert [request.method for request in server.requests] == ["DESCRIBE", "SETUP"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -730,6 +778,7 @@ async def test_onvif_backchannel_rejects_setup_failure_before_audio() -> None:
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_rejects_setup_200_without_session_before_play() -> None:
+    # Given: A camera that accepts SETUP without returning an RTSP session header
     server = _FakeRTSPBackchannelServer(setup_session_header=None)
     await server.start()
     try:
@@ -737,11 +786,14 @@ async def test_onvif_backchannel_rejects_setup_200_without_session_before_play()
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(CameraRejectedTalkSessionError, match="Session"):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter rejects the session before PLAY or RTP
     assert [request.method for request in server.requests] == ["DESCRIBE", "SETUP"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
@@ -749,6 +801,7 @@ async def test_onvif_backchannel_rejects_setup_200_without_session_before_play()
 
 @pytest.mark.asyncio
 async def test_onvif_backchannel_rejects_play_failure_before_audio() -> None:
+    # Given: A camera whose PLAY request fails after SETUP succeeds
     server = _FakeRTSPBackchannelServer(play_status=454)
     await server.start()
     try:
@@ -756,11 +809,14 @@ async def test_onvif_backchannel_rejects_play_failure_before_audio() -> None:
             ONVIFBackchannelConfig(rtsp_url=server.url),
             camera_name="front_door",
         )
+
+        # When: Opening a talk session
         with pytest.raises(CameraRejectedTalkSessionError):
             await adapter.open_session(session_id="talk-1")
     finally:
         await server.stop()
 
+    # Then: The adapter tears down the RTSP session and emits no RTP
     assert [request.method for request in server.requests] == [
         "DESCRIBE",
         "SETUP",
@@ -773,6 +829,7 @@ async def test_onvif_backchannel_rejects_play_failure_before_audio() -> None:
 
 @pytest.mark.asyncio
 async def test_onvif_session_rejects_writes_after_close() -> None:
+    # Given: A talk session that has already been closed
     client = _NoopTalkClient()
     session = ONVIFTalkSession(
         session_id="talk-1",
@@ -783,13 +840,17 @@ async def test_onvif_session_rejects_writes_after_close() -> None:
 
     await session.close()
 
+    # When: Writing audio to the closed session
     with pytest.raises(CameraTalkStreamFailedError, match="closed"):
         await session.write_pcm_frame(_pcm_frame_16khz_20ms())
+
+    # Then: The session rejects the write and closes the client only once
     assert client.close_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_onvif_session_wraps_interleaved_send_failures() -> None:
+    # Given: A talk session whose RTSP client fails interleaved RTP writes
     session = ONVIFTalkSession(
         session_id="talk-1",
         camera_name="front_door",
@@ -797,6 +858,8 @@ async def test_onvif_session_wraps_interleaved_send_failures() -> None:
         selected=_selected(),
     )
 
+    # When: Writing one PCM frame
+    # Then: The raw send failure is reported as a camera talk stream failure
     with pytest.raises(CameraTalkStreamFailedError, match="broken pipe"):
         await session.write_pcm_frame(_pcm_frame_16khz_20ms())
 
@@ -836,13 +899,15 @@ async def test_onvif_session_rejects_selected_codecs_without_encoder() -> None:
         selected=_selected(codec_name="OPUS", payload_type=111),
     )
 
-    # When/Then: A codec without an encoder still fails before any RTP is emitted.
+    # When: Writing one PCM frame through the unsupported codec session
+    # Then: The session fails before any RTP is emitted
     with pytest.raises(UnsupportedTalkCodecError, match="OPUS/8000"):
         await session.write_pcm_frame(_pcm_frame_16khz_20ms())
 
 
 @pytest.mark.asyncio
 async def test_onvif_session_close_is_idempotent_and_teardown_is_best_effort() -> None:
+    # Given: A talk session whose TEARDOWN request fails during close
     client = _FailingTeardownTalkClient(session_id="homesec-talk")
     session = ONVIFTalkSession(
         session_id="talk-1",
@@ -851,8 +916,10 @@ async def test_onvif_session_close_is_idempotent_and_teardown_is_best_effort() -
         selected=_selected(),
     )
 
+    # When: Closing the session more than once
     await session.close()
     await session.close()
 
+    # Then: TEARDOWN is attempted once and client close remains idempotent
     assert client.teardown_calls == 1
     assert client.close_calls == 1
