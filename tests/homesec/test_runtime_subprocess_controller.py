@@ -22,7 +22,7 @@ from homesec.models.config import (
     StorageConfig,
 )
 from homesec.models.filter import FilterConfig
-from homesec.models.talk import TalkInputFormat, TalkRefusalReason
+from homesec.models.talk import TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.models.vlm import VLMConfig
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
@@ -49,6 +49,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerPreviewStatusPayload,
     WorkerTalkPreparePayload,
     WorkerTalkRefusalPayload,
+    WorkerTalkStatusPayload,
 )
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
@@ -64,6 +65,7 @@ def _make_config(
     watch_dir: str,
     source_backend: str = "local_folder",
     preview_enabled: bool = False,
+    talk_enabled: bool = True,
 ) -> Config:
     return Config(
         cameras=[
@@ -96,6 +98,7 @@ def _make_config(
         ),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
         preview={"enabled": preview_enabled},
+        talk={"enabled": talk_enabled},
     )
 
 
@@ -329,14 +332,77 @@ async def test_subprocess_controller_uses_extended_timeout_for_preview_activatio
 
 
 @pytest.mark.asyncio
-async def test_subprocess_controller_uses_probe_aware_timeout_for_talk_prepare(
+async def test_subprocess_controller_uses_extended_timeout_for_talk_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk status should use the extended talk response timeout."""
+    # Given: An RTSP runtime handle and controller with distinct command timeouts
+    controller = SubprocessRuntimeController(
+        command_timeout_s=1.0,
+        talk_command_timeout_s=7.5,
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-status-timeout",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    observed_timeout_s: list[float | None] = []
+
+    async def _fake_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        session_id: str | None = None,
+        talk_input: TalkInputFormat | None = None,
+        response_timeout_s: float | None = None,
+    ) -> WorkerCommandResult:
+        _ = (handle, command_type, camera_name, viewer_id, session_id, talk_input)
+        observed_timeout_s.append(response_timeout_s)
+        return WorkerCommandResult(
+            command=WorkerCommandType.TALK_STATUS,
+            command_id="cmd-talk-status-timeout",
+            generation=1,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            talk_status=WorkerTalkStatusPayload(
+                enabled=True,
+                policy_enabled=True,
+                state=TalkState.IDLE,
+            ),
+        )
+
+    monkeypatch.setattr(controller, "_send_command", _fake_send_command)
+
+    try:
+        # When: Fetching talk status through the subprocess controller
+        status = await controller.get_talk_status(runtime, "front")
+
+        # Then: The command uses the extended talk timeout for camera probing
+        assert observed_timeout_s == [7.5]
+        assert status.state == TalkState.IDLE
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_uses_extended_timeout_for_talk_prepare(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Talk prepare should allow enough time for camera capability probing."""
     # Given: An RTSP runtime handle and controller with a short generic command timeout
     controller = SubprocessRuntimeController(
         command_timeout_s=1.0,
-        talk_prepare_timeout_s=7.5,
+        talk_command_timeout_s=7.5,
     )
     runtime = cast(
         SubprocessRuntimeHandle,
@@ -388,10 +454,67 @@ async def test_subprocess_controller_uses_probe_aware_timeout_for_talk_prepare(
             input_format=input_format,
         )
 
-        # Then: The command uses a timeout large enough for default ONVIF probe budgets
-        assert observed_timeout_s == [16.0]
+        # Then: The command uses the extended talk timeout and still returns a session
+        assert observed_timeout_s == [7.5]
         assert isinstance(prepared, CameraTalkSessionPrepared)
         assert prepared.session_id == "tk_timeout"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_talk_error_status_preserves_policy_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fallback talk statuses should not collapse policy into effective enablement."""
+    # Given: Global talk is disabled but the camera policy still allows talkback
+    controller = SubprocessRuntimeController(command_timeout_s=1.0)
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-policy-fallback",
+                source_backend="rtsp",
+                talk_enabled=False,
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+
+    async def _raise_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        session_id: str | None = None,
+        talk_input: TalkInputFormat | None = None,
+        response_timeout_s: float | None = None,
+    ) -> WorkerCommandResult:
+        _ = (
+            handle,
+            command_type,
+            camera_name,
+            viewer_id,
+            session_id,
+            talk_input,
+            response_timeout_s,
+        )
+        raise RuntimeError("talk command failed")
+
+    monkeypatch.setattr(controller, "_send_command", _raise_send_command)
+
+    try:
+        # When: Talk status falls back after a worker command failure
+        status = await controller.get_talk_status(runtime, "front")
+
+        # Then: Effective enablement is disabled while per-camera policy is preserved
+        assert status.enabled is False
+        assert status.policy_enabled is True
+        assert status.state == TalkState.DISABLED
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)

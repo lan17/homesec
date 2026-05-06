@@ -17,8 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
-
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import (
@@ -59,31 +57,6 @@ if TYPE_CHECKING:
     from homesec.models.config import Config
 
 logger = logging.getLogger(__name__)
-
-
-def _talk_probe_timeout_s(config: Config, camera_name: str) -> float:
-    """Estimate the longest ONVIF probe used while preparing a talk session."""
-    camera = next((item for item in config.cameras if item.name == camera_name), None)
-    if camera is None or camera.talk.backend != "onvif_rtsp_backchannel":
-        return 0.0
-
-    raw_config = camera.talk.config
-    if isinstance(raw_config, BaseModel):
-        config_data = raw_config.model_dump(mode="python")
-    else:
-        config_data = dict(raw_config)
-
-    connect_timeout_s = _float_config_value(config_data.get("connect_timeout_s"), default=5.0)
-    io_timeout_s = _float_config_value(config_data.get("io_timeout_s"), default=5.0)
-    return connect_timeout_s + (2 * io_timeout_s) + 1.0
-
-
-def _float_config_value(value: object, *, default: float) -> float:
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, (int, float)) and value > 0:
-        return float(value)
-    return default
 
 
 class _WorkerEventProtocol(asyncio.DatagramProtocol):
@@ -176,7 +149,7 @@ class SubprocessRuntimeController(RuntimeController):
     heartbeat_stale_s: float = 10.0
     command_timeout_s: float = 5.0
     preview_start_timeout_s: float = 20.0
-    talk_prepare_timeout_s: float = 20.0
+    talk_command_timeout_s: float = 20.0
     worker_module: str = "homesec.runtime.worker"
     worker_extra_args: tuple[str, ...] = ()
     _active_runtime: SubprocessRuntimeHandle | None = field(default=None, init=False, repr=False)
@@ -482,17 +455,26 @@ class SubprocessRuntimeController(RuntimeController):
                 handle,
                 WorkerCommandType.TALK_STATUS,
                 camera_name,
+                response_timeout_s=self._talk_response_timeout_s(),
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
             enabled = self._talk_enabled(handle, camera_name)
-            return self._talk_error_status(camera_name, enabled=enabled, message=message)
-
-        if result.talk_status is None:
-            enabled = self._talk_enabled(handle, camera_name)
+            policy_enabled = self._talk_policy_enabled(handle, camera_name)
             return self._talk_error_status(
                 camera_name,
                 enabled=enabled,
+                policy_enabled=policy_enabled,
+                message=message,
+            )
+
+        if result.talk_status is None:
+            enabled = self._talk_enabled(handle, camera_name)
+            policy_enabled = self._talk_policy_enabled(handle, camera_name)
+            return self._talk_error_status(
+                camera_name,
+                enabled=enabled,
+                policy_enabled=policy_enabled,
                 message="Runtime worker returned no talk status",
             )
         status = self._runtime_talk_status(camera_name, result.talk_status)
@@ -525,11 +507,7 @@ class SubprocessRuntimeController(RuntimeController):
                 camera_name,
                 session_id=session_id,
                 talk_input=input_format,
-                response_timeout_s=max(
-                    self.command_timeout_s,
-                    self.talk_prepare_timeout_s,
-                    _talk_probe_timeout_s(handle.config, camera_name),
-                ),
+                response_timeout_s=self._talk_response_timeout_s(),
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
@@ -963,15 +941,27 @@ class SubprocessRuntimeController(RuntimeController):
             raise TalkCameraNotFoundError(camera_name)
         return handle.config.talk.enabled and camera.enabled and camera.talk.policy_enabled
 
+    def _talk_policy_enabled(self, handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
+        cached = handle.camera_talk_statuses.get(camera_name)
+        if cached is not None:
+            return cached.policy_enabled
+
+        camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
+        if camera is None:
+            raise TalkCameraNotFoundError(camera_name)
+        return camera.talk.policy_enabled
+
     def _stale_talk_status(
         self,
         handle: SubprocessRuntimeHandle,
         camera_name: str,
     ) -> CameraTalkStatus:
         enabled = self._talk_enabled(handle, camera_name)
+        policy_enabled = self._talk_policy_enabled(handle, camera_name)
         return self._talk_error_status(
             camera_name,
             enabled=enabled,
+            policy_enabled=policy_enabled,
             message=self._runtime_unavailable_message(handle),
         )
 
@@ -980,20 +970,26 @@ class SubprocessRuntimeController(RuntimeController):
         camera_name: str,
         *,
         enabled: bool,
+        policy_enabled: bool,
         message: str,
     ) -> CameraTalkStatus:
         if not enabled:
             return CameraTalkStatus(
                 camera_name=camera_name,
                 enabled=False,
+                policy_enabled=policy_enabled,
                 state=TalkState.DISABLED,
             )
         return CameraTalkStatus(
             camera_name=camera_name,
             enabled=True,
+            policy_enabled=policy_enabled,
             state=TalkState.ERROR,
             last_error=message,
         )
+
+    def _talk_response_timeout_s(self) -> float:
+        return max(self.command_timeout_s, self.talk_command_timeout_s)
 
     def _stale_preview_status(
         self,
