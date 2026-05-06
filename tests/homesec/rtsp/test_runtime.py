@@ -865,6 +865,92 @@ async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe
     assert status.selected_codec == "PCMA/8000"
 
 
+@pytest.mark.asyncio
+async def test_talk_backchannel_inherits_source_rtsp_url_when_no_override_is_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk should inherit the source stream URL only when no talk override exists."""
+    captured: dict[str, object] = {}
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            captured["config"] = config
+            captured["rtsp_url"] = rtsp_url
+            captured["camera_name"] = camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(),
+        },
+    )
+
+    # Given: An RTSP camera without a dedicated talk URL override
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing talk capability
+    status = await source.refresh_talk_status()
+
+    # Then: The talk adapter inherits the source RTSP URL
+    assert captured["rtsp_url"] == "rtsp://camera.local/live"
+    assert status.capability == TalkCapabilityState.SUPPORTED
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit talk URL env override should not silently fall back to source URL."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("missing talk rtsp_url_env should not construct the adapter")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    monkeypatch.delenv("MISSING_TALK_RTSP_URL", raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(config={"rtsp_url_env": "MISSING_TALK_RTSP_URL"}),
+        },
+    )
+
+    # Given: A camera with an explicit talk RTSP URL env var that is not set
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and trying to prepare a talk session
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_missing_env")
+    )
+
+    # Then: Talk reports a clear config error without falling back to the live stream URL
+    assert status.enabled is True
+    assert status.state == TalkState.ERROR
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.last_error is not None
+    assert "MISSING_TALK_RTSP_URL" in status.last_error
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.message is not None
+    assert "MISSING_TALK_RTSP_URL" in prepared.message
+
+
 def test_preview_methods_delegate_to_live_publisher(tmp_path: Path) -> None:
     """RTSPSource should delegate preview lifecycle calls to the live publisher seam."""
     # Given: An RTSP source with an injected live publisher

@@ -11,6 +11,7 @@ import os
 import random
 import subprocess
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -76,6 +77,19 @@ def _talk_config_dict(value: dict[str, object] | BaseModel) -> dict[str, object]
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     return dict(value)
+
+
+def _talk_config_error_probe_factory(
+    message: str,
+) -> Callable[[], Awaitable[TalkCapabilityProbeResult]]:
+    async def _probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.ERROR,
+            refusal_reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+            message=message,
+        )
+
+    return _probe
 
 
 class RTSPMotionConfig(BaseModel):
@@ -877,13 +891,19 @@ class RTSPSource(ThreadedClipSource):
         if not adapter_config_data.get("rtsp_url") and not adapter_config_data.get("rtsp_url_env"):
             adapter_config_data["rtsp_url"] = self.rtsp_url
         adapter_config = ONVIFBackchannelConfig.model_validate(adapter_config_data)
-        rtsp_url = adapter_config.rtsp_url
-        if adapter_config.rtsp_url_env:
-            env_value = os.getenv(adapter_config.rtsp_url_env)
-            if env_value:
-                rtsp_url = env_value
-        if not rtsp_url:
-            rtsp_url = self.rtsp_url
+        try:
+            rtsp_url = adapter_config.resolve_rtsp_url()
+        except ValueError as exc:
+            return TalkManager(
+                camera_name=self.camera_name,
+                enabled=True,
+                policy_enabled=camera_talk.policy_enabled,
+                supported_codecs=list(adapter_config.preferred_codecs),
+                open_session_factory=self._open_disabled_talk_session,
+                capability_probe_factory=_talk_config_error_probe_factory(str(exc)),
+                max_session_s=runtime_talk.max_session_s,
+                idle_timeout_s=runtime_talk.idle_timeout_s,
+            )
         self._talk_adapter = ONVIFBackchannelAdapter(
             adapter_config,
             rtsp_url=rtsp_url,

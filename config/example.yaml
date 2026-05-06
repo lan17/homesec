@@ -117,7 +117,7 @@ preview:
 
 
 # =============================================================================
-# Talk - Push-to-talk configuration (MVP: PCM in, G.711 backchannel out)
+# Talk - Push-to-talk configuration (auto-probed RTSP ONVIF G.711 backchannel)
 # =============================================================================
 talk:
   enabled: true
