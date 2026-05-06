@@ -1255,6 +1255,8 @@ export interface components {
             token?: string | null;
             /** Token Expires At */
             token_expires_at?: string | null;
+            /** Websocket Url */
+            websocket_url: string;
         };
         /**
          * TalkState

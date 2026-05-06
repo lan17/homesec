@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from fastapi import status
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+import homesec.api.routes.talk as talk_route_module
+import homesec.api.talk_tokens as talk_tokens
+from homesec.api.errors import APIErrorCode
 from homesec.api.server import create_app
-from homesec.api.talk_tokens import validate_camera_talk_token
+from homesec.api.talk_tokens import issue_camera_talk_token, validate_camera_talk_token
 from homesec.models.config import FastAPIServerConfig, TalkConfig
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.runtime.errors import (
@@ -30,22 +36,33 @@ from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
 class _MemoryTalkWriter:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        drain_error: Exception | None = None,
+        wait_closed_error: Exception | None = None,
+    ) -> None:
         self.data = bytearray()
         self.closed = False
         self.drain_count = 0
+        self.drain_error = drain_error
+        self.wait_closed_error = wait_closed_error
 
     def write(self, data: bytes) -> None:
         self.data.extend(data)
 
     async def drain(self) -> None:
         self.drain_count += 1
+        if self.drain_error is not None:
+            raise self.drain_error
 
     def close(self) -> None:
         self.closed = True
 
     async def wait_closed(self) -> None:
         self.closed = True
+        if self.wait_closed_error is not None:
+            raise self.wait_closed_error
 
 
 class _StubTalkApp:
@@ -149,6 +166,7 @@ class _StubTalkApp:
             input=input_format,
             reader=cast(asyncio.StreamReader, object()),
             writer=cast(asyncio.StreamWriter, self.stream_writer),
+            selected_codec=self._status.selected_codec or "PCMU/8000",
         )
 
     async def stop_camera_talk_session(
@@ -165,6 +183,14 @@ class _StubTalkApp:
 
 def _client(app: _StubTalkApp) -> TestClient:
     return TestClient(create_app(app))
+
+
+def _start_message(input_format: TalkInputFormat) -> str:
+    return json.dumps({"type": "start", **input_format.model_dump(mode="json")})
+
+
+def _stop_message() -> str:
+    return json.dumps({"type": "stop"})
 
 
 def test_get_talk_status_returns_runtime_status() -> None:
@@ -197,7 +223,51 @@ def test_get_talk_status_returns_runtime_status() -> None:
     }
 
 
-def test_prepare_talk_session_returns_stream_url_and_runtime_contract() -> None:
+def test_get_talk_status_returns_disabled_camera_status() -> None:
+    """Disabled talk status should be reported without opening a session."""
+    app = _StubTalkApp(
+        status=CameraTalkStatus(
+            camera_name="front",
+            enabled=False,
+            state=TalkState.DISABLED,
+            supported_codecs=[],
+            selected_codec=None,
+            last_error=None,
+        )
+    )
+    client = _client(app)
+
+    response = client.get("/api/v1/talk/cameras/front")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert response.json()["state"] == "disabled"
+    assert app.open_calls == []
+
+
+def test_get_talk_status_returns_unsupported_source_status() -> None:
+    """Unsupported sources should surface as talk status rather than session opens."""
+    app = _StubTalkApp(
+        status=CameraTalkStatus(
+            camera_name="front",
+            enabled=True,
+            state=TalkState.UNSUPPORTED,
+            supported_codecs=[],
+            selected_codec=None,
+            last_error="Source does not support talk",
+        )
+    )
+    client = _client(app)
+
+    response = client.get("/api/v1/talk/cameras/front")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "unsupported"
+    assert response.json()["last_error"] == "Source does not support talk"
+    assert app.open_calls == []
+
+
+def test_prepare_talk_session_returns_websocket_url_and_runtime_contract() -> None:
     """POST /talk/cameras/{camera_name}/sessions should reserve and describe a stream."""
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=20)
     app = _StubTalkApp(
@@ -225,15 +295,26 @@ def test_prepare_talk_session_returns_stream_url_and_runtime_contract() -> None:
     assert payload["token_expires_at"] is None
     assert payload["max_session_s"] == 45
     assert payload["idle_timeout_s"] == 1.5
-    parsed = urlparse(payload["stream_url"])
+    assert payload["websocket_url"] == payload["stream_url"]
+    parsed = urlparse(payload["websocket_url"])
     assert parsed.path == "/api/v1/talk/cameras/front/sessions/custom-session/stream"
-    assert parse_qs(parsed.query) == {
-        "codec": ["pcm_s16le"],
-        "sample_rate": ["8000"],
-        "channels": ["1"],
-        "frame_ms": ["20"],
-    }
+    assert parse_qs(parsed.query) == {}
     assert app.prepare_calls == [("front", "custom-session", input_format)]
+
+
+def test_prepare_talk_session_generates_session_id_when_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session creation should mint an opaque id when the client does not provide one."""
+    monkeypatch.setattr(talk_route_module.secrets, "token_urlsafe", lambda size: f"fixed-{size}")
+    app = _StubTalkApp()
+    client = _client(app)
+
+    response = client.post("/api/v1/talk/cameras/front/sessions", json={})
+
+    assert response.status_code == 201
+    generated_session_id = app.prepare_calls[0][1]
+    assert generated_session_id == "tk_fixed-16"
 
 
 def test_prepare_talk_session_mints_short_lived_stream_token_when_auth_enabled(
@@ -263,7 +344,8 @@ def test_prepare_talk_session_mints_short_lived_stream_token_when_auth_enabled(
     token = payload["token"]
     assert isinstance(token, str)
     assert payload["token_expires_at"] is not None
-    assert parse_qs(urlparse(payload["stream_url"]).query)["token"] == [token]
+    assert payload["websocket_url"] == payload["stream_url"]
+    assert parse_qs(urlparse(payload["websocket_url"]).query)["token"] == [token]
     decoded = validate_camera_talk_token(
         api_key="secret",
         token=token,
@@ -272,6 +354,26 @@ def test_prepare_talk_session_mints_short_lived_stream_token_when_auth_enabled(
     )
     assert decoded.camera_name == "front"
     assert decoded.session_id == "session-1"
+
+
+def test_prepare_talk_session_reports_missing_api_key_when_auth_enabled() -> None:
+    """Auth-enabled session creation should fail closed if no API key is configured."""
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(
+            auth_enabled=True,
+            api_key_env="HOMESEC_MISSING_TEST_API_KEY",
+        )
+    )
+    client = _client(app)
+
+    response = client.post(
+        "/api/v1/talk/cameras/front/sessions",
+        headers={"Authorization": "Bearer anything"},
+        json={"session_id": "session-1"},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["error_code"] == APIErrorCode.API_KEY_NOT_CONFIGURED
 
 
 def test_talk_control_routes_require_api_key_when_auth_enabled(
@@ -290,24 +392,101 @@ def test_talk_control_routes_require_api_key_when_auth_enabled(
     assert response.json()["error_code"] == "UNAUTHORIZED"
 
 
-def test_prepare_talk_session_maps_runtime_refusal_to_api_error() -> None:
+def test_prepare_talk_session_requires_api_key_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session-creation route should require normal API authentication."""
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
+    )
+    client = _client(app)
+
+    response = client.post("/api/v1/talk/cameras/front/sessions", json={"session_id": "s1"})
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "UNAUTHORIZED"
+    assert app.prepare_calls == []
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_status", "expected_error_code"),
+    [
+        (
+            TalkRefusalReason.CAMERA_NOT_FOUND,
+            status.HTTP_404_NOT_FOUND,
+            APIErrorCode.TALK_CAMERA_NOT_FOUND,
+        ),
+        (TalkRefusalReason.TALK_DISABLED, status.HTTP_409_CONFLICT, APIErrorCode.TALK_DISABLED),
+        (
+            TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+            status.HTTP_409_CONFLICT,
+            APIErrorCode.TALK_SOURCE_NOT_TALK_CAPABLE,
+        ),
+        (
+            TalkRefusalReason.SESSION_ALREADY_ACTIVE,
+            status.HTTP_409_CONFLICT,
+            APIErrorCode.TALK_SESSION_ALREADY_ACTIVE,
+        ),
+        (
+            TalkRefusalReason.SESSION_BUDGET_EXHAUSTED,
+            status.HTTP_409_CONFLICT,
+            APIErrorCode.TALK_SESSION_BUDGET_EXHAUSTED,
+        ),
+        (
+            TalkRefusalReason.UNSUPPORTED_CAMERA,
+            status.HTTP_409_CONFLICT,
+            APIErrorCode.TALK_UNSUPPORTED_CAMERA,
+        ),
+        (
+            TalkRefusalReason.UNSUPPORTED_CODEC,
+            status.HTTP_400_BAD_REQUEST,
+            APIErrorCode.TALK_UNSUPPORTED_CODEC,
+        ),
+        (
+            TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            APIErrorCode.TALK_CAMERA_BACKCHANNEL_FAILED,
+        ),
+        (
+            TalkRefusalReason.RUNTIME_UNAVAILABLE,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            APIErrorCode.TALK_RUNTIME_UNAVAILABLE,
+        ),
+        (
+            TalkRefusalReason.INVALID_AUDIO_FRAME,
+            status.HTTP_400_BAD_REQUEST,
+            APIErrorCode.TALK_INVALID_AUDIO_FRAME,
+        ),
+        (
+            TalkRefusalReason.BACKPRESSURE,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            APIErrorCode.TALK_BACKPRESSURE,
+        ),
+    ],
+)
+def test_prepare_talk_session_maps_runtime_refusal_to_api_error(
+    reason: TalkRefusalReason,
+    expected_status: int,
+    expected_error_code: APIErrorCode,
+) -> None:
     """Machine-readable talk refusal reasons should survive the HTTP boundary."""
     app = _StubTalkApp(
         prepare_result=CameraTalkStartRefusal(
             camera_name="front",
-            reason=TalkRefusalReason.SESSION_ALREADY_ACTIVE,
-            message="A talk session is already active for this camera",
+            reason=reason,
+            message="Talk session refused",
         )
     )
     client = _client(app)
 
     response = client.post("/api/v1/talk/cameras/front/sessions", json={"session_id": "session-1"})
 
-    assert response.status_code == 409
+    assert response.status_code == expected_status
     assert response.json() == {
-        "detail": "A talk session is already active for this camera",
-        "error_code": "TALK_SESSION_ALREADY_ACTIVE",
-        "reason": "session_already_active",
+        "detail": "Talk session refused",
+        "error_code": expected_error_code,
+        "reason": reason.value,
     }
 
 
@@ -320,6 +499,47 @@ def test_talk_routes_map_camera_not_found() -> None:
 
     assert response.status_code == 404
     assert response.json()["error_code"] == "TALK_CAMERA_NOT_FOUND"
+
+
+@pytest.mark.parametrize("method", ["get", "post", "delete"])
+def test_talk_control_routes_map_runtime_unavailable(method: str) -> None:
+    """Control routes should expose runtime availability failures consistently."""
+    error = TalkRuntimeUnavailableError("worker unavailable")
+    app = _StubTalkApp(
+        status_error=error if method == "get" else None,
+        prepare_error=error if method == "post" else None,
+        stop_error=error if method == "delete" else None,
+    )
+    client = _client(app)
+
+    if method == "get":
+        response = client.get("/api/v1/talk/cameras/front")
+    elif method == "post":
+        response = client.post("/api/v1/talk/cameras/front/sessions", json={"session_id": "s1"})
+    else:
+        response = client.delete("/api/v1/talk/cameras/front/sessions/s1")
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == APIErrorCode.TALK_RUNTIME_UNAVAILABLE
+
+
+@pytest.mark.parametrize("method", ["post", "delete"])
+def test_talk_mutation_routes_map_camera_not_found(method: str) -> None:
+    """Session mutation routes should keep camera-not-found errors talk-specific."""
+    error = TalkCameraNotFoundError("missing")
+    app = _StubTalkApp(
+        prepare_error=error if method == "post" else None,
+        stop_error=error if method == "delete" else None,
+    )
+    client = _client(app)
+
+    if method == "post":
+        response = client.post("/api/v1/talk/cameras/missing/sessions", json={"session_id": "s1"})
+    else:
+        response = client.delete("/api/v1/talk/cameras/missing/sessions/s1")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == APIErrorCode.TALK_CAMERA_NOT_FOUND
 
 
 def test_delete_talk_session_returns_stop_result() -> None:
@@ -353,16 +573,17 @@ def test_talk_websocket_forwards_binary_frames_to_runtime_stream() -> None:
 
     with client.websocket_connect(
         "/api/v1/talk/cameras/front/sessions/session-1/stream"
-        "?codec=pcm_s16le&sample_rate=8000&channels=1&frame_ms=10"
     ) as websocket:
+        websocket.send_text(_start_message(input_format))
         assert websocket.receive_json() == {
             "type": "ready",
             "camera_name": "front",
             "session_id": "session-1",
             "input": input_format.model_dump(mode="json"),
+            "camera_codec": "PCMU/8000",
         }
         websocket.send_bytes(frame)
-        websocket.send_text("stop")
+        websocket.send_text(_stop_message())
         with pytest.raises(WebSocketDisconnect):
             websocket.receive_text()
 
@@ -388,12 +609,12 @@ def test_talk_websocket_forwards_multiple_binary_frames_to_runtime_stream() -> N
 
     with client.websocket_connect(
         "/api/v1/talk/cameras/front/sessions/session-1/stream"
-        "?codec=pcm_s16le&sample_rate=8000&channels=1&frame_ms=10"
     ) as websocket:
+        websocket.send_text(_start_message(input_format))
         websocket.receive_json()
         websocket.send_bytes(first_frame)
         websocket.send_bytes(second_frame)
-        websocket.send_text("stop")
+        websocket.send_text(_stop_message())
         with pytest.raises(WebSocketDisconnect):
             websocket.receive_text()
 
@@ -418,8 +639,8 @@ def test_talk_websocket_rejects_invalid_audio_frame_length() -> None:
 
     with client.websocket_connect(
         "/api/v1/talk/cameras/front/sessions/session-1/stream"
-        "?codec=pcm_s16le&sample_rate=8000&channels=1&frame_ms=10"
     ) as websocket:
+        websocket.send_text(_start_message(input_format))
         websocket.receive_json()
         websocket.send_bytes(b"too short")
         with pytest.raises(WebSocketDisconnect):
@@ -429,19 +650,69 @@ def test_talk_websocket_rejects_invalid_audio_frame_length() -> None:
     assert app.stop_calls == [("front", "session-1")]
 
 
-def test_talk_websocket_cleans_up_reserved_session_on_invalid_input_query() -> None:
-    """Invalid attach parameters should not leave a reserved talk slot behind."""
+def test_talk_websocket_cleans_up_reserved_session_on_invalid_start_message() -> None:
+    """Invalid start control messages should not leave a reserved talk slot behind."""
     app = _StubTalkApp()
     client = _client(app)
 
-    with (
-        pytest.raises(WebSocketDisconnect),
-        client.websocket_connect(
-            "/api/v1/talk/cameras/front/sessions/session-1/stream?sample_rate=not-an-int"
-        ),
-    ):
-        pass
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        websocket.send_text(json.dumps({"type": "start", "sample_rate": "not-an-int"}))
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            websocket.receive_text()
 
+    assert disconnect.value.code == 1008
+    assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_code"),
+    [
+        (b"not json", 1003),
+        ("not json", 1008),
+        (json.dumps(["not", "an", "object"]), 1008),
+        (json.dumps({"type": "start"}), 1008),
+        (json.dumps({"type": "start", "unexpected": True}), 1008),
+    ],
+)
+def test_talk_websocket_rejects_invalid_start_payload_shapes(
+    payload: str | bytes,
+    expected_code: int,
+) -> None:
+    """The first WebSocket message must be a strict JSON start control object."""
+    app = _StubTalkApp()
+    client = _client(app)
+
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        if isinstance(payload, bytes):
+            websocket.send_bytes(payload)
+        else:
+            websocket.send_text(payload)
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            websocket.receive_text()
+
+    assert disconnect.value.code == expected_code
+    assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_rejects_start_message_without_type() -> None:
+    """Start control messages must be explicit, not inferred from defaults."""
+    app = _StubTalkApp()
+    client = _client(app)
+
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        websocket.send_text(json.dumps({"codec": "pcm_s16le", "sample_rate": 16000}))
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            websocket.receive_text()
+
+    assert disconnect.value.code == 1008
     assert app.open_calls == []
     assert app.stop_calls == [("front", "session-1")]
 
@@ -457,10 +728,31 @@ def test_talk_websocket_cleans_up_when_runtime_stream_open_fails() -> None:
         ) as websocket,
         pytest.raises(WebSocketDisconnect),
     ):
+        websocket.send_text(_start_message(TalkInputFormat()))
         websocket.receive_text()
 
     assert app.open_calls == []
     assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_does_not_stop_when_camera_disappears_during_open() -> None:
+    """A camera-not-found attach failure means the runtime did not reserve this session."""
+    app = _StubTalkApp(open_error=TalkCameraNotFoundError("missing"))
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.send_text(_start_message(TalkInputFormat()))
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert disconnect.value.reason == "Camera not found"
+    assert app.open_calls == []
+    assert app.stop_calls == []
 
 
 def test_talk_websocket_maps_typed_stream_open_refusal_to_policy_close() -> None:
@@ -479,11 +771,103 @@ def test_talk_websocket_maps_typed_stream_open_refusal_to_policy_close() -> None
         ) as websocket,
         pytest.raises(WebSocketDisconnect) as disconnect,
     ):
+        websocket.send_text(_start_message(TalkInputFormat()))
         websocket.receive_text()
 
     assert disconnect.value.code == 1008
     assert disconnect.value.reason == "Talk stream refused"
     assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_maps_backpressure_refusal_to_internal_error_close() -> None:
+    """Infrastructure/open failures should use retryable internal-error close semantics."""
+    app = _StubTalkApp(
+        open_error=TalkStreamOpenRefused(
+            "Backpressure while opening stream",
+            reason=TalkRefusalReason.BACKPRESSURE,
+        )
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.send_text(_start_message(TalkInputFormat()))
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1011
+    assert disconnect.value.reason == "Talk stream unavailable"
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_rejects_non_binary_frame_after_ready() -> None:
+    """Once active, only binary PCM frames or an exact stop control message are valid."""
+    app = _StubTalkApp()
+    client = _client(app)
+
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        websocket.send_text(_start_message(TalkInputFormat()))
+        websocket.receive_json()
+        websocket.send_text(json.dumps({"type": "stop", "extra": "not allowed"}))
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            websocket.receive_text()
+
+    assert disconnect.value.code == 1003
+    assert disconnect.value.reason == "Binary audio frames required"
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_closes_when_runtime_ipc_write_fails() -> None:
+    """Runtime IPC write failures should close the browser stream without buffering audio."""
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    writer = _MemoryTalkWriter(drain_error=BrokenPipeError("runtime gone"))
+    app = _StubTalkApp(
+        talk_config=TalkConfig(enabled=True, input=input_format),
+        stream_writer=writer,
+    )
+    client = _client(app)
+
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        websocket.send_text(_start_message(input_format))
+        websocket.receive_json()
+        websocket.send_bytes(b"\x44" * input_format.expected_bytes_per_frame)
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            websocket.receive_text()
+
+    assert disconnect.value.code == 1011
+    assert disconnect.value.reason == "Talk stream unavailable"
+    assert writer.closed is True
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_ignores_disconnect_error_while_closing_runtime_stream() -> None:
+    """Cleanup should tolerate a runtime writer that is already closed/reset."""
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    writer = _MemoryTalkWriter(wait_closed_error=BrokenPipeError("already closed"))
+    app = _StubTalkApp(
+        talk_config=TalkConfig(enabled=True, input=input_format),
+        stream_writer=writer,
+    )
+    client = _client(app)
+
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        websocket.send_text(_start_message(input_format))
+        websocket.receive_json()
+        websocket.send_text(_stop_message())
+        with pytest.raises(WebSocketDisconnect):
+            websocket.receive_text()
+
+    assert writer.closed is True
     assert app.stop_calls == [("front", "session-1")]
 
 
@@ -493,6 +877,7 @@ def test_talk_websocket_accepts_short_lived_token_when_auth_enabled(
     """Browser WebSocket streams should authorize via the token returned by prepare."""
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    writer = _MemoryTalkWriter()
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
         talk_config=TalkConfig(enabled=True, input=input_format),
@@ -501,6 +886,7 @@ def test_talk_websocket_accepts_short_lived_token_when_auth_enabled(
             session_id="session-1",
             input=input_format,
         ),
+        stream_writer=writer,
     )
     client = _client(app)
     prepare = client.post(
@@ -508,16 +894,91 @@ def test_talk_websocket_accepts_short_lived_token_when_auth_enabled(
         headers={"Authorization": "Bearer secret"},
         json={"session_id": "session-1", "input": input_format.model_dump(mode="json")},
     )
-    stream_url = prepare.json()["stream_url"]
+    stream_url = prepare.json()["websocket_url"]
+    frame = b"\x33" * input_format.expected_bytes_per_frame
 
     with client.websocket_connect(stream_url) as websocket:
+        websocket.send_text(_start_message(input_format))
         ready = websocket.receive_json()
-        websocket.send_text("stop")
+        websocket.send_bytes(frame)
+        websocket.send_text(_stop_message())
         with pytest.raises(WebSocketDisconnect):
             websocket.receive_text()
 
     assert ready["type"] == "ready"
     assert app.open_calls == [("front", "session-1", input_format)]
+    assert bytes(writer.data[:4]) == len(frame).to_bytes(4, "big")
+    assert bytes(writer.data[4:]) == frame
+
+
+def test_talk_websocket_accepts_bearer_api_key_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-browser clients may authorize the stream directly with the normal bearer key."""
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
+    )
+    client = _client(app)
+
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream",
+        headers={"Authorization": "Bearer secret"},
+    ) as websocket:
+        websocket.send_text(_start_message(TalkInputFormat()))
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_text(_stop_message())
+        with pytest.raises(WebSocketDisconnect):
+            websocket.receive_text()
+
+    assert app.open_calls == [("front", "session-1", TalkInputFormat())]
+
+
+def test_talk_websocket_rejects_wrong_bearer_api_key_without_runtime_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wrong bearer credentials should fail auth without stopping a reserved session."""
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream",
+            headers={"Authorization": "Bearer wrong-secret"},
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert app.open_calls == []
+    assert app.stop_calls == []
+
+
+def test_talk_websocket_rejects_auth_when_api_key_missing() -> None:
+    """Auth-enabled WebSockets should not fall back open if the API key is absent."""
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(
+            auth_enabled=True,
+            api_key_env="HOMESEC_MISSING_TEST_API_KEY",
+        )
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream?token=anything"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1011
+    assert app.open_calls == []
+    assert app.stop_calls == []
 
 
 def test_talk_websocket_rejects_missing_token_when_auth_enabled(
@@ -531,8 +992,82 @@ def test_talk_websocket_rejects_missing_token_when_auth_enabled(
     client = _client(app)
 
     with (
-        pytest.raises(WebSocketDisconnect),
-        client.websocket_connect("/api/v1/talk/cameras/front/sessions/session-1/stream"),
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
     ):
-        pass
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
     assert app.open_calls == []
+    assert app.stop_calls == []
+
+
+def test_talk_websocket_rejects_expired_token_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expired talk tokens should be rejected before runtime stream attachment."""
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    token, _ = issue_camera_talk_token(
+        api_key="secret",
+        camera_name="front",
+        session_id="session-1",
+        ttl_s=1,
+        now=datetime(2020, 1, 1, tzinfo=UTC),
+    )
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            f"/api/v1/talk/cameras/front/sessions/session-1/stream?token={token}"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert app.open_calls == []
+    assert app.stop_calls == []
+
+
+def test_talk_websocket_rejects_wrong_purpose_token_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wrong-purpose signed tokens should not authorize talk WebSocket streams."""
+    monkeypatch.setenv("HOMESEC_API_KEY", "secret")
+    expires_at = int(datetime(2099, 1, 1, tzinfo=UTC).timestamp())
+    payload_json = json.dumps(
+        {
+            "camera_name": "front",
+            "exp": expires_at,
+            "scope": "preview_stream",
+            "session_id": "session-1",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    payload_segment = talk_tokens._base64url_encode(payload_json)
+    signature = talk_tokens._base64url_encode(
+        talk_tokens._sign("secret", talk_tokens._signing_input(payload_segment))
+    )
+    token = f"{talk_tokens.TOKEN_VERSION}.{payload_segment}.{signature}"
+    app = _StubTalkApp(
+        server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            f"/api/v1/talk/cameras/front/sessions/session-1/stream?token={token}"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert app.open_calls == []
+    assert app.stop_calls == []

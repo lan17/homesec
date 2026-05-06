@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
@@ -36,8 +37,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _SESSION_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
+_TALK_WS_START_TYPE: Literal["start"] = "start"
 _TALK_WS_READY_TYPE = "ready"
-_TALK_WS_STOP_TYPE = "stop"
 
 control_router = APIRouter(tags=["talk"])
 stream_router = APIRouter(tags=["talk"])
@@ -69,11 +70,40 @@ class TalkSessionResponse(BaseModel):
     session_id: str
     state: TalkState
     input: TalkInputFormat
+    websocket_url: str
     stream_url: str
     token: str | None = None
     token_expires_at: datetime | None = None
     max_session_s: int
     idle_timeout_s: float
+
+
+class TalkWebSocketStartMessage(BaseModel):
+    """Client control message that starts a prepared talk stream."""
+
+    model_config = {"extra": "forbid"}
+
+    type: Literal["start"]
+    codec: Literal["pcm_s16le"]
+    sample_rate: int = Field(ge=8000, le=48000)
+    channels: int = Field(ge=1, le=1)
+    frame_ms: int = Field(ge=10, le=60)
+
+    def input_format(self) -> TalkInputFormat:
+        return TalkInputFormat(
+            codec=self.codec,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            frame_ms=self.frame_ms,
+        )
+
+
+class TalkWebSocketStopMessage(BaseModel):
+    """Client control message that ends a talk stream."""
+
+    model_config = {"extra": "forbid"}
+
+    type: Literal["stop"]
 
 
 class TalkStopResponse(BaseModel):
@@ -97,22 +127,15 @@ def _stream_url(
     camera_name: str,
     session_id: str,
     *,
-    input_format: TalkInputFormat,
     token: str | None = None,
 ) -> str:
     path = (
         f"/api/v1/talk/cameras/{quote(camera_name, safe='')}"
         f"/sessions/{quote(session_id, safe='')}/stream"
     )
-    query: dict[str, str] = {
-        "codec": input_format.codec,
-        "sample_rate": str(input_format.sample_rate),
-        "channels": str(input_format.channels),
-        "frame_ms": str(input_format.frame_ms),
-    }
-    if token is not None:
-        query["token"] = token
-    return f"{path}?{urlencode(query)}"
+    if token is None:
+        return path
+    return f"{path}?{urlencode({'token': token})}"
 
 
 def _new_session_id() -> str:
@@ -232,17 +255,18 @@ async def prepare_talk_session(
             ttl_s=talk_config.token_ttl_s,
         )
 
+    websocket_url = _stream_url(
+        camera_name,
+        outcome.session_id,
+        token=token,
+    )
     return TalkSessionResponse(
         camera_name=outcome.camera_name,
         session_id=outcome.session_id,
         state=TalkState.STARTING,
         input=outcome.input,
-        stream_url=_stream_url(
-            camera_name,
-            outcome.session_id,
-            input_format=outcome.input,
-            token=token,
-        ),
+        websocket_url=websocket_url,
+        stream_url=websocket_url,
         token=token,
         token_expires_at=expires_at,
         max_session_s=talk_config.max_session_s,
@@ -281,14 +305,16 @@ async def stream_talk_audio(
     app = await _get_websocket_app(websocket)
     if app is None:
         return
+
+    await websocket.accept()
     if not await _authorize_talk_websocket(websocket, app, camera_name, session_id):
         return
-    input_format = await _talk_input_from_websocket(websocket, app)
+
+    input_format = await _receive_talk_start_message(websocket)
     if input_format is None:
         await _stop_talk_session_best_effort(app, camera_name, session_id)
         return
 
-    await websocket.accept()
     stream: RuntimeTalkStream | None = None
     stop_best_effort = True
     try:
@@ -336,6 +362,7 @@ async def stream_talk_audio(
                 "camera_name": camera_name,
                 "session_id": session_id,
                 "input": input_format.model_dump(mode="json"),
+                "camera_codec": stream.selected_codec,
             }
         )
         await _forward_websocket_frames(websocket, stream, input_format)
@@ -436,38 +463,59 @@ def _parse_websocket_bearer_token(websocket: WebSocket) -> str | None:
     return auth_header.removeprefix("Bearer ").strip()
 
 
-async def _talk_input_from_websocket(
-    websocket: WebSocket,
-    app: Application,
-) -> TalkInputFormat | None:
-    raw_query = websocket.query_params
-    payload: dict[str, Any] = {}
-    if (codec := raw_query.get("codec")) is not None:
-        payload["codec"] = codec
-    for name in ("sample_rate", "channels", "frame_ms"):
-        raw_value = raw_query.get(name)
-        if raw_value is None:
-            continue
-        try:
-            payload[name] = int(raw_value)
-        except ValueError:
-            await websocket.close(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason="Invalid talk input format",
-            )
-            return None
+async def _receive_talk_start_message(websocket: WebSocket) -> TalkInputFormat | None:
+    try:
+        message = await websocket.receive()
+    except WebSocketDisconnect:
+        return None
+    if message.get("type") == "websocket.disconnect":
+        return None
 
-    if not payload:
-        return app.config.talk.input
+    text_payload = message.get("text")
+    if text_payload is None:
+        await websocket.close(
+            code=status.WS_1003_UNSUPPORTED_DATA,
+            reason="Talk start message required",
+        )
+        return None
+
+    payload = _decode_talk_control_payload(text_payload)
+    if payload is None:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Invalid talk start message",
+        )
+        return None
 
     try:
-        return TalkInputFormat.model_validate(payload)
+        return TalkWebSocketStartMessage.model_validate(payload).input_format()
     except ValidationError:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
-            reason="Invalid talk input format",
+            reason="Invalid talk start message",
         )
         return None
+
+
+def _decode_talk_control_payload(text_payload: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(text_payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _is_talk_stop_message(text_payload: str) -> bool:
+    payload = _decode_talk_control_payload(text_payload)
+    if payload is None:
+        return False
+    try:
+        TalkWebSocketStopMessage.model_validate(payload)
+    except ValidationError:
+        return False
+    return True
 
 
 async def _forward_websocket_frames(
@@ -504,7 +552,7 @@ async def _forward_websocket_frames(
             continue
 
         text_payload = message.get("text")
-        if text_payload == _TALK_WS_STOP_TYPE:
+        if text_payload is not None and _is_talk_stop_message(text_payload):
             await websocket.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Talk stopped")
             return
         await websocket.close(

@@ -773,6 +773,9 @@ class SubprocessRuntimeController(RuntimeController):
                 raise TalkRuntimeUnavailableError(
                     result.error_message or f"Runtime talk command failed: {result.error_code}"
                 )
+            selected_codec = (
+                result.talk_status.selected_codec if result.talk_status is not None else None
+            )
             close_writer = False
             return RuntimeTalkStream(
                 camera_name=camera_name,
@@ -780,6 +783,7 @@ class SubprocessRuntimeController(RuntimeController):
                 input=input_format,
                 reader=reader,
                 writer=writer,
+                selected_codec=selected_codec,
             )
         except TalkRuntimeUnavailableError:
             raise
