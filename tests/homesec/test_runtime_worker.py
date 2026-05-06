@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -212,7 +213,8 @@ async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
         Any,
         SimpleNamespace(sources_by_camera={"front": source}),
     )
-    socket_path = tmp_path / "worker-talk.sock"
+    _ = tmp_path
+    socket_path = Path(f"/tmp/hsrw-talk-{uuid.uuid4().hex}.sock")
     server = await asyncio.start_unix_server(
         service._handle_command_connection,
         path=str(socket_path),
@@ -268,6 +270,7 @@ async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
     finally:
         server.close()
         await server.wait_closed()
+        socket_path.unlink(missing_ok=True)
 
     assert source.prepared == [TalkSessionPrepareRequest(session_id="tk_1", input=input_format)]
     assert source.opened == [TalkSessionOpenRequest(session_id="tk_1", input=input_format)]
@@ -400,7 +403,8 @@ async def test_runtime_worker_talk_stream_invalid_frame_stops_source_session(
         Any,
         SimpleNamespace(sources_by_camera={"front": source}),
     )
-    socket_path = tmp_path / "worker-talk-invalid-frame.sock"
+    _ = tmp_path
+    socket_path = Path(f"/tmp/hsrw-talk-invalid-{uuid.uuid4().hex}.sock")
     server = await asyncio.start_unix_server(
         service._handle_command_connection,
         path=str(socket_path),
@@ -441,6 +445,7 @@ async def test_runtime_worker_talk_stream_invalid_frame_stops_source_session(
     finally:
         server.close()
         await server.wait_closed()
+        socket_path.unlink(missing_ok=True)
 
     assert source.frames == []
     assert source.stopped == ["tk_1"]

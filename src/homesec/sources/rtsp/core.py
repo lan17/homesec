@@ -55,6 +55,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
+from homesec.sources.rtsp.talk.errors import TalkProtocolError, TalkProtocolErrorCode
 from homesec.sources.rtsp.talk.manager import TalkManager, TalkManagerError, TalkSession
 from homesec.sources.rtsp.talk.models import ONVIFBackchannelConfig
 from homesec.sources.rtsp.talk.onvif_backchannel import ONVIFBackchannelAdapter
@@ -816,10 +817,13 @@ class RTSPSource(ThreadedClipSource):
                 "Talk adapter is not configured",
                 reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
             )
-        return await adapter.open_session(
-            session_id=request.session_id,
-            input_sample_rate=request.input.sample_rate,
-        )
+        try:
+            return await adapter.open_session(
+                session_id=request.session_id,
+                input_sample_rate=request.input.sample_rate,
+            )
+        except TalkProtocolError as exc:
+            raise _talk_manager_error_from_protocol_error(exc) from exc
 
     async def _open_disabled_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         _ = request
@@ -1919,3 +1923,28 @@ class RTSPSource(ThreadedClipSource):
             logger.exception("Unexpected error: %s", e)
         finally:
             self.cleanup()
+
+
+def _talk_manager_error_from_protocol_error(exc: TalkProtocolError) -> TalkManagerError:
+    """Translate RTSP-specific failures before they cross the source boundary."""
+    match exc.code:
+        case TalkProtocolErrorCode.CAMERA_BACKCHANNEL_UNSUPPORTED:
+            return TalkManagerError(
+                "Camera does not support ONVIF talk backchannel",
+                reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+            )
+        case TalkProtocolErrorCode.UNSUPPORTED_CODEC:
+            return TalkManagerError(
+                "Camera talk backchannel codec is not supported",
+                reason=TalkRefusalReason.UNSUPPORTED_CODEC,
+            )
+        case (
+            TalkProtocolErrorCode.CAMERA_REJECTED_SESSION
+            | TalkProtocolErrorCode.CAMERA_STREAM_FAILED
+            | TalkProtocolErrorCode.RTSP_AUTH_FAILED
+            | TalkProtocolErrorCode.RTSP_PROTOCOL_ERROR
+        ):
+            return TalkManagerError(
+                "Camera talk backchannel failed",
+                reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+            )
