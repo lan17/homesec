@@ -93,6 +93,28 @@ def _talk_config_error_probe_factory(
     return _probe
 
 
+def _talk_config_error_manager(
+    *,
+    message: str,
+    camera_name: str,
+    camera_talk: CameraTalkConfig,
+    runtime_talk: TalkConfig,
+    preferred_codecs: list[str],
+    open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
+) -> TalkManager:
+    """Build a talk manager that reports talk-specific config errors safely."""
+    return TalkManager(
+        camera_name=camera_name,
+        enabled=True,
+        policy_enabled=camera_talk.policy_enabled,
+        supported_codecs=list(preferred_codecs),
+        open_session_factory=open_session_factory,
+        capability_probe_factory=_talk_config_error_probe_factory(message),
+        max_session_s=runtime_talk.max_session_s,
+        idle_timeout_s=runtime_talk.idle_timeout_s,
+    )
+
+
 class RTSPMotionConfig(BaseModel):
     """Motion detection configuration."""
 
@@ -917,15 +939,13 @@ class RTSPSource(ThreadedClipSource):
         try:
             rtsp_url = adapter_config.resolve_rtsp_url()
         except ValueError as exc:
-            return TalkManager(
+            return _talk_config_error_manager(
+                message=str(exc),
                 camera_name=self.camera_name,
-                enabled=True,
-                policy_enabled=camera_talk.policy_enabled,
-                supported_codecs=list(adapter_config.preferred_codecs),
+                camera_talk=camera_talk,
+                runtime_talk=runtime_talk,
+                preferred_codecs=adapter_config.preferred_codecs,
                 open_session_factory=self._open_disabled_talk_session,
-                capability_probe_factory=_talk_config_error_probe_factory(str(exc)),
-                max_session_s=runtime_talk.max_session_s,
-                idle_timeout_s=runtime_talk.idle_timeout_s,
             )
         try:
             self._talk_adapter = ONVIFBackchannelAdapter(
@@ -934,15 +954,13 @@ class RTSPSource(ThreadedClipSource):
                 camera_name=camera_name,
             )
         except ValueError as exc:
-            return TalkManager(
+            return _talk_config_error_manager(
+                message=str(exc),
                 camera_name=self.camera_name,
-                enabled=True,
-                policy_enabled=camera_talk.policy_enabled,
-                supported_codecs=list(adapter_config.preferred_codecs),
+                camera_talk=camera_talk,
+                runtime_talk=runtime_talk,
+                preferred_codecs=adapter_config.preferred_codecs,
                 open_session_factory=self._open_disabled_talk_session,
-                capability_probe_factory=_talk_config_error_probe_factory(str(exc)),
-                max_session_s=runtime_talk.max_session_s,
-                idle_timeout_s=runtime_talk.idle_timeout_s,
             )
         return TalkManager(
             camera_name=self.camera_name,

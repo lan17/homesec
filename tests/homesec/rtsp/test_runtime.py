@@ -820,6 +820,52 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
 
 
 @pytest.mark.asyncio
+async def test_talk_missing_explicit_credential_env_reports_config_error_without_breaking_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing talk-only credential env vars should not break RTSP source startup."""
+    monkeypatch.delenv("MISSING_TALK_USER", raising=False)
+    monkeypatch.delenv("MISSING_TALK_PASSWORD", raising=False)
+    config = _make_config(
+        tmp_path,
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(
+                mode="auto",
+                config={
+                    "rtsp_url": "rtsp://host/talk",
+                    "username_env": "MISSING_TALK_USER",
+                    "password_env": "MISSING_TALK_PASSWORD",
+                },
+            ),
+        },
+    )
+
+    # Given: The main RTSP source is valid but talk-specific credential env vars are absent.
+    # When: Constructing the source and asking for talk capability.
+    source = RTSPSource(config, camera_name="cam")
+    status = await source.refresh_talk_status()
+
+    # Then: Talk reports a config/capability error while the source itself survives.
+    assert source.rtsp_url == "rtsp://host/stream"
+    assert status.enabled is True
+    assert status.policy_enabled is True
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.state == TalkState.ERROR
+    assert status.last_error is not None
+    assert "RTSP credential environment variable is not set" in status.last_error
+    assert "MISSING_TALK_USER" in status.last_error
+
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_missing_credentials")
+    )
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.message == status.last_error
+
+
+@pytest.mark.asyncio
 async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

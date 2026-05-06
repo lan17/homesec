@@ -16,9 +16,9 @@ const idleStatus: TalkStatusResponse = {
   capability: 'supported',
   state: 'idle',
   active_session_id: null,
-  supported_codecs: ['pcm_s16le'],
+  supported_codecs: ['PCMU/8000'],
   offered_codecs: ['PCMU/8000'],
-  selected_codec: 'pcm_s16le',
+  selected_codec: 'PCMU/8000',
   last_error: null,
 }
 
@@ -270,6 +270,7 @@ describe('usePushToTalk', () => {
 
     sockets[0].message(JSON.stringify({ type: 'ready' }))
     await waitFor(() => expect(result.current.isStreaming).toBe(true))
+    expect(result.current.status?.selected_codec).toBe('PCMU/8000')
 
     await act(async () => {
       await result.current.stop()
@@ -434,6 +435,34 @@ describe('usePushToTalk', () => {
     // Then: The optimistic active status no longer displays the stale probe error.
     expect(result.current.status?.state).toBe('active')
     expect(result.current.status?.capability).toBe('supported')
+    expect(result.current.status?.selected_codec).toBe('PCMU/8000')
+    expect(result.current.status?.last_error).toBeNull()
+  })
+
+  it('uses the camera codec from the ready message for optimistic active status', async () => {
+    // Given: The server reports the actual selected camera-side codec in ready.
+    const { stream } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+
+    // When: Starting talk and receiving a ready message with the selected camera codec.
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({
+      type: 'ready',
+      camera_codec: 'PCMA/8000',
+    }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // Then: Optimistic UI state uses the camera-side codec, not the browser PCM codec.
+    expect(result.current.status?.state).toBe('active')
+    expect(result.current.status?.selected_codec).toBe('PCMA/8000')
+    expect(result.current.status?.supported_codecs).toEqual(['PCMU/8000'])
+    expect(result.current.status?.offered_codecs).toEqual(['PCMU/8000'])
     expect(result.current.status?.last_error).toBeNull()
   })
 

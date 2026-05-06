@@ -2,6 +2,9 @@ export function frameSampleCount(sampleRate: number, frameMs: number): number {
   return Math.max(1, Math.round((sampleRate * frameMs) / 1000))
 }
 
+// Keep this encoder behavior aligned with talkPcmProcessor.js.
+// The AudioWorklet is loaded as a standalone browser module, so the worklet path
+// cannot import this TypeScript helper directly.
 export function floatToPcm16(frame: Float32Array): ArrayBuffer {
   const pcm = new Int16Array(frame.length)
   for (let index = 0; index < frame.length; index += 1) {

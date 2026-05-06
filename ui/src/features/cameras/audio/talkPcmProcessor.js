@@ -1,3 +1,6 @@
+// Keep this encoder behavior aligned with audio/pcm.ts.
+// AudioWorklet processors are loaded as standalone JS modules, so this file
+// intentionally mirrors the TypeScript PCM encoder instead of importing it.
 function floatToPcm16(frame) {
   const pcm = new Int16Array(frame.length)
   for (let index = 0; index < frame.length; index += 1) {

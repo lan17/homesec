@@ -7,6 +7,7 @@ import {
   PcmFrameEncoder,
 } from '../audio/pcm'
 import type {
+  TalkCapabilityState,
   TalkInputFormat,
   TalkSessionResponse,
   TalkState,
@@ -27,6 +28,7 @@ const TALK_MAX_BUFFERED_AUDIO_MS = 500
 
 type TalkReadyMessage = {
   type: typeof TALK_WS_READY_TYPE
+  camera_codec?: unknown
 }
 
 type AudioPipeline = {
@@ -181,17 +183,27 @@ function nextStatusFromState(
   state: TalkState,
   sessionId: string | null,
   previous: TalkStatusResponse | null,
+  selectedCameraCodec?: string | null,
 ): TalkStatusResponse {
+  const optimisticCapability: TalkCapabilityState = (
+    state === 'idle'
+    || state === 'starting'
+    || state === 'active'
+    || state === 'stopping'
+  )
+    ? 'supported'
+    : previous?.capability ?? 'supported'
+
   return {
     camera_name: cameraName,
     enabled: previous?.enabled ?? true,
     policy_enabled: previous?.policy_enabled ?? true,
-    capability: 'supported',
+    capability: optimisticCapability,
     state,
     active_session_id: sessionId,
-    supported_codecs: previous?.supported_codecs ?? ['pcm_s16le'],
+    supported_codecs: previous?.supported_codecs ?? [],
     offered_codecs: previous?.offered_codecs ?? [],
-    selected_codec: previous?.selected_codec ?? 'pcm_s16le',
+    selected_codec: selectedCameraCodec ?? previous?.selected_codec ?? null,
     last_error: null,
   }
 }
@@ -305,6 +317,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
           if (!isReadyMessage(parsed)) {
             return
           }
+          const selectedCameraCodec = typeof parsed.camera_codec === 'string' ? parsed.camera_codec : null
           if (isStartCancelled()) {
             socket.close(1000, 'Talk start cancelled')
             settleReject(new Error('Talk start cancelled'))
@@ -328,7 +341,13 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
               if (mountedRef.current) {
                 setIsStreaming(true)
                 setStatus((previous) =>
-                  nextStatusFromState(cameraName, 'active', nextSession.session_id, previous),
+                  nextStatusFromState(
+                    cameraName,
+                    'active',
+                    nextSession.session_id,
+                    previous,
+                    selectedCameraCodec,
+                  ),
                 )
               }
               settleResolve()

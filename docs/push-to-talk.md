@@ -88,6 +88,9 @@ backchannel support on that URI. Some cameras expose talk on a different profile
 or URI; configure `cameras[].talk.config.rtsp_url_env` separately when needed.
 If an explicit talk URL env var is configured, it must be set; HomeSec does not
 fall back to the main stream URL for a missing talk override.
+If explicit talk credential env vars are configured, they must also be set;
+HomeSec reports a talk config error rather than breaking the RTSP source when
+those env vars are missing.
 
 Opt out cameras that should never expose speaker access:
 
