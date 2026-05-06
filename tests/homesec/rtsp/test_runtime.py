@@ -951,6 +951,49 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
     assert "MISSING_TALK_RTSP_URL" in prepared.message
 
 
+@pytest.mark.asyncio
+async def test_talk_backchannel_missing_explicit_credential_env_reports_config_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing explicit talk credentials should not break RTSP source construction."""
+    monkeypatch.delenv("MISSING_TALK_RTSP_USER", raising=False)
+    monkeypatch.delenv("MISSING_TALK_RTSP_PASSWORD", raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(
+                config={
+                    "username_env": "MISSING_TALK_RTSP_USER",
+                    "password_env": "MISSING_TALK_RTSP_PASSWORD",
+                }
+            ),
+        },
+    )
+
+    # Given: A camera with explicit talk credential env vars that are not set
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and trying to prepare a talk session
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_missing_credentials")
+    )
+
+    # Then: Recording source construction survives and talk reports a config error
+    assert status.enabled is True
+    assert status.state == TalkState.ERROR
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.last_error is not None
+    assert "MISSING_TALK_RTSP_USER" in status.last_error
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.message is not None
+    assert "MISSING_TALK_RTSP_USER" in prepared.message
+
+
 def test_preview_methods_delegate_to_live_publisher(tmp_path: Path) -> None:
     """RTSPSource should delegate preview lifecycle calls to the live publisher seam."""
     # Given: An RTSP source with an injected live publisher

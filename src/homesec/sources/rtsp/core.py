@@ -904,11 +904,23 @@ class RTSPSource(ThreadedClipSource):
                 max_session_s=runtime_talk.max_session_s,
                 idle_timeout_s=runtime_talk.idle_timeout_s,
             )
-        self._talk_adapter = ONVIFBackchannelAdapter(
-            adapter_config,
-            rtsp_url=rtsp_url,
-            camera_name=camera_name,
-        )
+        try:
+            self._talk_adapter = ONVIFBackchannelAdapter(
+                adapter_config,
+                rtsp_url=rtsp_url,
+                camera_name=camera_name,
+            )
+        except ValueError as exc:
+            return TalkManager(
+                camera_name=self.camera_name,
+                enabled=True,
+                policy_enabled=camera_talk.policy_enabled,
+                supported_codecs=list(adapter_config.preferred_codecs),
+                open_session_factory=self._open_disabled_talk_session,
+                capability_probe_factory=_talk_config_error_probe_factory(str(exc)),
+                max_session_s=runtime_talk.max_session_s,
+                idle_timeout_s=runtime_talk.idle_timeout_s,
+            )
         return TalkManager(
             camera_name=self.camera_name,
             enabled=True,
