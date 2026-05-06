@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 
@@ -189,7 +190,14 @@ def select_audio_backchannel(
                     media=media,
                 )
 
-    raise UnsupportedTalkCodecError("SDP sendonly audio has no preferred codec")
+    advertised = _format_codec_list(
+        codec_name for media in candidates for codec_name in _advertised_codec_names(media)
+    )
+    preferred = _format_codec_list(preferences)
+    raise UnsupportedTalkCodecError(
+        "SDP sendonly audio has no preferred codec "
+        f"(advertised: {advertised}; preferred: {preferred})"
+    )
 
 
 def _parse_rtpmap(attr: str) -> SDPCodec | None:
@@ -234,6 +242,28 @@ def _apply_fmtp(media: SDPMediaDescription, attr: str) -> None:
         channels=codec.channels,
         fmtp=fmtp.strip(),
     )
+
+
+def _advertised_codec_names(media: SDPMediaDescription) -> list[str]:
+    names: list[str] = []
+    for payload_type in media.payload_types:
+        codec = media.codec_for_payload(payload_type)
+        if codec is None:
+            names.append(f"payload:{payload_type}")
+        else:
+            names.append(codec.normalized_name)
+    return names
+
+
+def _format_codec_list(values: Iterable[str]) -> str:
+    seen: set[str] = set()
+    formatted: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        formatted.append(value)
+    return ", ".join(formatted) or "none"
 
 
 def _resolve_control_url(
