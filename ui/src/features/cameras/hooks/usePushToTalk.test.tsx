@@ -10,9 +10,12 @@ import { usePushToTalk } from './usePushToTalk'
 const idleStatus: TalkStatusResponse = {
   camera_name: 'front',
   enabled: true,
+  policy_enabled: true,
+  capability: 'supported',
   state: 'idle',
   active_session_id: null,
   supported_codecs: ['pcm_s16le'],
+  offered_codecs: ['PCMU/8000'],
   selected_codec: 'pcm_s16le',
   last_error: null,
 }
@@ -212,6 +215,35 @@ describe('usePushToTalk', () => {
     expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
     expect(track.stop).toHaveBeenCalled()
     expect(result.current.isStreaming).toBe(false)
+  })
+
+  it('clears stale capability errors after a successful retry starts streaming', async () => {
+    // Given: The current talk status is retryable but carries a stale probe error.
+    vi.mocked(apiClient.getCameraTalkStatus).mockResolvedValueOnce({
+      ...idleStatus,
+      capability: 'error',
+      state: 'error',
+      last_error: 'previous probe failed',
+      httpStatus: 200,
+    })
+    const { stream } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+
+    // When: Retrying talk and reaching the ready websocket state.
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({ type: 'ready' }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // Then: The optimistic active status no longer displays the stale probe error.
+    expect(result.current.status?.state).toBe('active')
+    expect(result.current.status?.capability).toBe('supported')
+    expect(result.current.status?.last_error).toBeNull()
   })
 
   it('cancels release before getUserMedia resolves without preparing a session', async () => {

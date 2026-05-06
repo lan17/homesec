@@ -478,9 +478,12 @@ class _WorkerHarnessController(RuntimeController):
         return CameraTalkStatus(
             camera_name=camera_name,
             enabled=result.talk_status.enabled,
+            policy_enabled=result.talk_status.policy_enabled,
+            capability=result.talk_status.capability,
             state=result.talk_status.state,
             active_session_id=result.talk_status.active_session_id,
             supported_codecs=result.talk_status.supported_codecs,
+            offered_codecs=result.talk_status.offered_codecs,
             selected_codec=result.talk_status.selected_codec,
             last_error=result.talk_status.last_error,
         )
@@ -888,6 +891,44 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
+def test_talk_status_discovers_fake_onvif_backchannel(tmp_path: Path) -> None:
+    """Talk status should probe ONVIF backchannel capability before UI start."""
+    server = _FakeRTSPBackchannelServer()
+    app: _E2EApp | None = None
+
+    try:
+        server.start()
+        config = _make_config(tmp_path=tmp_path, rtsp_url=server.url)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
+        with TestClient(create_app(cast(Any, app))) as client:
+            # Given: A running backend with global talk enabled for an RTSP camera
+            # When: The UI asks for talk status
+            response = client.get("/api/v1/talk/cameras/front")
+
+            # Then: Status includes discovered camera capability and negotiated codec
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["enabled"] is True
+            assert payload["policy_enabled"] is True
+            assert payload["capability"] == "supported"
+            assert payload["state"] == "idle"
+            assert payload["offered_codecs"] == ["PCMU/8000"]
+            assert payload["selected_codec"] == "PCMU/8000"
+        server.wait_for_methods(["DESCRIBE"])
+    finally:
+        if app is not None:
+            _run(app.shutdown())
+        server.stop()
+
+    with server._lock:
+        # Then: Capability discovery stops at DESCRIBE and does not open RTP.
+        assert [request.method for request in server.requests] == ["DESCRIBE"]
+        assert server.interleaved_before_play == []
+        assert server.interleaved_after_play == []
+
+
 def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -935,7 +976,7 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
                 with pytest.raises(WebSocketDisconnect):
                     websocket.receive_text()
 
-        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(2)
     finally:
         if app is not None:
@@ -948,10 +989,16 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
         after_play = list(server.interleaved_after_play)
 
     # Then: The fake camera sees the ONVIF handshake and only post-PLAY RTP audio.
-    assert [request.method for request in requests] == ["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"]
+    assert [request.method for request in requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
     assert all(
         request.headers.get("require") == "www.onvif.org/ver20/backchannel"
-        for request in requests[:3]
+        for request in requests[:4]
     )
     assert all("@" not in request.uri for request in requests)
     assert before_play == []
@@ -1008,7 +1055,7 @@ def test_talk_websocket_negotiates_pcma_backchannel(tmp_path: Path) -> None:
                 with pytest.raises(WebSocketDisconnect):
                     websocket.receive_text()
 
-        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(1)
     finally:
         if app is not None:
@@ -1055,7 +1102,7 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
                 websocket.receive_json()
                 websocket.send_bytes(_pcm_frame(input_format, 500))
 
-        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
     finally:
         if app is not None:
             _run(app.shutdown())
@@ -1064,6 +1111,7 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
     with server._lock:
         # Then: The worker/source cleanup sent TEARDOWN and did not emit pre-PLAY RTP.
         assert [request.method for request in server.requests] == [
+            "DESCRIBE",
             "DESCRIBE",
             "SETUP",
             "PLAY",
@@ -1088,7 +1136,8 @@ def test_talk_websocket_maps_fake_camera_unsupported_backchannel_to_policy_close
         _run(app.start())
 
         with TestClient(create_app(cast(Any, app))) as client:
-            # Given: Session preparation succeeds before the camera protocol open is attempted.
+            # Given: A camera that rejects the ONVIF backchannel probe.
+            # When: Preparing a talk session.
             prepare = client.post(
                 "/api/v1/talk/cameras/front/sessions",
                 json={
@@ -1096,17 +1145,10 @@ def test_talk_websocket_maps_fake_camera_unsupported_backchannel_to_policy_close
                     "input": input_format.model_dump(mode="json"),
                 },
             )
-            assert prepare.status_code == 201
-
-            # When: Opening the stream reaches a camera that rejects ONVIF backchannel.
-            with client.websocket_connect(prepare.json()["websocket_url"]) as websocket:
-                websocket.send_text(_start_message(input_format))
-                with pytest.raises(WebSocketDisconnect) as disconnect:
-                    websocket.receive_json()
-
-            # Then: The protocol refusal maps to a policy close, not a runtime crash.
-            assert disconnect.value.code == 1008
-            assert disconnect.value.reason == "Talk stream refused"
+            # Then: Prepare refuses before creating a stream token.
+            assert prepare.status_code == 409
+            assert prepare.json()["error_code"] == "TALK_UNSUPPORTED_CAMERA"
+            assert prepare.json()["reason"] == "unsupported_camera"
         server.wait_for_methods(["DESCRIBE"])
     finally:
         if app is not None:
@@ -1134,7 +1176,8 @@ def test_talk_websocket_maps_fake_camera_unsupported_codec_to_policy_close(
         _run(app.start())
 
         with TestClient(create_app(cast(Any, app))) as client:
-            # Given: Session preparation succeeds before SDP codec selection.
+            # Given: A camera that advertises only unsupported talk codecs.
+            # When: Preparing a talk session.
             prepare = client.post(
                 "/api/v1/talk/cameras/front/sessions",
                 json={
@@ -1142,17 +1185,10 @@ def test_talk_websocket_maps_fake_camera_unsupported_codec_to_policy_close(
                     "input": input_format.model_dump(mode="json"),
                 },
             )
-            assert prepare.status_code == 201
-
-            # When: The camera advertises only an unsupported sendonly audio codec.
-            with client.websocket_connect(prepare.json()["websocket_url"]) as websocket:
-                websocket.send_text(_start_message(input_format))
-                with pytest.raises(WebSocketDisconnect) as disconnect:
-                    websocket.receive_json()
-
-            # Then: The API reports a non-retryable policy refusal.
-            assert disconnect.value.code == 1008
-            assert disconnect.value.reason == "Talk stream refused"
+            # Then: Prepare refuses with a codec-specific error.
+            assert prepare.status_code == 400
+            assert prepare.json()["error_code"] == "TALK_UNSUPPORTED_CODEC"
+            assert prepare.json()["reason"] == "unsupported_codec"
         server.wait_for_methods(["DESCRIBE"])
     finally:
         if app is not None:
@@ -1180,7 +1216,8 @@ def test_talk_websocket_maps_fake_camera_rejected_session_to_unavailable_close(
         _run(app.start())
 
         with TestClient(create_app(cast(Any, app))) as client:
-            # Given: Session preparation succeeds before RTSP negotiation fails.
+            # Given: A camera whose backchannel probe fails transiently.
+            # When: Preparing a talk session.
             prepare = client.post(
                 "/api/v1/talk/cameras/front/sessions",
                 json={
@@ -1188,17 +1225,10 @@ def test_talk_websocket_maps_fake_camera_rejected_session_to_unavailable_close(
                     "input": input_format.model_dump(mode="json"),
                 },
             )
-            assert prepare.status_code == 201
-
-            # When: The camera rejects the backchannel DESCRIBE for a generic reason.
-            with client.websocket_connect(prepare.json()["websocket_url"]) as websocket:
-                websocket.send_text(_start_message(input_format))
-                with pytest.raises(WebSocketDisconnect) as disconnect:
-                    websocket.receive_json()
-
-            # Then: The API reports a retryable stream-unavailable close.
-            assert disconnect.value.code == 1011
-            assert disconnect.value.reason == "Talk stream unavailable"
+            # Then: Prepare reports a retryable camera backchannel failure.
+            assert prepare.status_code == 503
+            assert prepare.json()["error_code"] == "TALK_CAMERA_BACKCHANNEL_FAILED"
+            assert prepare.json()["reason"] == "camera_backchannel_failed"
         server.wait_for_methods(["DESCRIBE"])
     finally:
         if app is not None:

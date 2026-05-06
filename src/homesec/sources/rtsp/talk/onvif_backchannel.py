@@ -6,10 +6,16 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass
 
+from homesec.models.talk import (
+    TalkCapabilityProbeResult,
+    TalkCapabilityState,
+    TalkRefusalReason,
+)
 from homesec.sources.rtsp.talk.errors import (
     CameraBackchannelUnsupportedError,
     CameraRejectedTalkSessionError,
     CameraTalkStreamFailedError,
+    TalkProtocolError,
     UnsupportedTalkCodecError,
 )
 from homesec.sources.rtsp.talk.g711 import encode_pcma, encode_pcmu
@@ -21,7 +27,13 @@ from homesec.sources.rtsp.talk.rtsp_client import (
     RTSPConnectionConfig,
     parse_interleaved_channels,
 )
-from homesec.sources.rtsp.talk.sdp import SDPCodec, SelectedBackchannel, select_audio_backchannel
+from homesec.sources.rtsp.talk.sdp import (
+    SDPCodec,
+    SelectedBackchannel,
+    advertised_audio_backchannel_codecs,
+    parse_sdp,
+    select_audio_backchannel,
+)
 
 logger = logging.getLogger(__name__)
 _ONVIF_BACKCHANNEL_REQUIRE = "www.onvif.org/ver20/backchannel"
@@ -97,6 +109,74 @@ class ONVIFBackchannelAdapter:
         self._credentials = config.resolve_credentials()
         self._camera_name = camera_name
 
+    async def probe(self) -> TalkCapabilityProbeResult:
+        """Probe camera SDP for ONVIF audio backchannel capability."""
+        client = self._client()
+        try:
+            await client.connect()
+            describe = await client.describe(headers=_require_header())
+            if describe.status_code == 551:
+                return TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.UNSUPPORTED,
+                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                    message="Camera rejected ONVIF backchannel DESCRIBE",
+                )
+            if describe.status_code != 200:
+                return TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.ERROR,
+                    refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+                    message=f"Camera rejected ONVIF backchannel DESCRIBE with RTSP {describe.status_code}",
+                )
+
+            body = describe.body.decode("utf-8", errors="replace")
+            description = parse_sdp(body)
+            offered_codecs = advertised_audio_backchannel_codecs(description)
+            base_control_url = (
+                describe.header("content-base")
+                or describe.header("content-location")
+                or self._rtsp_url
+            )
+            try:
+                selected = select_audio_backchannel(
+                    description,
+                    preferred_codecs=self._config.preferred_codecs,
+                    base_control_url=base_control_url,
+                )
+            except CameraBackchannelUnsupportedError as exc:
+                return TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.UNSUPPORTED,
+                    offered_codecs=offered_codecs,
+                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                    message=str(exc),
+                )
+            except UnsupportedTalkCodecError as exc:
+                return TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.UNSUPPORTED_CODEC,
+                    offered_codecs=offered_codecs,
+                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CODEC,
+                    message=str(exc),
+                )
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=offered_codecs,
+                selected_codec=selected.selected_codec,
+            )
+        except TalkProtocolError as exc:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.ERROR,
+                refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+                message=str(exc) or type(exc).__name__,
+            )
+        except Exception as exc:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.ERROR,
+                refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+                message=str(exc) or type(exc).__name__,
+            )
+        finally:
+            with suppress(Exception):
+                await client.close()
+
     async def open_session(
         self,
         *,
@@ -104,15 +184,7 @@ class ONVIFBackchannelAdapter:
         input_sample_rate: int = 16000,
     ) -> ONVIFTalkSession:
         """Negotiate DESCRIBE/SETUP/PLAY and return a ready talk session."""
-        client = RTSPClient(
-            RTSPConnectionConfig(
-                url=self._rtsp_url,
-                credentials=self._credentials,
-                user_agent=self._config.user_agent,
-                connect_timeout_s=self._config.connect_timeout_s,
-                io_timeout_s=self._config.io_timeout_s,
-            )
-        )
+        client = self._client()
         setup_completed = False
         await client.connect()
         try:
@@ -168,6 +240,17 @@ class ONVIFBackchannelAdapter:
                 await _best_effort_teardown(client)
             await client.close()
             raise
+
+    def _client(self) -> RTSPClient:
+        return RTSPClient(
+            RTSPConnectionConfig(
+                url=self._rtsp_url,
+                credentials=self._credentials,
+                user_agent=self._config.user_agent,
+                connect_timeout_s=self._config.connect_timeout_s,
+                io_timeout_s=self._config.io_timeout_s,
+            )
+        )
 
 
 def _require_header() -> dict[str, str]:

@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 
 import { isAPIError } from '../../../api/client'
+import type { TalkStatusResponse } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
 import { describeUnknownError } from '../../shared/errorPresentation'
@@ -61,7 +62,36 @@ function buttonLabel(isStarting: boolean, isStreaming: boolean, isStopping: bool
   return 'Hold to talk'
 }
 
-function blockedMessage(state: string | undefined): string | null {
+function codecList(codecs: string[] | undefined): string {
+  return codecs && codecs.length > 0 ? codecs.join(', ') : 'none'
+}
+
+function capabilityMessage(status: TalkStatusResponse | null): string | null {
+  if (!status) {
+    return null
+  }
+  switch (status.capability) {
+    case 'unsupported_codec':
+      return `Camera talkback codec is not supported. Offered: ${codecList(status.offered_codecs)}. Supported: ${codecList(status.supported_codecs)}.`
+    case 'unsupported':
+      return status.last_error ?? 'This camera does not advertise a talkback channel.'
+    case 'error':
+      return status.last_error
+        ? `Talkback capability check failed: ${status.last_error}`
+        : 'Talkback capability check failed.'
+    case 'probing':
+    case 'unknown':
+      return 'Checking talkback capability...'
+    default:
+      return null
+  }
+}
+
+function blockedMessage(status: TalkStatusResponse | null, state: string | undefined): string | null {
+  const capability = capabilityMessage(status)
+  if (capability) {
+    return capability
+  }
   switch (state) {
     case 'disabled':
       return 'Push-to-talk is disabled for this camera.'
@@ -71,6 +101,8 @@ function blockedMessage(state: string | undefined): string | null {
       return 'Talkback is temporarily unavailable. Try again in a moment.'
     case 'active':
       return 'Another talk session is already active.'
+    case 'error':
+      return status?.last_error ?? 'Talkback is in an error state.'
     default:
       return null
   }
@@ -104,7 +136,7 @@ export function PushToTalkControl({ cameraName }: PushToTalkControlProps) {
     if (isPending) {
       return 'Checking talkback capability...'
     }
-    return blockedMessage(state)
+    return blockedMessage(status, state)
   })()
 
   const beginTalk = (): void => {

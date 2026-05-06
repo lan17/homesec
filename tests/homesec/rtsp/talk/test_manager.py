@@ -5,7 +5,13 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from homesec.models.talk import TalkInputFormat, TalkRefusalReason, TalkState
+from homesec.models.talk import (
+    TalkCapabilityProbeResult,
+    TalkCapabilityState,
+    TalkInputFormat,
+    TalkRefusalReason,
+    TalkState,
+)
 from homesec.sources.rtsp.talk.manager import (
     TalkManager,
     TalkManagerError,
@@ -42,6 +48,108 @@ def _manager(*, max_session_s: float = 60.0, idle_timeout_s: float = 60.0) -> Ta
         max_session_s=max_session_s,
         idle_timeout_s=idle_timeout_s,
     )
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_refresh_status_probes_and_caches_capability() -> None:
+    """Status refresh should expose discovered camera talk capability."""
+    probe_calls = 0
+
+    async def _probe() -> TalkCapabilityProbeResult:
+        nonlocal probe_calls
+        probe_calls += 1
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.SUPPORTED,
+            offered_codecs=["PCMA/8000"],
+            selected_codec="PCMA/8000",
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000", "PCMA/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_probe,
+    )
+
+    # Given: A manager with an unprobed camera capability
+    initial = manager.status()
+
+    # When: Refreshing status twice inside the capability cache window
+    first = await manager.refresh_status()
+    second = await manager.refresh_status()
+
+    # Then: The probe result is cached and reflected in status
+    assert initial.capability == TalkCapabilityState.UNKNOWN
+    assert initial.state == TalkState.TEMPORARILY_UNAVAILABLE
+    assert first.capability == TalkCapabilityState.SUPPORTED
+    assert first.state == TalkState.IDLE
+    assert first.offered_codecs == ["PCMA/8000"]
+    assert first.selected_codec == "PCMA/8000"
+    assert second.capability == TalkCapabilityState.SUPPORTED
+    assert probe_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_prepare_forces_probe_and_rejects_unsupported_codec() -> None:
+    """Prepare should refuse when capability discovery finds no supported codec."""
+    probe_calls = 0
+
+    async def _probe() -> TalkCapabilityProbeResult:
+        nonlocal probe_calls
+        probe_calls += 1
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.UNSUPPORTED_CODEC,
+            offered_codecs=["OPUS/48000"],
+            refusal_reason=TalkRefusalReason.UNSUPPORTED_CODEC,
+            message="SDP sendonly audio has no preferred codec",
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_probe,
+    )
+
+    # Given: A manager whose camera advertises only unsupported talk codecs
+    # When: Preparing a talk session
+    result = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+
+    # Then: No session is reserved and the refusal is codec-specific
+    assert result.accepted is False
+    assert result.refusal_reason == TalkRefusalReason.UNSUPPORTED_CODEC
+    assert manager.status().state == TalkState.UNSUPPORTED
+    assert manager.status().offered_codecs == ["OPUS/48000"]
+    assert probe_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_reports_policy_separately_from_effective_enabled() -> None:
+    """Status should distinguish product disablement from per-camera policy."""
+    manager = TalkManager(
+        camera_name="front",
+        enabled=False,
+        policy_enabled=True,
+        supported_codecs=[],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+
+    # Given: A manager disabled by effective runtime state while camera policy allows talk
+    # When: Reading current talk status
+    status = manager.status()
+
+    # Then: Status preserves the per-camera policy distinction
+    assert status.enabled is False
+    assert status.policy_enabled is True
+    assert status.state == TalkState.DISABLED
 
 
 @pytest.mark.asyncio

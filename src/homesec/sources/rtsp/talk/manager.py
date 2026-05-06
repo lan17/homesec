@@ -13,6 +13,8 @@ from typing import Protocol
 
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityProbeResult,
+    TalkCapabilityState,
     TalkInputFormat,
     TalkRefusalReason,
     TalkSessionOpenRequest,
@@ -82,40 +84,114 @@ class TalkManager:
         *,
         camera_name: str,
         enabled: bool,
+        policy_enabled: bool | None = None,
         supported_codecs: list[str],
         open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
         max_session_s: float,
         idle_timeout_s: float,
+        capability_probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
+        capability_ttl_s: float = 30.0,
     ) -> None:
         self._camera_name = camera_name
         self._enabled = enabled
+        self._policy_enabled = enabled if policy_enabled is None else policy_enabled
         self._supported_codecs = list(supported_codecs)
         self._open_session_factory = open_session_factory
+        self._capability_probe_factory = capability_probe_factory
+        self._capability_ttl_s = capability_ttl_s
+        self._capability = TalkCapabilityProbeResult(
+            capability=(
+                TalkCapabilityState.DISABLED
+                if not enabled
+                else (
+                    TalkCapabilityState.SUPPORTED
+                    if capability_probe_factory is None
+                    else TalkCapabilityState.UNKNOWN
+                )
+            )
+        )
+        self._capability_refreshed_at: float | None = None
         self._max_session_s = max_session_s
         self._idle_timeout_s = idle_timeout_s
         self._record: _SessionRecord | None = None
         self._lock = asyncio.Lock()
+        self._probe_lock = asyncio.Lock()
         self._last_error: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def status(self) -> CameraTalkStatus:
         """Return current source-level talk status."""
         record = self._record
+        capability = self._capability
         if not self._enabled:
             state = TalkState.DISABLED
         elif record is None:
-            state = TalkState.IDLE
+            state = _state_from_capability(capability.capability)
         else:
             state = record.state
         return CameraTalkStatus(
             camera_name=self._camera_name,
             enabled=self._enabled,
+            policy_enabled=self._policy_enabled,
+            capability=capability.capability,
             state=state,
             active_session_id=record.session_id if record is not None else None,
             supported_codecs=self._supported_codecs,
-            selected_codec=record.selected_codec if record is not None else None,
-            last_error=self._last_error,
+            offered_codecs=capability.offered_codecs,
+            selected_codec=(
+                record.selected_codec if record is not None else capability.selected_codec
+            ),
+            last_error=self._last_error or capability.message,
         )
+
+    async def refresh_status(self, *, force: bool = False) -> CameraTalkStatus:
+        """Refresh capability if needed and return current source-level status."""
+        await self.refresh_capability(force=force)
+        return self.status()
+
+    async def refresh_capability(
+        self,
+        *,
+        force: bool = False,
+    ) -> TalkCapabilityProbeResult:
+        """Probe and cache camera talk capability when this manager has a probe source."""
+        self._bind_loop()
+        if not self._enabled:
+            return self._capability
+        if self._capability_probe_factory is None:
+            return self._capability
+
+        async with self._probe_lock:
+            async with self._lock:
+                if self._record is not None:
+                    return self._capability
+                now = time.monotonic()
+                if not force and self._capability_is_fresh(now):
+                    return self._capability
+                self._capability = TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.PROBING,
+                    offered_codecs=self._capability.offered_codecs,
+                    selected_codec=self._capability.selected_codec,
+                    message=self._capability.message,
+                    refusal_reason=self._capability.refusal_reason,
+                )
+
+            try:
+                result = await self._capability_probe_factory()
+            except Exception as exc:
+                result = TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.ERROR,
+                    refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+                    message=str(exc) or type(exc).__name__,
+                )
+
+            async with self._lock:
+                if self._record is None:
+                    self._capability = result
+                    self._capability_refreshed_at = time.monotonic()
+                    if result.capability == TalkCapabilityState.SUPPORTED:
+                        self._last_error = None
+                return self._capability
 
     async def prepare_session(
         self,
@@ -123,6 +199,10 @@ class TalkManager:
     ) -> TalkSessionPrepareResult:
         """Reserve a talk slot before the browser attaches the WebSocket stream."""
         self._bind_loop()
+        capability = await self.refresh_capability(force=True)
+        if capability.capability != TalkCapabilityState.SUPPORTED:
+            return _prepare_refusal_from_capability(capability, input_format=request.input)
+
         async with self._lock:
             if not self._enabled:
                 return TalkSessionPrepareResult(
@@ -155,6 +235,12 @@ class TalkManager:
                 session_id=session_id,
                 input=request.input,
             )
+
+    def _capability_is_fresh(self, now: float) -> bool:
+        return (
+            self._capability_refreshed_at is not None
+            and now - self._capability_refreshed_at < self._capability_ttl_s
+        )
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         """Open the camera session for a reserved talk session id."""
@@ -357,6 +443,71 @@ class TalkManagerError(RuntimeError):
     def __init__(self, message: str, *, reason: TalkRefusalReason) -> None:
         super().__init__(message)
         self.reason = reason
+
+
+def _state_from_capability(capability: TalkCapabilityState) -> TalkState:
+    match capability:
+        case TalkCapabilityState.DISABLED:
+            return TalkState.DISABLED
+        case TalkCapabilityState.SUPPORTED:
+            return TalkState.IDLE
+        case TalkCapabilityState.UNSUPPORTED | TalkCapabilityState.UNSUPPORTED_CODEC:
+            return TalkState.UNSUPPORTED
+        case TalkCapabilityState.ERROR:
+            return TalkState.ERROR
+        case TalkCapabilityState.UNKNOWN | TalkCapabilityState.PROBING:
+            return TalkState.TEMPORARILY_UNAVAILABLE
+
+
+def _prepare_refusal_from_capability(
+    capability: TalkCapabilityProbeResult,
+    *,
+    input_format: TalkInputFormat,
+) -> TalkSessionPrepareResult:
+    reason = capability.refusal_reason or _refusal_reason_from_capability(capability.capability)
+    message = capability.message or _refusal_message_from_capability(capability.capability)
+    return TalkSessionPrepareResult(
+        accepted=False,
+        refusal_reason=reason,
+        message=message,
+        input=input_format,
+    )
+
+
+def _refusal_reason_from_capability(
+    capability: TalkCapabilityState,
+) -> TalkRefusalReason:
+    match capability:
+        case TalkCapabilityState.DISABLED:
+            return TalkRefusalReason.TALK_DISABLED
+        case TalkCapabilityState.UNSUPPORTED:
+            return TalkRefusalReason.UNSUPPORTED_CAMERA
+        case TalkCapabilityState.UNSUPPORTED_CODEC:
+            return TalkRefusalReason.UNSUPPORTED_CODEC
+        case TalkCapabilityState.ERROR:
+            return TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+        case (
+            TalkCapabilityState.UNKNOWN
+            | TalkCapabilityState.PROBING
+            | TalkCapabilityState.SUPPORTED
+        ):
+            return TalkRefusalReason.RUNTIME_UNAVAILABLE
+
+
+def _refusal_message_from_capability(capability: TalkCapabilityState) -> str:
+    match capability:
+        case TalkCapabilityState.DISABLED:
+            return "Talk is disabled for this camera"
+        case TalkCapabilityState.UNSUPPORTED:
+            return "Camera does not advertise an ONVIF talk backchannel"
+        case TalkCapabilityState.UNSUPPORTED_CODEC:
+            return "Camera talk backchannel codec is not supported"
+        case TalkCapabilityState.ERROR:
+            return "Camera talk backchannel probe failed"
+        case TalkCapabilityState.UNKNOWN | TalkCapabilityState.PROBING:
+            return "Camera talk capability is not ready"
+        case TalkCapabilityState.SUPPORTED:
+            return "Talk session is temporarily unavailable"
 
 
 async def _close_record(record: _SessionRecord) -> None:

@@ -149,6 +149,7 @@ class SubprocessRuntimeController(RuntimeController):
     heartbeat_stale_s: float = 10.0
     command_timeout_s: float = 5.0
     preview_start_timeout_s: float = 20.0
+    talk_command_timeout_s: float = 20.0
     worker_module: str = "homesec.runtime.worker"
     worker_extra_args: tuple[str, ...] = ()
     _active_runtime: SubprocessRuntimeHandle | None = field(default=None, init=False, repr=False)
@@ -454,17 +455,26 @@ class SubprocessRuntimeController(RuntimeController):
                 handle,
                 WorkerCommandType.TALK_STATUS,
                 camera_name,
+                response_timeout_s=self._talk_response_timeout_s(),
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
             enabled = self._talk_enabled(handle, camera_name)
-            return self._talk_error_status(camera_name, enabled=enabled, message=message)
-
-        if result.talk_status is None:
-            enabled = self._talk_enabled(handle, camera_name)
+            policy_enabled = self._talk_policy_enabled(handle, camera_name)
             return self._talk_error_status(
                 camera_name,
                 enabled=enabled,
+                policy_enabled=policy_enabled,
+                message=message,
+            )
+
+        if result.talk_status is None:
+            enabled = self._talk_enabled(handle, camera_name)
+            policy_enabled = self._talk_policy_enabled(handle, camera_name)
+            return self._talk_error_status(
+                camera_name,
+                enabled=enabled,
+                policy_enabled=policy_enabled,
                 message="Runtime worker returned no talk status",
             )
         status = self._runtime_talk_status(camera_name, result.talk_status)
@@ -497,6 +507,7 @@ class SubprocessRuntimeController(RuntimeController):
                 camera_name,
                 session_id=session_id,
                 talk_input=input_format,
+                response_timeout_s=self._talk_response_timeout_s(),
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)
@@ -896,9 +907,12 @@ class SubprocessRuntimeController(RuntimeController):
         return CameraTalkStatus(
             camera_name=camera_name,
             enabled=payload.enabled,
+            policy_enabled=payload.policy_enabled,
+            capability=payload.capability,
             state=payload.state,
             active_session_id=payload.active_session_id,
             supported_codecs=list(payload.supported_codecs),
+            offered_codecs=list(payload.offered_codecs),
             selected_codec=payload.selected_codec,
             last_error=payload.last_error,
         )
@@ -925,7 +939,17 @@ class SubprocessRuntimeController(RuntimeController):
         camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
         if camera is None:
             raise TalkCameraNotFoundError(camera_name)
-        return handle.config.talk.enabled and camera.enabled and camera.talk.enabled
+        return handle.config.talk.enabled and camera.enabled and camera.talk.policy_enabled
+
+    def _talk_policy_enabled(self, handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
+        cached = handle.camera_talk_statuses.get(camera_name)
+        if cached is not None:
+            return cached.policy_enabled
+
+        camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
+        if camera is None:
+            raise TalkCameraNotFoundError(camera_name)
+        return camera.talk.policy_enabled
 
     def _stale_talk_status(
         self,
@@ -933,9 +957,11 @@ class SubprocessRuntimeController(RuntimeController):
         camera_name: str,
     ) -> CameraTalkStatus:
         enabled = self._talk_enabled(handle, camera_name)
+        policy_enabled = self._talk_policy_enabled(handle, camera_name)
         return self._talk_error_status(
             camera_name,
             enabled=enabled,
+            policy_enabled=policy_enabled,
             message=self._runtime_unavailable_message(handle),
         )
 
@@ -944,20 +970,26 @@ class SubprocessRuntimeController(RuntimeController):
         camera_name: str,
         *,
         enabled: bool,
+        policy_enabled: bool,
         message: str,
     ) -> CameraTalkStatus:
         if not enabled:
             return CameraTalkStatus(
                 camera_name=camera_name,
                 enabled=False,
+                policy_enabled=policy_enabled,
                 state=TalkState.DISABLED,
             )
         return CameraTalkStatus(
             camera_name=camera_name,
             enabled=True,
+            policy_enabled=policy_enabled,
             state=TalkState.ERROR,
             last_error=message,
         )
+
+    def _talk_response_timeout_s(self) -> float:
+        return max(self.command_timeout_s, self.talk_command_timeout_s)
 
     def _stale_preview_status(
         self,

@@ -19,7 +19,13 @@ from homesec.api.talk_tokens import (
     issue_camera_talk_token,
     validate_camera_talk_token,
 )
-from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
+from homesec.models.talk import (
+    CameraTalkStatus,
+    TalkCapabilityState,
+    TalkInputFormat,
+    TalkRefusalReason,
+    TalkState,
+)
 from homesec.runtime.errors import (
     TalkCameraNotFoundError,
     TalkRuntimeUnavailableError,
@@ -48,9 +54,12 @@ router = control_router
 class TalkStatusResponse(BaseModel):
     camera_name: str
     enabled: bool
+    policy_enabled: bool
+    capability: TalkCapabilityState
     state: TalkState
     active_session_id: str | None = None
     supported_codecs: list[str] = Field(default_factory=list)
+    offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
     last_error: str | None = None
 
@@ -115,9 +124,12 @@ def _status_response(talk_status: CameraTalkStatus) -> TalkStatusResponse:
     return TalkStatusResponse(
         camera_name=talk_status.camera_name,
         enabled=talk_status.enabled,
+        policy_enabled=talk_status.policy_enabled,
+        capability=talk_status.capability,
         state=talk_status.state,
         active_session_id=talk_status.active_session_id,
         supported_codecs=list(talk_status.supported_codecs),
+        offered_codecs=list(talk_status.offered_codecs),
         selected_codec=talk_status.selected_codec,
         last_error=talk_status.last_error,
     )

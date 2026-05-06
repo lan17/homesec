@@ -648,7 +648,7 @@ export interface components {
         };
         /**
          * CameraTalkConfig
-         * @description Per-camera talk backend configuration.
+         * @description Per-camera talk policy and backend override configuration.
          */
         CameraTalkConfig: {
             /**
@@ -663,9 +663,16 @@ export interface components {
             } | components["schemas"]["BaseModel"];
             /**
              * Enabled
-             * @default false
+             * @description Deprecated compatibility alias for mode != 'disabled'.
+             * @default true
              */
             enabled: boolean;
+            /**
+             * Mode
+             * @default auto
+             * @enum {string}
+             */
+            mode: "auto" | "disabled";
         };
         /** CameraUpdate */
         CameraUpdate: {
@@ -1205,6 +1212,12 @@ export interface components {
             clips_dir: string;
         };
         /**
+         * TalkCapabilityState
+         * @description Discovered camera talk capability independent from session state.
+         * @enum {string}
+         */
+        TalkCapabilityState: "disabled" | "unknown" | "probing" | "supported" | "unsupported" | "unsupported_codec" | "error";
+        /**
          * TalkInputFormat
          * @description Browser input frame format contract for push-to-talk.
          */
@@ -1270,10 +1283,15 @@ export interface components {
             active_session_id?: string | null;
             /** Camera Name */
             camera_name: string;
+            capability: components["schemas"]["TalkCapabilityState"];
             /** Enabled */
             enabled: boolean;
             /** Last Error */
             last_error?: string | null;
+            /** Offered Codecs */
+            offered_codecs?: string[];
+            /** Policy Enabled */
+            policy_enabled: boolean;
             /** Selected Codec */
             selected_codec?: string | null;
             state: components["schemas"]["TalkState"];

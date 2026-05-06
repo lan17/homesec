@@ -23,6 +23,8 @@ from homesec.models.clip import Clip
 from homesec.models.config import CameraTalkConfig, PreviewConfig, TalkConfig
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityProbeResult,
+    TalkCapabilityState,
     TalkRefusalReason,
     TalkSessionOpenRequest,
     TalkSessionPrepareRequest,
@@ -492,6 +494,17 @@ class RTSPSource(ThreadedClipSource):
             )
         return manager.status()
 
+    async def refresh_talk_status(self) -> CameraTalkStatus:
+        """Refresh discovered push-to-talk capability and return current status."""
+        manager = self._talk_manager
+        if manager is None:
+            return CameraTalkStatus(
+                camera_name=self.camera_name,
+                enabled=False,
+                state=TalkState.DISABLED,
+            )
+        return await manager.refresh_status()
+
     async def prepare_talk_session(
         self,
         request: TalkSessionPrepareRequest,
@@ -838,11 +851,12 @@ class RTSPSource(ThreadedClipSource):
         camera_talk = config.camera_talk
         if runtime_talk is None or camera_talk is None:
             return None
-        enabled = runtime_talk.enabled and camera_talk.enabled
+        enabled = runtime_talk.enabled and camera_talk.policy_enabled
         if not enabled:
             return TalkManager(
                 camera_name=self.camera_name,
                 enabled=False,
+                policy_enabled=camera_talk.policy_enabled,
                 supported_codecs=[],
                 open_session_factory=self._open_disabled_talk_session,
                 max_session_s=runtime_talk.max_session_s,
@@ -852,6 +866,7 @@ class RTSPSource(ThreadedClipSource):
             return TalkManager(
                 camera_name=self.camera_name,
                 enabled=False,
+                policy_enabled=camera_talk.policy_enabled,
                 supported_codecs=[],
                 open_session_factory=self._open_disabled_talk_session,
                 max_session_s=runtime_talk.max_session_s,
@@ -877,11 +892,23 @@ class RTSPSource(ThreadedClipSource):
         return TalkManager(
             camera_name=self.camera_name,
             enabled=True,
+            policy_enabled=camera_talk.policy_enabled,
             supported_codecs=list(adapter_config.preferred_codecs),
             open_session_factory=self._open_onvif_talk_session,
+            capability_probe_factory=self._probe_onvif_talk_capability,
             max_session_s=runtime_talk.max_session_s,
             idle_timeout_s=runtime_talk.idle_timeout_s,
         )
+
+    async def _probe_onvif_talk_capability(self) -> TalkCapabilityProbeResult:
+        adapter = self._talk_adapter
+        if adapter is None:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.UNSUPPORTED,
+                refusal_reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+                message="Talk adapter is not configured",
+            )
+        return await adapter.probe()
 
     async def _open_onvif_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         adapter = self._talk_adapter

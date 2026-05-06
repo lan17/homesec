@@ -48,15 +48,9 @@ cameras:
           backoff_s: 1.0             # Backoff between reconnects
           max_attempts: 0            # 0 = retry forever
           detect_fallback_attempts: 3  # Switch detect stream to main after N failures
-    talk:
-      enabled: false
-      backend: onvif_rtsp_backchannel
-      config:
-        rtsp_url_env: FRONT_DOOR_RTSP_URL
-        preferred_codecs:
-          - PCMU/8000
-          - PCMA/8000
-        transport: rtsp_tcp_interleaved
+    # Optional: opt out a camera that advertises an unwanted speaker backchannel.
+    # talk:
+    #   mode: disabled
 
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera
@@ -126,7 +120,7 @@ preview:
 # Talk - Push-to-talk configuration (MVP: PCM in, G.711 backchannel out)
 # =============================================================================
 talk:
-  enabled: false
+  enabled: true
   token_ttl_s: 30
   max_session_s: 60
   idle_timeout_s: 2.0

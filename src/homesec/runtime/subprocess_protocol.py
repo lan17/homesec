@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityState,
     TalkInputFormat,
     TalkRefusalReason,
     TalkSessionPrepareResult,
@@ -61,20 +62,35 @@ class WorkerTalkStatusPayload(BaseModel):
     """Serialized talk status emitted by worker."""
 
     enabled: bool
+    policy_enabled: bool = False
+    capability: TalkCapabilityState = TalkCapabilityState.UNKNOWN
     state: TalkState
     active_session_id: str | None = None
     supported_codecs: list[str] = Field(default_factory=list)
+    offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
     last_error: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_compatibility_defaults(self) -> WorkerTalkStatusPayload:
+        """Default new fields when reading pre-capability worker payloads."""
+        if "policy_enabled" not in self.model_fields_set:
+            self.policy_enabled = self.enabled
+        if "capability" not in self.model_fields_set:
+            self.capability = _capability_from_talk_state(self.state)
+        return self
 
     @classmethod
     def from_status(cls, status: CameraTalkStatus) -> WorkerTalkStatusPayload:
         """Build a worker payload from the shared API/runtime status model."""
         return cls(
             enabled=status.enabled,
+            policy_enabled=status.policy_enabled,
+            capability=status.capability,
             state=status.state,
             active_session_id=status.active_session_id,
             supported_codecs=list(status.supported_codecs),
+            offered_codecs=list(status.offered_codecs),
             selected_codec=status.selected_codec,
             last_error=status.last_error,
         )
@@ -118,6 +134,20 @@ class WorkerCommandType(StrEnum):
     TALK_PREPARE_SESSION = "talk_prepare_session"
     TALK_STREAM_OPEN = "talk_stream_open"
     TALK_STOP_SESSION = "talk_stop_session"
+
+
+def _capability_from_talk_state(state: TalkState) -> TalkCapabilityState:
+    match state:
+        case TalkState.DISABLED:
+            return TalkCapabilityState.DISABLED
+        case TalkState.UNSUPPORTED:
+            return TalkCapabilityState.UNSUPPORTED
+        case TalkState.IDLE | TalkState.STARTING | TalkState.ACTIVE | TalkState.STOPPING:
+            return TalkCapabilityState.SUPPORTED
+        case TalkState.ERROR:
+            return TalkCapabilityState.ERROR
+        case TalkState.TEMPORARILY_UNAVAILABLE:
+            return TalkCapabilityState.UNKNOWN
 
 
 class WorkerCommandErrorCode(StrEnum):
