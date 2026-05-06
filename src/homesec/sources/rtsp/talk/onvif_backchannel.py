@@ -174,7 +174,8 @@ class ONVIFBackchannelAdapter:
                 message=str(exc) or type(exc).__name__,
             )
         finally:
-            await client.close()
+            with suppress(Exception):
+                await client.close()
 
     async def open_session(
         self,

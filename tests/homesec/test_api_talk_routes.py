@@ -195,6 +195,7 @@ def _stop_message() -> str:
 
 def test_get_talk_status_returns_runtime_status() -> None:
     """GET /talk/cameras/{camera_name} should mirror runtime talk status."""
+    # Given: The runtime reports an active talk session with negotiated status fields
     app = _StubTalkApp(
         status=CameraTalkStatus(
             camera_name="front",
@@ -208,8 +209,10 @@ def test_get_talk_status_returns_runtime_status() -> None:
     )
     client = _client(app)
 
+    # When: Fetching talk status for the camera
     response = client.get("/api/v1/talk/cameras/front")
 
+    # Then: The API mirrors the runtime status and compatibility fields
     assert response.status_code == 200
     payload = response.json()
     assert payload == {

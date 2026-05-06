@@ -130,6 +130,29 @@ async def test_talk_manager_prepare_forces_probe_and_rejects_unsupported_codec()
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_reports_policy_separately_from_effective_enabled() -> None:
+    """Status should distinguish product disablement from per-camera policy."""
+    manager = TalkManager(
+        camera_name="front",
+        enabled=False,
+        policy_enabled=True,
+        supported_codecs=[],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+
+    # Given: A manager disabled by effective runtime state while camera policy allows talk
+    # When: Reading current talk status
+    status = manager.status()
+
+    # Then: Status preserves the per-camera policy distinction
+    assert status.enabled is False
+    assert status.policy_enabled is True
+    assert status.state == TalkState.DISABLED
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_enforces_one_reserved_or_active_session() -> None:
     manager = _manager()
 

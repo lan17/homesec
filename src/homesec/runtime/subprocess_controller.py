@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel
+
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import (
@@ -57,6 +59,31 @@ if TYPE_CHECKING:
     from homesec.models.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _talk_probe_timeout_s(config: Config, camera_name: str) -> float:
+    """Estimate the longest ONVIF probe used while preparing a talk session."""
+    camera = next((item for item in config.cameras if item.name == camera_name), None)
+    if camera is None or camera.talk.backend != "onvif_rtsp_backchannel":
+        return 0.0
+
+    raw_config = camera.talk.config
+    if isinstance(raw_config, BaseModel):
+        config_data = raw_config.model_dump(mode="python")
+    else:
+        config_data = dict(raw_config)
+
+    connect_timeout_s = _float_config_value(config_data.get("connect_timeout_s"), default=5.0)
+    io_timeout_s = _float_config_value(config_data.get("io_timeout_s"), default=5.0)
+    return connect_timeout_s + (2 * io_timeout_s) + 1.0
+
+
+def _float_config_value(value: object, *, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    return default
 
 
 class _WorkerEventProtocol(asyncio.DatagramProtocol):
@@ -149,6 +176,7 @@ class SubprocessRuntimeController(RuntimeController):
     heartbeat_stale_s: float = 10.0
     command_timeout_s: float = 5.0
     preview_start_timeout_s: float = 20.0
+    talk_prepare_timeout_s: float = 20.0
     worker_module: str = "homesec.runtime.worker"
     worker_extra_args: tuple[str, ...] = ()
     _active_runtime: SubprocessRuntimeHandle | None = field(default=None, init=False, repr=False)
@@ -497,6 +525,11 @@ class SubprocessRuntimeController(RuntimeController):
                 camera_name,
                 session_id=session_id,
                 talk_input=input_format,
+                response_timeout_s=max(
+                    self.command_timeout_s,
+                    self.talk_prepare_timeout_s,
+                    _talk_probe_timeout_s(handle.config, camera_name),
+                ),
             )
         except Exception as exc:
             message = sanitize_runtime_error(exc)

@@ -551,7 +551,7 @@ class _RuntimeWorkerService:
                 state = (
                     TalkState.STOPPING
                     if stop_result
-                    else (await self._talk_status(command.camera_name)).state
+                    else self._talk_status_without_refresh(command.camera_name).state
                 )
                 return WorkerCommandResult(
                     command=command.command,
@@ -653,12 +653,14 @@ class _RuntimeWorkerService:
             return CameraTalkStatus(
                 camera_name=camera_name,
                 enabled=False,
+                policy_enabled=self._talk_policy_enabled(camera_name),
                 state=TalkState.DISABLED,
             )
         if source is None:
             return CameraTalkStatus(
                 camera_name=camera_name,
                 enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
                 state=TalkState.UNSUPPORTED,
                 last_error="Source is not talk-capable",
             )
@@ -676,6 +678,42 @@ class _RuntimeWorkerService:
             return CameraTalkStatus(
                 camera_name=camera_name,
                 enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.ERROR,
+                last_error="Talk status unavailable",
+            )
+
+    def _talk_status_without_refresh(self, camera_name: str) -> CameraTalkStatus:
+        """Return current talk status without camera I/O for idempotent stop paths."""
+        source = self._talk_source_for_camera(camera_name)
+        if not self._talk_enabled(camera_name):
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=False,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.DISABLED,
+            )
+        if source is None:
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.UNSUPPORTED,
+                last_error="Source is not talk-capable",
+            )
+        try:
+            return source.talk_status()
+        except Exception as exc:
+            logger.warning(
+                "Talk status lookup failed for camera=%s: %s",
+                camera_name,
+                exc,
+                exc_info=True,
+            )
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
                 state=TalkState.ERROR,
                 last_error="Talk status unavailable",
             )
@@ -1029,6 +1067,10 @@ class _RuntimeWorkerService:
     def _talk_enabled(self, camera_name: str) -> bool:
         camera = self._camera_configs[camera_name]
         return self._config.talk.enabled and camera.enabled and camera.talk.policy_enabled
+
+    def _talk_policy_enabled(self, camera_name: str) -> bool:
+        camera = self._camera_configs[camera_name]
+        return camera.talk.policy_enabled
 
     def _preview_enabled(
         self,

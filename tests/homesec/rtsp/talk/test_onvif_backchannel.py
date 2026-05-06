@@ -22,6 +22,7 @@ from homesec.sources.rtsp.talk.models import ONVIFBackchannelConfig
 from homesec.sources.rtsp.talk.onvif_backchannel import ONVIFBackchannelAdapter, ONVIFTalkSession
 from homesec.sources.rtsp.talk.resample import resample_pcm_s16le_mono
 from homesec.sources.rtsp.talk.rtp import parse_rtp_header
+from homesec.sources.rtsp.talk.rtsp_client import RTSPResponse
 from homesec.sources.rtsp.talk.sdp import SDPCodec, SDPMediaDescription, SelectedBackchannel
 
 _BACKCHANNEL_SDP = """v=0\r
@@ -350,6 +351,42 @@ async def test_onvif_backchannel_probe_reports_supported_camera_without_setup() 
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_ignores_close_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probe classification should not be overwritten by best-effort close failures."""
+
+    class _CloseFailingClient:
+        async def connect(self) -> None:
+            return None
+
+        async def describe(self, *, headers: dict[str, str] | None = None) -> RTSPResponse:
+            _ = headers
+            return RTSPResponse(
+                status_code=200,
+                reason="OK",
+                body=_BACKCHANNEL_SDP.encode(),
+            )
+
+        async def close(self) -> None:
+            raise RuntimeError("camera reset during close")
+
+    # Given: A probe client that returns supported SDP but fails during cleanup
+    adapter = ONVIFBackchannelAdapter(
+        ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/stream1"),
+        camera_name="front_door",
+    )
+    monkeypatch.setattr(adapter, "_client", lambda: _CloseFailingClient())
+
+    # When: Probing camera talk capability
+    result = await adapter.probe()
+
+    # Then: The supported result is preserved despite cleanup failure
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert result.selected_codec == "PCMU/8000"
 
 
 @pytest.mark.asyncio

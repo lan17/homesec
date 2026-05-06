@@ -456,6 +456,74 @@ async def test_runtime_worker_talk_status_uses_refreshable_source_status() -> No
 
 
 @pytest.mark.asyncio
+async def test_runtime_worker_talk_stop_uses_cached_status_without_refresh() -> None:
+    """TALK_STOP_SESSION should not probe camera capability for stale session ids."""
+
+    class _TalkSource:
+        def __init__(self) -> None:
+            self.refresh_calls = 0
+            self.stop_calls: list[str] = []
+
+        def talk_status(self) -> CameraTalkStatus:
+            return CameraTalkStatus(
+                camera_name="front",
+                enabled=True,
+                capability=TalkCapabilityState.SUPPORTED,
+                state=TalkState.IDLE,
+            )
+
+        async def refresh_talk_status(self) -> CameraTalkStatus:
+            self.refresh_calls += 1
+            raise AssertionError("stop should not refresh camera talk capability")
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            _ = request
+            raise AssertionError("prepare should not run for TALK_STOP_SESSION")
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            _ = request
+            raise AssertionError("open should not run for TALK_STOP_SESSION")
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            _ = session_id, frame
+            raise AssertionError("write should not run for TALK_STOP_SESSION")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            self.stop_calls.append(session_id)
+            return False
+
+    # Given: A refreshable talk source with no matching active session
+    config = _make_config(notifiers=[], talk_enabled=True)
+    service = _make_service(config)
+    source = _TalkSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STOP_SESSION,
+        command_id="cmd-talk-stop-stale",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+        session_id="tk_stale",
+    )
+
+    # When: The worker handles an idempotent stop for a stale session id
+    result = await service._handle_async_command(command)
+
+    # Then: The stop result uses cached state and avoids a camera probe
+    assert source.stop_calls == ["tk_stale"]
+    assert source.refresh_calls == 0
+    assert result.talk_stop_result is not None
+    assert result.talk_stop_result.accepted is False
+    assert result.talk_stop_result.state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_runtime_worker_talk_prepare_refuses_non_talk_capable_source() -> None:
     """Talk preparation should return a typed refusal for unsupported camera sources."""
     config = _make_config(notifiers=[], talk_enabled=True)

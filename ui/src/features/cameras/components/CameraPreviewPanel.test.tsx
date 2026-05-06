@@ -544,4 +544,62 @@ describe('CameraPreviewPanel', () => {
     })
   })
 
+  it('surfaces unsupported talk codec details from capability status', () => {
+    // Given: A camera that advertises only codecs HomeSec cannot send
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({
+      canStart: false,
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        policy_enabled: true,
+        capability: 'unsupported_codec',
+        state: 'unsupported',
+        active_session_id: null,
+        supported_codecs: ['PCMU/8000', 'PCMA/8000'],
+        offered_codecs: ['OPUS/48000'],
+        selected_codec: null,
+        last_error: 'SDP sendonly audio has no preferred codec',
+        httpStatus: 200,
+      },
+    })
+
+    // When: Rendering the preview controls
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The talk control shows codec-specific diagnostics instead of generic copy
+    expect(screen.getByText(
+      'Camera talkback codec is not supported. Offered: OPUS/48000. Supported: PCMU/8000, PCMA/8000.',
+    )).toBeTruthy()
+  })
+
+  it('surfaces talk capability probe errors from status', () => {
+    // Given: A camera whose talk capability probe failed transiently
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({
+      canStart: false,
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        policy_enabled: true,
+        capability: 'error',
+        state: 'error',
+        active_session_id: null,
+        supported_codecs: ['PCMU/8000'],
+        offered_codecs: [],
+        selected_codec: null,
+        last_error: 'RTSP authentication was rejected by the camera',
+        httpStatus: 200,
+      },
+    })
+
+    // When: Rendering the preview controls
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The talk control shows the probe failure message
+    expect(screen.getByText(
+      'Talkback capability check failed: RTSP authentication was rejected by the camera',
+    )).toBeTruthy()
+  })
+
 })

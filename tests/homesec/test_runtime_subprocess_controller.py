@@ -32,6 +32,7 @@ from homesec.runtime.manager import RuntimeManager
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
     CameraPreviewStatus,
+    CameraTalkSessionPrepared,
     PreviewRefusalReason,
     PreviewState,
 )
@@ -46,6 +47,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerEvent,
     WorkerEventType,
     WorkerPreviewStatusPayload,
+    WorkerTalkPreparePayload,
     WorkerTalkRefusalPayload,
 )
 from homesec.sources.local_folder import LocalFolderSourceConfig
@@ -321,6 +323,75 @@ async def test_subprocess_controller_uses_extended_timeout_for_preview_activatio
         assert observed_timeout_s == [7.5]
         assert isinstance(ensured, CameraPreviewStatus)
         assert ensured.state == PreviewState.READY
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_uses_probe_aware_timeout_for_talk_prepare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk prepare should allow enough time for camera capability probing."""
+    # Given: An RTSP runtime handle and controller with a short generic command timeout
+    controller = SubprocessRuntimeController(
+        command_timeout_s=1.0,
+        talk_prepare_timeout_s=7.5,
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-prepare-timeout",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    input_format = TalkInputFormat()
+    observed_timeout_s: list[float | None] = []
+
+    async def _fake_send_command(
+        handle: SubprocessRuntimeHandle,
+        command_type: object,
+        camera_name: str,
+        *,
+        viewer_id: str | None = None,
+        session_id: str | None = None,
+        talk_input: TalkInputFormat | None = None,
+        response_timeout_s: float | None = None,
+    ) -> WorkerCommandResult:
+        _ = (handle, command_type, camera_name, viewer_id, talk_input)
+        observed_timeout_s.append(response_timeout_s)
+        return WorkerCommandResult(
+            command=WorkerCommandType.TALK_PREPARE_SESSION,
+            command_id="cmd-talk-prepare-timeout",
+            generation=1,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            talk_prepare=WorkerTalkPreparePayload(
+                session_id=session_id or "tk_timeout",
+                input=input_format,
+            ),
+        )
+
+    monkeypatch.setattr(controller, "_send_command", _fake_send_command)
+
+    try:
+        # When: Preparing a talk session through the subprocess controller
+        prepared = await controller.prepare_talk_session(
+            runtime,
+            "front",
+            session_id="tk_timeout",
+            input_format=input_format,
+        )
+
+        # Then: The command uses a timeout large enough for default ONVIF probe budgets
+        assert observed_timeout_s == [16.0]
+        assert isinstance(prepared, CameraTalkSessionPrepared)
+        assert prepared.session_id == "tk_timeout"
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)

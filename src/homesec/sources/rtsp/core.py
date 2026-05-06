@@ -783,6 +783,7 @@ class RTSPSource(ThreadedClipSource):
             return TalkManager(
                 camera_name=self.camera_name,
                 enabled=False,
+                policy_enabled=camera_talk.policy_enabled,
                 supported_codecs=[],
                 open_session_factory=self._open_disabled_talk_session,
                 max_session_s=runtime_talk.max_session_s,
@@ -792,6 +793,7 @@ class RTSPSource(ThreadedClipSource):
             return TalkManager(
                 camera_name=self.camera_name,
                 enabled=False,
+                policy_enabled=camera_talk.policy_enabled,
                 supported_codecs=[],
                 open_session_factory=self._open_disabled_talk_session,
                 max_session_s=runtime_talk.max_session_s,
@@ -817,6 +819,7 @@ class RTSPSource(ThreadedClipSource):
         return TalkManager(
             camera_name=self.camera_name,
             enabled=True,
+            policy_enabled=camera_talk.policy_enabled,
             supported_codecs=list(adapter_config.preferred_codecs),
             open_session_factory=self._open_onvif_talk_session,
             capability_probe_factory=self._probe_onvif_talk_capability,

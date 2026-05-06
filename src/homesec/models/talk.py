@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -94,7 +94,7 @@ class CameraTalkStatus(BaseModel):
     last_error: str | None = None
 
     @model_validator(mode="after")
-    def _derive_compatibility_defaults(self) -> Self:
+    def _derive_compatibility_defaults(self) -> CameraTalkStatus:
         """Default new capability fields from the legacy status contract."""
         if "policy_enabled" not in self.model_fields_set:
             self.policy_enabled = self.enabled

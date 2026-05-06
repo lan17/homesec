@@ -84,6 +84,7 @@ class TalkManager:
         *,
         camera_name: str,
         enabled: bool,
+        policy_enabled: bool | None = None,
         supported_codecs: list[str],
         open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
         max_session_s: float,
@@ -93,6 +94,7 @@ class TalkManager:
     ) -> None:
         self._camera_name = camera_name
         self._enabled = enabled
+        self._policy_enabled = enabled if policy_enabled is None else policy_enabled
         self._supported_codecs = list(supported_codecs)
         self._open_session_factory = open_session_factory
         self._capability_probe_factory = capability_probe_factory
@@ -130,7 +132,7 @@ class TalkManager:
         return CameraTalkStatus(
             camera_name=self._camera_name,
             enabled=self._enabled,
-            policy_enabled=self._enabled,
+            policy_enabled=self._policy_enabled,
             capability=capability.capability,
             state=state,
             active_session_id=record.session_id if record is not None else None,
