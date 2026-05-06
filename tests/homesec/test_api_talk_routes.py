@@ -215,9 +215,12 @@ def test_get_talk_status_returns_runtime_status() -> None:
     assert payload == {
         "camera_name": "front",
         "enabled": True,
+        "policy_enabled": True,
+        "capability": "supported",
         "state": "active",
         "active_session_id": "session-1",
         "supported_codecs": ["pcmu"],
+        "offered_codecs": [],
         "selected_codec": "pcmu",
         "last_error": None,
     }

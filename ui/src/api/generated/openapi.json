@@ -195,7 +195,7 @@
       },
       "CameraTalkConfig": {
         "additionalProperties": false,
-        "description": "Per-camera talk backend configuration.",
+        "description": "Per-camera talk policy and backend override configuration.",
         "properties": {
           "backend": {
             "const": "onvif_rtsp_backchannel",
@@ -216,9 +216,19 @@
             "title": "Config"
           },
           "enabled": {
-            "default": false,
+            "default": true,
+            "description": "Deprecated compatibility alias for mode != 'disabled'.",
             "title": "Enabled",
             "type": "boolean"
+          },
+          "mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "disabled"
+            ],
+            "title": "Mode",
+            "type": "string"
           }
         },
         "title": "CameraTalkConfig",
@@ -1705,6 +1715,20 @@
         "title": "StoragePathsConfig",
         "type": "object"
       },
+      "TalkCapabilityState": {
+        "description": "Discovered camera talk capability independent from session state.",
+        "enum": [
+          "disabled",
+          "unknown",
+          "probing",
+          "supported",
+          "unsupported",
+          "unsupported_codec",
+          "error"
+        ],
+        "title": "TalkCapabilityState",
+        "type": "string"
+      },
       "TalkInputFormat": {
         "additionalProperties": false,
         "description": "Browser input frame format contract for push-to-talk.",
@@ -1864,6 +1888,9 @@
             "title": "Camera Name",
             "type": "string"
           },
+          "capability": {
+            "$ref": "#/components/schemas/TalkCapabilityState"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -1878,6 +1905,17 @@
               }
             ],
             "title": "Last Error"
+          },
+          "offered_codecs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Offered Codecs",
+            "type": "array"
+          },
+          "policy_enabled": {
+            "title": "Policy Enabled",
+            "type": "boolean"
           },
           "selected_codec": {
             "anyOf": [
@@ -1904,6 +1942,8 @@
         "required": [
           "camera_name",
           "enabled",
+          "policy_enabled",
+          "capability",
           "state"
         ],
         "title": "TalkStatusResponse",

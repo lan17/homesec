@@ -265,13 +265,42 @@ class TalkConfig(BaseModel):
 
 
 class CameraTalkConfig(BaseModel):
-    """Per-camera talk backend configuration."""
+    """Per-camera talk policy and backend override configuration."""
 
     model_config = {"extra": "forbid"}
 
-    enabled: bool = False
+    mode: Literal["auto", "disabled"] = "auto"
+    enabled: bool = Field(
+        default=True,
+        description="Deprecated compatibility alias for mode != 'disabled'.",
+    )
     backend: Literal["onvif_rtsp_backchannel"] = "onvif_rtsp_backchannel"
     config: dict[str, Any] | BaseModel = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_enabled_compatibility(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        config = dict(value)
+        if "mode" not in config and "enabled" in config:
+            config["mode"] = "auto" if _bool_config_value(config["enabled"]) else "disabled"
+        if "enabled" not in config and "mode" in config:
+            config["enabled"] = config["mode"] != "disabled"
+        return config
+
+    @model_validator(mode="after")
+    def _validate_enabled_alias(self) -> CameraTalkConfig:
+        expected_enabled = self.mode != "disabled"
+        if self.enabled != expected_enabled:
+            raise ValueError("camera talk enabled must agree with mode")
+        return self
+
+    @property
+    def policy_enabled(self) -> bool:
+        """Whether policy allows runtime capability discovery for this camera."""
+        return self.mode != "disabled"
 
     @field_validator("backend", mode="before")
     @classmethod
@@ -279,6 +308,16 @@ class CameraTalkConfig(BaseModel):
         if isinstance(value, str):
             return value.lower()
         return value
+
+
+def _bool_config_value(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+    return bool(value)
 
 
 class FastAPIServerConfig(BaseModel):

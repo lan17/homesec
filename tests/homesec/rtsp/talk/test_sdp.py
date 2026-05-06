@@ -6,7 +6,11 @@ from homesec.sources.rtsp.talk.errors import (
     CameraBackchannelUnsupportedError,
     UnsupportedTalkCodecError,
 )
-from homesec.sources.rtsp.talk.sdp import parse_sdp, select_audio_backchannel
+from homesec.sources.rtsp.talk.sdp import (
+    advertised_audio_backchannel_codecs,
+    parse_sdp,
+    select_audio_backchannel,
+)
 
 _BACKCHANNEL_SDP = """v=0
 o=- 0 0 IN IP4 127.0.0.1
@@ -33,6 +37,18 @@ def test_parse_sdp_collects_sendonly_audio_codecs() -> None:
     assert audio.payload_types == [0, 8]
     assert audio.codec_for_payload(0).normalized_name == "PCMU/8000"  # type: ignore[union-attr]
     assert audio.codec_for_payload(8).normalized_name == "PCMA/8000"  # type: ignore[union-attr]
+
+
+def test_advertised_audio_backchannel_codecs_returns_sendonly_audio_codecs() -> None:
+    """Capability probes should expose camera-advertised talk codecs."""
+    # Given: SDP with a sendonly audio backchannel
+    description = parse_sdp(_BACKCHANNEL_SDP)
+
+    # When: Extracting advertised backchannel codecs
+    codecs = advertised_audio_backchannel_codecs(description)
+
+    # Then: The codec list preserves camera SDP order
+    assert codecs == ["PCMU/8000", "PCMA/8000"]
 
 
 def test_select_audio_backchannel_honors_codec_order_and_control_url() -> None:

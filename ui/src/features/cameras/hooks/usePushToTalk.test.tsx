@@ -10,9 +10,12 @@ import { usePushToTalk } from './usePushToTalk'
 const idleStatus: TalkStatusResponse = {
   camera_name: 'front',
   enabled: true,
+  policy_enabled: true,
+  capability: 'supported',
   state: 'idle',
   active_session_id: null,
   supported_codecs: ['pcm_s16le'],
+  offered_codecs: ['PCMU/8000'],
   selected_codec: 'pcm_s16le',
   last_error: null,
 }

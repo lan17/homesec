@@ -160,12 +160,7 @@ def select_audio_backchannel(
     """
     description = parse_sdp(sdp) if isinstance(sdp, str) else sdp
     preferences = [_normalize_codec_name(item) for item in preferred_codecs]
-    candidates: list[SDPMediaDescription] = []
-
-    for media in description.media:
-        direction = media.direction or description.session_direction
-        if media.media == "audio" and direction == "sendonly":
-            candidates.append(media)
+    candidates = _audio_backchannel_candidates(description)
 
     if not candidates:
         raise CameraBackchannelUnsupportedError("SDP has no sendonly audio backchannel")
@@ -198,6 +193,15 @@ def select_audio_backchannel(
         "SDP sendonly audio has no preferred codec "
         f"(advertised: {advertised}; preferred: {preferred})"
     )
+
+
+def advertised_audio_backchannel_codecs(sdp: str | SDPDescription) -> list[str]:
+    """Return codecs advertised by sendonly audio backchannel media sections."""
+    description = parse_sdp(sdp) if isinstance(sdp, str) else sdp
+    codecs: list[str] = []
+    for media in _audio_backchannel_candidates(description):
+        codecs.extend(_advertised_codec_names(media))
+    return _dedupe_preserving_order(codecs)
 
 
 def _parse_rtpmap(attr: str) -> SDPCodec | None:
@@ -256,6 +260,20 @@ def _advertised_codec_names(media: SDPMediaDescription) -> list[str]:
 
 
 def _format_codec_list(values: Iterable[str]) -> str:
+    formatted = _dedupe_preserving_order(values)
+    return ", ".join(formatted) or "none"
+
+
+def _audio_backchannel_candidates(description: SDPDescription) -> list[SDPMediaDescription]:
+    candidates: list[SDPMediaDescription] = []
+    for media in description.media:
+        direction = media.direction or description.session_direction
+        if media.media == "audio" and direction == "sendonly":
+            candidates.append(media)
+    return candidates
+
+
+def _dedupe_preserving_order(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     formatted: list[str] = []
     for value in values:
@@ -263,7 +281,7 @@ def _format_codec_list(values: Iterable[str]) -> str:
             continue
         seen.add(value)
         formatted.append(value)
-    return ", ".join(formatted) or "none"
+    return formatted
 
 
 def _resolve_control_url(

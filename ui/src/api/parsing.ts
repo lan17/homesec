@@ -8,6 +8,7 @@ import type {
   PreviewState,
   PreviewStatusResponse,
   PreviewStopResponse,
+  TalkCapabilityState,
   TalkInputFormat,
   TalkSessionResponse,
   TalkState,
@@ -563,21 +564,45 @@ export function parsePreviewStopResponse(payload: unknown): PreviewStopResponse 
   }
 }
 
+function parseTalkCapabilityState(value: unknown, fieldName: string): TalkCapabilityState {
+  if (
+    value === 'disabled'
+    || value === 'unknown'
+    || value === 'probing'
+    || value === 'supported'
+    || value === 'unsupported'
+    || value === 'unsupported_codec'
+    || value === 'error'
+  ) {
+    return value
+  }
+  throw new Error(
+    `${fieldName} must be one of disabled|unknown|probing|supported|unsupported|unsupported_codec|error`,
+  )
+}
+
 export function parseTalkStatusResponse(payload: unknown): TalkStatusResponse {
   if (!isJsonObject(payload)) {
     throw new Error('Talk status response is not a JSON object')
   }
 
   const rawSupportedCodecs = payload.supported_codecs
+  const rawOfferedCodecs = payload.offered_codecs
   return {
     camera_name: expectString(payload.camera_name, 'camera_name'),
     enabled: expectBoolean(payload.enabled, 'enabled'),
+    policy_enabled: expectBoolean(payload.policy_enabled, 'policy_enabled'),
+    capability: parseTalkCapabilityState(payload.capability, 'capability'),
     state: parseTalkState(payload.state, 'state'),
     active_session_id: expectNullableString(payload.active_session_id, 'active_session_id'),
     supported_codecs:
       rawSupportedCodecs === undefined
         ? []
         : expectStringArray(rawSupportedCodecs, 'supported_codecs'),
+    offered_codecs:
+      rawOfferedCodecs === undefined
+        ? []
+        : expectStringArray(rawOfferedCodecs, 'offered_codecs'),
     selected_codec: expectNullableString(payload.selected_codec, 'selected_codec'),
     last_error: expectNullableString(payload.last_error, 'last_error'),
   }

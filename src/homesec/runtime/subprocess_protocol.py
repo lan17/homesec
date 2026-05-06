@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityState,
     TalkInputFormat,
     TalkRefusalReason,
     TalkSessionPrepareResult,
@@ -61,9 +62,12 @@ class WorkerTalkStatusPayload(BaseModel):
     """Serialized talk status emitted by worker."""
 
     enabled: bool
+    policy_enabled: bool = False
+    capability: TalkCapabilityState = TalkCapabilityState.UNKNOWN
     state: TalkState
     active_session_id: str | None = None
     supported_codecs: list[str] = Field(default_factory=list)
+    offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
     last_error: str | None = None
 
@@ -72,9 +76,12 @@ class WorkerTalkStatusPayload(BaseModel):
         """Build a worker payload from the shared API/runtime status model."""
         return cls(
             enabled=status.enabled,
+            policy_enabled=status.policy_enabled,
+            capability=status.capability,
             state=status.state,
             active_session_id=status.active_session_id,
             supported_codecs=list(status.supported_codecs),
+            offered_codecs=list(status.offered_codecs),
             selected_codec=status.selected_codec,
             last_error=status.last_error,
         )

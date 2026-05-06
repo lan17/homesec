@@ -896,9 +896,12 @@ class SubprocessRuntimeController(RuntimeController):
         return CameraTalkStatus(
             camera_name=camera_name,
             enabled=payload.enabled,
+            policy_enabled=payload.policy_enabled,
+            capability=payload.capability,
             state=payload.state,
             active_session_id=payload.active_session_id,
             supported_codecs=list(payload.supported_codecs),
+            offered_codecs=list(payload.offered_codecs),
             selected_codec=payload.selected_codec,
             last_error=payload.last_error,
         )
@@ -925,7 +928,7 @@ class SubprocessRuntimeController(RuntimeController):
         camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
         if camera is None:
             raise TalkCameraNotFoundError(camera_name)
-        return handle.config.talk.enabled and camera.enabled and camera.talk.enabled
+        return handle.config.talk.enabled and camera.enabled and camera.talk.policy_enabled
 
     def _stale_talk_status(
         self,

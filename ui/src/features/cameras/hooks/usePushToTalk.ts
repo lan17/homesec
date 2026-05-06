@@ -180,9 +180,12 @@ function nextStatusFromState(
   return {
     camera_name: previous?.camera_name ?? cameraName,
     enabled: previous?.enabled ?? true,
+    policy_enabled: previous?.policy_enabled ?? true,
+    capability: previous?.capability ?? 'supported',
     state,
     active_session_id: sessionId,
     supported_codecs: previous?.supported_codecs ?? ['pcm_s16le'],
+    offered_codecs: previous?.offered_codecs ?? [],
     selected_codec: previous?.selected_codec ?? 'pcm_s16le',
     last_error: null,
   }

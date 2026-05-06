@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from homesec.models.talk import TalkCapabilityState, TalkRefusalReason
 from homesec.sources.rtsp.talk.errors import (
     CameraBackchannelUnsupportedError,
     CameraRejectedTalkSessionError,
@@ -323,6 +324,84 @@ def _selected(codec_name: str = "PCMU", payload_type: int = 0) -> SelectedBackch
         codec=codec,
         media=media,
     )
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_reports_supported_camera_without_setup() -> None:
+    """Probe should classify support from DESCRIBE without opening a talk stream."""
+    # Given: A camera that advertises a supported ONVIF audio backchannel
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: Probing camera talk capability
+        result = await adapter.probe()
+    finally:
+        await server.stop()
+
+    # Then: Capability is supported and no SETUP/PLAY/RTP happens
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert result.offered_codecs == ["PCMU/8000"]
+    assert result.selected_codec == "PCMU/8000"
+    assert [request.method for request in server.requests] == ["DESCRIBE"]
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_reports_unsupported_codec() -> None:
+    """Probe should expose camera codecs when HomeSec cannot encode them."""
+    # Given: A camera that advertises only an unsupported backchannel codec
+    server = _FakeRTSPBackchannelServer(
+        sdp_body=_BACKCHANNEL_SDP.replace("PCMU/8000", "OPUS/48000")
+        .replace("RTP/AVP 0", "RTP/AVP 96")
+        .replace("rtpmap:0", "rtpmap:96")
+        .encode()
+    )
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: Probing camera talk capability
+        result = await adapter.probe()
+    finally:
+        await server.stop()
+
+    # Then: The result is an unsupported-codec capability, not a protocol crash
+    assert result.capability == TalkCapabilityState.UNSUPPORTED_CODEC
+    assert result.refusal_reason == TalkRefusalReason.UNSUPPORTED_CODEC
+    assert result.offered_codecs == ["OPUS/48000"]
+    assert result.message is not None
+    assert "advertised: OPUS/48000" in result.message
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_reports_missing_backchannel() -> None:
+    """Probe should distinguish cameras without sendonly audio backchannel support."""
+    # Given: A camera that rejects the ONVIF backchannel DESCRIBE extension
+    server = _FakeRTSPBackchannelServer(describe_status=551)
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: Probing camera talk capability
+        result = await adapter.probe()
+    finally:
+        await server.stop()
+
+    # Then: The result is an unsupported-camera capability
+    assert result.capability == TalkCapabilityState.UNSUPPORTED
+    assert result.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
 
 
 @pytest.mark.asyncio

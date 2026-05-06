@@ -887,6 +887,53 @@ def test_camera_talk_backend_normalized() -> None:
     assert config.cameras[0].talk.backend == "onvif_rtsp_backchannel"
 
 
+def test_camera_talk_defaults_to_auto_policy() -> None:
+    """Omitted per-camera talk config should allow capability discovery."""
+    # Given: A config without per-camera talk overrides
+    data = minimal_config()
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: Per-camera talk policy defaults to auto discovery
+    assert config.cameras[0].talk.mode == "auto"
+    assert config.cameras[0].talk.enabled is True
+    assert config.cameras[0].talk.policy_enabled is True
+
+
+def test_camera_talk_enabled_false_maps_to_disabled_mode() -> None:
+    """Legacy per-camera enabled=false should remain a disable override."""
+    # Given: A legacy config that explicitly disables talk for a camera
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {"enabled": False}
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: The compatibility alias disables camera talk policy
+    assert config.cameras[0].talk.mode == "disabled"
+    assert config.cameras[0].talk.enabled is False
+    assert config.cameras[0].talk.policy_enabled is False
+
+
+def test_camera_talk_mode_sets_enabled_compatibility_alias() -> None:
+    """New mode config should keep the legacy enabled field consistent."""
+    # Given: A config using the new per-camera talk mode
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {"mode": "disabled"}
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: The legacy enabled alias reflects the mode
+    assert config.cameras[0].talk.enabled is False
+    assert config.cameras[0].talk.policy_enabled is False
+
+
 def test_talk_input_forbids_extra_fields() -> None:
     """Talk input format should reject unknown fields."""
     # Given: A config with extra talk input fields

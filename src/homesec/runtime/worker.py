@@ -139,6 +139,13 @@ class _TalkCapableSource(Protocol):
     async def stop_talk_session(self, session_id: str) -> bool: ...
 
 
+@runtime_checkable
+class _RefreshableTalkStatusSource(Protocol):
+    """Structural protocol for sources that can refresh talk capability."""
+
+    async def refresh_talk_status(self) -> CameraTalkStatus: ...
+
+
 class _NoopNotifier(Notifier):
     """No-op notifier used when no notifiers are configured."""
 
@@ -392,6 +399,7 @@ class _RuntimeWorkerService:
                 await self._handle_talk_stream(command, reader, writer)
                 return
             if command.command in {
+                WorkerCommandType.TALK_STATUS,
                 WorkerCommandType.TALK_PREPARE_SESSION,
                 WorkerCommandType.TALK_STOP_SESSION,
             }:
@@ -475,18 +483,11 @@ class _RuntimeWorkerService:
                     camera_name=command.camera_name,
                     status=self._preview_status_payload(command.camera_name, status),
                 )
-            case WorkerCommandType.TALK_STATUS:
-                return WorkerCommandResult(
-                    command=command.command,
-                    command_id=command.command_id,
-                    generation=self._generation,
-                    correlation_id=self._correlation_id,
-                    camera_name=command.camera_name,
-                    talk_status=WorkerTalkStatusPayload.from_status(
-                        self._talk_status(command.camera_name)
-                    ),
-                )
-            case WorkerCommandType.TALK_PREPARE_SESSION | WorkerCommandType.TALK_STOP_SESSION:
+            case (
+                WorkerCommandType.TALK_STATUS
+                | WorkerCommandType.TALK_PREPARE_SESSION
+                | WorkerCommandType.TALK_STOP_SESSION
+            ):
                 return WorkerCommandResult(
                     command=command.command,
                     command_id=command.command_id,
@@ -511,6 +512,17 @@ class _RuntimeWorkerService:
             return validation_error
 
         match command.command:
+            case WorkerCommandType.TALK_STATUS:
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    talk_status=WorkerTalkStatusPayload.from_status(
+                        await self._talk_status(command.camera_name)
+                    ),
+                )
             case WorkerCommandType.TALK_PREPARE_SESSION:
                 prepare_result = await self._prepare_talk_session(command)
                 if not prepare_result.accepted:
@@ -539,7 +551,7 @@ class _RuntimeWorkerService:
                 state = (
                     TalkState.STOPPING
                     if stop_result
-                    else self._talk_status(command.camera_name).state
+                    else (await self._talk_status(command.camera_name)).state
                 )
                 return WorkerCommandResult(
                     command=command.command,
@@ -635,7 +647,7 @@ class _RuntimeWorkerService:
             if stream_opened:
                 await self._stop_talk_session(command)
 
-    def _talk_status(self, camera_name: str) -> CameraTalkStatus:
+    async def _talk_status(self, camera_name: str) -> CameraTalkStatus:
         source = self._talk_source_for_camera(camera_name)
         if not self._talk_enabled(camera_name):
             return CameraTalkStatus(
@@ -651,6 +663,8 @@ class _RuntimeWorkerService:
                 last_error="Source is not talk-capable",
             )
         try:
+            if isinstance(source, _RefreshableTalkStatusSource):
+                return await source.refresh_talk_status()
             return source.talk_status()
         except Exception as exc:
             logger.warning(
@@ -1014,7 +1028,7 @@ class _RuntimeWorkerService:
 
     def _talk_enabled(self, camera_name: str) -> bool:
         camera = self._camera_configs[camera_name]
-        return self._config.talk.enabled and camera.enabled and camera.talk.enabled
+        return self._config.talk.enabled and camera.enabled and camera.talk.policy_enabled
 
     def _preview_enabled(
         self,
