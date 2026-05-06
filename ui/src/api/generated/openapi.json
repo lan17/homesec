@@ -49,6 +49,9 @@
           },
           "source": {
             "$ref": "#/components/schemas/CameraSourceConfig"
+          },
+          "talk": {
+            "$ref": "#/components/schemas/CameraTalkConfig"
           }
         },
         "required": [
@@ -188,6 +191,37 @@
           "last_heartbeat"
         ],
         "title": "CameraStatus",
+        "type": "object"
+      },
+      "CameraTalkConfig": {
+        "additionalProperties": false,
+        "description": "Per-camera talk backend configuration.",
+        "properties": {
+          "backend": {
+            "const": "onvif_rtsp_backchannel",
+            "default": "onvif_rtsp_backchannel",
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "CameraTalkConfig",
         "type": "object"
       },
       "CameraUpdate": {
