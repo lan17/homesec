@@ -74,6 +74,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_STALE_TALK_OPEN_MESSAGES = {
+    "Talk session is not reserved",
+    "Talk session is no longer reserved",
+}
+
 
 @runtime_checkable
 class _PreviewStatusLike(Protocol):
@@ -753,12 +758,11 @@ class _RuntimeWorkerService:
             )
         except Exception as exc:
             reason = _talk_refusal_reason_from_exception(exc)
-            logger.warning(
-                "Talk stream open failed for camera=%s session=%s: %s",
-                command.camera_name,
-                session_id,
-                exc,
-                exc_info=True,
+            _log_talk_stream_open_failure(
+                camera_name=command.camera_name,
+                session_id=session_id,
+                reason=reason,
+                exc=exc,
             )
             return self._talk_refusal_result(
                 command,
@@ -1059,6 +1063,32 @@ def _talk_refusal_reason_from_exception(exc: Exception) -> TalkRefusalReason:
         except ValueError:
             pass
     return TalkRefusalReason.RUNTIME_UNAVAILABLE
+
+
+def _log_talk_stream_open_failure(
+    *,
+    camera_name: str,
+    session_id: str,
+    reason: TalkRefusalReason,
+    exc: Exception,
+) -> None:
+    """Log expected stale-session open races without traceback noise."""
+    if reason == TalkRefusalReason.RUNTIME_UNAVAILABLE and str(exc) in _STALE_TALK_OPEN_MESSAGES:
+        logger.info(
+            "Talk stream open skipped for stale session camera=%s session=%s: %s",
+            camera_name,
+            session_id,
+            exc,
+        )
+        return
+
+    logger.warning(
+        "Talk stream open failed for camera=%s session=%s: %s",
+        camera_name,
+        session_id,
+        exc,
+        exc_info=True,
+    )
 
 
 def _preview_state_from_source(state: object) -> PreviewState:
