@@ -22,6 +22,7 @@ from homesec.api.routes import (
     runtime,
     setup,
     stats,
+    talk,
 )
 
 
@@ -45,6 +46,11 @@ def register_routes(app: FastAPI) -> None:
         preview.playback_router,
         dependencies=[Depends(require_normal_mode)],
     )
+    app.include_router(
+        talk.control_router,
+        dependencies=[Depends(verify_api_key), Depends(require_normal_mode)],
+    )
+    app.include_router(talk.stream_router)
     app.include_router(
         clips.router,
         dependencies=[

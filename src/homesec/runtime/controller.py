@@ -6,11 +6,16 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from homesec.models.config import Config
+    from homesec.models.talk import CameraTalkStatus, TalkInputFormat
     from homesec.runtime.models import (
         CameraPreviewStartRefusal,
         CameraPreviewStatus,
         CameraPreviewStopResult,
+        CameraTalkSessionPrepared,
+        CameraTalkStartRefusal,
+        CameraTalkStopResult,
         ManagedRuntime,
+        RuntimeTalkStream,
     )
 
 
@@ -65,4 +70,44 @@ class RuntimeController(Protocol):
         viewer_id: str | None = None,
     ) -> None:
         """Record successful preview playback activity for a camera."""
+        ...
+
+    async def get_talk_status(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+    ) -> CameraTalkStatus:
+        """Return the current talk status for a camera."""
+        ...
+
+    async def prepare_talk_session(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> CameraTalkSessionPrepared | CameraTalkStartRefusal:
+        """Reserve a talk session slot for browser stream attachment."""
+        ...
+
+    async def open_talk_stream(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> RuntimeTalkStream:
+        """Open a binary IPC talk stream to the runtime worker."""
+        ...
+
+    async def stop_talk_session(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        session_id: str,
+    ) -> CameraTalkStopResult:
+        """Stop a talk session for a camera."""
         ...

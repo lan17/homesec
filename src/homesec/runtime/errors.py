@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from homesec.models.talk import TalkRefusalReason
+
 
 def sanitize_runtime_error(exc: Exception, *, max_length: int = 512) -> str:
     """Return a bounded runtime error message for status surfaces."""
@@ -52,3 +54,39 @@ class PreviewRuntimeUnavailableError(RuntimePreviewError):
             message,
             error_code="PREVIEW_RUNTIME_UNAVAILABLE",
         )
+
+
+class RuntimeTalkError(RuntimeError):
+    """Base runtime talk error with a stable machine-readable code."""
+
+    def __init__(self, message: str, *, error_code: str) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class TalkCameraNotFoundError(RuntimeTalkError):
+    """Raised when talk control targets an unknown camera."""
+
+    def __init__(self, camera_name: str) -> None:
+        super().__init__(
+            f"Camera '{camera_name}' not found in the active runtime",
+            error_code="TALK_CAMERA_NOT_FOUND",
+        )
+
+
+class TalkRuntimeUnavailableError(RuntimeTalkError):
+    """Raised when the runtime cannot accept talk control commands."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            error_code="TALK_RUNTIME_UNAVAILABLE",
+        )
+
+
+class TalkStreamOpenRefused(TalkRuntimeUnavailableError):
+    """Raised when a worker refuses a talk stream open with a typed reason."""
+
+    def __init__(self, message: str, *, reason: TalkRefusalReason) -> None:
+        super().__init__(message)
+        self.reason = reason

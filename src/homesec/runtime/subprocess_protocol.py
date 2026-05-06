@@ -7,6 +7,13 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from homesec.models.talk import (
+    CameraTalkStatus,
+    TalkInputFormat,
+    TalkRefusalReason,
+    TalkSessionPrepareResult,
+    TalkState,
+)
 from homesec.runtime.models import PreviewRefusalReason, PreviewState
 
 
@@ -50,6 +57,56 @@ class WorkerEvent(BaseModel):
     message: str | None = None
 
 
+class WorkerTalkStatusPayload(BaseModel):
+    """Serialized talk status emitted by worker."""
+
+    enabled: bool
+    state: TalkState
+    active_session_id: str | None = None
+    supported_codecs: list[str] = Field(default_factory=list)
+    selected_codec: str | None = None
+    last_error: str | None = None
+
+    @classmethod
+    def from_status(cls, status: CameraTalkStatus) -> WorkerTalkStatusPayload:
+        """Build a worker payload from the shared API/runtime status model."""
+        return cls(
+            enabled=status.enabled,
+            state=status.state,
+            active_session_id=status.active_session_id,
+            supported_codecs=list(status.supported_codecs),
+            selected_codec=status.selected_codec,
+            last_error=status.last_error,
+        )
+
+
+class WorkerTalkRefusalPayload(BaseModel):
+    """Serialized talk refusal."""
+
+    reason: TalkRefusalReason
+    message: str
+
+
+class WorkerTalkPreparePayload(BaseModel):
+    """Serialized talk prepare acknowledgement."""
+
+    session_id: str
+    input: TalkInputFormat
+
+    @classmethod
+    def from_result(cls, result: TalkSessionPrepareResult) -> WorkerTalkPreparePayload:
+        if result.session_id is None:
+            raise ValueError("accepted talk prepare result requires session_id")
+        return cls(session_id=result.session_id, input=result.input)
+
+
+class WorkerTalkStopPayload(BaseModel):
+    """Serialized talk stop acknowledgement."""
+
+    accepted: bool
+    state: TalkState
+
+
 class WorkerCommandType(StrEnum):
     """Parent-to-worker control command type."""
 
@@ -57,6 +114,10 @@ class WorkerCommandType(StrEnum):
     PREVIEW_ENSURE_ACTIVE = "preview_ensure_active"
     PREVIEW_FORCE_STOP = "preview_force_stop"
     PREVIEW_NOTE_VIEWER_ACTIVITY = "preview_note_viewer_activity"
+    TALK_STATUS = "talk_status"
+    TALK_PREPARE_SESSION = "talk_prepare_session"
+    TALK_STREAM_OPEN = "talk_stream_open"
+    TALK_STOP_SESSION = "talk_stop_session"
 
 
 class WorkerCommandErrorCode(StrEnum):
@@ -88,6 +149,8 @@ class WorkerCommand(BaseModel):
     correlation_id: str
     camera_name: str
     viewer_id: str | None = None
+    session_id: str | None = None
+    talk_input: TalkInputFormat | None = None
 
 
 class WorkerCommandResult(BaseModel):
@@ -101,5 +164,9 @@ class WorkerCommandResult(BaseModel):
     status: WorkerPreviewStatusPayload | None = None
     refusal: WorkerPreviewRefusalPayload | None = None
     stop_result: WorkerPreviewStopPayload | None = None
+    talk_status: WorkerTalkStatusPayload | None = None
+    talk_refusal: WorkerTalkRefusalPayload | None = None
+    talk_prepare: WorkerTalkPreparePayload | None = None
+    talk_stop_result: WorkerTalkStopPayload | None = None
     error_code: WorkerCommandErrorCode | None = None
     error_message: str | None = None

@@ -16,6 +16,7 @@ from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
 from homesec.maintenance.postgres_backup import PostgresBackupManager
 from homesec.models.config import FastAPIServerConfig
+from homesec.models.talk import CameraTalkStatus, TalkInputFormat
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.runtime.bootstrap import (
     RuntimePersistenceStack,
@@ -28,12 +29,16 @@ from homesec.runtime.models import (
     CameraPreviewStartRefusal,
     CameraPreviewStatus,
     CameraPreviewStopResult,
+    CameraTalkSessionPrepared,
+    CameraTalkStartRefusal,
+    CameraTalkStopResult,
     ManagedRuntime,
     RuntimeCameraStatus,
     RuntimeReloadRequest,
     RuntimeReloadResult,
     RuntimeState,
     RuntimeStatusSnapshot,
+    RuntimeTalkStream,
 )
 from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
@@ -385,6 +390,50 @@ class Application:
         await self._require_runtime_manager().note_preview_viewer_activity(
             camera_name,
             viewer_id=viewer_id,
+        )
+
+    async def get_camera_talk_status(self, camera_name: str) -> CameraTalkStatus:
+        """Return talk status for a runtime camera."""
+        return await self._require_runtime_manager().get_talk_status(camera_name)
+
+    async def prepare_camera_talk_session(
+        self,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> CameraTalkSessionPrepared | CameraTalkStartRefusal:
+        """Reserve a talk session slot for a runtime camera."""
+        return await self._require_runtime_manager().prepare_talk_session(
+            camera_name,
+            session_id=session_id,
+            input_format=input_format,
+        )
+
+    async def open_camera_talk_stream(
+        self,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> RuntimeTalkStream:
+        """Open a binary talk stream for a runtime camera."""
+        return await self._require_runtime_manager().open_talk_stream(
+            camera_name,
+            session_id=session_id,
+            input_format=input_format,
+        )
+
+    async def stop_camera_talk_session(
+        self,
+        camera_name: str,
+        *,
+        session_id: str,
+    ) -> CameraTalkStopResult:
+        """Stop a runtime camera talk session."""
+        return await self._require_runtime_manager().stop_talk_session(
+            camera_name,
+            session_id=session_id,
         )
 
     def _require_config(self) -> Config:

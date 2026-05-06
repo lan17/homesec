@@ -22,11 +22,12 @@ from homesec.models.config import (
     StorageConfig,
 )
 from homesec.models.filter import FilterConfig
+from homesec.models.talk import TalkInputFormat, TalkRefusalReason
 from homesec.models.vlm import VLMConfig
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
-from homesec.runtime.errors import PreviewRuntimeUnavailableError
+from homesec.runtime.errors import PreviewRuntimeUnavailableError, TalkStreamOpenRefused
 from homesec.runtime.manager import RuntimeManager
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
@@ -45,6 +46,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerEvent,
     WorkerEventType,
     WorkerPreviewStatusPayload,
+    WorkerTalkRefusalPayload,
 )
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
@@ -319,6 +321,79 @@ async def test_subprocess_controller_uses_extended_timeout_for_preview_activatio
         assert observed_timeout_s == [7.5]
         assert isinstance(ensured, CameraPreviewStatus)
         assert ensured.state == PreviewState.READY
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker talk_refusal payloads should not collapse to generic runtime errors."""
+    controller = SubprocessRuntimeController(command_timeout_s=1.0)
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-refusal",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+
+    class _FakeReader:
+        async def readline(self) -> bytes:
+            return b"{}\n"
+
+    class _FakeWriter:
+        def write(self, data: bytes) -> None:
+            _ = data
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_open_unix_connection(path: str) -> tuple[_FakeReader, _FakeWriter]:
+        _ = path
+        return _FakeReader(), _FakeWriter()
+
+    def _fake_parse_command_result(raw_response: bytes, command: object) -> WorkerCommandResult:
+        _ = (raw_response, command)
+        return WorkerCommandResult(
+            command=WorkerCommandType.TALK_STREAM_OPEN,
+            command_id="cmd-talk-refusal",
+            generation=1,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            talk_refusal=WorkerTalkRefusalPayload(
+                reason=TalkRefusalReason.INVALID_AUDIO_FRAME,
+                message="Talk input format does not match the reserved session",
+            ),
+        )
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _fake_open_unix_connection)
+    monkeypatch.setattr(controller, "_parse_command_result", _fake_parse_command_result)
+
+    try:
+        with pytest.raises(TalkStreamOpenRefused) as error:
+            await controller.open_talk_stream(
+                runtime,
+                "front",
+                session_id="tk_1",
+                input_format=TalkInputFormat(),
+            )
+
+        assert error.value.reason == TalkRefusalReason.INVALID_AUDIO_FRAME
+        assert str(error.value) == "Talk input format does not match the reserved session"
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)
