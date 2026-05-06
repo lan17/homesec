@@ -389,6 +389,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
     let mediaStream: MediaStream | null = null
     let preparedSession: TalkSessionResponse | null = null
     try {
+      if (window.isSecureContext === false) {
+        throw new Error('Microphone capture requires HTTPS or localhost.')
+      }
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('Microphone capture is not supported by this browser.')
       }

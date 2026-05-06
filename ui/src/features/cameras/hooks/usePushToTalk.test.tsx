@@ -235,6 +235,10 @@ describe('usePushToTalk', () => {
       state: 'stopping',
       httpStatus: 202,
     })
+    Object.defineProperty(window, 'isSecureContext', {
+      configurable: true,
+      value: true,
+    })
   })
 
   afterEach(() => {
@@ -496,6 +500,32 @@ describe('usePushToTalk', () => {
     // Then: The hook reports the browser error without reserving a session
     expect(apiClient.prepareCameraTalkSession).not.toHaveBeenCalled()
     expect(result.current.error).toBeInstanceOf(Error)
+  })
+
+  it('reports insecure browser origins before requesting microphone capture', async () => {
+    const getUserMedia = vi.fn()
+    Object.defineProperty(window, 'isSecureContext', {
+      configurable: true,
+      value: false,
+    })
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: undefined,
+    })
+    Object.assign(globalThis, { WebSocket: FakeWebSocket })
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+
+    // Given: The app is loaded from an insecure LAN origin where browsers hide getUserMedia
+    // When: Starting push-to-talk
+    await act(async () => {
+      await result.current.start()
+    })
+
+    // Then: The hook reports the HTTPS/localhost requirement and never asks for the mic
+    expect(result.current.error).toEqual(new Error('Microphone capture requires HTTPS or localhost.'))
+    expect(getUserMedia).not.toHaveBeenCalled()
+    expect(apiClient.prepareCameraTalkSession).not.toHaveBeenCalled()
   })
 
   it('closes and stops the session when audio backpressure exceeds the threshold', async () => {

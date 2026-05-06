@@ -614,10 +614,21 @@ class _RuntimeWorkerService:
             assert session_id is not None
 
             while True:
-                frame = await read_length_prefixed_frame(
-                    reader,
-                    max_payload_bytes=input_format.expected_bytes_per_frame,
-                )
+                try:
+                    frame = await asyncio.wait_for(
+                        read_length_prefixed_frame(
+                            reader,
+                            max_payload_bytes=input_format.expected_bytes_per_frame,
+                        ),
+                        timeout=self._config.talk.idle_timeout_s,
+                    )
+                except TimeoutError:
+                    logger.info(
+                        "Talk stream idle timeout for camera=%s session=%s",
+                        command.camera_name,
+                        session_id,
+                    )
+                    break
                 if frame is None:
                     break
                 await self._write_talk_frame(command.camera_name, session_id, frame)

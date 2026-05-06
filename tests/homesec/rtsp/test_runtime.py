@@ -17,6 +17,7 @@ from homesec.models.talk import (
     TalkCapabilityProbeResult,
     TalkCapabilityState,
     TalkRefusalReason,
+    TalkSessionOpenRequest,
     TalkSessionPrepareRequest,
     TalkState,
 )
@@ -36,6 +37,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
+from homesec.sources.rtsp.talk.manager import TalkManagerError
 
 
 class FakeClock:
@@ -992,6 +994,62 @@ async def test_talk_backchannel_missing_explicit_credential_env_reports_config_e
     assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
     assert prepared.message is not None
     assert "MISSING_TALK_RTSP_USER" in prepared.message
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_open_io_failure_reports_camera_backchannel_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raw RTSP I/O failures should remain camera-backchannel errors across source boundary."""
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000",
+            )
+
+        async def open_session(
+            self,
+            *,
+            session_id: str,
+            input_sample_rate: int,
+        ) -> object:
+            _ = session_id, input_sample_rate
+            raise TimeoutError("RTSP DESCRIBE timed out")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(),
+        },
+    )
+    source = RTSPSource(config, camera_name="cam")
+    input_format = TalkConfig().input
+
+    # Given: Capability probing succeeds but opening the camera RTSP session times out
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_io_failure", input=input_format)
+    )
+
+    # When / Then: The source maps raw I/O failure to a camera-backchannel refusal reason
+    assert prepared.accepted is True
+    with pytest.raises(TalkManagerError) as exc_info:
+        await source.open_talk_session(
+            TalkSessionOpenRequest(session_id="tk_io_failure", input=input_format)
+        )
+    assert exc_info.value.reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
 
 
 def test_preview_methods_delegate_to_live_publisher(tmp_path: Path) -> None:

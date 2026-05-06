@@ -659,6 +659,34 @@ def test_talk_websocket_forwards_multiple_binary_frames_to_runtime_stream() -> N
     assert bytes(writer.data[second_offset + 4 :]) == second_frame
 
 
+def test_talk_websocket_idle_timeout_closes_stream_when_browser_audio_stalls() -> None:
+    """A ready WebSocket with no browser audio should not hold the runtime stream forever."""
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    writer = _MemoryTalkWriter()
+    app = _StubTalkApp(
+        talk_config=TalkConfig(enabled=True, input=input_format, idle_timeout_s=0.1),
+        stream_writer=writer,
+    )
+    client = _client(app)
+
+    # Given: A talk WebSocket that reaches ready but receives no audio frames
+    with client.websocket_connect(
+        "/api/v1/talk/cameras/front/sessions/session-1/stream"
+    ) as websocket:
+        websocket.send_text(_start_message(input_format))
+        websocket.receive_json()
+
+        # When: The browser audio graph stalls past the configured idle timeout
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            websocket.receive_text()
+
+    # Then: The API closes the stream and releases the reserved runtime session
+    assert disconnect.value.code == 1000
+    assert app.stop_calls == [("front", "session-1")]
+    assert writer.closed is True
+    assert bytes(writer.data) == b""
+
+
 def test_talk_websocket_rejects_invalid_audio_frame_length() -> None:
     """Invalid browser frame sizes should not be forwarded into runtime IPC."""
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)

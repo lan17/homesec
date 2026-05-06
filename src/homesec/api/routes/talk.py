@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -378,7 +379,12 @@ async def stream_talk_audio(
                 "camera_codec": stream.selected_codec,
             }
         )
-        await _forward_websocket_frames(websocket, stream, input_format)
+        await _forward_websocket_frames(
+            websocket,
+            stream,
+            input_format,
+            idle_timeout_s=app.config.talk.idle_timeout_s,
+        )
     finally:
         if stream is not None:
             await _close_talk_stream_writer(stream)
@@ -535,12 +541,17 @@ async def _forward_websocket_frames(
     websocket: WebSocket,
     stream: RuntimeTalkStream,
     input_format: TalkInputFormat,
+    *,
+    idle_timeout_s: float,
 ) -> None:
     expected_bytes = input_format.expected_bytes_per_frame
     while True:
         try:
-            message = await websocket.receive()
+            message = await asyncio.wait_for(websocket.receive(), timeout=idle_timeout_s)
         except WebSocketDisconnect:
+            return
+        except TimeoutError:
+            await websocket.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Talk idle timeout")
             return
         message_type = message.get("type")
         if message_type == "websocket.disconnect":

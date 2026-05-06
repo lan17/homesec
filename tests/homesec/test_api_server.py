@@ -298,6 +298,34 @@ def test_token_redacting_access_log_filter_rewrites_uvicorn_path_argument() -> N
     )
 
 
+def test_token_redacting_access_log_filter_rewrites_websocket_path_argument() -> None:
+    """Access-log filter should redact tokens from uvicorn WebSocket handshake logs."""
+    # Given: A uvicorn WebSocket log record with the request path in args[1]
+    record = logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "WebSocket %s" [accepted]',
+        args=(
+            "127.0.0.1:1234",
+            "/api/v1/talk/cameras/front/sessions/tk_123/stream?token=secret&foo=bar",
+        ),
+        exc_info=None,
+    )
+    access_filter = api_server._TokenRedactingAccessLogFilter()
+
+    # When: The access-log filter processes the WebSocket record
+    accepted = access_filter.filter(record)
+
+    # Then: The token is stripped even though WebSocket logs use a different arg shape
+    assert accepted is True
+    assert record.args == (
+        "127.0.0.1:1234",
+        "/api/v1/talk/cameras/front/sessions/tk_123/stream?foo=bar",
+    )
+
+
 def test_token_redacting_access_log_filter_supports_mutable_args_lists() -> None:
     """Access-log filter should redact token query params when uvicorn passes args as a list."""
     # Given: A uvicorn-style access log record with mutable list args
@@ -333,8 +361,8 @@ def test_token_redacting_access_log_filter_supports_mutable_args_lists() -> None
 
 
 def test_token_redacting_access_log_filter_leaves_nonstandard_records_untouched() -> None:
-    """Access-log filter should no-op when the record does not look like a uvicorn access record."""
-    # Given: A log record whose args do not contain a request path at index 2
+    """Access-log filter should no-op when the record has no tokenized URL args."""
+    # Given: A log record whose args do not contain a tokenized request path
     record = logging.LogRecord(
         name="uvicorn.access",
         level=logging.INFO,

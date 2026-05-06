@@ -978,6 +978,11 @@ class RTSPSource(ThreadedClipSource):
             )
         except TalkProtocolError as exc:
             raise _talk_manager_error_from_protocol_error(exc) from exc
+        except (EOFError, OSError) as exc:
+            raise TalkManagerError(
+                "Camera talk backchannel failed",
+                reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+            ) from exc
 
     async def _open_disabled_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         _ = request
