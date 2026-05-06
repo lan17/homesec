@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 
@@ -248,6 +249,50 @@ def test_rtsp_response_parser_rejects_malformed_responses(raw: bytes, match: str
     # Then: The parser rejects the malformed shape with a protocol error
     with pytest.raises(RTSPProtocolError, match=match):
         RTSPResponse.parse(raw)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_response",
+    [
+        b"RTSP/1.0 200 OK\r\nContent-Length: nope\r\n\r\n",
+        b"RTSP/1.0 200 OK\r\nContent-Length: -1\r\n\r\nbody",
+    ],
+)
+async def test_rtsp_client_rejects_malformed_live_content_length(
+    raw_response: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: A live RTSP socket response with a malformed Content-Length header
+    reader = asyncio.StreamReader()
+    reader.feed_data(raw_response)
+    reader.feed_eof()
+
+    class _Writer:
+        def write(self, data: bytes) -> None:
+            _ = data
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_open_connection(host: str, port: int) -> tuple[asyncio.StreamReader, _Writer]:
+        _ = (host, port)
+        return reader, _Writer()
+
+    monkeypatch.setattr(asyncio, "open_connection", _fake_open_connection)
+    client = RTSPClient(RTSPConnectionConfig(url="rtsp://camera.local/live"))
+    await client.connect()
+
+    # When: A public RTSP request reads the malformed response from the socket
+    # Then: The live response path raises the same typed protocol error as raw parsing
+    with pytest.raises(RTSPProtocolError, match="Content-Length"):
+        await client.describe()
 
 
 def test_parse_interleaved_channels() -> None:
