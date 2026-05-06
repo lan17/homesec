@@ -559,6 +559,55 @@ def test_worker_main_uses_shared_logging_configuration(monkeypatch) -> None:
     assert calls["ran"] is True
 
 
+def test_talk_open_stale_session_logs_without_warning_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Stop/open races for stale talk sessions should not produce warning tracebacks."""
+
+    class _TalkManagerFailure(RuntimeError):
+        reason = TalkRefusalReason.RUNTIME_UNAVAILABLE
+
+    # Given: The manager reports that a session was stopped while stream open was in flight.
+    error = _TalkManagerFailure("Talk session is no longer reserved")
+
+    # When: The worker logs the open refusal.
+    with caplog.at_level(logging.INFO, logger=worker_module.logger.name):
+        worker_module._log_talk_stream_open_failure(
+            camera_name="front",
+            session_id="tk_1",
+            reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+            exc=error,
+        )
+
+    # Then: The expected stale-session path is informational and has no traceback.
+    assert [record.levelno for record in caplog.records] == [logging.INFO]
+    assert "stale session" in caplog.records[0].message
+    assert caplog.records[0].exc_info is None
+
+
+def test_talk_open_unexpected_failure_logs_warning_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unexpected talk stream open failures should keep diagnostic tracebacks."""
+
+    # Given: A runtime-unavailable failure that is not an expected stale-session race.
+    error = RuntimeError("worker command socket failed")
+
+    # When: The worker logs the open failure.
+    with caplog.at_level(logging.INFO, logger=worker_module.logger.name):
+        worker_module._log_talk_stream_open_failure(
+            camera_name="front",
+            session_id="tk_1",
+            reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+            exc=error,
+        )
+
+    # Then: The unexpected failure remains a warning with exception context.
+    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+    assert "Talk stream open failed" in caplog.records[0].message
+    assert caplog.records[0].exc_info is not None
+
+
 def test_runtime_worker_create_notifier_returns_noop_when_notifier_list_empty() -> None:
     # Given: Runtime worker config with no notifier entries
     config = _make_config(notifiers=[])
