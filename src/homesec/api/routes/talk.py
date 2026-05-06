@@ -324,7 +324,10 @@ async def stream_talk_audio(
     if not await _authorize_talk_websocket(websocket, app, camera_name, session_id):
         return
 
-    input_format = await _receive_talk_start_message(websocket)
+    input_format = await _receive_talk_start_message(
+        websocket,
+        idle_timeout_s=app.config.talk.idle_timeout_s,
+    )
     if input_format is None:
         await _stop_talk_session_best_effort(app, camera_name, session_id)
         return
@@ -482,10 +485,17 @@ def _parse_websocket_bearer_token(websocket: WebSocket) -> str | None:
     return auth_header.removeprefix("Bearer ").strip()
 
 
-async def _receive_talk_start_message(websocket: WebSocket) -> TalkInputFormat | None:
+async def _receive_talk_start_message(
+    websocket: WebSocket,
+    *,
+    idle_timeout_s: float,
+) -> TalkInputFormat | None:
     try:
-        message = await websocket.receive()
+        message = await asyncio.wait_for(websocket.receive(), timeout=idle_timeout_s)
     except WebSocketDisconnect:
+        return None
+    except (asyncio.TimeoutError, TimeoutError):
+        await websocket.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Talk start timeout")
         return None
     if message.get("type") == "websocket.disconnect":
         return None

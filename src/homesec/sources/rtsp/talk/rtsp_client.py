@@ -55,7 +55,15 @@ class RTSPResponse:
                 headers[key] = f"{headers[key]}, {value.strip()}"
             else:
                 headers[key] = value.strip()
-        content_length = int(headers.get("content-length", "0") or "0")
+        raw_content_length = headers.get("content-length", "0") or "0"
+        try:
+            content_length = int(raw_content_length)
+        except ValueError as exc:
+            raise RTSPProtocolError(
+                f"Invalid RTSP Content-Length header: {raw_content_length!r}"
+            ) from exc
+        if content_length < 0:
+            raise RTSPProtocolError(f"Invalid RTSP Content-Length header: {raw_content_length!r}")
         if content_length and len(body) < content_length:
             raise RTSPProtocolError("RTSP response body shorter than Content-Length")
         if content_length:

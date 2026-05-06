@@ -231,9 +231,9 @@ def test_get_talk_status_returns_runtime_status() -> None:
 
 def test_get_talk_status_returns_disabled_camera_status() -> None:
     """Disabled talk status should be reported without opening a session."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: The runtime reports talk disabled for the requested camera.
+    # When: The client reads the camera talk status endpoint.
+    # Then: The API returns the disabled status without opening a talk stream.
     app = _StubTalkApp(
         status=CameraTalkStatus(
             camera_name="front",
@@ -256,9 +256,9 @@ def test_get_talk_status_returns_disabled_camera_status() -> None:
 
 def test_get_talk_status_returns_unsupported_source_status() -> None:
     """Unsupported sources should surface as talk status rather than session opens."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: The runtime reports that the camera source has no talk support.
+    # When: The client reads the camera talk status endpoint.
+    # Then: The API returns unsupported state and preserves the diagnostic error.
     app = _StubTalkApp(
         status=CameraTalkStatus(
             camera_name="front",
@@ -281,9 +281,9 @@ def test_get_talk_status_returns_unsupported_source_status() -> None:
 
 def test_prepare_talk_session_returns_websocket_url_and_runtime_contract() -> None:
     """POST /talk/cameras/{camera_name}/sessions should reserve and describe a stream."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime talk preparation reserves a session with explicit input settings.
+    # When: The client creates a talk session over the REST endpoint.
+    # Then: The response exposes the session, stream URL, timing, and input contract.
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=20)
     app = _StubTalkApp(
         talk_config=TalkConfig(enabled=True, max_session_s=45, idle_timeout_s=1.5),
@@ -347,9 +347,9 @@ def test_prepare_talk_session_generates_session_id_when_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Session creation should mint an opaque id when the client does not provide one."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: The client omits a talk session id during preparation.
+    # When: The REST endpoint creates the session.
+    # Then: The API generates an opaque talk session id before calling runtime.
     monkeypatch.setattr(talk_route_module.secrets, "token_urlsafe", lambda size: f"fixed-{size}")
     app = _StubTalkApp()
     client = _client(app)
@@ -365,9 +365,9 @@ def test_prepare_talk_session_mints_short_lived_stream_token_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Authenticated deployments should return a session-scoped WebSocket token."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled and talk tokens have a short TTL.
+    # When: An authenticated client prepares a talk session.
+    # Then: The response includes a session-scoped WebSocket token and URL.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
@@ -405,9 +405,9 @@ def test_prepare_talk_session_mints_short_lived_stream_token_when_auth_enabled(
 
 def test_prepare_talk_session_reports_missing_api_key_when_auth_enabled() -> None:
     """Auth-enabled session creation should fail closed if no API key is configured."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled but the configured API key env var is absent.
+    # When: A client attempts to create a talk session.
+    # Then: The API fails closed with the missing-key error envelope.
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(
             auth_enabled=True,
@@ -430,9 +430,9 @@ def test_talk_control_routes_require_api_key_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Talk control endpoints should inherit normal API-key auth."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled for talk control routes.
+    # When: A client calls talk status without credentials.
+    # Then: The route rejects the request with normal unauthorized semantics.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
@@ -449,9 +449,9 @@ def test_prepare_talk_session_requires_api_key_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The session-creation route should require normal API authentication."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled for talk session creation.
+    # When: A client prepares a session without credentials.
+    # Then: The API rejects the request before reserving runtime talk.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
@@ -527,9 +527,9 @@ def test_prepare_talk_session_maps_runtime_refusal_to_api_error(
     expected_error_code: APIErrorCode,
 ) -> None:
     """Machine-readable talk refusal reasons should survive the HTTP boundary."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime refuses talk preparation with a typed refusal reason.
+    # When: The client creates a talk session through the REST endpoint.
+    # Then: The API maps the refusal to the expected HTTP status and reason payload.
     app = _StubTalkApp(
         prepare_result=CameraTalkStartRefusal(
             camera_name="front",
@@ -551,9 +551,9 @@ def test_prepare_talk_session_maps_runtime_refusal_to_api_error(
 
 def test_talk_routes_map_camera_not_found() -> None:
     """Unknown runtime cameras should return the talk-specific 404 envelope."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime cannot find the requested camera during talk status lookup.
+    # When: The client reads talk status for that camera.
+    # Then: The API returns the talk-specific camera-not-found envelope.
     app = _StubTalkApp(status_error=TalkCameraNotFoundError("missing"))
     client = _client(app)
 
@@ -566,9 +566,9 @@ def test_talk_routes_map_camera_not_found() -> None:
 @pytest.mark.parametrize("method", ["get", "post", "delete"])
 def test_talk_control_routes_map_runtime_unavailable(method: str) -> None:
     """Control routes should expose runtime availability failures consistently."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime talk control operations fail because the worker is unavailable.
+    # When: The client calls a talk status, prepare, or stop route.
+    # Then: The API reports a retryable runtime-unavailable error consistently.
     error = TalkRuntimeUnavailableError("worker unavailable")
     app = _StubTalkApp(
         status_error=error if method == "get" else None,
@@ -591,9 +591,9 @@ def test_talk_control_routes_map_runtime_unavailable(method: str) -> None:
 @pytest.mark.parametrize("method", ["post", "delete"])
 def test_talk_mutation_routes_map_camera_not_found(method: str) -> None:
     """Session mutation routes should keep camera-not-found errors talk-specific."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime cannot find the requested camera for a talk mutation.
+    # When: The client prepares or stops a talk session for that camera.
+    # Then: The API preserves the talk-specific camera-not-found response.
     error = TalkCameraNotFoundError("missing")
     app = _StubTalkApp(
         prepare_error=error if method == "post" else None,
@@ -612,9 +612,9 @@ def test_talk_mutation_routes_map_camera_not_found(method: str) -> None:
 
 def test_delete_talk_session_returns_stop_result() -> None:
     """DELETE /talk/cameras/{camera_name}/sessions/{session_id} should stop runtime talk."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime accepts a request to stop an active talk session.
+    # When: The client deletes the talk session resource.
+    # Then: The API returns the stop result and forwards the session id to runtime.
     app = _StubTalkApp(
         stop_result=CameraTalkStopResult(
             camera_name="front",
@@ -633,9 +633,9 @@ def test_delete_talk_session_returns_stop_result() -> None:
 
 def test_talk_websocket_forwards_binary_frames_to_runtime_stream() -> None:
     """The WebSocket should bridge exact-size PCM frames into length-prefixed IPC."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A prepared talk WebSocket and an exact-size browser PCM frame.
+    # When: The client starts the stream, sends audio, and stops.
+    # Then: The API writes one length-prefixed frame and closes runtime cleanly.
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
     writer = _MemoryTalkWriter()
     app = _StubTalkApp(
@@ -671,9 +671,9 @@ def test_talk_websocket_forwards_binary_frames_to_runtime_stream() -> None:
 
 def test_talk_websocket_forwards_multiple_binary_frames_to_runtime_stream() -> None:
     """The WebSocket bridge should stay open for the whole talk stream."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A prepared talk WebSocket with two valid browser PCM frames.
+    # When: The client sends both frames before stopping.
+    # Then: The API forwards each frame in order with independent length prefixes.
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
     writer = _MemoryTalkWriter()
     app = _StubTalkApp(
@@ -734,9 +734,9 @@ def test_talk_websocket_idle_timeout_closes_stream_when_browser_audio_stalls() -
 
 def test_talk_websocket_rejects_invalid_audio_frame_length() -> None:
     """Invalid browser frame sizes should not be forwarded into runtime IPC."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A prepared talk WebSocket receives a binary frame with the wrong size.
+    # When: The client sends that invalid audio frame after start.
+    # Then: The API closes the stream without forwarding bytes to runtime.
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
     writer = _MemoryTalkWriter()
     app = _StubTalkApp(
@@ -760,9 +760,9 @@ def test_talk_websocket_rejects_invalid_audio_frame_length() -> None:
 
 def test_talk_websocket_cleans_up_reserved_session_on_invalid_start_message() -> None:
     """Invalid start control messages should not leave a reserved talk slot behind."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A prepared talk WebSocket receives a malformed start control message.
+    # When: The client sends the invalid start payload.
+    # Then: The API closes the socket and releases the reserved talk session.
     app = _StubTalkApp()
     client = _client(app)
 
@@ -793,6 +793,28 @@ def test_talk_websocket_disconnect_before_start_releases_reserved_session() -> N
     assert app.stop_calls == [("front", "session-1")]
 
 
+def test_talk_websocket_start_timeout_releases_reserved_session() -> None:
+    """A silent client should not hold a prepared talk slot forever."""
+    app = _StubTalkApp(talk_config=TalkConfig(enabled=True, idle_timeout_s=0.1))
+    client = _client(app)
+
+    # Given: A prepared talk WebSocket is accepted but sends no start message.
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        # When: The start-message wait exceeds the configured talk idle timeout.
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.receive_text()
+
+    # Then: The API closes the socket and releases the reservation without opening runtime talk.
+    assert disconnect.value.code == 1000
+    assert disconnect.value.reason == "Talk start timeout"
+    assert app.open_calls == []
+    assert app.stop_calls == [("front", "session-1")]
+
+
 @pytest.mark.parametrize(
     ("payload", "expected_code"),
     [
@@ -808,9 +830,9 @@ def test_talk_websocket_rejects_invalid_start_payload_shapes(
     expected_code: int,
 ) -> None:
     """The first WebSocket message must be a strict JSON start control object."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A prepared talk WebSocket receives an invalid first-message shape.
+    # When: The client sends the invalid start payload variant.
+    # Then: The API closes with the expected policy/protocol code and releases runtime.
     app = _StubTalkApp()
     client = _client(app)
 
@@ -831,9 +853,9 @@ def test_talk_websocket_rejects_invalid_start_payload_shapes(
 
 def test_talk_websocket_rejects_start_message_without_type() -> None:
     """Start control messages must be explicit, not inferred from defaults."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A prepared talk WebSocket receives input fields without an explicit type.
+    # When: The client sends the incomplete start control message.
+    # Then: The API rejects it without inferring defaults or opening runtime talk.
     app = _StubTalkApp()
     client = _client(app)
 
@@ -851,9 +873,9 @@ def test_talk_websocket_rejects_start_message_without_type() -> None:
 
 def test_talk_websocket_cleans_up_when_runtime_stream_open_fails() -> None:
     """Runtime restart/stale-socket failures during attach should stop the reservation."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime fails while attaching the reserved talk WebSocket stream.
+    # When: The client sends a valid start control message.
+    # Then: The API closes the socket and stops the reserved session.
     app = _StubTalkApp(open_error=TalkRuntimeUnavailableError("stale runtime socket"))
     client = _client(app)
 
@@ -872,9 +894,9 @@ def test_talk_websocket_cleans_up_when_runtime_stream_open_fails() -> None:
 
 def test_talk_websocket_does_not_stop_when_camera_disappears_during_open() -> None:
     """A camera-not-found attach failure means the runtime did not reserve this session."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime reports camera-not-found before it owns the talk stream.
+    # When: The WebSocket start message triggers stream attachment.
+    # Then: The API closes with camera-not-found and avoids a redundant stop call.
     app = _StubTalkApp(open_error=TalkCameraNotFoundError("missing"))
     client = _client(app)
 
@@ -895,9 +917,9 @@ def test_talk_websocket_does_not_stop_when_camera_disappears_during_open() -> No
 
 def test_talk_websocket_maps_typed_stream_open_refusal_to_policy_close() -> None:
     """Attach-time typed refusals should survive to WebSocket close semantics."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime refuses stream attachment with a typed policy-level reason.
+    # When: The client starts the prepared WebSocket stream.
+    # Then: The API maps the refusal to a policy close and releases the reservation.
     app = _StubTalkApp(
         open_error=TalkStreamOpenRefused(
             "Talk session is not reserved",
@@ -923,9 +945,9 @@ def test_talk_websocket_maps_typed_stream_open_refusal_to_policy_close() -> None
 
 def test_talk_websocket_maps_backpressure_refusal_to_internal_error_close() -> None:
     """Infrastructure/open failures should use retryable internal-error close semantics."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime refuses stream attachment because of talk backpressure.
+    # When: The client starts the prepared WebSocket stream.
+    # Then: The API maps it to a retryable internal-error close and stops the session.
     app = _StubTalkApp(
         open_error=TalkStreamOpenRefused(
             "Backpressure while opening stream",
@@ -950,9 +972,9 @@ def test_talk_websocket_maps_backpressure_refusal_to_internal_error_close() -> N
 
 def test_talk_websocket_rejects_non_binary_frame_after_ready() -> None:
     """Once active, only binary PCM frames or an exact stop control message are valid."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk WebSocket is active and ready for binary PCM frames.
+    # When: The client sends an invalid text control frame after ready.
+    # Then: The API closes the stream as a protocol error and stops runtime talk.
     app = _StubTalkApp()
     client = _client(app)
 
@@ -972,9 +994,9 @@ def test_talk_websocket_rejects_non_binary_frame_after_ready() -> None:
 
 def test_talk_websocket_closes_when_runtime_ipc_write_fails() -> None:
     """Runtime IPC write failures should close the browser stream without buffering audio."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A runtime talk writer fails while draining audio IPC.
+    # When: The client sends a valid PCM frame over the WebSocket.
+    # Then: The API closes with a retryable stream error and releases the session.
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
     writer = _MemoryTalkWriter(drain_error=BrokenPipeError("runtime gone"))
     app = _StubTalkApp(
@@ -1000,9 +1022,9 @@ def test_talk_websocket_closes_when_runtime_ipc_write_fails() -> None:
 
 def test_talk_websocket_ignores_disconnect_error_while_closing_runtime_stream() -> None:
     """Cleanup should tolerate a runtime writer that is already closed/reset."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Runtime writer cleanup raises because the stream is already reset.
+    # When: The client stops an otherwise valid talk WebSocket session.
+    # Then: The API treats cleanup as best-effort and records the stop call.
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
     writer = _MemoryTalkWriter(wait_closed_error=BrokenPipeError("already closed"))
     app = _StubTalkApp(
@@ -1028,9 +1050,9 @@ def test_talk_websocket_accepts_short_lived_token_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Browser WebSocket streams should authorize via the token returned by prepare."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Authenticated session preparation returns a short-lived talk stream token.
+    # When: The browser connects with that token and sends one audio frame.
+    # Then: The WebSocket authorizes and forwards the frame to runtime.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
     writer = _MemoryTalkWriter()
@@ -1071,9 +1093,9 @@ def test_talk_websocket_accepts_bearer_api_key_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-browser clients may authorize the stream directly with the normal bearer key."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled and a non-browser client has the bearer key.
+    # When: The client opens the talk WebSocket with that bearer credential.
+    # Then: The API authorizes the stream without a session token.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
@@ -1097,9 +1119,9 @@ def test_talk_websocket_rejects_wrong_bearer_api_key_without_runtime_side_effect
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Wrong bearer credentials should fail auth without stopping a reserved session."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled and the WebSocket bearer key is wrong.
+    # When: The client attempts to open the talk stream.
+    # Then: The API rejects auth before opening or stopping runtime talk.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
@@ -1122,9 +1144,9 @@ def test_talk_websocket_rejects_wrong_bearer_api_key_without_runtime_side_effect
 
 def test_talk_websocket_rejects_auth_when_api_key_missing() -> None:
     """Auth-enabled WebSockets should not fall back open if the API key is absent."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: WebSocket token auth is enabled but the API key env var is missing.
+    # When: The client connects with an arbitrary talk token.
+    # Then: The API fails closed without opening or stopping runtime talk.
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(
             auth_enabled=True,
@@ -1150,9 +1172,9 @@ def test_talk_websocket_rejects_missing_token_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Authenticated WebSocket streams should fail closed without a bearer key or stream token."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: API authentication is enabled for talk WebSocket streams.
+    # When: The client connects without a bearer key or talk token.
+    # Then: The API rejects the stream before runtime side effects.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     app = _StubTalkApp(
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY")
@@ -1176,9 +1198,9 @@ def test_talk_websocket_rejects_expired_token_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Expired talk tokens should be rejected before runtime stream attachment."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A signed talk stream token has already expired.
+    # When: The client connects using that token.
+    # Then: The API rejects the WebSocket before opening runtime talk.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     token, _ = issue_camera_talk_token(
         api_key="secret",
@@ -1209,9 +1231,9 @@ def test_talk_websocket_rejects_wrong_purpose_token_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Wrong-purpose signed tokens should not authorize talk WebSocket streams."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A signed token is validly signed but scoped for preview streaming.
+    # When: The client uses it for a talk WebSocket stream.
+    # Then: The API rejects the wrong-purpose token without runtime side effects.
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     expires_at = int(datetime(2099, 1, 1, tzinfo=UTC).timestamp())
     payload_json = json.dumps(

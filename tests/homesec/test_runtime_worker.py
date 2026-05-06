@@ -147,9 +147,9 @@ async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
     tmp_path: Path,
 ) -> None:
     """TALK_STREAM_OPEN should drive the real worker IPC frame loop."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A worker talk source accepts a reserved session and IPC frame stream.
+    # When: TALK_STREAM_OPEN receives length-prefixed browser PCM frames.
+    # Then: The worker opens the source session, writes frames, and stops on EOF.
 
     class _TalkSource:
         def __init__(self) -> None:
@@ -714,9 +714,9 @@ async def test_runtime_worker_talk_stop_uses_cached_status_without_refresh() -> 
 @pytest.mark.asyncio
 async def test_runtime_worker_talk_prepare_refuses_non_talk_capable_source() -> None:
     """Talk preparation should return a typed refusal for unsupported camera sources."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: The configured camera source does not implement the talk protocol.
+    # When: The worker handles TALK_PREPARE_SESSION for that camera.
+    # Then: It returns a typed unsupported-source refusal instead of opening talk.
     config = _make_config(notifiers=[], talk_enabled=True)
     service = _make_service(config)
     service._runtime_bundle = cast(
@@ -798,9 +798,9 @@ async def test_runtime_worker_talk_prepare_converts_source_exception_to_refusal(
 @pytest.mark.asyncio
 async def test_runtime_worker_talk_stream_open_returns_camera_not_found_error() -> None:
     """TALK_STREAM_OPEN should fail before streaming when the camera is unknown."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A TALK_STREAM_OPEN command names a camera outside the runtime bundle.
+    # When: The worker handles the stream-open command.
+    # Then: It returns camera-not-found before attaching the IPC stream.
     config = _make_config(notifiers=[], talk_enabled=True)
     service = _make_service(config)
     command = WorkerCommand(
@@ -891,9 +891,9 @@ async def test_runtime_worker_talk_stream_invalid_frame_stops_source_session(
     tmp_path: Path,
 ) -> None:
     """Oversized IPC frames should close the source session instead of buffering audio."""
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A worker talk stream receives an invalid length-prefixed IPC frame.
+    # When: The frame reader rejects the payload before forwarding audio.
+    # Then: The worker stops the source session and closes the stream cleanly.
 
     class _TalkSource:
         def __init__(self) -> None:

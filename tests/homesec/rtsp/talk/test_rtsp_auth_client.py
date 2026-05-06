@@ -237,6 +237,8 @@ def test_rtsp_response_parser_combines_duplicate_headers() -> None:
         (b"RTSP/1.0 200 OK\r\n", "header terminator"),
         (b"HTTP/1.1 200 OK\r\n\r\n", "status line"),
         (b"RTSP/1.0 200 OK\r\nnot-a-header\r\n\r\n", "header line"),
+        (b"RTSP/1.0 200 OK\r\nContent-Length: nope\r\n\r\n", "Content-Length"),
+        (b"RTSP/1.0 200 OK\r\nContent-Length: -1\r\n\r\nbody", "Content-Length"),
         (b"RTSP/1.0 200 OK\r\nContent-Length: 4\r\n\r\na", "shorter"),
     ],
 )

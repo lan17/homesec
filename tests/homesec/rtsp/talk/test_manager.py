@@ -198,9 +198,9 @@ async def test_talk_manager_reports_policy_separately_from_effective_enabled() -
 
 @pytest.mark.asyncio
 async def test_talk_manager_enforces_one_reserved_or_active_session() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk manager has already reserved or activated one session.
+    # When: Another session is prepared or opened concurrently.
+    # Then: The manager rejects the competing lifecycle operation.
     manager = _manager()
 
     first = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
@@ -394,9 +394,9 @@ async def test_talk_manager_rejects_input_mismatch_before_opening_camera_session
 
 @pytest.mark.asyncio
 async def test_talk_manager_opens_and_writes_valid_pcm_frames() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A reserved talk session and a valid PCM frame.
+    # When: The session opens and the frame is written.
+    # Then: The manager forwards the frame and reports the active session status.
     manager = _manager()
     frame = b"\x00" * TalkInputFormat().expected_bytes_per_frame
 
@@ -417,9 +417,9 @@ async def test_talk_manager_opens_and_writes_valid_pcm_frames() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_stop_returns_false_for_wrong_session() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk session is reserved and then opened under one id.
+    # When: A stop request names a different session id.
+    # Then: The manager leaves the active session running and returns false.
     manager = _manager()
 
     await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
@@ -454,9 +454,9 @@ async def test_talk_manager_shutdown_closes_active_session() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_stop_does_not_wait_for_slow_open() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Camera session open has started but is blocked.
+    # When: Stop is requested for that same reserved session.
+    # Then: Stop returns promptly and prevents the slow open from becoming active.
     opened = asyncio.Event()
     release = asyncio.Event()
     opened_sessions: list[_FakeSession] = []
@@ -494,9 +494,9 @@ async def test_talk_manager_stop_does_not_wait_for_slow_open() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_timeout_does_not_wait_for_slow_open() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: Camera session open is still blocked when max session time expires.
+    # When: Timeout cleanup runs during the slow open.
+    # Then: The manager releases the reservation without waiting for open completion.
     opened = asyncio.Event()
     release = asyncio.Event()
     opened_sessions: list[_FakeSession] = []
@@ -533,9 +533,9 @@ async def test_talk_manager_timeout_does_not_wait_for_slow_open() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_stop_waits_for_in_flight_write_before_close() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk session has an in-flight frame write.
+    # When: The same session is stopped during that write.
+    # Then: The manager lets the write finish before closing the camera session.
     write_started = asyncio.Event()
     release_write = asyncio.Event()
 
@@ -595,9 +595,9 @@ async def test_talk_manager_stop_waits_for_in_flight_write_before_close() -> Non
 
 @pytest.mark.asyncio
 async def test_talk_manager_timeout_waits_for_in_flight_write_before_close() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk session is writing a frame when max session timeout arrives.
+    # When: Timeout cleanup closes the active session.
+    # Then: The manager waits for the write before closing the camera session.
     write_started = asyncio.Event()
     release_write = asyncio.Event()
 
@@ -655,9 +655,9 @@ async def test_talk_manager_timeout_waits_for_in_flight_write_before_close() -> 
 
 @pytest.mark.asyncio
 async def test_talk_manager_rejects_wrong_sized_pcm_frame() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: An active talk session expects fixed-size browser PCM frames.
+    # When: A frame with the wrong byte length is written.
+    # Then: The manager rejects the frame before sending it to the camera.
     manager = _manager()
 
     await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
@@ -672,9 +672,9 @@ async def test_talk_manager_rejects_wrong_sized_pcm_frame() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_write_after_stop_fails_cleanly() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk session has been stopped and closed.
+    # When: A caller tries to write another PCM frame.
+    # Then: The manager reports that there is no active talk session.
     manager = _manager()
     frame = b"\x55" * TalkInputFormat().expected_bytes_per_frame
 
@@ -690,9 +690,9 @@ async def test_talk_manager_write_after_stop_fails_cleanly() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_timeout_cleanup_releases_reserved_session() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk session is reserved but never opened.
+    # When: The max-session timeout elapses.
+    # Then: The manager releases the reservation and returns to idle.
     manager = _manager(max_session_s=0.01, idle_timeout_s=60.0)
 
     await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
@@ -705,9 +705,9 @@ async def test_talk_manager_timeout_cleanup_releases_reserved_session() -> None:
 
 @pytest.mark.asyncio
 async def test_talk_manager_timeout_cleanup_closes_active_session() -> None:
-    # Given: The test setup represents the scenario named by this test.
-    # When: The behavior under test is exercised.
-    # Then: The observable result should match the expected contract.
+    # Given: A talk session is active past the max-session timeout.
+    # When: Timeout cleanup runs.
+    # Then: The manager closes the active camera session and returns to idle.
     manager = _manager(max_session_s=0.01, idle_timeout_s=60.0)
 
     await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
