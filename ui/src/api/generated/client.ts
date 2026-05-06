@@ -14,6 +14,10 @@ import type {
   PreviewSessionResponse,
   PreviewStatusResponse,
   PreviewStopResponse,
+  TalkSessionRequest,
+  TalkSessionResponse,
+  TalkStatusResponse,
+  TalkStopResponse,
   DiagnosticsResponse,
   DiscoverRequest,
   DiscoveredCameraResponse,
@@ -73,6 +77,20 @@ export interface GeneratedHomeSecClient {
     cameraName: string,
     options?: ApiRequestOptions,
   ): Promise<ApiResponseWithStatus<PreviewStopResponse>>
+  getCameraTalkStatus(
+    cameraName: string,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<TalkStatusResponse>>
+  prepareCameraTalkSession(
+    cameraName: string,
+    payload?: TalkSessionRequest,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<TalkSessionResponse>>
+  stopCameraTalkSession(
+    cameraName: string,
+    sessionId: string,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<TalkStopResponse>>
   getSetupStatus(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<SetupStatusResponse>>
   finalizeSetup(
     payload: FinalizeRequest,

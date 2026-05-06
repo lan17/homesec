@@ -14,6 +14,10 @@ import type {
   PreviewSessionResponse,
   PreviewStatusResponse,
   PreviewStopResponse,
+  TalkSessionRequest,
+  TalkSessionResponse,
+  TalkStatusResponse,
+  TalkStopResponse,
   DiscoverRequest,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
@@ -46,6 +50,9 @@ import {
   parsePreviewSessionResponse,
   parsePreviewStatusResponse,
   parsePreviewStopResponse,
+  parseTalkSessionResponse,
+  parseTalkStatusResponse,
+  parseTalkStopResponse,
   parseOnvifDiscoverResponse,
   parseOnvifProbeResponse,
   parseDiagnosticsResponse,
@@ -74,6 +81,9 @@ export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
 export type PreviewSessionSnapshot = ApiSnapshot<PreviewSessionResponse>
 export type PreviewStatusSnapshot = ApiSnapshot<PreviewStatusResponse>
 export type PreviewStopSnapshot = ApiSnapshot<PreviewStopResponse>
+export type TalkSessionSnapshot = ApiSnapshot<TalkSessionResponse>
+export type TalkStatusSnapshot = ApiSnapshot<TalkStatusResponse>
+export type TalkStopSnapshot = ApiSnapshot<TalkStopResponse>
 export type RuntimeReloadSnapshot = ApiSnapshot<RuntimeReloadResponse>
 export type RuntimeStatusSnapshot = ApiSnapshot<RuntimeStatusResponse>
 export type PostgresBackupStatusSnapshot = ApiSnapshot<PostgresBackupStatusResponse>
@@ -243,6 +253,73 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     } catch {
       throw new APIError(
         'Invalid preview stop response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async getCameraTalkStatus(
+    cameraName: string,
+    options: ApiRequestOptions = {},
+  ): Promise<TalkStatusSnapshot> {
+    const { status, payload } = await this.httpClient.requestJson(
+      `/api/v1/talk/cameras/${encodeURIComponent(cameraName)}`,
+      options,
+    )
+
+    try {
+      return withHttpStatus(parseTalkStatusResponse(payload), status)
+    } catch {
+      throw new APIError('Invalid talk status response payload', status, payload, null)
+    }
+  }
+
+  async prepareCameraTalkSession(
+    cameraName: string,
+    payload: TalkSessionRequest = {},
+    options: ApiRequestOptions = {},
+  ): Promise<TalkSessionSnapshot> {
+    const response = await this.httpClient.requestJson(
+      `/api/v1/talk/cameras/${encodeURIComponent(cameraName)}/sessions`,
+      {
+        ...options,
+        method: 'POST',
+        body: payload,
+      },
+    )
+
+    try {
+      return withHttpStatus(parseTalkSessionResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid talk session response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
+  async stopCameraTalkSession(
+    cameraName: string,
+    sessionId: string,
+    options: ApiRequestOptions = {},
+  ): Promise<TalkStopSnapshot> {
+    const response = await this.httpClient.requestJson(
+      `/api/v1/talk/cameras/${encodeURIComponent(cameraName)}/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        ...options,
+        method: 'DELETE',
+      },
+    )
+
+    try {
+      return withHttpStatus(parseTalkStopResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid talk stop response payload',
         response.status,
         response.payload,
         null,
