@@ -67,6 +67,8 @@ from homesec.runtime.subprocess_protocol import (
     WorkerCommandType,
 )
 from homesec.sources.rtsp.core import RTSPSource, RTSPSourceConfig
+from homesec.sources.rtsp.talk.g711 import encode_pcmu
+from homesec.sources.rtsp.talk.resample import resample_pcm_s16le_mono
 from homesec.sources.rtsp.talk.rtp import parse_rtp_header
 from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
@@ -84,6 +86,16 @@ a=rtpmap:0 PCMU/8000\r
 a=control:trackID=backchannel\r
 """
 
+_UNSUPPORTED_CODEC_SDP = """v=0\r
+o=- 0 0 IN IP4 127.0.0.1\r
+s=HomeSec fake unsupported backchannel camera\r
+t=0 0\r
+m=audio 0 RTP/AVP 8\r
+a=sendonly\r
+a=rtpmap:8 PCMA/8000\r
+a=control:trackID=backchannel\r
+"""
+
 
 @dataclass(slots=True)
 class _RTSPRequest:
@@ -93,8 +105,18 @@ class _RTSPRequest:
 
 
 class _FakeRTSPBackchannelServer:
-    def __init__(self, *, describe_status: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        describe_status: int = 200,
+        setup_status: int = 200,
+        play_status: int = 200,
+        sdp: str = _BACKCHANNEL_SDP,
+    ) -> None:
         self.describe_status = describe_status
+        self.setup_status = setup_status
+        self.play_status = play_status
+        self.sdp = sdp
         self.requests: list[_RTSPRequest] = []
         self.interleaved_before_play: list[tuple[int, bytes]] = []
         self.interleaved_after_play: list[tuple[int, bytes]] = []
@@ -174,7 +196,7 @@ class _FakeRTSPBackchannelServer:
                 continue
             except OSError:
                 break
-            connection.settimeout(1.0)
+            connection.settimeout(None)
             with self._lock:
                 self._connections.append(connection)
             try:
@@ -187,30 +209,32 @@ class _FakeRTSPBackchannelServer:
 
     def _handle_connection(self, connection: socket.socket) -> None:
         play_seen = False
-        while not self._stop.is_set():
-            try:
+        try:
+            while not self._stop.is_set():
                 first = _recv_exact(connection, 1)
-            except EOFError:
-                return
-            if first == b"$":
-                channel = _recv_exact(connection, 1)[0]
-                length = int.from_bytes(_recv_exact(connection, 2), "big")
-                payload = _recv_exact(connection, length)
-                with self._lock:
-                    target = (
-                        self.interleaved_after_play if play_seen else self.interleaved_before_play
-                    )
-                    target.append((channel, payload))
-                continue
+                if first == b"$":
+                    channel = _recv_exact(connection, 1)[0]
+                    length = int.from_bytes(_recv_exact(connection, 2), "big")
+                    payload = _recv_exact(connection, length)
+                    with self._lock:
+                        target = (
+                            self.interleaved_after_play
+                            if play_seen
+                            else self.interleaved_before_play
+                        )
+                        target.append((channel, payload))
+                    continue
 
-            request = self._read_request(connection, first)
-            with self._lock:
-                self.requests.append(request)
-            connection.sendall(self._response_for(request))
-            if request.method == "PLAY" and self.describe_status == 200:
-                play_seen = True
-            if request.method == "TEARDOWN":
-                return
+                request = self._read_request(connection, first)
+                with self._lock:
+                    self.requests.append(request)
+                connection.sendall(self._response_for(request))
+                if request.method == "PLAY" and self.describe_status == 200:
+                    play_seen = True
+                if request.method == "TEARDOWN":
+                    return
+        except (EOFError, OSError):
+            return
 
     def _read_request(self, connection: socket.socket, first: bytes) -> _RTSPRequest:
         head = first + _recv_until(connection, b"\r\n\r\n")
@@ -239,9 +263,15 @@ class _FakeRTSPBackchannelServer:
             return _rtsp_response(
                 cseq=cseq,
                 headers={"Content-Type": "application/sdp"},
-                body=_BACKCHANNEL_SDP.encode(),
+                body=self.sdp.encode(),
             )
         if request.method == "SETUP":
+            if self.setup_status != 200:
+                return _rtsp_response(
+                    cseq=cseq,
+                    status=self.setup_status,
+                    reason="Setup Failed",
+                )
             return _rtsp_response(
                 cseq=cseq,
                 headers={
@@ -250,6 +280,12 @@ class _FakeRTSPBackchannelServer:
                 },
             )
         if request.method == "PLAY":
+            if self.play_status != 200:
+                return _rtsp_response(
+                    cseq=cseq,
+                    status=self.play_status,
+                    reason="Play Failed",
+                )
             return _rtsp_response(cseq=cseq, headers={"Session": "homesec-talk"})
         if request.method == "TEARDOWN":
             return _rtsp_response(cseq=cseq, headers={"Session": "homesec-talk"})
@@ -816,6 +852,19 @@ def _pcm_frame(input_format: TalkInputFormat, value: int) -> bytes:
     return struct.pack(f"<{sample_count}h", *([value] * sample_count))
 
 
+def _expected_pcmu_payload(input_format: TalkInputFormat, pcm_frame: bytes) -> bytes:
+    resampled = resample_pcm_s16le_mono(
+        pcm_frame,
+        input_rate=input_format.sample_rate,
+        output_rate=8000,
+    )
+    return encode_pcmu(resampled)
+
+
+def _rtp_payload(packet: bytes) -> bytes:
+    return packet[12:]
+
+
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
@@ -827,14 +876,18 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
     """Full API stream should open ONVIF backchannel and send RTP only after PLAY."""
     caplog.set_level(logging.DEBUG)
     server = _FakeRTSPBackchannelServer()
-    server.start()
-    secret_url = server.url.replace("rtsp://", "rtsp://alice:s3cr%40t@", 1)
-    input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
-    config = _make_config(tmp_path=tmp_path, rtsp_url=secret_url, input_format=input_format)
-    app = _E2EApp(config, _WorkerHarnessController(tmp_path))
-    _run(app.start())
+    app: _E2EApp | None = None
 
     try:
+        server.start()
+        secret_url = server.url.replace("rtsp://", "rtsp://alice:s3cr%40t@", 1)
+        input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
+        first_frame = _pcm_frame(input_format, 1000)
+        second_frame = _pcm_frame(input_format, -1000)
+        config = _make_config(tmp_path=tmp_path, rtsp_url=secret_url, input_format=input_format)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
         with TestClient(create_app(cast(Any, app))) as client:
             # Given: A prepared push-to-talk session exposed by the public API.
             prepare = client.post(
@@ -857,8 +910,6 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
                     "input": input_format.model_dump(mode="json"),
                     "camera_codec": "PCMU/8000",
                 }
-                first_frame = _pcm_frame(input_format, 1000)
-                second_frame = _pcm_frame(input_format, -1000)
                 websocket.send_bytes(first_frame)
                 websocket.send_bytes(second_frame)
                 websocket.send_text(_stop_message())
@@ -868,7 +919,8 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
         server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(2)
     finally:
-        _run(app.shutdown())
+        if app is not None:
+            _run(app.shutdown())
         server.stop()
 
     with server._lock:
@@ -886,7 +938,20 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
     assert before_play == []
     assert len(after_play) == 2
     assert [channel for channel, _packet in after_play] == [0, 0]
-    assert [parse_rtp_header(packet)["payload_type"] for _channel, packet in after_play] == [0, 0]
+    rtp_headers = [parse_rtp_header(packet) for _channel, packet in after_play]
+    assert [header["payload_type"] for header in rtp_headers] == [0, 0]
+    assert [_rtp_payload(packet) for _channel, packet in after_play] == [
+        _expected_pcmu_payload(input_format, first_frame),
+        _expected_pcmu_payload(input_format, second_frame),
+    ]
+    assert (
+        rtp_headers[1]["sequence_number"] == (int(rtp_headers[0]["sequence_number"]) + 1) & 0xFFFF
+    )
+    assert (
+        rtp_headers[1]["timestamp"]
+        == (int(rtp_headers[0]["timestamp"]) + len(_rtp_payload(after_play[0][1]))) & 0xFFFFFFFF
+    )
+    assert rtp_headers[1]["ssrc"] == rtp_headers[0]["ssrc"]
     assert "s3cr" not in caplog.text
     assert _pcm_frame(input_format, 1000).hex() not in caplog.text
 
@@ -894,13 +959,15 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
 def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path) -> None:
     """Client disconnect should release the active ONVIF backchannel session."""
     server = _FakeRTSPBackchannelServer()
-    server.start()
-    input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
-    config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
-    app = _E2EApp(config, _WorkerHarnessController(tmp_path))
-    _run(app.start())
+    app: _E2EApp | None = None
 
     try:
+        server.start()
+        input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
+        config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
         with TestClient(create_app(cast(Any, app))) as client:
             # Given: A prepared API session attached to a fake camera backchannel.
             prepare = client.post(
@@ -921,7 +988,8 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
 
         server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
     finally:
-        _run(app.shutdown())
+        if app is not None:
+            _run(app.shutdown())
         server.stop()
 
     with server._lock:
@@ -941,13 +1009,15 @@ def test_talk_websocket_maps_fake_camera_unsupported_backchannel_to_policy_close
 ) -> None:
     """RTSP protocol failures should keep typed refusal reasons across the API stream."""
     server = _FakeRTSPBackchannelServer(describe_status=551)
-    server.start()
-    input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
-    config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
-    app = _E2EApp(config, _WorkerHarnessController(tmp_path))
-    _run(app.start())
+    app: _E2EApp | None = None
 
     try:
+        server.start()
+        input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
+        config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
         with TestClient(create_app(cast(Any, app))) as client:
             # Given: Session preparation succeeds before the camera protocol open is attempted.
             prepare = client.post(
@@ -970,7 +1040,100 @@ def test_talk_websocket_maps_fake_camera_unsupported_backchannel_to_policy_close
             assert disconnect.value.reason == "Talk stream refused"
         server.wait_for_methods(["DESCRIBE"])
     finally:
-        _run(app.shutdown())
+        if app is not None:
+            _run(app.shutdown())
+        server.stop()
+
+    with server._lock:
+        assert [request.method for request in server.requests] == ["DESCRIBE"]
+        assert server.interleaved_before_play == []
+        assert server.interleaved_after_play == []
+
+
+def test_talk_websocket_maps_fake_camera_unsupported_codec_to_policy_close(
+    tmp_path: Path,
+) -> None:
+    """Unsupported camera speaker codecs should remain typed policy refusals."""
+    server = _FakeRTSPBackchannelServer(sdp=_UNSUPPORTED_CODEC_SDP)
+    app: _E2EApp | None = None
+
+    try:
+        server.start()
+        input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
+        config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
+        with TestClient(create_app(cast(Any, app))) as client:
+            # Given: Session preparation succeeds before SDP codec selection.
+            prepare = client.post(
+                "/api/v1/talk/cameras/front/sessions",
+                json={
+                    "session_id": "tk_codec",
+                    "input": input_format.model_dump(mode="json"),
+                },
+            )
+            assert prepare.status_code == 201
+
+            # When: The camera advertises only an unsupported sendonly audio codec.
+            with client.websocket_connect(prepare.json()["websocket_url"]) as websocket:
+                websocket.send_text(_start_message(input_format))
+                with pytest.raises(WebSocketDisconnect) as disconnect:
+                    websocket.receive_json()
+
+            # Then: The API reports a non-retryable policy refusal.
+            assert disconnect.value.code == 1008
+            assert disconnect.value.reason == "Talk stream refused"
+        server.wait_for_methods(["DESCRIBE"])
+    finally:
+        if app is not None:
+            _run(app.shutdown())
+        server.stop()
+
+    with server._lock:
+        assert [request.method for request in server.requests] == ["DESCRIBE"]
+        assert server.interleaved_before_play == []
+        assert server.interleaved_after_play == []
+
+
+def test_talk_websocket_maps_fake_camera_rejected_session_to_unavailable_close(
+    tmp_path: Path,
+) -> None:
+    """Generic RTSP backchannel failures should remain retryable runtime refusals."""
+    server = _FakeRTSPBackchannelServer(describe_status=500)
+    app: _E2EApp | None = None
+
+    try:
+        server.start()
+        input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
+        config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
+        with TestClient(create_app(cast(Any, app))) as client:
+            # Given: Session preparation succeeds before RTSP negotiation fails.
+            prepare = client.post(
+                "/api/v1/talk/cameras/front/sessions",
+                json={
+                    "session_id": "tk_rejected",
+                    "input": input_format.model_dump(mode="json"),
+                },
+            )
+            assert prepare.status_code == 201
+
+            # When: The camera rejects the backchannel DESCRIBE for a generic reason.
+            with client.websocket_connect(prepare.json()["websocket_url"]) as websocket:
+                websocket.send_text(_start_message(input_format))
+                with pytest.raises(WebSocketDisconnect) as disconnect:
+                    websocket.receive_json()
+
+            # Then: The API reports a retryable stream-unavailable close.
+            assert disconnect.value.code == 1011
+            assert disconnect.value.reason == "Talk stream unavailable"
+        server.wait_for_methods(["DESCRIBE"])
+    finally:
+        if app is not None:
+            _run(app.shutdown())
         server.stop()
 
     with server._lock:
