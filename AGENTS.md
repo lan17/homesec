@@ -24,6 +24,37 @@
 
 ---
 
+## Media Feature Changes
+
+**Rule:** Keep media transport and camera protocol details behind runtime/source
+boundaries. This applies to preview, push-to-talk, camera media sessions, RTSP,
+RTP, SDP, codecs, browser microphone/audio capture, and media auth tokens.
+
+- API routes must not import camera protocol implementation modules directly. They
+  should work through application/runtime interfaces and typed API models.
+- UI code must not know camera protocol details. Browser code should handle
+  browser-safe media concerns such as microphone capture, PCM framing, playback,
+  backpressure, and display state.
+- Runtime/controller code owns active runtime selection, command routing, and IPC
+  stream bridging. Source implementations own camera-specific media lifecycle.
+- Credentials, API keys, media tokens, and raw audio/video frames must not be
+  logged or persisted. Logs may include redacted URLs, env var names, stable
+  error codes, and low-cardinality operational context.
+- Session lifecycles must be bounded and must clean up on explicit stop,
+  disconnect, failure, cancellation, and timeout. Concurrency and camera session
+  budget behavior must be explicit in code and covered by behavioral tests or
+  operator docs.
+- Cross-boundary payloads must use typed Pydantic/API models rather than raw
+  dictionaries. Preserve stable refusal/error reasons for UI and automation.
+- Protocol, codec, or transport changes need behavioral coverage at the protocol
+  boundary, preferably with fake-camera/server fixtures. Update operator docs or
+  troubleshooting notes when deployment behavior changes.
+- Push-to-talk UI changes must preserve exact PCM frame sizing, backpressure
+  handling, microphone-denial behavior, and preview audio mute coordination while
+  talk is active.
+
+---
+
 ## Logging Guidance
 
 **Rule:** Use regular Python logging for operational logs, and structured extras for queryable telemetry. Logging is best-effort observability; use `ClipRepository` for workflow state and durable events.
