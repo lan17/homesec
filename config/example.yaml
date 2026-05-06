@@ -55,6 +55,7 @@ cameras:
         rtsp_url_env: FRONT_DOOR_RTSP_URL
         preferred_codecs:
           - PCMU/8000
+          - PCMA/8000
         transport: rtsp_tcp_interleaved
 
   # FTP server (receive uploads from cameras that support FTP)
@@ -122,7 +123,7 @@ preview:
 
 
 # =============================================================================
-# Talk - Push-to-talk configuration (MVP: PCM in, PCMU backchannel out)
+# Talk - Push-to-talk configuration (MVP: PCM in, G.711 backchannel out)
 # =============================================================================
 talk:
   enabled: false

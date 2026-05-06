@@ -16,8 +16,10 @@ from homesec.sources.rtsp.talk.errors import (
     RTSPAuthenticationError,
     UnsupportedTalkCodecError,
 )
+from homesec.sources.rtsp.talk.g711 import encode_pcma
 from homesec.sources.rtsp.talk.models import ONVIFBackchannelConfig
 from homesec.sources.rtsp.talk.onvif_backchannel import ONVIFBackchannelAdapter, ONVIFTalkSession
+from homesec.sources.rtsp.talk.resample import resample_pcm_s16le_mono
 from homesec.sources.rtsp.talk.rtp import parse_rtp_header
 from homesec.sources.rtsp.talk.sdp import SDPCodec, SDPMediaDescription, SelectedBackchannel
 
@@ -684,15 +686,42 @@ async def test_onvif_session_wraps_interleaved_send_failures() -> None:
 
 
 @pytest.mark.asyncio
+async def test_onvif_session_encodes_selected_pcma_codec() -> None:
+    # Given: An active talk session whose negotiated camera codec is PCMA.
+    client = _NoopTalkClient()
+    session = ONVIFTalkSession(
+        session_id="talk-1",
+        camera_name="front_door",
+        client=client,  # type: ignore[arg-type]
+        selected=_selected(codec_name="PCMA", payload_type=8),
+    )
+    pcm_frame = _pcm_frame_16khz_20ms()
+
+    # When: The camera-selected backchannel codec is PCMA.
+    await session.write_pcm_frame(pcm_frame)
+
+    # Then: The RTP payload uses payload type 8 and G.711 A-law bytes.
+    assert len(client.sent) == 1
+    channel, packet = client.sent[0]
+    assert channel == 0
+    assert parse_rtp_header(packet)["payload_type"] == 8
+    assert packet[12:] == encode_pcma(
+        resample_pcm_s16le_mono(pcm_frame, input_rate=16000, output_rate=8000)
+    )
+
+
+@pytest.mark.asyncio
 async def test_onvif_session_rejects_selected_codecs_without_encoder() -> None:
+    # Given: An active talk session whose selected codec has no encoder.
     session = ONVIFTalkSession(
         session_id="talk-1",
         camera_name="front_door",
         client=_NoopTalkClient(),  # type: ignore[arg-type]
-        selected=_selected(codec_name="PCMA", payload_type=8),
+        selected=_selected(codec_name="OPUS", payload_type=111),
     )
 
-    with pytest.raises(UnsupportedTalkCodecError, match="PCMA/8000"):
+    # When/Then: A codec without an encoder still fails before any RTP is emitted.
+    with pytest.raises(UnsupportedTalkCodecError, match="OPUS/8000"):
         await session.write_pcm_frame(_pcm_frame_16khz_20ms())
 
 

@@ -193,7 +193,8 @@ def test_select_audio_backchannel_rejects_missing_sendonly_audio() -> None:
 
 
 def test_select_audio_backchannel_rejects_unsupported_codec() -> None:
-    with pytest.raises(UnsupportedTalkCodecError):
+    # Given/When/Then: The error includes both camera-advertised and requested codecs.
+    with pytest.raises(UnsupportedTalkCodecError, match="advertised: PCMU/8000, PCMA/8000"):
         select_audio_backchannel(_BACKCHANNEL_SDP, preferred_codecs=["OPUS/48000"])
 
 
@@ -205,5 +206,6 @@ a=sendonly
 a=control:talk
 """
 
-    with pytest.raises(UnsupportedTalkCodecError):
+    # Given/When/Then: Unknown dynamic payloads remain visible in diagnostics.
+    with pytest.raises(UnsupportedTalkCodecError, match="payload:121"):
         select_audio_backchannel(sdp, preferred_codecs=["PCMU/8000"])

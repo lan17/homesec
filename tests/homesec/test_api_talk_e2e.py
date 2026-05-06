@@ -67,7 +67,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerCommandType,
 )
 from homesec.sources.rtsp.core import RTSPSource, RTSPSourceConfig
-from homesec.sources.rtsp.talk.g711 import encode_pcmu
+from homesec.sources.rtsp.talk.g711 import encode_pcma, encode_pcmu
 from homesec.sources.rtsp.talk.resample import resample_pcm_s16le_mono
 from homesec.sources.rtsp.talk.rtp import parse_rtp_header
 from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
@@ -89,6 +89,16 @@ a=control:trackID=backchannel\r
 _UNSUPPORTED_CODEC_SDP = """v=0\r
 o=- 0 0 IN IP4 127.0.0.1\r
 s=HomeSec fake unsupported backchannel camera\r
+t=0 0\r
+m=audio 0 RTP/AVP 111\r
+a=sendonly\r
+a=rtpmap:111 OPUS/48000/2\r
+a=control:trackID=backchannel\r
+"""
+
+_PCMA_BACKCHANNEL_SDP = """v=0\r
+o=- 0 0 IN IP4 127.0.0.1\r
+s=HomeSec fake PCMA backchannel camera\r
 t=0 0\r
 m=audio 0 RTP/AVP 8\r
 a=sendonly\r
@@ -861,6 +871,15 @@ def _expected_pcmu_payload(input_format: TalkInputFormat, pcm_frame: bytes) -> b
     return encode_pcmu(resampled)
 
 
+def _expected_pcma_payload(input_format: TalkInputFormat, pcm_frame: bytes) -> bytes:
+    resampled = resample_pcm_s16le_mono(
+        pcm_frame,
+        input_rate=input_format.sample_rate,
+        output_rate=8000,
+    )
+    return encode_pcma(resampled)
+
+
 def _rtp_payload(packet: bytes) -> bytes:
     return packet[12:]
 
@@ -954,6 +973,56 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
     assert rtp_headers[1]["ssrc"] == rtp_headers[0]["ssrc"]
     assert "s3cr" not in caplog.text
     assert _pcm_frame(input_format, 1000).hex() not in caplog.text
+
+
+def test_talk_websocket_negotiates_pcma_backchannel(tmp_path: Path) -> None:
+    """Full API stream should use PCMA when that is the camera's advertised G.711 codec."""
+    server = _FakeRTSPBackchannelServer(sdp=_PCMA_BACKCHANNEL_SDP)
+    app: _E2EApp | None = None
+
+    try:
+        server.start()
+        input_format = TalkInputFormat(sample_rate=16000, frame_ms=20)
+        pcm_frame = _pcm_frame(input_format, 1000)
+        config = _make_config(tmp_path=tmp_path, rtsp_url=server.url, input_format=input_format)
+        app = _E2EApp(config, _WorkerHarnessController(tmp_path))
+        _run(app.start())
+
+        with TestClient(create_app(cast(Any, app))) as client:
+            # Given: A prepared push-to-talk session targeting a PCMA-only camera.
+            prepare = client.post(
+                "/api/v1/talk/cameras/front/sessions",
+                json={
+                    "session_id": "tk_pcma",
+                    "input": input_format.model_dump(mode="json"),
+                },
+            )
+            assert prepare.status_code == 201
+
+            # When: The browser stream opens and sends one PCM frame.
+            with client.websocket_connect(prepare.json()["websocket_url"]) as websocket:
+                websocket.send_text(_start_message(input_format))
+                assert websocket.receive_json()["camera_codec"] == "PCMA/8000"
+                websocket.send_bytes(pcm_frame)
+                websocket.send_text(_stop_message())
+                with pytest.raises(WebSocketDisconnect):
+                    websocket.receive_text()
+
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_rtp_packets(1)
+    finally:
+        if app is not None:
+            _run(app.shutdown())
+        server.stop()
+
+    with server._lock:
+        after_play = list(server.interleaved_after_play)
+
+    # Then: The camera receives static PCMA RTP payload type 8 with A-law bytes.
+    assert len(after_play) == 1
+    _channel, packet = after_play[0]
+    assert parse_rtp_header(packet)["payload_type"] == 8
+    assert _rtp_payload(packet) == _expected_pcma_payload(input_format, pcm_frame)
 
 
 def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path) -> None:

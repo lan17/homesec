@@ -22,6 +22,7 @@ class TalkCodec(StrEnum):
     """Supported camera speaker codecs for the Phase 1/MVP protocol path."""
 
     PCMU_8000 = "PCMU/8000"
+    PCMA_8000 = "PCMA/8000"
 
 
 class ONVIFBackchannelConfig(BaseModel):
@@ -54,7 +55,7 @@ class ONVIFBackchannelConfig(BaseModel):
         description="RTSP password used for manual/probe sessions.",
     )
     preferred_codecs: list[str] = Field(
-        default_factory=lambda: [TalkCodec.PCMU_8000.value],
+        default_factory=lambda: [TalkCodec.PCMU_8000.value, TalkCodec.PCMA_8000.value],
         min_length=1,
         description="Ordered codec preference list using SDP names such as PCMU/8000.",
     )
@@ -67,9 +68,10 @@ class ONVIFBackchannelConfig(BaseModel):
     @classmethod
     def _require_mvp_codec(cls, value: list[str]) -> list[str]:
         normalized = [_normalize_codec_name(item) for item in value]
-        unsupported = [item for item in normalized if item != TalkCodec.PCMU_8000.value]
+        supported = {codec.value for codec in TalkCodec}
+        unsupported = [item for item in normalized if item not in supported]
         if unsupported:
-            raise ValueError("Phase 1 ONVIF talk supports only PCMU/8000")
+            raise ValueError("ONVIF talk supports only PCMU/8000 and PCMA/8000")
         return normalized
 
     @model_validator(mode="after")
