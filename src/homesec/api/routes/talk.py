@@ -550,7 +550,7 @@ async def _forward_websocket_frames(
             message = await asyncio.wait_for(websocket.receive(), timeout=idle_timeout_s)
         except WebSocketDisconnect:
             return
-        except TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             await websocket.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Talk idle timeout")
             return
         message_type = message.get("type")

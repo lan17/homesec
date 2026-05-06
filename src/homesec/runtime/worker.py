@@ -18,6 +18,7 @@ from homesec.logging_setup import configure_logging
 from homesec.models.alert import Alert
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityState,
     TalkRefusalReason,
     TalkSessionOpenRequest,
     TalkSessionPrepareRequest,
@@ -622,7 +623,7 @@ class _RuntimeWorkerService:
                         ),
                         timeout=self._config.talk.idle_timeout_s,
                     )
-                except TimeoutError:
+                except (asyncio.TimeoutError, TimeoutError):
                     logger.info(
                         "Talk stream idle timeout for camera=%s session=%s",
                         command.camera_name,
@@ -808,7 +809,7 @@ class _RuntimeWorkerService:
                 message="Camera source is not talk-capable",
             )
         try:
-            await source.open_talk_session(
+            session = await source.open_talk_session(
                 TalkSessionOpenRequest(session_id=session_id, input=input_format)
             )
             return WorkerCommandResult(
@@ -817,7 +818,16 @@ class _RuntimeWorkerService:
                 generation=self._generation,
                 correlation_id=self._correlation_id,
                 camera_name=command.camera_name,
-                talk_status=WorkerTalkStatusPayload.from_status(source.talk_status()),
+                talk_status=WorkerTalkStatusPayload(
+                    enabled=True,
+                    policy_enabled=self._talk_policy_enabled(command.camera_name),
+                    capability=TalkCapabilityState.SUPPORTED,
+                    state=TalkState.ACTIVE,
+                    active_session_id=session.session_id,
+                    supported_codecs=[session.selected_codec],
+                    offered_codecs=[session.selected_codec],
+                    selected_codec=session.selected_codec,
+                ),
             )
         except Exception as exc:
             reason = _talk_refusal_reason_from_exception(exc)

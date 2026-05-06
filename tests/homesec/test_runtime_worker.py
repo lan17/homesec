@@ -364,6 +364,80 @@ async def test_runtime_worker_talk_stream_disconnect_during_open_response_stops_
 
 
 @pytest.mark.asyncio
+async def test_runtime_worker_talk_stream_open_uses_returned_session_for_ready_status() -> None:
+    """TALK_STREAM_OPEN should not depend on a second status lookup after opening."""
+
+    class _TalkSource:
+        def __init__(self) -> None:
+            self.opened: list[TalkSessionOpenRequest] = []
+            self.stopped: list[str] = []
+
+        def talk_status(self) -> CameraTalkStatus:
+            raise AssertionError("post-open status lookup should not run")
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            return TalkSessionPrepareResult(
+                accepted=True,
+                session_id=request.session_id,
+                input=request.input,
+            )
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            self.opened.append(request)
+            return SimpleNamespace(
+                session_id=request.session_id,
+                camera_name="front",
+                selected_codec="PCMA/8000",
+            )
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            _ = session_id, frame
+            raise AssertionError("EOF stream should close before writing frames")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            self.stopped.append(session_id)
+            return True
+
+    # Given: Opening the source succeeds but source status lookup would fail afterward
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    config = _make_config(notifiers=[], talk_enabled=True, talk_input=input_format)
+    service = _make_service(config)
+    source = _TalkSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    reader = asyncio.StreamReader()
+    reader.feed_eof()
+    writer = _DisconnectingWriter()
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STREAM_OPEN,
+        command_id="cmd-open-talk-session-status",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+        session_id="tk_1",
+        talk_input=input_format,
+    )
+
+    # When: The worker opens the stream and the IPC client immediately closes
+    await service._handle_talk_stream(command, reader, cast(Any, writer))
+
+    # Then: Ready status is derived from the returned session and cleanup still runs
+    response = WorkerCommandResult.model_validate_json(writer.writes[0].decode("utf-8"))
+    assert response.talk_refusal is None
+    assert response.talk_status is not None
+    assert response.talk_status.state == TalkState.ACTIVE
+    assert response.talk_status.active_session_id == "tk_1"
+    assert response.talk_status.selected_codec == "PCMA/8000"
+    assert source.opened == [TalkSessionOpenRequest(session_id="tk_1", input=input_format)]
+    assert source.stopped == ["tk_1"]
+
+
+@pytest.mark.asyncio
 async def test_runtime_worker_talk_status_reports_unsupported_for_non_talk_capable_source() -> None:
     """TALK_STATUS should use structural capability checks instead of source imports."""
     # Given: A runtime source that does not expose the talk protocol
