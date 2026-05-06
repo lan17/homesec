@@ -59,10 +59,16 @@ class TalkInputFormat(BaseModel):
     channels: int = Field(default=1, ge=1, le=1)
     frame_ms: int = Field(default=20, ge=10, le=60)
 
+    @model_validator(mode="after")
+    def _require_integral_frame_samples(self) -> TalkInputFormat:
+        if (self.sample_rate * self.frame_ms) % 1000 != 0:
+            raise ValueError("sample_rate and frame_ms must produce an integral PCM frame size")
+        return self
+
     @property
     def expected_bytes_per_frame(self) -> int:
         """Expected byte size for one PCM S16LE frame."""
-        return int(self.sample_rate * self.frame_ms / 1000) * self.channels * 2
+        return (self.sample_rate * self.frame_ms // 1000) * self.channels * 2
 
 
 class TalkCapabilityProbeResult(BaseModel):

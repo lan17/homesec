@@ -152,9 +152,22 @@ def validate_plugin_configs(config: Config) -> None:
     """Validate plugin configs against registered plugin config models."""
     errors: list[str] = []
 
+    def _format_validation_error(err: ValidationError) -> str:
+        details: list[str] = []
+        for item in err.errors(include_input=False):
+            loc = item.get("loc", ())
+            if isinstance(loc, tuple) and loc:
+                location = ".".join(str(part) for part in loc)
+            else:
+                location = "__root__"
+            message = str(item.get("msg", "Invalid value"))
+            error_type = str(item.get("type", "value_error"))
+            details.append(f"{location}: {message} [{error_type}]")
+        return "; ".join(details) if details else "Invalid value"
+
     def _add_error(prefix: str, err: Exception) -> None:
         if isinstance(err, ValidationError):
-            errors.append(f"{prefix}: {err}")
+            errors.append(f"{prefix}: {_format_validation_error(err)}")
         else:
             errors.append(f"{prefix}: {err}")
 
@@ -187,14 +200,14 @@ def validate_plugin_configs(config: Config) -> None:
 
     if config.alert_policy.enabled:
         try:
-            runtime_context = {}
+            alert_runtime_context: dict[str, object] = {}
             if config.alert_policy.backend == "default":
-                runtime_context["trigger_classes"] = list(config.vlm.trigger_classes)
+                alert_runtime_context["trigger_classes"] = list(config.vlm.trigger_classes)
             validate_plugin(
                 PluginType.ALERT_POLICY,
                 config.alert_policy.backend,
                 config.alert_policy.config,
-                **runtime_context,
+                **alert_runtime_context,
             )
         except Exception as exc:
             _add_error(f"alert_policy[{config.alert_policy.backend}]", exc)
@@ -211,11 +224,16 @@ def validate_plugin_configs(config: Config) -> None:
 
     for camera in config.cameras:
         try:
+            source_runtime_context: dict[str, object] = {"camera_name": camera.name}
+            if camera.source.backend == "rtsp":
+                source_runtime_context["__runtime_preview__"] = config.preview
+                source_runtime_context["__runtime_talk__"] = config.talk
+                source_runtime_context["__camera_talk__"] = camera.talk
             validate_plugin(
                 PluginType.SOURCE,
                 camera.source.backend,
                 camera.source.config,
-                camera_name=camera.name,
+                **source_runtime_context,
             )
         except Exception as exc:
             _add_error(f"source[{camera.name}:{camera.source.backend}]", exc)

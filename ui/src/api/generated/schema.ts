@@ -1246,7 +1246,7 @@ export interface components {
         };
         /** TalkSessionRequest */
         TalkSessionRequest: {
-            input?: components["schemas"]["TalkInputFormat"];
+            input?: components["schemas"]["TalkInputFormat"] | null;
             /** Session Id */
             session_id?: string | null;
         };

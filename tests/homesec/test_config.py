@@ -989,6 +989,27 @@ def test_talk_input_rejects_unsupported_codec() -> None:
     assert "pcm_s16le" in str(exc_info.value)
 
 
+def test_talk_input_rejects_fractional_frame_size() -> None:
+    """Talk input should reject frame sizes that browser and server could round differently."""
+    # Given: A PCM input format whose sample rate and frame duration produce fractional samples
+    data = minimal_config()
+    data["talk"] = {
+        "enabled": True,
+        "input": {
+            "codec": "pcm_s16le",
+            "sample_rate": 22050,
+            "channels": 1,
+            "frame_ms": 10,
+        },
+    }
+
+    # When / Then: Validation rejects the ambiguous frame size
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(data)
+
+    assert "integral PCM frame size" in str(exc_info.value)
+
+
 def test_camera_talk_rejects_unsupported_backend() -> None:
     """Camera talk config should reject deferred backends in the v1 contract."""
     # Given: A config using a backend that is intentionally out of scope for MVP
@@ -1002,3 +1023,60 @@ def test_camera_talk_rejects_unsupported_backend() -> None:
         Config.model_validate(data)
 
     assert "onvif_rtsp_backchannel" in str(exc_info.value)
+
+
+def test_rtsp_talk_backend_config_is_validated_during_config_load() -> None:
+    """RTSP talk backend config errors should be caught before runtime startup."""
+    # Given: An RTSP camera with an invalid ONVIF talk codec preference
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["source"] = {
+        "backend": "rtsp",
+        "config": {"rtsp_url": "rtsp://camera.local/live"},
+    }
+    camera["talk"] = {
+        "mode": "auto",
+        "config": {"preferred_codecs": ["AAC/8000"]},
+    }
+
+    # When / Then: Config validation rejects the talk backend shape before reload
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)
+
+    assert exc_info.value.code is ConfigErrorCode.PLUGIN_CONFIG_INVALID
+    assert "preferred_codecs" in str(exc_info.value)
+    assert "PCMU/8000" in str(exc_info.value)
+
+
+def test_rtsp_talk_backend_validation_redacts_secret_inputs() -> None:
+    """RTSP talk backend validation errors should not echo credential-bearing config."""
+    # Given: Invalid talk backend config that also contains explicit credentials
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["source"] = {
+        "backend": "rtsp",
+        "config": {"rtsp_url": "rtsp://admin:source-secret@camera.local/live"},
+    }
+    camera["talk"] = {
+        "mode": "auto",
+        "config": {
+            "rtsp_url": "rtsp://admin:talk-secret@camera.local/talk",
+            "username": "admin",
+            "password": "plain-secret",
+            "preferred_codecs": ["AAC/8000"],
+        },
+    }
+
+    # When: Config validation reports the talk backend error
+    with pytest.raises(ConfigError) as exc_info:
+        load_config_from_dict(data)
+
+    # Then: The error remains actionable without exposing raw secret inputs
+    message = str(exc_info.value)
+    assert "preferred_codecs" in message
+    assert "PCMU/8000" in message
+    assert "plain-secret" not in message
+    assert "talk-secret" not in message
+    assert "source-secret" not in message

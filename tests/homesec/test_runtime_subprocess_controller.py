@@ -29,6 +29,7 @@ from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.runtime.errors import (
     PreviewRuntimeUnavailableError,
+    TalkCameraNotFoundError,
     TalkRuntimeUnavailableError,
     TalkStreamOpenRefused,
 )
@@ -48,6 +49,7 @@ from homesec.runtime.subprocess_controller import (
 )
 from homesec.runtime.subprocess_protocol import (
     WorkerCommand,
+    WorkerCommandErrorCode,
     WorkerCommandResult,
     WorkerCommandType,
     WorkerEvent,
@@ -56,6 +58,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerTalkPreparePayload,
     WorkerTalkRefusalPayload,
     WorkerTalkStatusPayload,
+    WorkerTalkStopPayload,
 )
 from homesec.sources.local_folder import LocalFolderSourceConfig
 
@@ -594,6 +597,246 @@ async def test_subprocess_controller_preserves_talk_stream_refusal_reason(
 
         assert error.value.reason == TalkRefusalReason.INVALID_AUDIO_FRAME
         assert str(error.value) == "Talk input format does not match the reserved session"
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_uses_extended_timeout_for_talk_stream_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TALK_STREAM_OPEN should allow enough time for RTSP DESCRIBE/SETUP/PLAY."""
+    controller = SubprocessRuntimeController(
+        command_timeout_s=0.01,
+        talk_command_timeout_s=0.2,
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-open-timeout",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+
+    class _SlowReader:
+        async def readline(self) -> bytes:
+            await asyncio.sleep(0.05)
+            return b"{}\n"
+
+    class _CapturingWriter:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def write(self, data: bytes) -> None:
+            _ = data
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            return None
+
+    writer = _CapturingWriter()
+
+    async def _fake_open_unix_connection(path: str) -> tuple[_SlowReader, _CapturingWriter]:
+        _ = path
+        return _SlowReader(), writer
+
+    def _fake_parse_command_result(raw_response: bytes, command: object) -> WorkerCommandResult:
+        _ = raw_response
+        assert isinstance(command, WorkerCommand)
+        return WorkerCommandResult(
+            command=WorkerCommandType.TALK_STREAM_OPEN,
+            command_id=command.command_id,
+            generation=runtime.generation,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            talk_status=WorkerTalkStatusPayload(
+                enabled=True,
+                policy_enabled=True,
+                state=TalkState.ACTIVE,
+                selected_codec="PCMU/8000",
+            ),
+        )
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _fake_open_unix_connection)
+    monkeypatch.setattr(controller, "_parse_command_result", _fake_parse_command_result)
+
+    try:
+        # Given: A worker talk open response that is slower than the generic command timeout
+        # When: Opening a talk stream through the subprocess controller
+        stream = await controller.open_talk_stream(
+            runtime,
+            "front",
+            session_id="tk_1",
+            input_format=TalkInputFormat(),
+        )
+
+        # Then: The controller waits for the extended talk timeout and keeps the stream open
+        assert stream.selected_codec == "PCMU/8000"
+        assert stream.writer is writer
+        assert writer.closed is False
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_maps_talk_stream_open_camera_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TALK_STREAM_OPEN should preserve worker camera-not-found responses."""
+    controller = SubprocessRuntimeController()
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-open-missing-camera",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+
+    class _Reader:
+        async def readline(self) -> bytes:
+            return b"{}\n"
+
+    class _Writer:
+        def write(self, data: bytes) -> None:
+            _ = data
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_open_unix_connection(path: str) -> tuple[_Reader, _Writer]:
+        _ = path
+        return _Reader(), _Writer()
+
+    def _fake_parse_command_result(raw_response: bytes, command: object) -> WorkerCommandResult:
+        _ = raw_response
+        assert isinstance(command, WorkerCommand)
+        return WorkerCommandResult(
+            command=WorkerCommandType.TALK_STREAM_OPEN,
+            command_id=command.command_id,
+            generation=runtime.generation,
+            correlation_id=runtime.correlation_id,
+            camera_name="front",
+            error_code=WorkerCommandErrorCode.CAMERA_NOT_FOUND,
+            error_message="missing camera",
+        )
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _fake_open_unix_connection)
+    monkeypatch.setattr(controller, "_parse_command_result", _fake_parse_command_result)
+
+    try:
+        # Given: The worker reports that the talk stream camera disappeared
+        # When / Then: The controller raises the typed camera-not-found error
+        with pytest.raises(TalkCameraNotFoundError):
+            await controller.open_talk_stream(
+                runtime,
+                "front",
+                session_id="tk_1",
+                input_format=TalkInputFormat(),
+            )
+    finally:
+        runtime.process = None
+        await controller._finalize_handle(runtime)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_controller_uses_extended_timeout_for_talk_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TALK_STOP_SESSION should use the talk-specific response timeout."""
+    controller = SubprocessRuntimeController(
+        command_timeout_s=0.01,
+        talk_command_timeout_s=0.2,
+    )
+    runtime = cast(
+        SubprocessRuntimeHandle,
+        await controller.build_candidate(
+            _make_config(
+                watch_dir="/tmp/talk-stop-timeout",
+                source_backend="rtsp",
+            ),
+            1,
+        ),
+    )
+    runtime.process = cast(asyncio.subprocess.Process, _FakeProcess(pid=4242))
+    runtime.last_heartbeat_at = datetime.now(timezone.utc)
+    captured_command: WorkerCommand | None = None
+
+    class _SlowReader:
+        async def readline(self) -> bytes:
+            await asyncio.sleep(0.05)
+            assert captured_command is not None
+            return (
+                WorkerCommandResult(
+                    command=WorkerCommandType.TALK_STOP_SESSION,
+                    command_id=captured_command.command_id,
+                    generation=runtime.generation,
+                    correlation_id=runtime.correlation_id,
+                    camera_name="front",
+                    talk_stop_result=WorkerTalkStopPayload(
+                        accepted=True,
+                        state=TalkState.IDLE,
+                    ),
+                )
+                .model_dump_json()
+                .encode("utf-8")
+                + b"\n"
+            )
+
+    class _CapturingWriter:
+        def write(self, data: bytes) -> None:
+            nonlocal captured_command
+            captured_command = WorkerCommand.model_validate_json(data.decode("utf-8"))
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_open_unix_connection(path: str) -> tuple[_SlowReader, _CapturingWriter]:
+        _ = path
+        return _SlowReader(), _CapturingWriter()
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _fake_open_unix_connection)
+
+    try:
+        # Given: A worker stop response slower than the generic command timeout
+        # When: Stopping a talk session through the subprocess controller
+        result = await controller.stop_talk_session(
+            runtime,
+            "front",
+            session_id="tk_1",
+        )
+
+        # Then: The controller waits for the extended talk timeout
+        assert result.accepted is True
+        assert result.state is TalkState.IDLE
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)

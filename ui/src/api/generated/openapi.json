@@ -1767,7 +1767,14 @@
       "TalkSessionRequest": {
         "properties": {
           "input": {
-            "$ref": "#/components/schemas/TalkInputFormat"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TalkInputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "session_id": {
             "anyOf": [

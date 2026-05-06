@@ -577,7 +577,10 @@ class SubprocessRuntimeController(RuntimeController):
                 WorkerCommandType.TALK_STOP_SESSION,
                 camera_name,
                 session_id=session_id,
+                response_timeout_s=self._talk_response_timeout_s(),
             )
+        except TalkCameraNotFoundError:
+            raise
         except Exception as exc:
             message = sanitize_runtime_error(exc)
             raise TalkRuntimeUnavailableError(message) from exc
@@ -768,7 +771,7 @@ class SubprocessRuntimeController(RuntimeController):
             await asyncio.wait_for(writer.drain(), timeout=self.command_timeout_s)
             raw_response = await asyncio.wait_for(
                 reader.readline(),
-                timeout=self.command_timeout_s,
+                timeout=self._talk_response_timeout_s(),
             )
             if not raw_response:
                 raise TalkRuntimeUnavailableError(
@@ -780,6 +783,8 @@ class SubprocessRuntimeController(RuntimeController):
                     result.talk_refusal.message,
                     reason=result.talk_refusal.reason,
                 )
+            if result.error_code == WorkerCommandErrorCode.CAMERA_NOT_FOUND:
+                raise TalkCameraNotFoundError(camera_name)
             if result.error_code is not None:
                 raise TalkRuntimeUnavailableError(
                     result.error_message or f"Runtime talk command failed: {result.error_code}"
@@ -796,6 +801,8 @@ class SubprocessRuntimeController(RuntimeController):
                 writer=writer,
                 selected_codec=selected_codec,
             )
+        except TalkCameraNotFoundError:
+            raise
         except TalkRuntimeUnavailableError:
             raise
         except Exception as exc:

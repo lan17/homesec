@@ -2,9 +2,11 @@
 
 HomeSec push-to-talk is a half-duplex browser microphone to camera speaker path for
 RTSP cameras that expose an ONVIF RTSP audio backchannel. The MVP stays inside
-HomeSec: browser PCM frames are authenticated by the API, bridged to the runtime
-worker, encoded to G.711 (`PCMU/8000` or `PCMA/8000`), packetized as RTP, and
-sent to the camera over RTSP-over-TCP interleaved RTP.
+HomeSec: browser PCM frames are authenticated by the API when API auth is
+enabled, bridged to the runtime worker, encoded to G.711 (`PCMU/8000` or
+`PCMA/8000`), packetized as RTP, and sent to the camera over RTSP-over-TCP
+interleaved RTP. When API auth is disabled, talk endpoints follow the same
+trusted-LAN access model as the rest of the control API.
 
 Talk policy defaults to enabled/auto. HomeSec probes RTSP cameras for ONVIF
 backchannel support at runtime and only enables the UI when the camera advertises

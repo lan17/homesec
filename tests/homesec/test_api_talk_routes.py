@@ -308,6 +308,32 @@ def test_prepare_talk_session_returns_websocket_url_and_runtime_contract() -> No
     assert app.prepare_calls == [("front", "custom-session", input_format)]
 
 
+def test_prepare_talk_session_uses_configured_input_when_request_omits_input() -> None:
+    """POST /talk sessions should inherit the server-configured browser PCM contract."""
+    configured_input = TalkInputFormat(sample_rate=8000, frame_ms=20)
+    app = _StubTalkApp(
+        talk_config=TalkConfig(enabled=True, input=configured_input),
+        prepare_result=CameraTalkSessionPrepared(
+            camera_name="front",
+            session_id="session-1",
+            input=configured_input,
+        ),
+    )
+    client = _client(app)
+
+    # Given: A server configured with a non-default talk input format
+    # When: Preparing a session without an explicit input override
+    response = client.post(
+        "/api/v1/talk/cameras/front/sessions",
+        json={"session_id": "session-1"},
+    )
+
+    # Then: The runtime prepare call and response use the configured input format
+    assert response.status_code == 201
+    assert app.prepare_calls == [("front", "session-1", configured_input)]
+    assert response.json()["input"] == configured_input.model_dump(mode="json")
+
+
 def test_prepare_talk_session_generates_session_id_when_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

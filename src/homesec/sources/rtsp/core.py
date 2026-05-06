@@ -272,6 +272,28 @@ class RTSPSourceConfig(BaseModel):
             raise ValueError("rtsp_url_env or rtsp_url required for RTSP source")
         return self
 
+    @model_validator(mode="after")
+    def _validate_talk_backchannel_config(self) -> RTSPSourceConfig:
+        runtime_talk = self.runtime_talk
+        camera_talk = self.camera_talk
+        if (
+            runtime_talk is None
+            or camera_talk is None
+            or not runtime_talk.enabled
+            or not camera_talk.policy_enabled
+            or camera_talk.backend != "onvif_rtsp_backchannel"
+        ):
+            return self
+
+        adapter_config_data = _talk_config_dict(camera_talk.config)
+        if not adapter_config_data.get("rtsp_url") and not adapter_config_data.get("rtsp_url_env"):
+            if self.rtsp_url is not None:
+                adapter_config_data["rtsp_url"] = self.rtsp_url
+            elif self.rtsp_url_env is not None:
+                adapter_config_data["rtsp_url_env"] = self.rtsp_url_env
+        ONVIFBackchannelConfig.model_validate(adapter_config_data)
+        return self
+
 
 class RTSPRunState(str, Enum):
     IDLE = "idle"

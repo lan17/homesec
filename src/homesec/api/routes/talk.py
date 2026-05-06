@@ -71,7 +71,7 @@ class TalkSessionRequest(BaseModel):
         max_length=128,
         pattern=_SESSION_ID_PATTERN,
     )
-    input: TalkInputFormat = Field(default_factory=TalkInputFormat)
+    input: TalkInputFormat | None = None
 
 
 class TalkSessionResponse(BaseModel):
@@ -235,11 +235,12 @@ async def prepare_talk_session(
     """Reserve a push-to-talk session slot and return the WebSocket stream URL."""
     body = request or TalkSessionRequest()
     requested_session_id = body.session_id or _new_session_id()
+    input_format = body.input or app.config.talk.input
     try:
         outcome = await app.prepare_camera_talk_session(
             camera_name,
             session_id=requested_session_id,
-            input_format=body.input,
+            input_format=input_format,
         )
     except TalkCameraNotFoundError as exc:
         _raise_camera_not_found(exc)
