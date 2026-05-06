@@ -12,7 +12,7 @@ from homesec.sources.rtsp.talk.errors import (
     CameraTalkStreamFailedError,
     UnsupportedTalkCodecError,
 )
-from homesec.sources.rtsp.talk.g711 import encode_pcmu
+from homesec.sources.rtsp.talk.g711 import encode_pcma, encode_pcmu
 from homesec.sources.rtsp.talk.models import ONVIFBackchannelConfig
 from homesec.sources.rtsp.talk.resample import resample_pcm_s16le_mono
 from homesec.sources.rtsp.talk.rtp import RTPPacketizer
@@ -192,4 +192,6 @@ def _encode_for_codec(pcm_s16le: bytes, codec: SDPCodec) -> bytes:
     normalized = codec.normalized_name.upper()
     if normalized == "PCMU/8000":
         return encode_pcmu(pcm_s16le)
+    if normalized == "PCMA/8000":
+        return encode_pcma(pcm_s16le)
     raise UnsupportedTalkCodecError(f"Unsupported talk codec selected: {codec.normalized_name}")

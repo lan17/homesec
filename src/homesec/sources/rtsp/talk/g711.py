@@ -7,6 +7,11 @@ import struct
 _BIAS = 0x84
 _CLIP = 32635
 _SEG_END = (0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF)
+_ALAW_MASK = 0xD5
+_ALAW_SIGN_MASK = 0x80
+_ALAW_QUANT_MASK = 0x0F
+_ALAW_SEG_MASK = 0x70
+_ALAW_SEG_SHIFT = 4
 
 
 def encode_pcmu(pcm_s16le: bytes) -> bytes:
@@ -17,6 +22,11 @@ def encode_pcmu(pcm_s16le: bytes) -> bytes:
     one 8 kHz sample.
     """
     return bytes(_linear_to_ulaw(sample) for sample in _iter_pcm16le(pcm_s16le))
+
+
+def encode_pcma(pcm_s16le: bytes) -> bytes:
+    """Encode little-endian signed 16-bit mono PCM to G.711 A-law/PCMA bytes."""
+    return bytes(_ALAW_ENCODE_TABLE[(sample + 32768) >> 2] for sample in _iter_pcm16le(pcm_s16le))
 
 
 def _iter_pcm16le(pcm_s16le: bytes):  # type: ignore[no-untyped-def]
@@ -52,3 +62,41 @@ def _search_segment(value: int) -> int:
         if value <= end:
             return index
     return len(_SEG_END)
+
+
+def _build_alaw_encode_table() -> bytes:
+    """Build a compact 16-bit PCM to A-law table matching standard G.711 quantization."""
+    table = bytearray(16384)
+    index = 1
+    table[8192] = _ALAW_MASK
+
+    for code in range(127):
+        lower = _alaw_to_linear(code ^ _ALAW_MASK)
+        upper = _alaw_to_linear((code + 1) ^ _ALAW_MASK)
+        threshold = (lower + upper + 4) >> 3
+        while index < threshold:
+            table[8192 - index] = code ^ (_ALAW_MASK ^ _ALAW_SIGN_MASK)
+            table[8192 + index] = code ^ _ALAW_MASK
+            index += 1
+
+    while index < 8192:
+        table[8192 - index] = 127 ^ (_ALAW_MASK ^ _ALAW_SIGN_MASK)
+        table[8192 + index] = 127 ^ _ALAW_MASK
+        index += 1
+
+    table[0] = table[1]
+    return bytes(table)
+
+
+def _alaw_to_linear(value: int) -> int:
+    encoded = value ^ 0x55
+    magnitude = encoded & _ALAW_QUANT_MASK
+    segment = (encoded & _ALAW_SEG_MASK) >> _ALAW_SEG_SHIFT
+    if segment:
+        magnitude = (magnitude + magnitude + 1 + 32) << (segment + 2)
+    else:
+        magnitude = (magnitude + magnitude + 1) << 3
+    return magnitude if encoded & _ALAW_SIGN_MASK else -magnitude
+
+
+_ALAW_ENCODE_TABLE = _build_alaw_encode_table()

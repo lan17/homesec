@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from homesec.sources.rtsp.talk.g711 import encode_pcmu
+from homesec.sources.rtsp.talk.g711 import encode_pcma, encode_pcmu
 from homesec.sources.rtsp.talk.resample import resample_pcm_s16le_mono
 from homesec.sources.rtsp.talk.rtp import RTPPacketizer, parse_rtp_header
 
@@ -21,6 +21,17 @@ def test_pcmu_encode_known_vectors() -> None:
 
 def test_pcmu_encode_clips_out_of_range_extremes() -> None:
     assert encode_pcmu(_pcm(-32768, 32767)) == bytes([0x00, 0x80])
+
+
+def test_pcma_encode_known_vectors() -> None:
+    # Given: Representative signed 16-bit PCM samples spanning the A-law range.
+    samples = (-32768, -32124, -1, 0, 1, 32124, 32767)
+
+    # When: The samples are encoded as G.711 A-law.
+    encoded = encode_pcma(_pcm(*samples))
+
+    # Then: The bytes match the standard PCMA quantization points.
+    assert encoded == bytes([0x2A, 0x2A, 0x55, 0xD5, 0xD5, 0xAA, 0xAA])
 
 
 def test_g711_rejects_odd_pcm_input() -> None:

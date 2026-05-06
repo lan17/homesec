@@ -59,21 +59,32 @@ def test_onvif_backchannel_config_requires_credential_pairs() -> None:
         ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/talk", username_env="USER")
 
 
-def test_onvif_backchannel_config_rejects_deferred_codecs() -> None:
-    with pytest.raises(ValidationError, match="PCMU/8000"):
+def test_onvif_backchannel_config_defaults_to_supported_g711_codecs() -> None:
+    # Given/When: An ONVIF talk config omits an explicit codec preference list.
+    config = ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/talk")
+
+    # Then: HomeSec negotiates both G.711 variants by default.
+    assert config.preferred_codecs == ["PCMU/8000", "PCMA/8000"]
+
+
+def test_onvif_backchannel_config_rejects_unsupported_codecs() -> None:
+    # Given/When/Then: A codec without an encoder is rejected at config validation time.
+    with pytest.raises(ValidationError, match="PCMU/8000 and PCMA/8000"):
         ONVIFBackchannelConfig(
             rtsp_url="rtsp://camera.local/talk",
-            preferred_codecs=["PCMA/8000"],
+            preferred_codecs=["OPUS/48000"],
         )
 
 
 def test_onvif_backchannel_config_normalizes_supported_codec_names() -> None:
+    # Given: Supported codecs use lowercase names and explicit mono channels.
     config = ONVIFBackchannelConfig(
         rtsp_url="rtsp://camera.local/talk",
-        preferred_codecs=["pcmu/8000/1"],
+        preferred_codecs=["pcmu/8000/1", "pcma/8000/1"],
     )
 
-    assert config.preferred_codecs == ["PCMU/8000"]
+    # Then: Names normalize to SDP codec identifiers used during negotiation.
+    assert config.preferred_codecs == ["PCMU/8000", "PCMA/8000"]
 
 
 @pytest.mark.parametrize(
