@@ -257,7 +257,7 @@ class TalkConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    enabled: bool = False
+    enabled: bool = True
     token_ttl_s: int = Field(default=30, ge=1, le=300)
     max_session_s: int = Field(default=60, ge=1, le=300)
     idle_timeout_s: float = Field(default=2.0, ge=0.1, le=30.0)

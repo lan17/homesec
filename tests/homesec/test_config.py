@@ -857,7 +857,7 @@ def test_preview_rejects_v2_and_legacy_extra_fields() -> None:
 
 
 def test_talk_config_defaults() -> None:
-    """Talk config defaults should be disabled and frame-sized for 20ms PCM16 mono."""
+    """Talk config defaults should enable capability discovery with 20ms PCM16 mono."""
     # Given: A minimal config without talk settings
     data = minimal_config()
 
@@ -865,11 +865,25 @@ def test_talk_config_defaults() -> None:
     config = Config.model_validate(data)
 
     # Then: Talk defaults are applied
-    assert config.talk.enabled is False
+    assert config.talk.enabled is True
     assert config.talk.token_ttl_s == 30
     assert config.talk.max_session_s == 60
     assert config.talk.input.codec == "pcm_s16le"
     assert config.talk.input.expected_bytes_per_frame == 640
+
+
+def test_talk_config_enabled_false_remains_global_opt_out() -> None:
+    """Explicit talk.enabled=false should still disable push-to-talk globally."""
+    # Given: A config that explicitly opts out of global push-to-talk
+    data = minimal_config()
+    data["talk"] = {"enabled": False}
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: The explicit opt-out overrides the enabled-by-default behavior
+    assert config.talk.enabled is False
+    assert config.talk.token_ttl_s == 30
 
 
 def test_camera_talk_backend_normalized() -> None:
