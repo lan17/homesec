@@ -1137,6 +1137,7 @@ def test_talk_websocket_maps_fake_camera_unsupported_backchannel_to_policy_close
 
         with TestClient(create_app(cast(Any, app))) as client:
             # Given: A camera that rejects the ONVIF backchannel probe.
+            # When: Preparing a talk session.
             prepare = client.post(
                 "/api/v1/talk/cameras/front/sessions",
                 json={
@@ -1176,6 +1177,7 @@ def test_talk_websocket_maps_fake_camera_unsupported_codec_to_policy_close(
 
         with TestClient(create_app(cast(Any, app))) as client:
             # Given: A camera that advertises only unsupported talk codecs.
+            # When: Preparing a talk session.
             prepare = client.post(
                 "/api/v1/talk/cameras/front/sessions",
                 json={
@@ -1215,6 +1217,7 @@ def test_talk_websocket_maps_fake_camera_rejected_session_to_unavailable_close(
 
         with TestClient(create_app(cast(Any, app))) as client:
             # Given: A camera whose backchannel probe fails transiently.
+            # When: Preparing a talk session.
             prepare = client.post(
                 "/api/v1/talk/cameras/front/sessions",
                 json={
