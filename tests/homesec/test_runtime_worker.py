@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -212,7 +213,8 @@ async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
         Any,
         SimpleNamespace(sources_by_camera={"front": source}),
     )
-    socket_path = tmp_path / "worker-talk.sock"
+    _ = tmp_path
+    socket_path = Path(f"/tmp/hsrw-talk-{uuid.uuid4().hex}.sock")
     server = await asyncio.start_unix_server(
         service._handle_command_connection,
         path=str(socket_path),
@@ -268,10 +270,87 @@ async def test_runtime_worker_talk_stream_command_forwards_frames_and_stops(
     finally:
         server.close()
         await server.wait_closed()
+        socket_path.unlink(missing_ok=True)
 
     assert source.prepared == [TalkSessionPrepareRequest(session_id="tk_1", input=input_format)]
     assert source.opened == [TalkSessionOpenRequest(session_id="tk_1", input=input_format)]
     assert source.frames == [("tk_1", first_frame), ("tk_1", second_frame)]
+    assert source.stopped == ["tk_1"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_talk_stream_disconnect_during_open_response_stops_source_session() -> (
+    None
+):
+    """TALK_STREAM_OPEN should release source sessions if the response cannot flush."""
+
+    class _TalkSource:
+        def __init__(self) -> None:
+            self.opened: list[TalkSessionOpenRequest] = []
+            self.stopped: list[str] = []
+
+        def talk_status(self) -> CameraTalkStatus:
+            return CameraTalkStatus(
+                camera_name="front",
+                enabled=True,
+                state=TalkState.ACTIVE,
+                active_session_id="tk_1",
+                supported_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000",
+            )
+
+        async def prepare_talk_session(
+            self,
+            request: TalkSessionPrepareRequest,
+        ) -> TalkSessionPrepareResult:
+            return TalkSessionPrepareResult(
+                accepted=True,
+                session_id=request.session_id,
+                input=request.input,
+            )
+
+        async def open_talk_session(self, request: TalkSessionOpenRequest) -> object:
+            self.opened.append(request)
+            return SimpleNamespace(
+                session_id=request.session_id,
+                camera_name="front",
+                selected_codec="PCMU/8000",
+            )
+
+        async def write_talk_frame(self, session_id: str, frame: bytes) -> None:
+            raise AssertionError("disconnect test should not write frames")
+
+        async def stop_talk_session(self, session_id: str) -> bool:
+            self.stopped.append(session_id)
+            return True
+
+    # Given: A talk stream whose client disconnects while the open response is flushed
+    input_format = TalkInputFormat(sample_rate=8000, frame_ms=10)
+    config = _make_config(notifiers=[], talk_enabled=True, talk_input=input_format)
+    service = _make_service(config)
+    source = _TalkSource()
+    service._runtime_bundle = cast(
+        Any,
+        SimpleNamespace(sources_by_camera={"front": source}),
+    )
+    reader = asyncio.StreamReader()
+    writer = _DisconnectingWriter(drain_error=ConnectionResetError("Connection lost"))
+    command = WorkerCommand(
+        command=WorkerCommandType.TALK_STREAM_OPEN,
+        command_id="cmd-open-talk-disconnect",
+        generation=1,
+        correlation_id="test-correlation-id",
+        camera_name="front",
+        session_id="tk_1",
+        talk_input=input_format,
+    )
+
+    # When: The worker opens the source session but cannot flush the command response
+    await service._handle_talk_stream(command, reader, cast(Any, writer))
+
+    # Then: The opened source session is stopped immediately instead of waiting for timeout
+    assert writer.closed is False
+    assert source.opened == [TalkSessionOpenRequest(session_id="tk_1", input=input_format)]
     assert source.stopped == ["tk_1"]
 
 
@@ -400,7 +479,8 @@ async def test_runtime_worker_talk_stream_invalid_frame_stops_source_session(
         Any,
         SimpleNamespace(sources_by_camera={"front": source}),
     )
-    socket_path = tmp_path / "worker-talk-invalid-frame.sock"
+    _ = tmp_path
+    socket_path = Path(f"/tmp/hsrw-talk-invalid-{uuid.uuid4().hex}.sock")
     server = await asyncio.start_unix_server(
         service._handle_command_connection,
         path=str(socket_path),
@@ -441,6 +521,7 @@ async def test_runtime_worker_talk_stream_invalid_frame_stops_source_session(
     finally:
         server.close()
         await server.wait_closed()
+        socket_path.unlink(missing_ok=True)
 
     assert source.frames == []
     assert source.stopped == ["tk_1"]

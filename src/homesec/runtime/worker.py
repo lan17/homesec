@@ -580,17 +580,22 @@ class _RuntimeWorkerService:
         writer: asyncio.StreamWriter,
     ) -> None:
         result = await self._open_talk_stream(command)
-        writer.write(result.model_dump_json().encode("utf-8") + b"\n")
-        await writer.drain()
-        if result.talk_refusal is not None or result.error_code is not None:
-            return
-
         input_format = command.talk_input or self._config.talk.input
         session_id = command.session_id
-        if session_id is None:
-            return
+        stream_opened = (
+            session_id is not None
+            and result.talk_status is not None
+            and result.talk_refusal is None
+            and result.error_code is None
+        )
 
         try:
+            writer.write(result.model_dump_json().encode("utf-8") + b"\n")
+            await writer.drain()
+            if not stream_opened:
+                return
+            assert session_id is not None
+
             while True:
                 frame = await read_length_prefixed_frame(
                     reader,
@@ -599,6 +604,13 @@ class _RuntimeWorkerService:
                 if frame is None:
                     break
                 await self._write_talk_frame(command.camera_name, session_id, frame)
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            logger.info(
+                "Talk stream client disconnected for camera=%s session=%s reason=%s",
+                command.camera_name,
+                session_id,
+                exc,
+            )
         except (EOFError, IPCFrameError) as exc:
             logger.info(
                 "Talk stream closed for camera=%s session=%s reason=%s",
@@ -615,7 +627,8 @@ class _RuntimeWorkerService:
                 exc_info=True,
             )
         finally:
-            await self._stop_talk_session(command)
+            if stream_opened:
+                await self._stop_talk_session(command)
 
     def _talk_status(self, camera_name: str) -> CameraTalkStatus:
         source = self._talk_source_for_camera(camera_name)
