@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-05-07)
+
+### Bug Fixes
+
+- Retry RTSP startup preflight in worker thread ([#72](https://github.com/lan17/homesec/pull/72),
+  [`e8e549e`](https://github.com/lan17/homesec/commit/e8e549e59837d92650a0d1edcd60d6d221bccd4a))
+
+### Chores
+
+- **graphify**: Add knowledge graph outputs ([#74](https://github.com/lan17/homesec/pull/74),
+  [`c54dca2`](https://github.com/lan17/homesec/commit/c54dca2fc27a4bab6183a12aa5d570c9db162d7b))
+
+### Features
+
+- Add camera push-to-talk over ONVIF RTSP backchannel
+  ([#84](https://github.com/lan17/homesec/pull/84),
+  [`eeffcf3`](https://github.com/lan17/homesec/commit/eeffcf3804452f0def9b7c0c2c6e578500d57a9a))
+
+
 ## v1.9.4 (2026-04-25)
 
 ### Bug Fixes
