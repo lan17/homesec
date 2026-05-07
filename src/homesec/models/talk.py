@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from homesec.talk.backend_ids import sanitize_talk_backend_id
+from homesec.talk.backend_ids import sanitize_talk_backend_id, sanitize_talk_backend_reason
 
 
 class TalkState(StrEnum):
@@ -120,11 +120,11 @@ class CameraTalkStatus(BaseModel):
 
 def sanitize_talk_backend_diagnostic_fields(value: object) -> object:
     """Normalize or drop unsafe backend IDs before public diagnostics."""
-    if not isinstance(value, dict) or "backend" not in value:
+    if not isinstance(value, dict):
         return value
 
     raw_backend = value.get("backend")
-    if raw_backend is None:
+    if raw_backend is None and "backend_reason" not in value:
         return value
 
     sanitized_backend = sanitize_talk_backend_id(raw_backend)
@@ -132,6 +132,10 @@ def sanitize_talk_backend_diagnostic_fields(value: object) -> object:
     sanitized_value["backend"] = sanitized_backend
     if sanitized_backend is None:
         sanitized_value["backend_reason"] = None
+    elif "backend_reason" in sanitized_value:
+        sanitized_value["backend_reason"] = sanitize_talk_backend_reason(
+            sanitized_value["backend_reason"]
+        )
     return sanitized_value
 
 

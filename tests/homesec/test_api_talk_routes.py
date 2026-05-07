@@ -281,6 +281,44 @@ def test_talk_status_response_sanitizes_unsafe_backend_diagnostics() -> None:
     assert response.backend_reason is None
 
 
+def test_talk_status_response_drops_backend_reason_without_backend() -> None:
+    """API talk status responses should not expose backend reasons without backend IDs."""
+    # Given: A status response is built with a backend reason but no backend
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend=None,
+        backend_reason="selected rtsp://admin:secret@example.local/stream1",
+    )
+
+    # Then: The standalone public diagnostic reason is dropped
+    assert response.backend is None
+    assert response.backend_reason is None
+
+
+def test_talk_status_response_drops_secret_bearing_backend_reason() -> None:
+    """API talk status responses should not expose secret-bearing backend reasons."""
+    # Given: A status response is built with a safe backend ID and unsafe reason
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend="vendor_backend",
+        backend_reason="selected rtsp://admin:secret@example.local/stream1",
+    )
+
+    # Then: The backend ID is preserved but the unsafe reason is dropped
+    assert response.backend == "vendor_backend"
+    assert response.backend_reason is None
+
+
 def test_get_talk_status_returns_unsupported_source_status() -> None:
     """Unsupported sources should surface as talk status rather than session opens."""
     # Given: The runtime reports that the camera source has no talk support.

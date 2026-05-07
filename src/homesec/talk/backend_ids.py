@@ -6,6 +6,11 @@ import re
 
 TALK_BACKEND_ID_PATTERN_TEXT = r"^[a-z][a-z0-9_]{0,63}$"
 _TALK_BACKEND_ID_PATTERN = re.compile(TALK_BACKEND_ID_PATTERN_TEXT)
+_UNSAFE_TALK_BACKEND_REASON_PATTERN = re.compile(
+    r"://|authorization|bearer|basic|digest|password|passwd|secret|token|api[_-]?key|"
+    r"^v=0$|^m=|^a=|^sdp$",
+    re.IGNORECASE,
+)
 
 
 def normalize_talk_backend_id(value: str) -> str:
@@ -32,3 +37,17 @@ def sanitize_talk_backend_id(value: object) -> str | None:
         return validate_talk_backend_id(normalized)
     except ValueError:
         return None
+
+
+def sanitize_talk_backend_reason(value: object) -> str | None:
+    """Return a safe short backend diagnostic reason, or None."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    reason = value.strip()
+    if not reason or len(reason) > 256 or "\n" in reason or "\r" in reason:
+        return None
+    if _UNSAFE_TALK_BACKEND_REASON_PATTERN.search(reason):
+        return None
+    return reason
