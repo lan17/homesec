@@ -491,6 +491,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/talk/cameras/{camera_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Talk Status
+         * @description Return push-to-talk status for a camera.
+         */
+        get: operations["get_talk_status_api_v1_talk_cameras__camera_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/talk/cameras/{camera_name}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare Talk Session
+         * @description Reserve a push-to-talk session slot and return the WebSocket stream URL.
+         */
+        post: operations["prepare_talk_session_api_v1_talk_cameras__camera_name__sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/talk/cameras/{camera_name}/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Stop Talk Session
+         * @description Stop a reserved or active push-to-talk session.
+         */
+        delete: operations["stop_talk_session_api_v1_talk_cameras__camera_name__sessions__session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -530,6 +590,7 @@ export interface components {
             /** Name */
             name: string;
             source: components["schemas"]["CameraSourceConfig"];
+            talk?: components["schemas"]["CameraTalkConfig"];
         };
         /** CameraCreate */
         CameraCreate: {
@@ -584,6 +645,34 @@ export interface components {
             healthy: boolean;
             /** Last Heartbeat */
             last_heartbeat: number | null;
+        };
+        /**
+         * CameraTalkConfig
+         * @description Per-camera talk policy and backend override configuration.
+         */
+        CameraTalkConfig: {
+            /**
+             * Backend
+             * @default onvif_rtsp_backchannel
+             * @constant
+             */
+            backend: "onvif_rtsp_backchannel";
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | components["schemas"]["BaseModel"];
+            /**
+             * Enabled
+             * @description Deprecated compatibility alias for mode != 'disabled'.
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Mode
+             * @default auto
+             * @enum {string}
+             */
+            mode: "auto" | "disabled";
         };
         /** CameraUpdate */
         CameraUpdate: {
@@ -1121,6 +1210,99 @@ export interface components {
              * @default clips
              */
             clips_dir: string;
+        };
+        /**
+         * TalkCapabilityState
+         * @description Discovered camera talk capability independent from session state.
+         * @enum {string}
+         */
+        TalkCapabilityState: "disabled" | "unknown" | "probing" | "supported" | "unsupported" | "unsupported_codec" | "error";
+        /**
+         * TalkInputFormat
+         * @description Browser input frame format contract for push-to-talk.
+         */
+        TalkInputFormat: {
+            /**
+             * Channels
+             * @default 1
+             */
+            channels: number;
+            /**
+             * Codec
+             * @default pcm_s16le
+             * @constant
+             */
+            codec: "pcm_s16le";
+            /**
+             * Frame Ms
+             * @default 20
+             */
+            frame_ms: number;
+            /**
+             * Sample Rate
+             * @default 16000
+             */
+            sample_rate: number;
+        };
+        /** TalkSessionRequest */
+        TalkSessionRequest: {
+            input?: components["schemas"]["TalkInputFormat"] | null;
+            /** Session Id */
+            session_id?: string | null;
+        };
+        /** TalkSessionResponse */
+        TalkSessionResponse: {
+            /** Camera Name */
+            camera_name: string;
+            /** Idle Timeout S */
+            idle_timeout_s: number;
+            input: components["schemas"]["TalkInputFormat"];
+            /** Max Session S */
+            max_session_s: number;
+            /** Session Id */
+            session_id: string;
+            state: components["schemas"]["TalkState"];
+            /** Stream Url */
+            stream_url: string;
+            /** Token */
+            token?: string | null;
+            /** Token Expires At */
+            token_expires_at?: string | null;
+            /** Websocket Url */
+            websocket_url: string;
+        };
+        /**
+         * TalkState
+         * @description Current talk capability/session state for a camera.
+         * @enum {string}
+         */
+        TalkState: "disabled" | "unsupported" | "idle" | "starting" | "active" | "stopping" | "error" | "temporarily_unavailable";
+        /** TalkStatusResponse */
+        TalkStatusResponse: {
+            /** Active Session Id */
+            active_session_id?: string | null;
+            /** Camera Name */
+            camera_name: string;
+            capability: components["schemas"]["TalkCapabilityState"];
+            /** Enabled */
+            enabled: boolean;
+            /** Last Error */
+            last_error?: string | null;
+            /** Offered Codecs */
+            offered_codecs?: string[];
+            /** Policy Enabled */
+            policy_enabled: boolean;
+            /** Selected Codec */
+            selected_codec?: string | null;
+            state: components["schemas"]["TalkState"];
+            /** Supported Codecs */
+            supported_codecs?: string[];
+        };
+        /** TalkStopResponse */
+        TalkStopResponse: {
+            /** Accepted */
+            accepted: boolean;
+            state: components["schemas"]["TalkState"];
         };
         /**
          * TestConnectionRequest
@@ -2038,6 +2220,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatsResponse"];
+                };
+            };
+        };
+    };
+    get_talk_status_api_v1_talk_cameras__camera_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TalkStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_talk_session_api_v1_talk_cameras__camera_name__sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TalkSessionRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TalkSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_talk_session_api_v1_talk_cameras__camera_name__sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_name: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TalkStopResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

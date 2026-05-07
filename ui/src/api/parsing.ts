@@ -8,6 +8,12 @@ import type {
   PreviewState,
   PreviewStatusResponse,
   PreviewStopResponse,
+  TalkCapabilityState,
+  TalkInputFormat,
+  TalkSessionResponse,
+  TalkState,
+  TalkStatusResponse,
+  TalkStopResponse,
   DeviceInfoResponse,
   DiscoveredCameraResponse,
   DiagnosticsResponse,
@@ -415,6 +421,42 @@ function parsePreviewState(value: unknown, fieldName: string): PreviewState {
   throw new Error(`${fieldName} must be one of idle|starting|ready|degraded|stopping|error`)
 }
 
+function parseTalkState(value: unknown, fieldName: string): TalkState {
+  if (
+    value === 'disabled'
+    || value === 'unsupported'
+    || value === 'idle'
+    || value === 'starting'
+    || value === 'active'
+    || value === 'stopping'
+    || value === 'error'
+    || value === 'temporarily_unavailable'
+  ) {
+    return value
+  }
+  throw new Error(
+    `${fieldName} must be one of disabled|unsupported|idle|starting|active|stopping|error|temporarily_unavailable`,
+  )
+}
+
+export function parseTalkInputFormat(payload: unknown): TalkInputFormat {
+  if (!isJsonObject(payload)) {
+    throw new Error('Talk input format is not a JSON object')
+  }
+
+  const codec = expectString(payload.codec, 'codec')
+  if (codec !== 'pcm_s16le') {
+    throw new Error('codec must be pcm_s16le')
+  }
+
+  return {
+    codec,
+    sample_rate: expectNumber(payload.sample_rate, 'sample_rate'),
+    channels: expectNumber(payload.channels, 'channels'),
+    frame_ms: expectNumber(payload.frame_ms, 'frame_ms'),
+  }
+}
+
 export function parseRuntimeReloadResponse(payload: unknown): RuntimeReloadResponse {
   if (!isJsonObject(payload)) {
     throw new Error('Runtime reload response is not a JSON object')
@@ -519,6 +561,80 @@ export function parsePreviewStopResponse(payload: unknown): PreviewStopResponse 
   return {
     accepted: expectBoolean(payload.accepted, 'accepted'),
     state: parsePreviewState(payload.state, 'state'),
+  }
+}
+
+function parseTalkCapabilityState(value: unknown, fieldName: string): TalkCapabilityState {
+  if (
+    value === 'disabled'
+    || value === 'unknown'
+    || value === 'probing'
+    || value === 'supported'
+    || value === 'unsupported'
+    || value === 'unsupported_codec'
+    || value === 'error'
+  ) {
+    return value
+  }
+  throw new Error(
+    `${fieldName} must be one of disabled|unknown|probing|supported|unsupported|unsupported_codec|error`,
+  )
+}
+
+export function parseTalkStatusResponse(payload: unknown): TalkStatusResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Talk status response is not a JSON object')
+  }
+
+  const rawSupportedCodecs = payload.supported_codecs
+  const rawOfferedCodecs = payload.offered_codecs
+  return {
+    camera_name: expectString(payload.camera_name, 'camera_name'),
+    enabled: expectBoolean(payload.enabled, 'enabled'),
+    policy_enabled: expectBoolean(payload.policy_enabled, 'policy_enabled'),
+    capability: parseTalkCapabilityState(payload.capability, 'capability'),
+    state: parseTalkState(payload.state, 'state'),
+    active_session_id: expectNullableString(payload.active_session_id, 'active_session_id'),
+    supported_codecs:
+      rawSupportedCodecs === undefined
+        ? []
+        : expectStringArray(rawSupportedCodecs, 'supported_codecs'),
+    offered_codecs:
+      rawOfferedCodecs === undefined
+        ? []
+        : expectStringArray(rawOfferedCodecs, 'offered_codecs'),
+    selected_codec: expectNullableString(payload.selected_codec, 'selected_codec'),
+    last_error: expectNullableString(payload.last_error, 'last_error'),
+  }
+}
+
+export function parseTalkSessionResponse(payload: unknown): TalkSessionResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Talk session response is not a JSON object')
+  }
+
+  return {
+    camera_name: expectString(payload.camera_name, 'camera_name'),
+    session_id: expectString(payload.session_id, 'session_id'),
+    state: parseTalkState(payload.state, 'state'),
+    input: parseTalkInputFormat(payload.input),
+    websocket_url: expectString(payload.websocket_url, 'websocket_url'),
+    stream_url: expectString(payload.stream_url, 'stream_url'),
+    token: expectNullableString(payload.token, 'token'),
+    token_expires_at: expectNullableString(payload.token_expires_at, 'token_expires_at'),
+    max_session_s: expectNumber(payload.max_session_s, 'max_session_s'),
+    idle_timeout_s: expectNumber(payload.idle_timeout_s, 'idle_timeout_s'),
+  }
+}
+
+export function parseTalkStopResponse(payload: unknown): TalkStopResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Talk stop response is not a JSON object')
+  }
+
+  return {
+    accepted: expectBoolean(payload.accepted, 'accepted'),
+    state: parseTalkState(payload.state, 'state'),
   }
 }
 

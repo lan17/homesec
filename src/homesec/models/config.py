@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from homesec.models.filter import FilterConfig
+from homesec.models.talk import TalkInputFormat
 from homesec.models.vlm import VLMConfig
 
 
@@ -251,6 +252,74 @@ class PreviewConfig(BaseModel):
         return value
 
 
+class TalkConfig(BaseModel):
+    """Top-level push-to-talk feature configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = True
+    token_ttl_s: int = Field(default=30, ge=1, le=300)
+    max_session_s: int = Field(default=60, ge=1, le=300)
+    idle_timeout_s: float = Field(default=2.0, ge=0.1, le=30.0)
+    input: TalkInputFormat = Field(default_factory=TalkInputFormat)
+
+
+class CameraTalkConfig(BaseModel):
+    """Per-camera talk policy and backend override configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    mode: Literal["auto", "disabled"] = "auto"
+    enabled: bool = Field(
+        default=True,
+        description="Deprecated compatibility alias for mode != 'disabled'.",
+    )
+    backend: Literal["onvif_rtsp_backchannel"] = "onvif_rtsp_backchannel"
+    config: dict[str, Any] | BaseModel = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_enabled_compatibility(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        config = dict(value)
+        if "mode" not in config and "enabled" in config:
+            config["mode"] = "auto" if _bool_config_value(config["enabled"]) else "disabled"
+        if "enabled" not in config and "mode" in config:
+            config["enabled"] = config["mode"] != "disabled"
+        return config
+
+    @model_validator(mode="after")
+    def _validate_enabled_alias(self) -> CameraTalkConfig:
+        expected_enabled = self.mode != "disabled"
+        if self.enabled != expected_enabled:
+            raise ValueError("camera talk enabled must agree with mode")
+        return self
+
+    @property
+    def policy_enabled(self) -> bool:
+        """Whether policy allows runtime capability discovery for this camera."""
+        return self.mode != "disabled"
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
+
+
+def _bool_config_value(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+    return bool(value)
+
+
 class FastAPIServerConfig(BaseModel):
     """Configuration for the FastAPI server."""
 
@@ -314,6 +383,7 @@ class CameraConfig(BaseModel):
     name: str
     enabled: bool = True
     source: CameraSourceConfig
+    talk: CameraTalkConfig = Field(default_factory=CameraTalkConfig)
 
 
 class Config(BaseModel):
@@ -332,6 +402,7 @@ class Config(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     server: FastAPIServerConfig = Field(default_factory=FastAPIServerConfig)
     preview: PreviewConfig = Field(default_factory=PreviewConfig)
+    talk: TalkConfig = Field(default_factory=TalkConfig)
     filter: FilterConfig
     vlm: VLMConfig
     alert_policy: AlertPolicyConfig

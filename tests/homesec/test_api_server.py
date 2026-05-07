@@ -202,6 +202,7 @@ async def test_wait_until_started_requires_initialized_server() -> None:
     server = APIServer(FastAPI(), host="127.0.0.1", port=8130, startup_timeout_s=0.2)
 
     # When: Waiting on startup state directly
+    # Then: The API server reports the invalid lifecycle state before hanging
     with pytest.raises(RuntimeError, match="task not initialized"):
         await server._wait_until_started()
 
@@ -249,19 +250,34 @@ def test_redact_token_query_param_from_url_strips_only_token_values() -> None:
     assert redacted == "/api/v1/preview/cameras/front/playlist.m3u8?foo=bar"
 
 
+def test_redact_token_query_param_from_url_strips_encoded_token_keys() -> None:
+    """Access-log URL redaction should decode query keys before deciding what to strip."""
+    # Given: A WebSocket URL whose token query key is percent-encoded in the raw log path
+    url = "/api/v1/talk/cameras/front/stream?to%6Ben=secret&foo=bar"
+
+    # When: Redacting token query parameters for access logging
+    redacted = api_server._redact_token_query_param_from_url(url)
+
+    # Then: The decoded token key is still removed from the logged URL
+    assert redacted == "/api/v1/talk/cameras/front/stream?foo=bar"
+
+
 def test_redact_token_query_param_from_url_leaves_non_token_paths_unchanged() -> None:
     """Access-log URL redaction should leave unrelated paths and empty queries untouched."""
     # Given: URLs without a token query parameter and a path that happens to contain the word token
     no_query_url = "/api/v1/preview/cameras/front/playlist.m3u8"
     empty_query_url = "/api/v1/preview/cameras/token?"
+    encoded_query_url = "/api/v1/preview/cameras/front/playlist.m3u8?foo=hello%20world"
 
     # When: Redacting token query parameters for access logging
     redacted_no_query = api_server._redact_token_query_param_from_url(no_query_url)
     redacted_empty_query = api_server._redact_token_query_param_from_url(empty_query_url)
+    redacted_encoded_query = api_server._redact_token_query_param_from_url(encoded_query_url)
 
     # Then: The original URLs are preserved because there is no token query parameter to strip
     assert redacted_no_query == no_query_url
     assert redacted_empty_query == empty_query_url
+    assert redacted_encoded_query == encoded_query_url
 
 
 def test_token_redacting_access_log_filter_rewrites_uvicorn_path_argument() -> None:
@@ -295,6 +311,34 @@ def test_token_redacting_access_log_filter_rewrites_uvicorn_path_argument() -> N
         "/api/v1/preview/cameras/front/playlist.m3u8?foo=bar",
         "1.1",
         200,
+    )
+
+
+def test_token_redacting_access_log_filter_rewrites_websocket_path_argument() -> None:
+    """Access-log filter should redact tokens from uvicorn WebSocket handshake logs."""
+    # Given: A uvicorn WebSocket log record with the request path in args[1]
+    record = logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "WebSocket %s" [accepted]',
+        args=(
+            "127.0.0.1:1234",
+            "/api/v1/talk/cameras/front/sessions/tk_123/stream?token=secret&foo=bar",
+        ),
+        exc_info=None,
+    )
+    access_filter = api_server._TokenRedactingAccessLogFilter()
+
+    # When: The access-log filter processes the WebSocket record
+    accepted = access_filter.filter(record)
+
+    # Then: The token is stripped even though WebSocket logs use a different arg shape
+    assert accepted is True
+    assert record.args == (
+        "127.0.0.1:1234",
+        "/api/v1/talk/cameras/front/sessions/tk_123/stream?foo=bar",
     )
 
 
@@ -333,8 +377,8 @@ def test_token_redacting_access_log_filter_supports_mutable_args_lists() -> None
 
 
 def test_token_redacting_access_log_filter_leaves_nonstandard_records_untouched() -> None:
-    """Access-log filter should no-op when the record does not look like a uvicorn access record."""
-    # Given: A log record whose args do not contain a request path at index 2
+    """Access-log filter should no-op when the record has no tokenized URL args."""
+    # Given: A log record whose args do not contain a tokenized request path
     record = logging.LogRecord(
         name="uvicorn.access",
         level=logging.INFO,

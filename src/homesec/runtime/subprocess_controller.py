@@ -17,20 +17,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import (
     PreviewCameraNotFoundError,
     PreviewRuntimeUnavailableError,
+    TalkCameraNotFoundError,
+    TalkRuntimeUnavailableError,
+    TalkStreamOpenRefused,
     sanitize_runtime_error,
 )
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
     CameraPreviewStatus,
     CameraPreviewStopResult,
+    CameraTalkSessionPrepared,
+    CameraTalkStartRefusal,
+    CameraTalkStopResult,
     ManagedRuntime,
     PreviewRefusalReason,
     PreviewState,
     RuntimeCameraStatus,
+    RuntimeTalkStream,
     config_signature,
     preview_error_status,
 )
@@ -42,6 +50,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerEvent,
     WorkerEventType,
     WorkerPreviewStatusPayload,
+    WorkerTalkStatusPayload,
 )
 
 if TYPE_CHECKING:
@@ -113,6 +122,7 @@ class SubprocessRuntimeHandle:
     last_error: str | None = None
     camera_statuses: dict[str, RuntimeCameraStatus] = field(default_factory=dict)
     camera_preview_statuses: dict[str, CameraPreviewStatus] = field(default_factory=dict)
+    camera_talk_statuses: dict[str, CameraTalkStatus] = field(default_factory=dict)
 
     @property
     def is_running(self) -> bool:
@@ -139,6 +149,7 @@ class SubprocessRuntimeController(RuntimeController):
     heartbeat_stale_s: float = 10.0
     command_timeout_s: float = 5.0
     preview_start_timeout_s: float = 20.0
+    talk_command_timeout_s: float = 20.0
     worker_module: str = "homesec.runtime.worker"
     worker_extra_args: tuple[str, ...] = ()
     _active_runtime: SubprocessRuntimeHandle | None = field(default=None, init=False, repr=False)
@@ -427,6 +438,162 @@ class SubprocessRuntimeController(RuntimeController):
                 result.status,
             )
 
+    async def get_talk_status(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+    ) -> CameraTalkStatus:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise TalkCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            return self._stale_talk_status(handle, camera_name)
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.TALK_STATUS,
+                camera_name,
+                response_timeout_s=self._talk_response_timeout_s(),
+            )
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            enabled = self._talk_enabled(handle, camera_name)
+            policy_enabled = self._talk_policy_enabled(handle, camera_name)
+            return self._talk_error_status(
+                camera_name,
+                enabled=enabled,
+                policy_enabled=policy_enabled,
+                message=message,
+            )
+
+        if result.talk_status is None:
+            enabled = self._talk_enabled(handle, camera_name)
+            policy_enabled = self._talk_policy_enabled(handle, camera_name)
+            return self._talk_error_status(
+                camera_name,
+                enabled=enabled,
+                policy_enabled=policy_enabled,
+                message="Runtime worker returned no talk status",
+            )
+        status = self._runtime_talk_status(camera_name, result.talk_status)
+        handle.camera_talk_statuses[camera_name] = status
+        return status
+
+    async def prepare_talk_session(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> CameraTalkSessionPrepared | CameraTalkStartRefusal:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise TalkCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            return CameraTalkStartRefusal(
+                camera_name=camera_name,
+                reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                message=self._runtime_unavailable_message(handle),
+            )
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.TALK_PREPARE_SESSION,
+                camera_name,
+                session_id=session_id,
+                talk_input=input_format,
+                response_timeout_s=self._talk_response_timeout_s(),
+            )
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            return CameraTalkStartRefusal(
+                camera_name=camera_name,
+                reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                message=message,
+            )
+
+        if result.talk_refusal is not None:
+            return CameraTalkStartRefusal(
+                camera_name=camera_name,
+                reason=result.talk_refusal.reason,
+                message=result.talk_refusal.message,
+            )
+        if result.talk_prepare is None:
+            return CameraTalkStartRefusal(
+                camera_name=camera_name,
+                reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                message="Runtime worker returned no talk prepare result",
+            )
+        return CameraTalkSessionPrepared(
+            camera_name=camera_name,
+            session_id=result.talk_prepare.session_id,
+            input=result.talk_prepare.input,
+        )
+
+    async def open_talk_stream(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> RuntimeTalkStream:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise TalkCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            raise TalkRuntimeUnavailableError(self._runtime_unavailable_message(handle))
+
+        return await self._open_talk_stream_command(
+            handle,
+            camera_name,
+            session_id=session_id,
+            input_format=input_format,
+        )
+
+    async def stop_talk_session(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        session_id: str,
+    ) -> CameraTalkStopResult:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise TalkCameraNotFoundError(camera_name)
+
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            raise TalkRuntimeUnavailableError(self._runtime_unavailable_message(handle))
+
+        try:
+            result = await self._send_command(
+                handle,
+                WorkerCommandType.TALK_STOP_SESSION,
+                camera_name,
+                session_id=session_id,
+                response_timeout_s=self._talk_response_timeout_s(),
+            )
+        except TalkCameraNotFoundError:
+            raise
+        except Exception as exc:
+            message = sanitize_runtime_error(exc)
+            raise TalkRuntimeUnavailableError(message) from exc
+
+        if result.talk_stop_result is None:
+            raise TalkRuntimeUnavailableError("Runtime worker returned no talk stop result")
+
+        return CameraTalkStopResult(
+            camera_name=camera_name,
+            accepted=result.talk_stop_result.accepted,
+            state=result.talk_stop_result.state,
+        )
+
     @staticmethod
     def _ensure_posix_support() -> None:
         if os.name != "posix":
@@ -448,6 +615,7 @@ class SubprocessRuntimeController(RuntimeController):
         handle.last_error = None
         handle.camera_statuses = {}
         handle.camera_preview_statuses = {}
+        handle.camera_talk_statuses = {}
         handle.last_heartbeat_at = None
 
         args = [
@@ -570,6 +738,80 @@ class SubprocessRuntimeController(RuntimeController):
         if event.event == WorkerEventType.ERROR:
             handle.last_error = event.message or "runtime worker reported an error"
 
+    async def _open_talk_stream_command(
+        self,
+        handle: SubprocessRuntimeHandle,
+        camera_name: str,
+        *,
+        session_id: str,
+        input_format: TalkInputFormat,
+    ) -> RuntimeTalkStream:
+        command = WorkerCommand(
+            command=WorkerCommandType.TALK_STREAM_OPEN,
+            command_id=uuid.uuid4().hex,
+            generation=handle.generation,
+            correlation_id=handle.correlation_id,
+            camera_name=camera_name,
+            session_id=session_id,
+            talk_input=input_format,
+        )
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(handle.command_socket_path)),
+                timeout=self.command_timeout_s,
+            )
+        except Exception as exc:
+            raise TalkRuntimeUnavailableError(
+                "Failed to connect to runtime worker talk command socket"
+            ) from exc
+
+        close_writer = True
+        try:
+            writer.write(command.model_dump_json().encode("utf-8") + b"\n")
+            await asyncio.wait_for(writer.drain(), timeout=self.command_timeout_s)
+            raw_response = await asyncio.wait_for(
+                reader.readline(),
+                timeout=self._talk_response_timeout_s(),
+            )
+            if not raw_response:
+                raise TalkRuntimeUnavailableError(
+                    "Runtime worker closed talk command stream without a response"
+                )
+            result = self._parse_command_result(raw_response, command)
+            if result.talk_refusal is not None:
+                raise TalkStreamOpenRefused(
+                    result.talk_refusal.message,
+                    reason=result.talk_refusal.reason,
+                )
+            if result.error_code == WorkerCommandErrorCode.CAMERA_NOT_FOUND:
+                raise TalkCameraNotFoundError(camera_name)
+            if result.error_code is not None:
+                raise TalkRuntimeUnavailableError(
+                    result.error_message or f"Runtime talk command failed: {result.error_code}"
+                )
+            selected_codec = (
+                result.talk_status.selected_codec if result.talk_status is not None else None
+            )
+            close_writer = False
+            return RuntimeTalkStream(
+                camera_name=camera_name,
+                session_id=session_id,
+                input=input_format,
+                reader=reader,
+                writer=writer,
+                selected_codec=selected_codec,
+            )
+        except TalkCameraNotFoundError:
+            raise
+        except TalkRuntimeUnavailableError:
+            raise
+        except Exception as exc:
+            raise TalkRuntimeUnavailableError(sanitize_runtime_error(exc)) from exc
+        finally:
+            if close_writer:
+                writer.close()
+                await writer.wait_closed()
+
     async def _send_command(
         self,
         handle: SubprocessRuntimeHandle,
@@ -577,6 +819,8 @@ class SubprocessRuntimeController(RuntimeController):
         camera_name: str,
         *,
         viewer_id: str | None = None,
+        session_id: str | None = None,
+        talk_input: TalkInputFormat | None = None,
         response_timeout_s: float | None = None,
     ) -> WorkerCommandResult:
         command = WorkerCommand(
@@ -586,6 +830,8 @@ class SubprocessRuntimeController(RuntimeController):
             correlation_id=handle.correlation_id,
             camera_name=camera_name,
             viewer_id=viewer_id,
+            session_id=session_id,
+            talk_input=talk_input,
         )
 
         try:
@@ -612,33 +858,37 @@ class SubprocessRuntimeController(RuntimeController):
         if not raw_response:
             raise RuntimeError("Runtime worker closed preview command stream without a response")
 
-        try:
-            result = WorkerCommandResult.model_validate_json(raw_response.decode("utf-8"))
-        except Exception as exc:
-            raise RuntimeError(
-                "Runtime worker returned an invalid preview command response"
-            ) from exc
-
-        if result.generation != command.generation:
-            raise RuntimeError("Runtime worker returned preview response for the wrong generation")
-        if result.correlation_id != command.correlation_id:
-            raise RuntimeError(
-                "Runtime worker returned preview response for the wrong correlation id"
-            )
-        if result.command_id != command.command_id:
-            raise RuntimeError("Runtime worker returned preview response for the wrong command")
-        if result.command != command.command:
-            raise RuntimeError(
-                "Runtime worker returned preview response for the wrong command type"
-            )
-        if result.camera_name != command.camera_name:
-            raise RuntimeError("Runtime worker returned preview response for the wrong camera")
+        result = self._parse_command_result(raw_response, command)
         if result.error_code == WorkerCommandErrorCode.CAMERA_NOT_FOUND:
+            if command.command.value.startswith("talk_"):
+                raise TalkCameraNotFoundError(camera_name)
             raise PreviewCameraNotFoundError(camera_name)
         if result.error_code is not None:
             raise RuntimeError(
-                result.error_message or f"Runtime preview command failed: {result.error_code}"
+                result.error_message or f"Runtime command failed: {result.error_code}"
             )
+        return result
+
+    @staticmethod
+    def _parse_command_result(
+        raw_response: bytes,
+        command: WorkerCommand,
+    ) -> WorkerCommandResult:
+        try:
+            result = WorkerCommandResult.model_validate_json(raw_response.decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError("Runtime worker returned an invalid command response") from exc
+
+        if result.generation != command.generation:
+            raise RuntimeError("Runtime worker returned response for the wrong generation")
+        if result.correlation_id != command.correlation_id:
+            raise RuntimeError("Runtime worker returned response for the wrong correlation id")
+        if result.command_id != command.command_id:
+            raise RuntimeError("Runtime worker returned response for the wrong command")
+        if result.command != command.command:
+            raise RuntimeError("Runtime worker returned response for the wrong command type")
+        if result.camera_name != command.camera_name:
+            raise RuntimeError("Runtime worker returned response for the wrong camera")
         return result
 
     @staticmethod
@@ -657,6 +907,24 @@ class SubprocessRuntimeController(RuntimeController):
         )
 
     @staticmethod
+    def _runtime_talk_status(
+        camera_name: str,
+        payload: WorkerTalkStatusPayload,
+    ) -> CameraTalkStatus:
+        return CameraTalkStatus(
+            camera_name=camera_name,
+            enabled=payload.enabled,
+            policy_enabled=payload.policy_enabled,
+            capability=payload.capability,
+            state=payload.state,
+            active_session_id=payload.active_session_id,
+            supported_codecs=list(payload.supported_codecs),
+            offered_codecs=list(payload.offered_codecs),
+            selected_codec=payload.selected_codec,
+            last_error=payload.last_error,
+        )
+
+    @staticmethod
     def _camera_exists(handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
         return any(camera.name == camera_name for camera in handle.config.cameras)
 
@@ -669,6 +937,66 @@ class SubprocessRuntimeController(RuntimeController):
         if camera is None:
             raise PreviewCameraNotFoundError(camera_name)
         return handle.config.preview.enabled and camera.enabled and camera.source.backend == "rtsp"
+
+    def _talk_enabled(self, handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
+        cached = handle.camera_talk_statuses.get(camera_name)
+        if cached is not None:
+            return cached.enabled
+
+        camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
+        if camera is None:
+            raise TalkCameraNotFoundError(camera_name)
+        return handle.config.talk.enabled and camera.enabled and camera.talk.policy_enabled
+
+    def _talk_policy_enabled(self, handle: SubprocessRuntimeHandle, camera_name: str) -> bool:
+        cached = handle.camera_talk_statuses.get(camera_name)
+        if cached is not None:
+            return cached.policy_enabled
+
+        camera = next((item for item in handle.config.cameras if item.name == camera_name), None)
+        if camera is None:
+            raise TalkCameraNotFoundError(camera_name)
+        return camera.talk.policy_enabled
+
+    def _stale_talk_status(
+        self,
+        handle: SubprocessRuntimeHandle,
+        camera_name: str,
+    ) -> CameraTalkStatus:
+        enabled = self._talk_enabled(handle, camera_name)
+        policy_enabled = self._talk_policy_enabled(handle, camera_name)
+        return self._talk_error_status(
+            camera_name,
+            enabled=enabled,
+            policy_enabled=policy_enabled,
+            message=self._runtime_unavailable_message(handle),
+        )
+
+    @staticmethod
+    def _talk_error_status(
+        camera_name: str,
+        *,
+        enabled: bool,
+        policy_enabled: bool,
+        message: str,
+    ) -> CameraTalkStatus:
+        if not enabled:
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=False,
+                policy_enabled=policy_enabled,
+                state=TalkState.DISABLED,
+            )
+        return CameraTalkStatus(
+            camera_name=camera_name,
+            enabled=True,
+            policy_enabled=policy_enabled,
+            state=TalkState.ERROR,
+            last_error=message,
+        )
+
+    def _talk_response_timeout_s(self) -> float:
+        return max(self.command_timeout_s, self.talk_command_timeout_s)
 
     def _stale_preview_status(
         self,

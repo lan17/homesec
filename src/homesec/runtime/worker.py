@@ -16,6 +16,15 @@ from homesec.config import resolve_env_var
 from homesec.interfaces import Notifier
 from homesec.logging_setup import configure_logging
 from homesec.models.alert import Alert
+from homesec.models.talk import (
+    CameraTalkStatus,
+    TalkCapabilityState,
+    TalkRefusalReason,
+    TalkSessionOpenRequest,
+    TalkSessionPrepareRequest,
+    TalkSessionPrepareResult,
+    TalkState,
+)
 from homesec.notifiers.multiplex import MultiplexNotifier, NotifierEntry
 from homesec.plugins import discover_all_plugins
 from homesec.plugins.alert_policies import load_alert_policy
@@ -27,6 +36,7 @@ from homesec.runtime.bootstrap import (
     build_runtime_persistence_stack,
 )
 from homesec.runtime.errors import sanitize_runtime_error
+from homesec.runtime.ipc_stream import IPCFrameError, read_length_prefixed_frame
 from homesec.runtime.models import (
     CameraPreviewStartRefusal,
     CameraPreviewStatus,
@@ -46,6 +56,10 @@ from homesec.runtime.subprocess_protocol import (
     WorkerPreviewRefusalPayload,
     WorkerPreviewStatusPayload,
     WorkerPreviewStopPayload,
+    WorkerTalkPreparePayload,
+    WorkerTalkRefusalPayload,
+    WorkerTalkStatusPayload,
+    WorkerTalkStopPayload,
 )
 
 if TYPE_CHECKING:
@@ -60,6 +74,11 @@ if TYPE_CHECKING:
     from homesec.repository import ClipRepository
 
 logger = logging.getLogger(__name__)
+
+_STALE_TALK_OPEN_MESSAGES = {
+    "Talk session is not reserved",
+    "Talk session is no longer reserved",
+}
 
 
 @runtime_checkable
@@ -92,6 +111,40 @@ class _PreviewCapableSource(Protocol):
     def stop_preview(self) -> None: ...
 
     def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None: ...
+
+
+@runtime_checkable
+class _TalkSessionLike(Protocol):
+    """Structural protocol for source-opened talk sessions."""
+
+    session_id: str
+    camera_name: str
+    selected_codec: str
+
+
+@runtime_checkable
+class _TalkCapableSource(Protocol):
+    """Structural protocol for camera sources that expose talk controls."""
+
+    def talk_status(self) -> CameraTalkStatus: ...
+
+    async def prepare_talk_session(
+        self,
+        request: TalkSessionPrepareRequest,
+    ) -> TalkSessionPrepareResult: ...
+
+    async def open_talk_session(self, request: TalkSessionOpenRequest) -> _TalkSessionLike: ...
+
+    async def write_talk_frame(self, session_id: str, frame: bytes) -> None: ...
+
+    async def stop_talk_session(self, session_id: str) -> bool: ...
+
+
+@runtime_checkable
+class _RefreshableTalkStatusSource(Protocol):
+    """Structural protocol for sources that can refresh talk capability."""
+
+    async def refresh_talk_status(self) -> CameraTalkStatus: ...
 
 
 class _NoopNotifier(Notifier):
@@ -313,6 +366,8 @@ class _RuntimeWorkerService:
             runtime_context: dict[str, object] = {}
             if source_cfg.backend == "rtsp":
                 runtime_context["__runtime_preview__"] = config.preview
+                runtime_context["__runtime_talk__"] = config.talk
+                runtime_context["__camera_talk__"] = camera.talk
             source = load_source_plugin(
                 source_backend=source_cfg.backend,
                 config=source_cfg.config,
@@ -341,7 +396,17 @@ class _RuntimeWorkerService:
                 logger.warning("Dropping invalid runtime preview command: %s", exc, exc_info=True)
                 return
 
-            result = await asyncio.to_thread(self._handle_command, command)
+            if command.command == WorkerCommandType.TALK_STREAM_OPEN:
+                await self._handle_talk_stream(command, reader, writer)
+                return
+            if command.command in {
+                WorkerCommandType.TALK_STATUS,
+                WorkerCommandType.TALK_PREPARE_SESSION,
+                WorkerCommandType.TALK_STOP_SESSION,
+            }:
+                result = await self._handle_async_command(command)
+            else:
+                result = await asyncio.to_thread(self._handle_command, command)
             writer.write(result.model_dump_json().encode("utf-8") + b"\n")
             try:
                 await writer.drain()
@@ -357,26 +422,9 @@ class _RuntimeWorkerService:
                 logger.debug("Runtime preview command client disconnected before response flush")
 
     def _handle_command(self, command: WorkerCommand) -> WorkerCommandResult:
-        if command.generation != self._generation or command.correlation_id != self._correlation_id:
-            return WorkerCommandResult(
-                command=command.command,
-                command_id=command.command_id,
-                generation=self._generation,
-                correlation_id=self._correlation_id,
-                camera_name=command.camera_name,
-                error_message="Runtime worker rejected preview command for another generation",
-            )
-
-        if command.camera_name not in self._camera_configs:
-            return WorkerCommandResult(
-                command=command.command,
-                command_id=command.command_id,
-                generation=self._generation,
-                correlation_id=self._correlation_id,
-                camera_name=command.camera_name,
-                error_code=WorkerCommandErrorCode.CAMERA_NOT_FOUND,
-                error_message=f"Camera '{command.camera_name}' not found",
-            )
+        validation_error = self._validate_command(command)
+        if validation_error is not None:
+            return validation_error
 
         match command.command:
             case WorkerCommandType.PREVIEW_STATUS:
@@ -436,6 +484,19 @@ class _RuntimeWorkerService:
                     camera_name=command.camera_name,
                     status=self._preview_status_payload(command.camera_name, status),
                 )
+            case (
+                WorkerCommandType.TALK_STATUS
+                | WorkerCommandType.TALK_PREPARE_SESSION
+                | WorkerCommandType.TALK_STOP_SESSION
+            ):
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    error_message=f"Unsupported sync runtime command: {command.command}",
+                )
             case _:
                 return WorkerCommandResult(
                     command=command.command,
@@ -445,6 +506,383 @@ class _RuntimeWorkerService:
                     camera_name=command.camera_name,
                     error_message=f"Unsupported preview command: {command.command}",
                 )
+
+    async def _handle_async_command(self, command: WorkerCommand) -> WorkerCommandResult:
+        validation_error = self._validate_command(command)
+        if validation_error is not None:
+            return validation_error
+
+        match command.command:
+            case WorkerCommandType.TALK_STATUS:
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    talk_status=WorkerTalkStatusPayload.from_status(
+                        await self._talk_status(command.camera_name)
+                    ),
+                )
+            case WorkerCommandType.TALK_PREPARE_SESSION:
+                prepare_result = await self._prepare_talk_session(command)
+                if not prepare_result.accepted:
+                    return WorkerCommandResult(
+                        command=command.command,
+                        command_id=command.command_id,
+                        generation=self._generation,
+                        correlation_id=self._correlation_id,
+                        camera_name=command.camera_name,
+                        talk_refusal=WorkerTalkRefusalPayload(
+                            reason=prepare_result.refusal_reason
+                            or TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                            message=prepare_result.message or "Talk session refused",
+                        ),
+                    )
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    talk_prepare=WorkerTalkPreparePayload.from_result(prepare_result),
+                )
+            case WorkerCommandType.TALK_STOP_SESSION:
+                stop_result = await self._stop_talk_session(command)
+                state = (
+                    TalkState.STOPPING
+                    if stop_result
+                    else self._talk_status_without_refresh(command.camera_name).state
+                )
+                return WorkerCommandResult(
+                    command=command.command,
+                    command_id=command.command_id,
+                    generation=self._generation,
+                    correlation_id=self._correlation_id,
+                    camera_name=command.camera_name,
+                    talk_stop_result=WorkerTalkStopPayload(
+                        accepted=stop_result,
+                        state=state,
+                    ),
+                )
+            case _:
+                return self._handle_command(command)
+
+    def _validate_command(self, command: WorkerCommand) -> WorkerCommandResult | None:
+        if command.generation != self._generation or command.correlation_id != self._correlation_id:
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                error_message="Runtime worker rejected preview command for another generation",
+            )
+
+        if command.camera_name not in self._camera_configs:
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                error_code=WorkerCommandErrorCode.CAMERA_NOT_FOUND,
+                error_message=f"Camera '{command.camera_name}' not found",
+            )
+        return None
+
+    async def _handle_talk_stream(
+        self,
+        command: WorkerCommand,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        result = await self._open_talk_stream(command)
+        input_format = command.talk_input or self._config.talk.input
+        session_id = command.session_id
+        stream_opened = (
+            session_id is not None
+            and result.talk_status is not None
+            and result.talk_refusal is None
+            and result.error_code is None
+        )
+
+        try:
+            writer.write(result.model_dump_json().encode("utf-8") + b"\n")
+            await writer.drain()
+            if not stream_opened:
+                return
+            assert session_id is not None
+
+            while True:
+                try:
+                    frame = await asyncio.wait_for(
+                        read_length_prefixed_frame(
+                            reader,
+                            max_payload_bytes=input_format.expected_bytes_per_frame,
+                        ),
+                        timeout=self._config.talk.idle_timeout_s,
+                    )
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.info(
+                        "Talk stream idle timeout for camera=%s session=%s",
+                        command.camera_name,
+                        session_id,
+                    )
+                    break
+                if frame is None:
+                    break
+                await self._write_talk_frame(command.camera_name, session_id, frame)
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            logger.info(
+                "Talk stream client disconnected for camera=%s session=%s reason=%s",
+                command.camera_name,
+                session_id,
+                exc,
+            )
+        except (EOFError, IPCFrameError) as exc:
+            logger.info(
+                "Talk stream closed for camera=%s session=%s reason=%s",
+                command.camera_name,
+                session_id,
+                exc,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Talk stream failed for camera=%s session=%s: %s",
+                command.camera_name,
+                session_id,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            if stream_opened:
+                await self._stop_talk_session(command)
+
+    async def _talk_status(self, camera_name: str) -> CameraTalkStatus:
+        source = self._talk_source_for_camera(camera_name)
+        if not self._talk_enabled(camera_name):
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=False,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.DISABLED,
+            )
+        if source is None:
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.UNSUPPORTED,
+                last_error="Source is not talk-capable",
+            )
+        try:
+            if isinstance(source, _RefreshableTalkStatusSource):
+                return await source.refresh_talk_status()
+            return source.talk_status()
+        except Exception as exc:
+            logger.warning(
+                "Talk status lookup failed for camera=%s: %s",
+                camera_name,
+                exc,
+                exc_info=True,
+            )
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.ERROR,
+                last_error="Talk status unavailable",
+            )
+
+    def _talk_status_without_refresh(self, camera_name: str) -> CameraTalkStatus:
+        """Return current talk status without camera I/O for idempotent stop paths."""
+        source = self._talk_source_for_camera(camera_name)
+        if not self._talk_enabled(camera_name):
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=False,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.DISABLED,
+            )
+        if source is None:
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.UNSUPPORTED,
+                last_error="Source is not talk-capable",
+            )
+        try:
+            return source.talk_status()
+        except Exception as exc:
+            logger.warning(
+                "Talk status lookup failed for camera=%s: %s",
+                camera_name,
+                exc,
+                exc_info=True,
+            )
+            return CameraTalkStatus(
+                camera_name=camera_name,
+                enabled=True,
+                policy_enabled=self._talk_policy_enabled(camera_name),
+                state=TalkState.ERROR,
+                last_error="Talk status unavailable",
+            )
+
+    async def _prepare_talk_session(
+        self,
+        command: WorkerCommand,
+    ) -> TalkSessionPrepareResult:
+        input_format = command.talk_input or self._config.talk.input
+        if not self._talk_enabled(command.camera_name):
+            return TalkSessionPrepareResult(
+                accepted=False,
+                refusal_reason=TalkRefusalReason.TALK_DISABLED,
+                message="Talk is disabled for this camera",
+                input=input_format,
+            )
+        source = self._talk_source_for_camera(command.camera_name)
+        if source is None:
+            return TalkSessionPrepareResult(
+                accepted=False,
+                refusal_reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+                message="Camera source is not talk-capable",
+                input=input_format,
+            )
+        try:
+            return await source.prepare_talk_session(
+                TalkSessionPrepareRequest(
+                    session_id=command.session_id,
+                    input=input_format,
+                )
+            )
+        except Exception as exc:
+            reason = _talk_refusal_reason_from_exception(exc)
+            logger.warning(
+                "Talk prepare failed for camera=%s: %s",
+                command.camera_name,
+                exc,
+                exc_info=True,
+            )
+            return TalkSessionPrepareResult(
+                accepted=False,
+                refusal_reason=reason,
+                message="Talk session prepare failed",
+                input=input_format,
+            )
+
+    async def _open_talk_stream(self, command: WorkerCommand) -> WorkerCommandResult:
+        if command.generation != self._generation or command.correlation_id != self._correlation_id:
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                error_message="Runtime worker rejected talk stream for another generation",
+            )
+        if command.camera_name not in self._camera_configs:
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                error_code=WorkerCommandErrorCode.CAMERA_NOT_FOUND,
+                error_message=f"Camera '{command.camera_name}' not found",
+            )
+
+        session_id = command.session_id
+        input_format = command.talk_input or self._config.talk.input
+        if session_id is None:
+            return self._talk_refusal_result(
+                command,
+                reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                message="Talk stream requires a session_id",
+            )
+        source = self._talk_source_for_camera(command.camera_name)
+        if source is None or not self._talk_enabled(command.camera_name):
+            return self._talk_refusal_result(
+                command,
+                reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+                message="Camera source is not talk-capable",
+            )
+        try:
+            session = await source.open_talk_session(
+                TalkSessionOpenRequest(session_id=session_id, input=input_format)
+            )
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                talk_status=WorkerTalkStatusPayload(
+                    enabled=True,
+                    policy_enabled=self._talk_policy_enabled(command.camera_name),
+                    capability=TalkCapabilityState.SUPPORTED,
+                    state=TalkState.ACTIVE,
+                    active_session_id=session.session_id,
+                    supported_codecs=[session.selected_codec],
+                    offered_codecs=[session.selected_codec],
+                    selected_codec=session.selected_codec,
+                ),
+            )
+        except Exception as exc:
+            reason = _talk_refusal_reason_from_exception(exc)
+            _log_talk_stream_open_failure(
+                camera_name=command.camera_name,
+                session_id=session_id,
+                reason=reason,
+                exc=exc,
+            )
+            return self._talk_refusal_result(
+                command,
+                reason=reason,
+                message="Talk stream open failed",
+            )
+
+    async def _write_talk_frame(self, camera_name: str, session_id: str, frame: bytes) -> None:
+        source = self._talk_source_for_camera(camera_name)
+        if source is None:
+            raise RuntimeError("Camera source is not talk-capable")
+        await source.write_talk_frame(session_id, frame)
+
+    async def _stop_talk_session(self, command: WorkerCommand) -> bool:
+        session_id = command.session_id
+        if session_id is None:
+            return False
+        source = self._talk_source_for_camera(command.camera_name)
+        if source is None:
+            return False
+        try:
+            return bool(await source.stop_talk_session(session_id))
+        except Exception as exc:
+            logger.warning(
+                "Talk stop failed for camera=%s session=%s: %s",
+                command.camera_name,
+                session_id,
+                exc,
+                exc_info=True,
+            )
+            return False
+
+    def _talk_refusal_result(
+        self,
+        command: WorkerCommand,
+        *,
+        reason: TalkRefusalReason,
+        message: str,
+    ) -> WorkerCommandResult:
+        return WorkerCommandResult(
+            command=command.command,
+            command_id=command.command_id,
+            generation=self._generation,
+            correlation_id=self._correlation_id,
+            camera_name=command.camera_name,
+            talk_refusal=WorkerTalkRefusalPayload(reason=reason, message=message),
+        )
 
     def _emit_event(self, event_type: WorkerEventType, *, message: str | None = None) -> None:
         event = WorkerEvent(
@@ -638,6 +1076,23 @@ class _RuntimeWorkerService:
             return source
         return None
 
+    def _talk_source_for_camera(self, camera_name: str) -> _TalkCapableSource | None:
+        bundle = self._runtime_bundle
+        if bundle is None:
+            return None
+        source = bundle.sources_by_camera.get(camera_name)
+        if isinstance(source, _TalkCapableSource):
+            return source
+        return None
+
+    def _talk_enabled(self, camera_name: str) -> bool:
+        camera = self._camera_configs[camera_name]
+        return self._config.talk.enabled and camera.enabled and camera.talk.policy_enabled
+
+    def _talk_policy_enabled(self, camera_name: str) -> bool:
+        camera = self._camera_configs[camera_name]
+        return camera.talk.policy_enabled
+
     def _preview_enabled(
         self,
         camera_name: str,
@@ -674,6 +1129,43 @@ class _RuntimeWorkerService:
                 f"got {type(reason).__name__}"
             )
         return PreviewRefusalReason(raw_reason)
+
+
+def _talk_refusal_reason_from_exception(exc: Exception) -> TalkRefusalReason:
+    raw_reason = getattr(exc, "reason", None)
+    raw_value = getattr(raw_reason, "value", raw_reason)
+    if isinstance(raw_value, str):
+        try:
+            return TalkRefusalReason(raw_value)
+        except ValueError:
+            pass
+    return TalkRefusalReason.RUNTIME_UNAVAILABLE
+
+
+def _log_talk_stream_open_failure(
+    *,
+    camera_name: str,
+    session_id: str,
+    reason: TalkRefusalReason,
+    exc: Exception,
+) -> None:
+    """Log expected stale-session open races without traceback noise."""
+    if reason == TalkRefusalReason.RUNTIME_UNAVAILABLE and str(exc) in _STALE_TALK_OPEN_MESSAGES:
+        logger.info(
+            "Talk stream open skipped for stale session camera=%s session=%s: %s",
+            camera_name,
+            session_id,
+            exc,
+        )
+        return
+
+    logger.warning(
+        "Talk stream open failed for camera=%s session=%s: %s",
+        camera_name,
+        session_id,
+        exc,
+        exc_info=True,
+    )
 
 
 def _preview_state_from_source(state: object) -> PreviewState:

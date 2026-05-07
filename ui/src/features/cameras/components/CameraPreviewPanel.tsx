@@ -6,6 +6,7 @@ import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { useCameraPreview } from '../hooks/useCameraPreview'
+import { PushToTalkControl } from './PushToTalkControl'
 
 const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
@@ -436,6 +437,8 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
       {statusMessage && playlistUrl && playlistReady && !playerError ? (
         <p className="camera-preview__message">{statusMessage}</p>
       ) : null}
+
+      <PushToTalkControl cameraName={cameraName} />
 
       <div className="inline-form__actions">
         <Button

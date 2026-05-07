@@ -683,6 +683,39 @@ a:hover {
   font-size: 0.85rem;
 }
 
+
+.push-to-talk {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 58%, transparent);
+  padding: 0.65rem 0.7rem;
+}
+
+.push-to-talk__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.push-to-talk__button {
+  min-width: 9.5rem;
+  touch-action: none;
+  user-select: none;
+}
+
+.push-to-talk__button--active {
+  background: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 74%, #fff);
+  color: #fff;
+}
+
+.push-to-talk__button--active:hover {
+  background: color-mix(in srgb, var(--danger) 84%, #000);
+}
+
 .camera-config-editor {
   display: grid;
   gap: var(--space-2);

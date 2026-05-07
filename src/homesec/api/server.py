@@ -36,39 +36,43 @@ _ACCESS_LOG_TOKEN_PARAM = "token"
 
 def _redact_token_query_param_from_url(url: str) -> str:
     """Return a URL/path string with token query parameters removed."""
-    if "?" not in url or _ACCESS_LOG_TOKEN_PARAM not in url:
+    if "?" not in url:
         return url
 
     parsed = urlsplit(url)
     if not parsed.query:
         return url
 
-    filtered_query = [
-        (key, value)
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key != _ACCESS_LOG_TOKEN_PARAM
-    ]
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    if all(key != _ACCESS_LOG_TOKEN_PARAM for key, _ in query_items):
+        return url
+
+    filtered_query = [(key, value) for key, value in query_items if key != _ACCESS_LOG_TOKEN_PARAM]
     redacted_query = urlencode(filtered_query, doseq=True)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment))
 
 
 class _TokenRedactingAccessLogFilter(logging.Filter):
-    """Strip token query parameters from uvicorn access log paths."""
+    """Strip token query parameters from uvicorn HTTP and WebSocket log paths."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
 
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
-            redacted_path = _redact_token_query_param_from_url(args[2])
-            if redacted_path != args[2]:
-                record.args = (*args[:2], redacted_path, *args[3:])
+        if isinstance(args, tuple):
+            updated_args = tuple(
+                _redact_token_query_param_from_url(arg) if isinstance(arg, str) else arg
+                for arg in args
+            )
+            if updated_args != args:
+                record.args = updated_args
             return True
 
-        if isinstance(args, list) and len(args) >= 3 and isinstance(args[2], str):
-            redacted_path = _redact_token_query_param_from_url(args[2])
-            if redacted_path != args[2]:
-                updated_args = list(args)
-                updated_args[2] = redacted_path
+        if isinstance(args, list):
+            updated_args = [
+                _redact_token_query_param_from_url(arg) if isinstance(arg, str) else arg
+                for arg in args
+            ]
+            if updated_args != args:
                 record.args = updated_args
             return True
 
@@ -77,10 +81,11 @@ class _TokenRedactingAccessLogFilter(logging.Filter):
 
 def _ensure_access_log_redaction() -> None:
     """Install the token-redacting access-log filter once per process."""
-    access_logger = logging.getLogger("uvicorn.access")
-    if any(isinstance(item, _TokenRedactingAccessLogFilter) for item in access_logger.filters):
-        return
-    access_logger.addFilter(_TokenRedactingAccessLogFilter())
+    for logger_name in ("uvicorn.access", "uvicorn.error"):
+        access_logger = logging.getLogger(logger_name)
+        if any(isinstance(item, _TokenRedactingAccessLogFilter) for item in access_logger.filters):
+            continue
+        access_logger.addFilter(_TokenRedactingAccessLogFilter())
 
 
 def create_contract_app() -> FastAPI:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,6 +13,15 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from homesec.models.config import CameraTalkConfig, TalkConfig
+from homesec.models.talk import (
+    TalkCapabilityProbeResult,
+    TalkCapabilityState,
+    TalkRefusalReason,
+    TalkSessionOpenRequest,
+    TalkSessionPrepareRequest,
+    TalkState,
+)
 from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
@@ -28,6 +38,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
+from homesec.sources.rtsp.talk.manager import TalkManagerError
 
 
 class FakeClock:
@@ -230,7 +241,8 @@ def test_rtsp_url_env_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("MISSING_RTSP_URL", raising=False)
     config = _make_config(tmp_path, rtsp_url=None, rtsp_url_env="MISSING_RTSP_URL")
 
-    # When/Then: initialization fails due to missing URL
+    # When: Initializing the source
+    # Then: Missing URL configuration fails before runtime startup
     with pytest.raises(ValueError, match="rtsp_url_env or rtsp_url required"):
         RTSPSource(config, camera_name="cam")
 
@@ -757,6 +769,358 @@ def test_default_preview_seam_refuses_until_backend_is_wired(tmp_path: Path) -> 
     assert isinstance(preview_result, LivePublisherStartRefusal)
     assert preview_result.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
     assert source.preview_status() == LivePublisherStatus(state=LivePublisherState.IDLE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runtime_talk", "camera_talk", "expected_policy_enabled"),
+    [
+        (TalkConfig(enabled=False), CameraTalkConfig(mode="auto"), True),
+        (TalkConfig(enabled=True), CameraTalkConfig(mode="disabled"), False),
+    ],
+)
+async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_talk: TalkConfig,
+    camera_talk: CameraTalkConfig,
+    expected_policy_enabled: bool,
+) -> None:
+    """Disabled talk policy should stop before ONVIF/RTSP backchannel construction."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("disabled talk should not construct the ONVIF backchannel adapter")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    config = _make_config(
+        tmp_path,
+        **{
+            "__runtime_talk__": runtime_talk,
+            "__camera_talk__": camera_talk,
+        },
+    )
+    source = RTSPSource(config, camera_name="cam")
+
+    # Given: Talk is disabled by global config or per-camera policy
+    # When: Reading status and attempting to prepare a talk session
+    status = source.talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_disabled")
+    )
+
+    # Then: The source reports disabled state without touching camera backchannel I/O
+    assert status.enabled is False
+    assert status.policy_enabled is expected_policy_enabled
+    assert status.state == TalkState.DISABLED
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_DISABLED
+
+
+@pytest.mark.asyncio
+async def test_talk_missing_explicit_credential_env_reports_config_error_without_breaking_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing talk-only credential env vars should not break RTSP source startup."""
+    monkeypatch.delenv("MISSING_TALK_USER", raising=False)
+    monkeypatch.delenv("MISSING_TALK_PASSWORD", raising=False)
+    config = _make_config(
+        tmp_path,
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(
+                mode="auto",
+                config={
+                    "rtsp_url": "rtsp://host/talk",
+                    "username_env": "MISSING_TALK_USER",
+                    "password_env": "MISSING_TALK_PASSWORD",
+                },
+            ),
+        },
+    )
+
+    # Given: The main RTSP source is valid but talk-specific credential env vars are absent.
+    # When: Constructing the source and asking for talk capability.
+    source = RTSPSource(config, camera_name="cam")
+    status = await source.refresh_talk_status()
+
+    # Then: Talk reports a config/capability error while the source itself survives.
+    assert source.rtsp_url == "rtsp://host/stream"
+    assert status.enabled is True
+    assert status.policy_enabled is True
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.state == TalkState.ERROR
+    assert status.last_error is not None
+    assert "RTSP credential environment variable is not set" in status.last_error
+    assert "MISSING_TALK_USER" in status.last_error
+
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_missing_credentials")
+    )
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.message == status.last_error
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk adapter construction should honor a dedicated camera speaker RTSP URL."""
+    captured: dict[str, object] = {}
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            captured["config"] = config
+            captured["rtsp_url"] = rtsp_url
+            captured["camera_name"] = camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            captured["probed"] = True
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=["PCMA/8000"],
+                selected_codec="PCMA/8000",
+            )
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    monkeypatch.setenv("TALK_RTSP_URL", "rtsp://camera.local/talk")
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(config={"rtsp_url_env": "TALK_RTSP_URL"}),
+        },
+    )
+    source = RTSPSource(config, camera_name="cam")
+
+    # Given: A camera with a dedicated talk RTSP URL configured through the environment
+    # When: Refreshing talk capability
+    status = await source.refresh_talk_status()
+
+    # Then: The talk adapter uses the talk URL, not the recording/preview stream URL
+    assert captured["rtsp_url"] == "rtsp://camera.local/talk"
+    assert captured["camera_name"] == "cam"
+    assert captured["probed"] is True
+    assert status.capability == TalkCapabilityState.SUPPORTED
+    assert status.state == TalkState.IDLE
+    assert status.selected_codec == "PCMA/8000"
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_inherits_source_rtsp_url_when_no_override_is_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Talk should inherit the source stream URL only when no talk override exists."""
+    captured: dict[str, object] = {}
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            captured["config"] = config
+            captured["rtsp_url"] = rtsp_url
+            captured["camera_name"] = camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(),
+        },
+    )
+
+    # Given: An RTSP camera without a dedicated talk URL override
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing talk capability
+    status = await source.refresh_talk_status()
+
+    # Then: The talk adapter inherits the source RTSP URL
+    assert captured["rtsp_url"] == "rtsp://camera.local/live"
+    assert status.capability == TalkCapabilityState.SUPPORTED
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit talk URL env override should not silently fall back to source URL."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("missing talk rtsp_url_env should not construct the adapter")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    monkeypatch.delenv("MISSING_TALK_RTSP_URL", raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(config={"rtsp_url_env": "MISSING_TALK_RTSP_URL"}),
+        },
+    )
+
+    # Given: A camera with an explicit talk RTSP URL env var that is not set
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and trying to prepare a talk session
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_missing_env")
+    )
+
+    # Then: Talk reports a clear config error without falling back to the live stream URL
+    assert status.enabled is True
+    assert status.state == TalkState.ERROR
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.last_error is not None
+    assert "MISSING_TALK_RTSP_URL" in status.last_error
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.message is not None
+    assert "MISSING_TALK_RTSP_URL" in prepared.message
+
+
+@pytest.mark.parametrize("talk_config", [{"rtsp_url": ""}, {"rtsp_url_env": ""}])
+def test_talk_backchannel_blank_explicit_rtsp_url_does_not_inherit_source_url(
+    tmp_path: Path,
+    talk_config: dict[str, str],
+) -> None:
+    """A blank explicit talk URL override should be rejected instead of inherited."""
+
+    # Given: A camera with a blank explicit talk RTSP URL override
+    # When: Validating the RTSP source configuration
+    # Then: The talk config is rejected rather than inheriting the source RTSP URL
+    with pytest.raises(ValueError, match="rtsp_url_env or rtsp_url"):
+        _make_config(
+            tmp_path,
+            rtsp_url="rtsp://camera.local/live",
+            **{
+                "__runtime_talk__": TalkConfig(enabled=True),
+                "__camera_talk__": CameraTalkConfig(config=talk_config),
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_missing_explicit_credential_env_reports_config_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing explicit talk credentials should not break RTSP source construction."""
+    monkeypatch.delenv("MISSING_TALK_RTSP_USER", raising=False)
+    monkeypatch.delenv("MISSING_TALK_RTSP_PASSWORD", raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(
+                config={
+                    "username_env": "MISSING_TALK_RTSP_USER",
+                    "password_env": "MISSING_TALK_RTSP_PASSWORD",
+                }
+            ),
+        },
+    )
+
+    # Given: A camera with explicit talk credential env vars that are not set
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and trying to prepare a talk session
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_missing_credentials")
+    )
+
+    # Then: Recording source construction survives and talk reports a config error
+    assert status.enabled is True
+    assert status.state == TalkState.ERROR
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.last_error is not None
+    assert "MISSING_TALK_RTSP_USER" in status.last_error
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.message is not None
+    assert "MISSING_TALK_RTSP_USER" in prepared.message
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_open_io_failure_reports_camera_backchannel_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raw RTSP I/O failures should remain camera-backchannel errors across source boundary."""
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000",
+            )
+
+        async def open_session(
+            self,
+            *,
+            session_id: str,
+            input_sample_rate: int,
+        ) -> object:
+            _ = session_id, input_sample_rate
+            raise asyncio.TimeoutError("RTSP DESCRIBE timed out")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(),
+        },
+    )
+    source = RTSPSource(config, camera_name="cam")
+    input_format = TalkConfig().input
+
+    # Given: Capability probing succeeds but opening the camera RTSP session times out
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_io_failure", input=input_format)
+    )
+
+    assert prepared.accepted is True
+
+    # When: Opening the reserved talk session
+    # Then: The source maps raw I/O failure to a camera-backchannel refusal reason
+    with pytest.raises(TalkManagerError) as exc_info:
+        await source.open_talk_session(
+            TalkSessionOpenRequest(session_id="tk_io_failure", input=input_format)
+        )
+    assert exc_info.value.reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
 
 
 def test_preview_methods_delegate_to_live_publisher(tmp_path: Path) -> None:

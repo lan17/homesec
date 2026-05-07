@@ -49,6 +49,9 @@
           },
           "source": {
             "$ref": "#/components/schemas/CameraSourceConfig"
+          },
+          "talk": {
+            "$ref": "#/components/schemas/CameraTalkConfig"
           }
         },
         "required": [
@@ -188,6 +191,47 @@
           "last_heartbeat"
         ],
         "title": "CameraStatus",
+        "type": "object"
+      },
+      "CameraTalkConfig": {
+        "additionalProperties": false,
+        "description": "Per-camera talk policy and backend override configuration.",
+        "properties": {
+          "backend": {
+            "const": "onvif_rtsp_backchannel",
+            "default": "onvif_rtsp_backchannel",
+            "title": "Backend",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/BaseModel"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Deprecated compatibility alias for mode != 'disabled'.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "disabled"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "CameraTalkConfig",
         "type": "object"
       },
       "CameraUpdate": {
@@ -1671,6 +1715,264 @@
         "title": "StoragePathsConfig",
         "type": "object"
       },
+      "TalkCapabilityState": {
+        "description": "Discovered camera talk capability independent from session state.",
+        "enum": [
+          "disabled",
+          "unknown",
+          "probing",
+          "supported",
+          "unsupported",
+          "unsupported_codec",
+          "error"
+        ],
+        "title": "TalkCapabilityState",
+        "type": "string"
+      },
+      "TalkInputFormat": {
+        "additionalProperties": false,
+        "description": "Browser input frame format contract for push-to-talk.",
+        "properties": {
+          "channels": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Channels",
+            "type": "integer"
+          },
+          "codec": {
+            "const": "pcm_s16le",
+            "default": "pcm_s16le",
+            "title": "Codec",
+            "type": "string"
+          },
+          "frame_ms": {
+            "default": 20,
+            "maximum": 60.0,
+            "minimum": 10.0,
+            "title": "Frame Ms",
+            "type": "integer"
+          },
+          "sample_rate": {
+            "default": 16000,
+            "maximum": 48000.0,
+            "minimum": 8000.0,
+            "title": "Sample Rate",
+            "type": "integer"
+          }
+        },
+        "title": "TalkInputFormat",
+        "type": "object"
+      },
+      "TalkSessionRequest": {
+        "properties": {
+          "input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TalkInputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "title": "TalkSessionRequest",
+        "type": "object"
+      },
+      "TalkSessionResponse": {
+        "properties": {
+          "camera_name": {
+            "title": "Camera Name",
+            "type": "string"
+          },
+          "idle_timeout_s": {
+            "title": "Idle Timeout S",
+            "type": "number"
+          },
+          "input": {
+            "$ref": "#/components/schemas/TalkInputFormat"
+          },
+          "max_session_s": {
+            "title": "Max Session S",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TalkState"
+          },
+          "stream_url": {
+            "title": "Stream Url",
+            "type": "string"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "token_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Expires At"
+          },
+          "websocket_url": {
+            "title": "Websocket Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "camera_name",
+          "session_id",
+          "state",
+          "input",
+          "websocket_url",
+          "stream_url",
+          "max_session_s",
+          "idle_timeout_s"
+        ],
+        "title": "TalkSessionResponse",
+        "type": "object"
+      },
+      "TalkState": {
+        "description": "Current talk capability/session state for a camera.",
+        "enum": [
+          "disabled",
+          "unsupported",
+          "idle",
+          "starting",
+          "active",
+          "stopping",
+          "error",
+          "temporarily_unavailable"
+        ],
+        "title": "TalkState",
+        "type": "string"
+      },
+      "TalkStatusResponse": {
+        "properties": {
+          "active_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Session Id"
+          },
+          "camera_name": {
+            "title": "Camera Name",
+            "type": "string"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/TalkCapabilityState"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "offered_codecs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Offered Codecs",
+            "type": "array"
+          },
+          "policy_enabled": {
+            "title": "Policy Enabled",
+            "type": "boolean"
+          },
+          "selected_codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Codec"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TalkState"
+          },
+          "supported_codecs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Codecs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "camera_name",
+          "enabled",
+          "policy_enabled",
+          "capability",
+          "state"
+        ],
+        "title": "TalkStatusResponse",
+        "type": "object"
+      },
+      "TalkStopResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TalkState"
+          }
+        },
+        "required": [
+          "accepted",
+          "state"
+        ],
+        "title": "TalkStopResponse",
+        "type": "object"
+      },
       "TestConnectionRequest": {
         "description": "Payload for generic setup test-connection endpoint.",
         "properties": {
@@ -3120,6 +3422,161 @@
         "summary": "Get Stats",
         "tags": [
           "stats"
+        ]
+      }
+    },
+    "/api/v1/talk/cameras/{camera_name}": {
+      "get": {
+        "description": "Return push-to-talk status for a camera.",
+        "operationId": "get_talk_status_api_v1_talk_cameras__camera_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TalkStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Talk Status",
+        "tags": [
+          "talk"
+        ]
+      }
+    },
+    "/api/v1/talk/cameras/{camera_name}/sessions": {
+      "post": {
+        "description": "Reserve a push-to-talk session slot and return the WebSocket stream URL.",
+        "operationId": "prepare_talk_session_api_v1_talk_cameras__camera_name__sessions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TalkSessionRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TalkSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare Talk Session",
+        "tags": [
+          "talk"
+        ]
+      }
+    },
+    "/api/v1/talk/cameras/{camera_name}/sessions/{session_id}": {
+      "delete": {
+        "description": "Stop a reserved or active push-to-talk session.",
+        "operationId": "stop_talk_session_api_v1_talk_cameras__camera_name__sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TalkStopResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Talk Session",
+        "tags": [
+          "talk"
         ]
       }
     }
