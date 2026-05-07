@@ -319,6 +319,25 @@ def test_talk_status_response_drops_secret_bearing_backend_reason() -> None:
     assert response.backend_reason is None
 
 
+def test_talk_status_response_drops_raw_sdp_backend_reason() -> None:
+    """API talk status responses should not expose raw SDP backend reasons."""
+    # Given: A status response is built with a safe backend ID and SDP reason
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend="vendor_backend",
+        backend_reason="SDP answer v=0 m=audio 0 RTP/AVP 0",
+    )
+
+    # Then: The backend ID is preserved but the raw SDP reason is dropped
+    assert response.backend == "vendor_backend"
+    assert response.backend_reason is None
+
+
 def test_get_talk_status_returns_unsupported_source_status() -> None:
     """Unsupported sources should surface as talk status rather than session opens."""
     # Given: The runtime reports that the camera source has no talk support.

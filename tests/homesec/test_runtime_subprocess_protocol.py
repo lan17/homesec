@@ -86,6 +86,25 @@ def test_camera_talk_status_drops_secret_bearing_backend_reason() -> None:
     assert status.backend_reason is None
 
 
+def test_camera_talk_status_drops_raw_sdp_backend_reason() -> None:
+    """Public talk status should not expose raw SDP backend reasons."""
+    # Given: A custom source reports a safe backend ID with an embedded SDP snippet
+    payload = {
+        "camera_name": "front",
+        "enabled": True,
+        "state": "error",
+        "backend": "vendor_backend",
+        "backend_reason": "raw SDP: a=crypto:1 inline:keymaterial",
+    }
+
+    # When: Parsing the public camera talk status model
+    status = CameraTalkStatus.model_validate(payload)
+
+    # Then: The backend ID is preserved but the raw SDP reason is dropped
+    assert status.backend == "vendor_backend"
+    assert status.backend_reason is None
+
+
 def test_worker_talk_status_payload_sanitizes_unsafe_backend_diagnostics() -> None:
     """Worker talk IPC should not forward unsafe backend identifiers."""
     # Given: A worker payload includes an unsafe backend identifier
@@ -136,6 +155,24 @@ def test_worker_talk_status_payload_drops_secret_bearing_backend_reason() -> Non
     status = WorkerTalkStatusPayload.model_validate(payload)
 
     # Then: The backend ID is preserved but the unsafe reason is dropped
+    assert status.backend == "vendor_backend"
+    assert status.backend_reason is None
+
+
+def test_worker_talk_status_payload_drops_raw_sdp_backend_reason() -> None:
+    """Worker talk IPC should not forward raw SDP backend reasons."""
+    # Given: A worker payload includes a safe backend ID with an embedded SDP snippet
+    payload = {
+        "enabled": True,
+        "state": "error",
+        "backend": "vendor_backend",
+        "backend_reason": "SDP answer v=0 m=audio 0 RTP/AVP 0",
+    }
+
+    # When: Parsing the worker IPC payload
+    status = WorkerTalkStatusPayload.model_validate(payload)
+
+    # Then: The backend ID is preserved but the raw SDP reason is dropped
     assert status.backend == "vendor_backend"
     assert status.backend_reason is None
 
@@ -193,5 +230,24 @@ def test_runtime_talk_stream_drops_secret_bearing_backend_reason() -> None:
     )
 
     # Then: The backend ID remains but the unsafe reason is dropped
+    assert stream.backend == "vendor_backend"
+    assert stream.backend_reason is None
+
+
+def test_runtime_talk_stream_drops_raw_sdp_backend_reason() -> None:
+    """Runtime talk stream ready metadata should not expose raw SDP reasons."""
+    # Given: A runtime stream is created with a safe backend ID and SDP reason
+    # When: The stream model is initialized
+    stream = RuntimeTalkStream(
+        camera_name="front",
+        session_id="tk_sdp_reason",
+        input=TalkInputFormat(),
+        reader=cast(asyncio.StreamReader, object()),
+        writer=cast(asyncio.StreamWriter, object()),
+        backend="vendor_backend",
+        backend_reason="raw SDP: a=crypto:1 inline:keymaterial",
+    )
+
+    # Then: The backend ID remains but the raw SDP reason is dropped
     assert stream.backend == "vendor_backend"
     assert stream.backend_reason is None

@@ -8,7 +8,7 @@ TALK_BACKEND_ID_PATTERN_TEXT = r"^[a-z][a-z0-9_]{0,63}$"
 _TALK_BACKEND_ID_PATTERN = re.compile(TALK_BACKEND_ID_PATTERN_TEXT)
 _UNSAFE_TALK_BACKEND_REASON_PATTERN = re.compile(
     r"://|authorization|bearer|basic|digest|password|passwd|secret|token|api[_-]?key|"
-    r"^v=0$|^m=|^a=|^sdp$",
+    r"\bsdp\b|(?:^|\s)(?:v=0|m=|a=)",
     re.IGNORECASE,
 )
 
