@@ -28,7 +28,7 @@ from homesec.talk.selector import TalkBackendSelector
 
 
 class _FakeConfig(BaseModel):
-    supported: bool = True
+    supported: bool = False
 
 
 @dataclass(slots=True)
@@ -166,6 +166,12 @@ def _fake_detector(context: TalkBackendContext) -> TalkBackendDetection:
     )
 
 
+def _require_fake_config(config: BaseModel) -> _FakeConfig:
+    if not isinstance(config, _FakeConfig):
+        raise TypeError(f"Expected _FakeConfig, got {type(config).__name__}")
+    return config
+
+
 def _registry(
     *,
     calls: list[str],
@@ -191,7 +197,7 @@ def _registry(
             name="fake_proprietary",
             config_model=_FakeConfig,
             factory=lambda config, context: _FakeProprietaryTalkBackend(
-                config=config if isinstance(config, _FakeConfig) else _FakeConfig(),
+                config=_require_fake_config(config),
                 calls=calls,
                 sessions=session_store,
             ),
@@ -206,6 +212,7 @@ def _registry(
 @pytest.mark.asyncio
 async def test_explicit_fake_proprietary_backend_is_selected_without_onvif_probe() -> None:
     """Explicit proprietary backend selection should not fall back to ONVIF."""
+    # Given: A camera explicitly configured for a registered fake proprietary backend
     calls: list[str] = []
     sessions: list[_FakeProprietaryTalkSession] = []
     selector = TalkBackendSelector(
@@ -218,7 +225,6 @@ async def test_explicit_fake_proprietary_backend_is_selected_without_onvif_probe
         ),
     )
 
-    # Given: A camera explicitly configured for a registered fake proprietary backend
     # When: Probing and opening through the selector
     probe = await selector.probe()
     session = await selector.open_session(
@@ -235,6 +241,7 @@ async def test_explicit_fake_proprietary_backend_is_selected_without_onvif_probe
 @pytest.mark.asyncio
 async def test_auto_prefers_supported_onvif_before_fake_fingerprint() -> None:
     """Auto selection should keep ONVIF first when the standards backend works."""
+    # Given: A safe fake fingerprint and a supported standards backend
     calls: list[str] = []
     selector = TalkBackendSelector(
         registry=_registry(
@@ -247,7 +254,6 @@ async def test_auto_prefers_supported_onvif_before_fake_fingerprint() -> None:
         ),
     )
 
-    # Given: A safe fake fingerprint and a supported standards backend
     # When: Probing auto talk capability
     probe = await selector.probe()
 
@@ -260,6 +266,7 @@ async def test_auto_prefers_supported_onvif_before_fake_fingerprint() -> None:
 @pytest.mark.asyncio
 async def test_auto_selects_safe_fake_backend_after_onvif_is_unsupported() -> None:
     """Auto selection should fall through to safe proprietary candidates after ONVIF fails."""
+    # Given: ONVIF is unsupported but fake proprietary config makes that backend safe to probe
     calls: list[str] = []
     selector = TalkBackendSelector(
         registry=_registry(calls=calls),
@@ -271,7 +278,6 @@ async def test_auto_selects_safe_fake_backend_after_onvif_is_unsupported() -> No
         ),
     )
 
-    # Given: ONVIF is unsupported but fake proprietary config makes that backend safe to probe
     # When: Probing auto talk capability
     probe = await selector.probe()
 
@@ -284,13 +290,13 @@ async def test_auto_selects_safe_fake_backend_after_onvif_is_unsupported() -> No
 @pytest.mark.asyncio
 async def test_auto_ignores_fake_backend_without_safe_config_or_fingerprint() -> None:
     """Auto selection should not probe unsafe proprietary candidates."""
+    # Given: ONVIF is unsupported and the fake backend has no safe detector match
     calls: list[str] = []
     selector = TalkBackendSelector(
         registry=_registry(calls=calls),
         context=_context(CameraTalkConfig(backend="auto")),
     )
 
-    # Given: ONVIF is unsupported and the fake backend has no safe detector match
     # When: Probing auto talk capability
     probe = await selector.probe()
 
@@ -304,6 +310,7 @@ async def test_auto_ignores_fake_backend_without_safe_config_or_fingerprint() ->
 @pytest.mark.asyncio
 async def test_fake_backend_session_receives_pcm_through_talk_manager() -> None:
     """A proprietary backend should work behind the existing TalkManager interface."""
+    # Given: A TalkManager wired to selector factories for a safe fake proprietary backend
     calls: list[str] = []
     sessions: list[_FakeProprietaryTalkSession] = []
     selector = TalkBackendSelector(
@@ -319,26 +326,32 @@ async def test_fake_backend_session_receives_pcm_through_talk_manager() -> None:
         camera_name="front",
         enabled=True,
         supported_codecs=selector.supported_codecs,
+        supported_codecs_factory=lambda: selector.selected_supported_codecs,
         open_session_factory=selector.open_session,
         capability_probe_factory=selector.probe,
         max_session_s=60.0,
         idle_timeout_s=60.0,
     )
     frame = b"\x00" * TalkInputFormat().expected_bytes_per_frame
+    initial_status = manager.status()
 
-    # Given: A TalkManager wired to selector factories for a safe fake proprietary backend
     # When: Preparing, opening, writing, and stopping a talk session
     prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_fake"))
+    prepared_status = manager.status()
     session = await manager.open_session(TalkSessionOpenRequest(session_id="tk_fake"))
     await manager.write_pcm_frame("tk_fake", frame)
     stopped = await manager.stop_session("tk_fake")
+    stopped_status = manager.status()
 
     # Then: Existing manager lifecycle forwards PCM to the fake backend with no API/runtime changes
     assert prepared.accepted is True
+    assert initial_status.supported_codecs == ["PCMU/8000"]
+    assert prepared_status.supported_codecs == ["PCMA/8000"]
     assert session is sessions[0]
     assert sessions[0].selected_codec == "PCMA/8000"
     assert sessions[0].frames == [frame]
     assert manager.status().selected_codec == "PCMA/8000"
+    assert stopped_status.supported_codecs == ["PCMA/8000"]
     assert stopped is True
     assert sessions[0].closed is True
     assert calls == ["onvif:probe", "fake:probe", "fake:open:tk_fake"]

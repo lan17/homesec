@@ -51,6 +51,12 @@ class _SelectionError:
         return []
 
 
+@dataclass(frozen=True, slots=True)
+class _AutoDetectionResult:
+    registrations: list[TalkBackendRegistration]
+    failures: list[_SelectionError]
+
+
 _AUTO_DETECTION_CONFIDENCE_RANK: dict[TalkBackendConfidence, int] = {
     "explicit": 0,
     "high": 1,
@@ -95,6 +101,13 @@ class TalkBackendSelector:
                 ).supported_codecs
             )
         return self._select().supported_codecs
+
+    @property
+    def selected_supported_codecs(self) -> list[str]:
+        """Return supported codecs for the selected backend, if auto selection has landed."""
+        if isinstance(self._selection, _SelectedBackend):
+            return self._selection.supported_codecs
+        return []
 
     @property
     def backend(self) -> str | None:
@@ -178,35 +191,59 @@ class TalkBackendSelector:
                 backend_reason="No standards-based talk backends are registered",
             )
             return self._selection.result
-        candidates = standards + [
-            registration
-            for registration in self._detected_auto_registrations()
-            if registration.name not in {standard.name for standard in standards}
-        ]
 
         best_failure: _SelectionError | None = None
-        for registration in candidates:
+        seen = set[str]()
+        for registration in standards:
+            seen.add(registration.name)
             selection = self._build_registered_backend(
                 registration.name,
                 reason=self._auto_candidate_reason(registration),
             )
             if isinstance(selection, _SelectionError):
-                self._selection = selection
-                return selection.result
+                best_failure = _better_auto_failure(best_failure, selection)
+                continue
 
             result = await selection.adapter.probe()
             if result.capability == TalkCapabilityState.SUPPORTED:
                 self._selection = selection
                 return result
-            candidate_failure = _SelectionError(
-                result,
-                backend=selection.backend,
-                backend_reason=selection.backend_reason,
+            best_failure = _better_auto_failure(
+                best_failure,
+                _SelectionError(
+                    result,
+                    backend=selection.backend,
+                    backend_reason=selection.backend_reason,
+                ),
             )
-            if best_failure is None or _auto_failure_rank(
-                candidate_failure.result
-            ) < _auto_failure_rank(best_failure.result):
-                best_failure = candidate_failure
+
+        detected = self._detected_auto_registrations()
+        for failure in detected.failures:
+            best_failure = _better_auto_failure(best_failure, failure)
+
+        for registration in detected.registrations:
+            if registration.name in seen:
+                continue
+            selection = self._build_registered_backend(
+                registration.name,
+                reason=self._auto_candidate_reason(registration),
+            )
+            if isinstance(selection, _SelectionError):
+                best_failure = _better_auto_failure(best_failure, selection)
+                continue
+
+            result = await selection.adapter.probe()
+            if result.capability == TalkCapabilityState.SUPPORTED:
+                self._selection = selection
+                return result
+            best_failure = _better_auto_failure(
+                best_failure,
+                _SelectionError(
+                    result,
+                    backend=selection.backend,
+                    backend_reason=selection.backend_reason,
+                ),
+            )
 
         if best_failure is None:
             return _SelectionError(
@@ -217,18 +254,6 @@ class TalkBackendSelector:
         self._selection = best_failure
         return best_failure.result
 
-    def _auto_candidate_registrations(self) -> list[TalkBackendRegistration]:
-        standards = self._standards_registrations()
-        if not standards:
-            return []
-        seen = {registration.name for registration in standards}
-        detected = [
-            registration
-            for registration in self._detected_auto_registrations()
-            if registration.name not in seen
-        ]
-        return standards + detected
-
     def _standards_registrations(self) -> list[TalkBackendRegistration]:
         return [
             registration
@@ -236,12 +261,32 @@ class TalkBackendSelector:
             if registration.standards_based
         ]
 
-    def _detected_auto_registrations(self) -> list[TalkBackendRegistration]:
+    def _detected_auto_registrations(self) -> _AutoDetectionResult:
         detected: list[tuple[int, bool, int, str, TalkBackendRegistration]] = []
+        failures: list[_SelectionError] = []
         for registration in self._registry.all():
             if registration.detector is None:
                 continue
-            detection = registration.detector(self._context)
+            try:
+                detection = registration.detector(self._context)
+            except Exception:
+                logger.debug(
+                    "Talk backend detector failed",
+                    extra={
+                        "camera_name": self._context.camera_name,
+                        "talk_backend": registration.name,
+                    },
+                    exc_info=True,
+                )
+                message = f"Talk backend '{registration.name}' detector failed"
+                failures.append(
+                    _SelectionError(
+                        _runtime_selection_error_result(message),
+                        backend=registration.name,
+                        backend_reason=message,
+                    )
+                )
+                continue
             detected_backend = normalize_talk_backend_id(detection.backend)
             try:
                 validate_talk_backend_id(detected_backend)
@@ -263,9 +308,12 @@ class TalkBackendSelector:
                 )
             )
         if not detected:
-            return []
+            return _AutoDetectionResult(registrations=[], failures=failures)
         detected.sort(key=lambda item: item[:4])
-        return [item[4] for item in detected]
+        return _AutoDetectionResult(
+            registrations=[item[4] for item in detected],
+            failures=failures,
+        )
 
     def _auto_candidate_reason(self, registration: TalkBackendRegistration) -> str:
         if registration.standards_based:
@@ -364,6 +412,17 @@ def _auto_failure_rank(result: TalkCapabilityProbeResult) -> int:
             return 4
         case _:
             return 5
+
+
+def _better_auto_failure(
+    current: _SelectionError | None,
+    candidate: _SelectionError,
+) -> _SelectionError:
+    if current is None:
+        return candidate
+    if _auto_failure_rank(candidate.result) < _auto_failure_rank(current.result):
+        return candidate
+    return current
 
 
 def _unique_codecs(values: Iterable[str]) -> list[str]:

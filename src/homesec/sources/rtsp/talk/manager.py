@@ -89,6 +89,7 @@ class TalkManager:
         open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
         max_session_s: float,
         idle_timeout_s: float,
+        supported_codecs_factory: Callable[[], list[str]] | None = None,
         capability_probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
         capability_ttl_s: float = 30.0,
     ) -> None:
@@ -96,6 +97,7 @@ class TalkManager:
         self._enabled = enabled
         self._policy_enabled = enabled if policy_enabled is None else policy_enabled
         self._supported_codecs = list(supported_codecs)
+        self._supported_codecs_factory = supported_codecs_factory
         self._open_session_factory = open_session_factory
         self._capability_probe_factory = capability_probe_factory
         self._capability_ttl_s = capability_ttl_s
@@ -136,13 +138,28 @@ class TalkManager:
             capability=capability.capability,
             state=state,
             active_session_id=record.session_id if record is not None else None,
-            supported_codecs=self._supported_codecs,
+            supported_codecs=self._current_supported_codecs(),
             offered_codecs=capability.offered_codecs,
             selected_codec=(
                 record.selected_codec if record is not None else capability.selected_codec
             ),
             last_error=self._last_error or capability.message,
         )
+
+    def _current_supported_codecs(self) -> list[str]:
+        """Return the latest selected backend codec hints when available."""
+        if self._supported_codecs_factory is None:
+            return list(self._supported_codecs)
+        try:
+            supported_codecs = list(self._supported_codecs_factory())
+        except Exception:
+            logger.debug(
+                "Talk supported codec refresh failed",
+                extra={"camera_name": self._camera_name},
+                exc_info=True,
+            )
+            return list(self._supported_codecs)
+        return supported_codecs or list(self._supported_codecs)
 
     async def refresh_status(self, *, force: bool = False) -> CameraTalkStatus:
         """Refresh capability if needed and return current source-level status."""

@@ -922,6 +922,7 @@ class RTSPSource(ThreadedClipSource):
             enabled=True,
             policy_enabled=camera_talk.policy_enabled,
             supported_codecs=selector.supported_codecs,
+            supported_codecs_factory=lambda: selector.selected_supported_codecs,
             open_session_factory=self._open_selected_talk_session,
             capability_probe_factory=selector.probe,
             max_session_s=runtime_talk.max_session_s,
