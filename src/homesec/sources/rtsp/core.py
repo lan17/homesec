@@ -100,6 +100,11 @@ def _build_onvif_backchannel_config_data(
     return adapter_config_data
 
 
+def _camera_talk_uses_onvif_for_current_runtime(camera_talk: CameraTalkConfig) -> bool:
+    """Return whether the pre-selector runtime should use the ONVIF talk path."""
+    return camera_talk.backend in {"auto", "onvif_rtsp_backchannel"}
+
+
 def _talk_config_error_probe_factory(
     message: str,
 ) -> Callable[[], Awaitable[TalkCapabilityProbeResult]]:
@@ -324,13 +329,13 @@ class RTSPSourceConfig(BaseModel):
             or camera_talk is None
             or not runtime_talk.enabled
             or not camera_talk.policy_enabled
-            or camera_talk.backend != "onvif_rtsp_backchannel"
+            or not _camera_talk_uses_onvif_for_current_runtime(camera_talk)
         ):
             return self
 
         ONVIFBackchannelConfig.model_validate(
             _build_onvif_backchannel_config_data(
-                camera_talk.config,
+                camera_talk.config_for_backend("onvif_rtsp_backchannel"),
                 fallback_rtsp_url=self.rtsp_url,
                 fallback_rtsp_url_env=self.rtsp_url_env,
             )
@@ -941,7 +946,7 @@ class RTSPSource(ThreadedClipSource):
                 max_session_s=runtime_talk.max_session_s,
                 idle_timeout_s=runtime_talk.idle_timeout_s,
             )
-        if camera_talk.backend != "onvif_rtsp_backchannel":
+        if not _camera_talk_uses_onvif_for_current_runtime(camera_talk):
             return TalkManager(
                 camera_name=self.camera_name,
                 enabled=False,
@@ -953,7 +958,7 @@ class RTSPSource(ThreadedClipSource):
             )
 
         adapter_config_data = _build_onvif_backchannel_config_data(
-            camera_talk.config,
+            camera_talk.config_for_backend("onvif_rtsp_backchannel"),
             fallback_rtsp_url=self.rtsp_url,
         )
         adapter_config = ONVIFBackchannelConfig.model_validate(adapter_config_data)

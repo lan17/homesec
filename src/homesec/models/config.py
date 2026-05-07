@@ -274,8 +274,9 @@ class CameraTalkConfig(BaseModel):
         default=True,
         description="Deprecated compatibility alias for mode != 'disabled'.",
     )
-    backend: Literal["onvif_rtsp_backchannel"] = "onvif_rtsp_backchannel"
+    backend: str = "auto"
     config: dict[str, Any] | BaseModel = Field(default_factory=dict)
+    backends: dict[str, dict[str, Any] | BaseModel] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -284,6 +285,14 @@ class CameraTalkConfig(BaseModel):
             return value
 
         config = dict(value)
+        backend = config.get("backend")
+        if isinstance(backend, str):
+            config["backend"] = backend.lower()
+        backends = config.get("backends")
+        if isinstance(backends, dict):
+            config["backends"] = {
+                key.lower() if isinstance(key, str) else key: item for key, item in backends.items()
+            }
         if "mode" not in config and "enabled" in config:
             config["mode"] = "auto" if _bool_config_value(config["enabled"]) else "disabled"
         if "enabled" not in config and "mode" in config:
@@ -302,12 +311,33 @@ class CameraTalkConfig(BaseModel):
         """Whether policy allows runtime capability discovery for this camera."""
         return self.mode != "disabled"
 
+    def config_for_backend(self, backend_name: str) -> dict[str, Any]:
+        """Return backend-specific config while preserving legacy config aliases."""
+        normalized_backend = backend_name.lower()
+        if normalized_backend in self.backends:
+            return _model_or_dict_config(self.backends[normalized_backend])
+        if self.backend == normalized_backend and self.config:
+            return _model_or_dict_config(self.config)
+        if (
+            self.backend == "auto"
+            and normalized_backend == "onvif_rtsp_backchannel"
+            and self.config
+        ):
+            return _model_or_dict_config(self.config)
+        return {}
+
     @field_validator("backend", mode="before")
     @classmethod
     def _normalize_backend(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower()
         return value
+
+
+def _model_or_dict_config(value: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    return dict(value)
 
 
 def _bool_config_value(value: Any) -> bool:

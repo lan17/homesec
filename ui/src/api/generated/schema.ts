@@ -653,10 +653,15 @@ export interface components {
         CameraTalkConfig: {
             /**
              * Backend
-             * @default onvif_rtsp_backchannel
-             * @constant
+             * @default auto
              */
-            backend: "onvif_rtsp_backchannel";
+            backend: string;
+            /** Backends */
+            backends?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                } | components["schemas"]["BaseModel"];
+            };
             /** Config */
             config?: {
                 [key: string]: unknown;

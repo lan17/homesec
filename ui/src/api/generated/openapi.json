@@ -198,10 +198,24 @@
         "description": "Per-camera talk policy and backend override configuration.",
         "properties": {
           "backend": {
-            "const": "onvif_rtsp_backchannel",
-            "default": "onvif_rtsp_backchannel",
+            "default": "auto",
             "title": "Backend",
             "type": "string"
+          },
+          "backends": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "$ref": "#/components/schemas/BaseModel"
+                }
+              ]
+            },
+            "title": "Backends",
+            "type": "object"
           },
           "config": {
             "anyOf": [
