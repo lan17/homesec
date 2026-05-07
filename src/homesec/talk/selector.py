@@ -113,9 +113,15 @@ class TalkBackendSelector:
         if detected_registration is not None:
             return self._build_registered_backend(detected_registration.name)
 
-        registrations = self._registry.standards_first()
+        registrations = [
+            registration
+            for registration in self._registry.standards_first()
+            if registration.standards_based
+        ]
         if not registrations:
-            return _SelectionError(_selection_error_result("No talk backends are registered"))
+            return _SelectionError(
+                _selection_error_result("No standards-based talk backends are registered")
+            )
         return self._build_registered_backend(registrations[0].name)
 
     def _detected_auto_registration(self) -> TalkBackendRegistration | None:

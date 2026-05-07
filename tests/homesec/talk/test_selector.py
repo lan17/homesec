@@ -185,6 +185,37 @@ async def test_selector_auto_ignores_detector_that_is_not_safe_to_probe() -> Non
 
 
 @pytest.mark.asyncio
+async def test_selector_auto_refuses_vendor_only_registry_without_safe_detector() -> None:
+    """Backend auto mode should not probe proprietary backends without safe detection."""
+    # Given: A registry with only a vendor backend and no safe detector match
+    calls: list[str] = []
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend("vendor_backend", calls),
+            priority=1,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Probing through auto selection
+    probe = await selector.probe()
+
+    # Then: Selection returns a config/runtime error without probing the vendor backend
+    assert probe.capability == TalkCapabilityState.ERROR
+    assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert probe.message == "No standards-based talk backends are registered"
+    assert selector.supported_codecs == []
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_selector_explicit_backend_does_not_fallback_to_standards_backend() -> None:
     """Explicit backend mode should not fallback to registered standards backends."""
     # Given: A selector with an explicit backend that is not registered
