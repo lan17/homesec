@@ -69,6 +69,8 @@ class WorkerTalkStatusPayload(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
     last_error: str | None = None
 
     @model_validator(mode="after")
@@ -92,6 +94,8 @@ class WorkerTalkStatusPayload(BaseModel):
             supported_codecs=list(status.supported_codecs),
             offered_codecs=list(status.offered_codecs),
             selected_codec=status.selected_codec,
+            backend=status.backend,
+            backend_reason=status.backend_reason,
             last_error=status.last_error,
         )
 

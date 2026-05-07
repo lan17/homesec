@@ -604,6 +604,8 @@ export function parseTalkStatusResponse(payload: unknown): TalkStatusResponse {
         ? []
         : expectStringArray(rawOfferedCodecs, 'offered_codecs'),
     selected_codec: expectNullableString(payload.selected_codec, 'selected_codec'),
+    backend: expectNullableString(payload.backend, 'backend'),
+    backend_reason: expectNullableString(payload.backend_reason, 'backend_reason'),
     last_error: expectNullableString(payload.last_error, 'last_error'),
   }
 }

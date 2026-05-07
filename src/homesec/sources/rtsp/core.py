@@ -23,6 +23,7 @@ from homesec.models.clip import Clip
 from homesec.models.config import CameraTalkConfig, PreviewConfig, TalkConfig
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityState,
     TalkRefusalReason,
     TalkSessionOpenRequest,
     TalkSessionPrepareRequest,
@@ -512,7 +513,7 @@ class RTSPSource(ThreadedClipSource):
                 enabled=False,
                 state=TalkState.DISABLED,
             )
-        return manager.status()
+        return self._with_talk_backend_diagnostics(manager.status())
 
     async def refresh_talk_status(self) -> CameraTalkStatus:
         """Refresh discovered push-to-talk capability and return current status."""
@@ -523,7 +524,23 @@ class RTSPSource(ThreadedClipSource):
                 enabled=False,
                 state=TalkState.DISABLED,
             )
-        return await manager.refresh_status()
+        return self._with_talk_backend_diagnostics(await manager.refresh_status())
+
+    def _with_talk_backend_diagnostics(self, status: CameraTalkStatus) -> CameraTalkStatus:
+        selector = self._talk_backend_selector
+        if (
+            selector is None
+            or not status.enabled
+            or not status.policy_enabled
+            or status.capability in {TalkCapabilityState.UNKNOWN, TalkCapabilityState.PROBING}
+        ):
+            return status.model_copy(update={"backend": None, "backend_reason": None})
+        return status.model_copy(
+            update={
+                "backend": selector.backend,
+                "backend_reason": selector.backend_reason,
+            }
+        )
 
     async def prepare_talk_session(
         self,

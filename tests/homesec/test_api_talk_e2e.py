@@ -485,6 +485,8 @@ class _WorkerHarnessController(RuntimeController):
             supported_codecs=result.talk_status.supported_codecs,
             offered_codecs=result.talk_status.offered_codecs,
             selected_codec=result.talk_status.selected_codec,
+            backend=result.talk_status.backend,
+            backend_reason=result.talk_status.backend_reason,
             last_error=result.talk_status.last_error,
         )
 
@@ -916,6 +918,11 @@ def test_talk_status_discovers_fake_onvif_backchannel(tmp_path: Path) -> None:
             assert payload["state"] == "idle"
             assert payload["offered_codecs"] == ["PCMU/8000"]
             assert payload["selected_codec"] == "PCMU/8000"
+            assert payload["backend"] == "onvif_rtsp_backchannel"
+            assert (
+                payload["backend_reason"]
+                == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+            )
         server.wait_for_methods(["DESCRIBE"])
     finally:
         if app is not None:

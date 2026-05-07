@@ -62,6 +62,8 @@ class TalkStatusResponse(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
     last_error: str | None = None
 
 
@@ -132,6 +134,8 @@ def _status_response(talk_status: CameraTalkStatus) -> TalkStatusResponse:
         supported_codecs=list(talk_status.supported_codecs),
         offered_codecs=list(talk_status.offered_codecs),
         selected_codec=talk_status.selected_codec,
+        backend=talk_status.backend,
+        backend_reason=talk_status.backend_reason,
         last_error=talk_status.last_error,
     )
 

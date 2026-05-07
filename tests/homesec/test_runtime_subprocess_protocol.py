@@ -21,3 +21,5 @@ def test_worker_talk_status_payload_derives_capability_defaults() -> None:
     assert status.policy_enabled is True
     assert status.capability == TalkCapabilityState.SUPPORTED
     assert status.state == TalkState.IDLE
+    assert status.backend is None
+    assert status.backend_reason is None

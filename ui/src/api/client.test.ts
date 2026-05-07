@@ -1372,6 +1372,8 @@ describe('HomeSecApiClient push-to-talk', () => {
           supported_codecs: ['pcm_s16le'],
           offered_codecs: ['PCMU/8000'],
           selected_codec: 'pcm_s16le',
+          backend: 'onvif_rtsp_backchannel',
+          backend_reason: 'Selected ONVIF RTSP backchannel by standards-first auto probing',
           last_error: null,
         }),
         {
@@ -1396,6 +1398,8 @@ describe('HomeSecApiClient push-to-talk', () => {
       supported_codecs: ['pcm_s16le'],
       offered_codecs: ['PCMU/8000'],
       selected_codec: 'pcm_s16le',
+      backend: 'onvif_rtsp_backchannel',
+      backend_reason: 'Selected ONVIF RTSP backchannel by standards-first auto probing',
       last_error: null,
       httpStatus: 200,
     })

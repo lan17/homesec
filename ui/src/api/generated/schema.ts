@@ -1286,6 +1286,10 @@ export interface components {
         TalkStatusResponse: {
             /** Active Session Id */
             active_session_id?: string | null;
+            /** Backend */
+            backend?: string | null;
+            /** Backend Reason */
+            backend_reason?: string | null;
             /** Camera Name */
             camera_name: string;
             capability: components["schemas"]["TalkCapabilityState"];

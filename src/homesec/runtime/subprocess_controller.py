@@ -921,6 +921,8 @@ class SubprocessRuntimeController(RuntimeController):
             supported_codecs=list(payload.supported_codecs),
             offered_codecs=list(payload.offered_codecs),
             selected_codec=payload.selected_codec,
+            backend=payload.backend,
+            backend_reason=payload.backend_reason,
             last_error=payload.last_error,
         )
 

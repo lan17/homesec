@@ -815,6 +815,8 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
     assert status.enabled is False
     assert status.policy_enabled is expected_policy_enabled
     assert status.state == TalkState.DISABLED
+    assert status.backend is None
+    assert status.backend_reason is None
     assert prepared.accepted is False
     assert prepared.refusal_reason == TalkRefusalReason.TALK_DISABLED
 
@@ -856,6 +858,8 @@ async def test_unknown_explicit_talk_backend_reports_config_error_without_onvif_
     assert status.capability == TalkCapabilityState.ERROR
     assert status.state == TalkState.ERROR
     assert status.last_error == "Talk backend 'tapo_local' is not registered in this runtime"
+    assert status.backend == "tapo_local"
+    assert status.backend_reason == "Talk backend 'tapo_local' is not registered"
     assert prepared.accepted is False
     assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
     assert prepared.message == status.last_error
@@ -898,6 +902,9 @@ async def test_talk_missing_explicit_credential_env_reports_config_error_without
     assert status.last_error is not None
     assert "RTSP credential environment variable is not set" in status.last_error
     assert "MISSING_TALK_USER" in status.last_error
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert status.backend_reason == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert "rtsp://host/talk" not in status.backend_reason
 
     prepared = await source.prepare_talk_session(
         TalkSessionPrepareRequest(session_id="tk_missing_credentials")
@@ -955,6 +962,10 @@ async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe
     assert status.capability == TalkCapabilityState.SUPPORTED
     assert status.state == TalkState.IDLE
     assert status.selected_codec == "PCMA/8000"
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert (
+        status.backend_reason == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+    )
 
 
 @pytest.mark.asyncio
@@ -1037,6 +1048,9 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
     assert status.capability == TalkCapabilityState.ERROR
     assert status.last_error is not None
     assert "MISSING_TALK_RTSP_URL" in status.last_error
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert status.backend_reason == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert "rtsp://camera.local/live" not in status.backend_reason
     assert prepared.accepted is False
     assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
     assert prepared.message is not None

@@ -97,6 +97,8 @@ class CameraTalkStatus(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
     last_error: str | None = None
 
     @model_validator(mode="after")

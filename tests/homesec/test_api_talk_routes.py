@@ -204,6 +204,8 @@ def test_get_talk_status_returns_runtime_status() -> None:
             active_session_id="session-1",
             supported_codecs=["pcmu"],
             selected_codec="pcmu",
+            backend="onvif_rtsp_backchannel",
+            backend_reason="Selected ONVIF RTSP backchannel by standards-first auto probing",
             last_error=None,
         )
     )
@@ -225,6 +227,8 @@ def test_get_talk_status_returns_runtime_status() -> None:
         "supported_codecs": ["pcmu"],
         "offered_codecs": [],
         "selected_codec": "pcmu",
+        "backend": "onvif_rtsp_backchannel",
+        "backend_reason": "Selected ONVIF RTSP backchannel by standards-first auto probing",
         "last_error": None,
     }
 
@@ -251,6 +255,8 @@ def test_get_talk_status_returns_disabled_camera_status() -> None:
     assert response.status_code == 200
     assert response.json()["enabled"] is False
     assert response.json()["state"] == "disabled"
+    assert response.json()["backend"] is None
+    assert response.json()["backend_reason"] is None
     assert app.open_calls == []
 
 

@@ -212,6 +212,8 @@ function nextStatusFromState(
     supported_codecs: previous?.supported_codecs ?? [],
     offered_codecs: previous?.offered_codecs ?? [],
     selected_codec: selectedCameraCodec ?? previous?.selected_codec ?? null,
+    backend: previous?.backend ?? null,
+    backend_reason: previous?.backend_reason ?? null,
     last_error: null,
   }
 }

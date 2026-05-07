@@ -1905,6 +1905,28 @@
             ],
             "title": "Active Session Id"
           },
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "backend_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Reason"
+          },
           "camera_name": {
             "title": "Camera Name",
             "type": "string"

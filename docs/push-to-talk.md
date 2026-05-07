@@ -124,6 +124,21 @@ cameras:
       mode: disabled
 ```
 
+## Status Diagnostics
+
+`GET /api/v1/talk/cameras/{camera_name}` returns the current talk policy,
+capability, selected backend, codec negotiation, and session state.
+
+Backend diagnostics are intentionally minimal:
+
+- `backend`: selected talk backend name once selection has completed, or the
+  explicit backend name when a configured backend is invalid or unavailable.
+- `backend_reason`: safe human-readable text explaining backend selection or why
+  no backend was selected.
+
+`backend_reason` must not include RTSP URLs, camera credentials, password
+hashes, API keys, stream tokens, raw auth headers, or raw SDP.
+
 ## Security and Privacy Notes
 
 - Treat talk as live microphone access. Browser permission prompts are expected.
@@ -195,7 +210,8 @@ Suggested result values:
 - Confirm `cameras[].talk.mode` is not `disabled` for the selected camera.
 - Confirm the camera source is RTSP; non-RTSP sources are not talk-capable in the MVP.
 - Check `GET /api/v1/talk/cameras/{camera_name}` for `state`, `capability`,
-  `offered_codecs`, `selected_codec`, and `last_error`.
+  `backend`, `backend_reason`, `offered_codecs`, `selected_codec`, and
+  `last_error`.
 
 ### Browser microphone permission is denied
 
