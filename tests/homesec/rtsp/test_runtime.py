@@ -820,6 +820,48 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
 
 
 @pytest.mark.asyncio
+async def test_explicit_future_talk_backend_reports_unsupported_without_onvif_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unimplemented explicit talk backends should not look policy-disabled."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("future backend should not construct the ONVIF backchannel adapter")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    config = _make_config(
+        tmp_path,
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(backend="tapo_local"),
+        },
+    )
+
+    # Given: A camera explicitly configured for a future talk backend.
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and attempting to reserve a talk session.
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_future_backend")
+    )
+
+    # Then: The source reports unsupported backend diagnostics, not disabled policy.
+    assert status.enabled is True
+    assert status.policy_enabled is True
+    assert status.capability == TalkCapabilityState.UNSUPPORTED
+    assert status.state == TalkState.UNSUPPORTED
+    assert status.last_error == "Talk backend 'tapo_local' is not available in this runtime yet"
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE
+    assert prepared.message == status.last_error
+
+
+@pytest.mark.asyncio
 async def test_talk_missing_explicit_credential_env_reports_config_error_without_breaking_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

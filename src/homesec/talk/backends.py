@@ -4,16 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
 from homesec.models.config import CameraTalkConfig, TalkConfig
 from homesec.models.talk import TalkCapabilityProbeResult, TalkSessionOpenRequest
-
-if TYPE_CHECKING:
-    from homesec.sources.rtsp.talk.manager import TalkSession
-
 
 TalkBackendConfidence = Literal["explicit", "high", "medium", "low", "not_applicable"]
 
@@ -33,8 +29,26 @@ class TalkBackendAdapter(Protocol):
         """Probe whether this backend can provide talk for the camera."""
         ...
 
-    async def open_session(self, request: TalkSessionOpenRequest) -> TalkSession:
+    async def open_session(self, request: TalkSessionOpenRequest) -> TalkBackendSession:
         """Open a backend-specific talk session for a reserved HomeSec session."""
+        ...
+
+
+@runtime_checkable
+class TalkBackendSession(Protocol):
+    """Camera talk session returned by a backend adapter."""
+
+    @property
+    def selected_codec(self) -> str:
+        """Codec selected by the camera adapter for this session."""
+        ...
+
+    async def write_pcm_frame(self, frame: bytes) -> None:
+        """Send one PCM frame to the camera speaker."""
+        ...
+
+    async def close(self) -> None:
+        """Close the camera talk session."""
         ...
 
 
@@ -70,9 +84,9 @@ class TalkBackendContext:
     runtime_talk: TalkConfig
     camera_talk: CameraTalkConfig
     source_host: str | None = None
-    source_rtsp_url: str | None = None
-    source_rtsp_url_env: str | None = None
-    resolved_source_rtsp_url: str | None = None
+    source_uri: str | None = None
+    source_uri_env: str | None = None
+    resolved_source_uri: str | None = None
     source_connect_timeout_s: float = 5.0
     source_io_timeout_s: float = 5.0
     fingerprint: CameraTalkFingerprint = field(default_factory=CameraTalkFingerprint)

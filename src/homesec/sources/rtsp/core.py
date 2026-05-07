@@ -118,6 +118,32 @@ def _talk_config_error_probe_factory(
     return _probe
 
 
+def _talk_unsupported_backend_probe_factory(
+    backend: str,
+) -> Callable[[], Awaitable[TalkCapabilityProbeResult]]:
+    async def _probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.UNSUPPORTED,
+            refusal_reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+            message=f"Talk backend '{backend}' is not available in this runtime yet",
+        )
+
+    return _probe
+
+
+def _talk_unsupported_backend_open_session_factory(
+    backend: str,
+) -> Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]]:
+    async def _open(request: TalkSessionOpenRequest) -> TalkSession:
+        _ = request
+        raise TalkManagerError(
+            f"Talk backend '{backend}' is not available in this runtime yet",
+            reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+        )
+
+    return _open
+
+
 def _talk_config_error_manager(
     *,
     message: str,
@@ -135,6 +161,26 @@ def _talk_config_error_manager(
         supported_codecs=list(preferred_codecs),
         open_session_factory=open_session_factory,
         capability_probe_factory=_talk_config_error_probe_factory(message),
+        max_session_s=runtime_talk.max_session_s,
+        idle_timeout_s=runtime_talk.idle_timeout_s,
+    )
+
+
+def _talk_unsupported_backend_manager(
+    *,
+    backend: str,
+    camera_name: str,
+    camera_talk: CameraTalkConfig,
+    runtime_talk: TalkConfig,
+) -> TalkManager:
+    """Build a talk manager that reports an explicit unimplemented backend."""
+    return TalkManager(
+        camera_name=camera_name,
+        enabled=True,
+        policy_enabled=camera_talk.policy_enabled,
+        supported_codecs=[],
+        open_session_factory=_talk_unsupported_backend_open_session_factory(backend),
+        capability_probe_factory=_talk_unsupported_backend_probe_factory(backend),
         max_session_s=runtime_talk.max_session_s,
         idle_timeout_s=runtime_talk.idle_timeout_s,
     )
@@ -947,14 +993,11 @@ class RTSPSource(ThreadedClipSource):
                 idle_timeout_s=runtime_talk.idle_timeout_s,
             )
         if not _camera_talk_uses_onvif_for_current_runtime(camera_talk):
-            return TalkManager(
+            return _talk_unsupported_backend_manager(
+                backend=camera_talk.backend,
                 camera_name=self.camera_name,
-                enabled=False,
-                policy_enabled=camera_talk.policy_enabled,
-                supported_codecs=[],
-                open_session_factory=self._open_disabled_talk_session,
-                max_session_s=runtime_talk.max_session_s,
-                idle_timeout_s=runtime_talk.idle_timeout_s,
+                camera_talk=camera_talk,
+                runtime_talk=runtime_talk,
             )
 
         adapter_config_data = _build_onvif_backchannel_config_data(

@@ -51,6 +51,16 @@ cameras:
     # Optional: opt out a camera that advertises an unwanted speaker backchannel.
     # talk:
     #   mode: disabled
+    #
+    # Optional: configure a dedicated ONVIF talk URI/profile. `talk.config`
+    # remains an ONVIF compatibility alias; new configs may use `talk.backends`.
+    # talk:
+    #   mode: auto
+    #   backend: auto
+    #   backends:
+    #     onvif_rtsp_backchannel:
+    #       rtsp_url_env: FRONT_DOOR_TALK_RTSP_URL
+    #       preferred_codecs: ["PCMU/8000", "PCMA/8000"]
 
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera

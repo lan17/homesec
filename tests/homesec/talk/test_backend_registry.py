@@ -80,7 +80,8 @@ def test_registry_rejects_duplicate_backend_names() -> None:
     registry = TalkBackendRegistry()
     registry.register(_registration("fake_backend"))
 
-    # When/Then: Registering the same backend again fails clearly
+    # When: Registering the same backend again
+    # Then: The registry fails clearly
     with pytest.raises(ValueError, match="fake_backend"):
         registry.register(_registration("FAKE_BACKEND"))
 
@@ -124,7 +125,8 @@ def test_backend_context_resolves_env_and_redaction_through_injected_helpers() -
 
 def test_detection_preserves_safe_probe_metadata() -> None:
     """Talk backend detection should carry safe auto-probe metadata."""
-    # Given/When: A detector result marks a backend as safe after a strong fingerprint
+    # Given: A strong camera fingerprint for a backend detector
+    # When: Building a detector result that marks the backend as safe to probe
     detection = TalkBackendDetection(
         backend="fake_backend",
         confidence="high",
