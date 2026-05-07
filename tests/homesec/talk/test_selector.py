@@ -313,3 +313,42 @@ async def test_selector_reports_stable_public_message_for_invalid_backend_config
     assert probe.message == "Talk backend 'vendor_backend' config is invalid"
     assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
     assert "secret-config-value" not in (probe.message or "")
+
+
+@pytest.mark.asyncio
+async def test_selector_does_not_expose_malformed_missing_env_name() -> None:
+    """Missing-env diagnostics should expose only safe environment variable names."""
+
+    # Given: A backend config factory reports a missing env value with unsafe input text
+    def _raise_unsafe_missing_env(
+        raw_config: dict[str, object] | BaseModel,
+        context: TalkBackendContext,
+    ) -> BaseModel:
+        _ = raw_config, context
+        raise ValueError(
+            "RTSP URL environment variable is not set: rtsp://alice:secret@camera.local/talk"
+        )
+
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            config_factory=_raise_unsafe_missing_env,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="vendor_backend")),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: The public error drops the unsafe env-name suffix
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert probe.message == "Talk backend 'vendor_backend' config is invalid"
+    assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
+    assert "rtsp://alice:secret@camera.local/talk" not in (probe.message or "")

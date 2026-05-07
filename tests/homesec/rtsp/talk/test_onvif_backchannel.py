@@ -15,6 +15,7 @@ from homesec.sources.rtsp.talk.errors import (
     CameraRejectedTalkSessionError,
     CameraTalkStreamFailedError,
     RTSPAuthenticationError,
+    RTSPProtocolError,
     UnsupportedTalkCodecError,
 )
 from homesec.sources.rtsp.talk.g711 import encode_pcma
@@ -465,6 +466,42 @@ async def test_onvif_backchannel_probe_reports_auth_failure() -> None:
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_redacts_protocol_parse_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probe errors should not expose raw malformed RTSP protocol payloads."""
+
+    class _ProtocolFailingClient:
+        async def connect(self) -> None:
+            return None
+
+        async def describe(self, *, headers: dict[str, str] | None = None) -> RTSPResponse:
+            _ = headers
+            raise RTSPProtocolError(
+                "Invalid RTSP status line: 'RTSP/1.0 500 rtsp://alice:secret@camera.local'"
+            )
+
+        async def close(self) -> None:
+            return None
+
+    adapter = ONVIFBackchannelAdapter(
+        ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/stream1"),
+        camera_name="front_door",
+    )
+    monkeypatch.setattr(adapter, "_client", lambda: _ProtocolFailingClient())
+
+    # Given: A camera returns malformed RTSP data containing sensitive-looking text
+    # When: Probing camera talk capability
+    result = await adapter.probe()
+
+    # Then: The public capability error is stable and omits the raw protocol payload
+    assert result.capability == TalkCapabilityState.ERROR
+    assert result.refusal_reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+    assert result.message == "Camera talk backchannel protocol failed"
+    assert "alice:secret" not in (result.message or "")
 
 
 @pytest.mark.asyncio

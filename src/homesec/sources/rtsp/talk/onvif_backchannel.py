@@ -295,5 +295,5 @@ def _probe_result_from_protocol_error(exc: TalkProtocolError) -> TalkCapabilityP
     return TalkCapabilityProbeResult(
         capability=TalkCapabilityState.ERROR,
         refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
-        message=str(exc) or type(exc).__name__,
+        message="Camera talk backchannel protocol failed",
     )

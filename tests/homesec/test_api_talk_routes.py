@@ -1066,6 +1066,33 @@ def test_talk_websocket_maps_backpressure_refusal_to_internal_error_close() -> N
     assert app.stop_calls == [("front", "session-1")]
 
 
+def test_talk_websocket_maps_auth_refusal_to_auth_close_reason() -> None:
+    """Camera credential failures should be distinguishable from transient stream failures."""
+    # Given: Runtime refuses stream attachment because the camera rejected credentials.
+    # When: The client starts the prepared WebSocket stream.
+    # Then: The API maps it to a safe auth-specific close reason and stops the session.
+    app = _StubTalkApp(
+        open_error=TalkStreamOpenRefused(
+            "Camera talk backchannel authentication failed",
+            reason=TalkRefusalReason.TALK_AUTH_FAILED,
+        )
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.send_text(_start_message(TalkInputFormat()))
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1011
+    assert disconnect.value.reason == "Camera talk authentication failed"
+    assert app.stop_calls == [("front", "session-1")]
+
+
 def test_talk_websocket_rejects_non_binary_frame_after_ready() -> None:
     """Once active, only binary PCM frames or an exact stop control message are valid."""
     # Given: A talk WebSocket is active and ready for binary PCM frames.

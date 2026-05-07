@@ -459,9 +459,10 @@ def _talk_stream_refusal_close(reason: TalkRefusalReason) -> tuple[int, str]:
             | TalkRefusalReason.INVALID_AUDIO_FRAME
         ):
             return status.WS_1008_POLICY_VIOLATION, "Talk stream refused"
+        case TalkRefusalReason.TALK_AUTH_FAILED:
+            return status.WS_1011_INTERNAL_ERROR, "Camera talk authentication failed"
         case (
-            TalkRefusalReason.TALK_AUTH_FAILED
-            | TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+            TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
             | TalkRefusalReason.RUNTIME_UNAVAILABLE
             | TalkRefusalReason.BACKPRESSURE
         ):

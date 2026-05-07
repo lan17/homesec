@@ -1060,6 +1060,50 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
     assert prepared.message == status.last_error
 
 
+@pytest.mark.asyncio
+async def test_talk_backchannel_malformed_rtsp_url_env_name_is_not_exposed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unsafe env-name values should not be echoed in public talk diagnostics."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("missing unsafe talk rtsp_url_env should not construct the adapter")
+
+    unsafe_env_name = "rtsp://alice:secret@camera.local/talk"
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    monkeypatch.delenv(unsafe_env_name, raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(config={"rtsp_url_env": unsafe_env_name}),
+        },
+    )
+
+    # Given: A camera with an unsafe string in the talk URL env-name field
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and trying to prepare a talk session
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_bad_env_name")
+    )
+
+    # Then: Talk reports a config error without exposing the unsafe raw value
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.last_error == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.backend_reason == status.last_error
+    assert unsafe_env_name not in status.last_error
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert prepared.message == status.last_error
+
+
 @pytest.mark.parametrize("talk_config", [{"rtsp_url": ""}, {"rtsp_url_env": ""}])
 def test_talk_backchannel_blank_explicit_rtsp_url_does_not_inherit_source_url(
     tmp_path: Path,

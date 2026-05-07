@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -58,6 +59,11 @@ _AUTO_DETECTION_CONFIDENCE_RANK: dict[TalkBackendConfidence, int] = {
 }
 
 logger = logging.getLogger(__name__)
+_SAFE_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_MISSING_ENV_PREFIXES = (
+    "RTSP URL environment variable is not set: ",
+    "RTSP credential environment variable is not set: ",
+)
 
 
 class TalkBackendSelector:
@@ -250,10 +256,12 @@ def _public_config_error_message(backend_name: str, exc: Exception) -> str:
     detail = str(exc).strip()
     if not detail:
         return base
-    if detail.startswith("RTSP URL environment variable is not set: ") or detail.startswith(
-        "RTSP credential environment variable is not set: "
-    ):
-        return f"{base}: {detail}"
+    for prefix in _MISSING_ENV_PREFIXES:
+        if detail.startswith(prefix):
+            env_name = detail.removeprefix(prefix).strip()
+            if _SAFE_ENV_VAR_NAME_PATTERN.fullmatch(env_name):
+                return f"{base}: {prefix}{env_name}"
+            return base
     return base
 
 

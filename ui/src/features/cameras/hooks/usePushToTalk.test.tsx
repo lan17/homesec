@@ -117,7 +117,7 @@ class FakeWebSocket {
   }
 
   emitClose(code = this.lastClose?.code ?? 1000, reason = this.lastClose?.reason ?? '') {
-    this.onclose?.(new CloseEvent('close', { code, reason }))
+    this.onclose?.({ code, reason } as CloseEvent)
   }
 }
 
@@ -459,6 +459,30 @@ describe('usePushToTalk', () => {
     expect(result.current.status?.capability).toBe('supported')
     expect(result.current.status?.selected_codec).toBe('PCMU/8000')
     expect(result.current.status?.last_error).toBeNull()
+  })
+
+  it('surfaces camera auth close reason when WebSocket open is refused', async () => {
+    // Given: Browser capture and session preparation succeed before camera auth fails on attach.
+    const { stream } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+
+    // When: Starting talk and receiving an auth-specific WebSocket close reason.
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].emitClose(1011, 'Camera talk authentication failed')
+
+    // Then: The hook exposes the operator-actionable auth failure to the UI.
+    await waitFor(() => {
+      expect((result.current.error as Error | null)?.message).toBe(
+        'Camera talk authentication failed',
+      )
+    })
+    expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
   })
 
   it('uses the camera codec from the ready message for optimistic active status', async () => {
