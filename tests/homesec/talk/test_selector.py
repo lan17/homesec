@@ -44,9 +44,17 @@ class _FakeSession:
 
 
 class _FakeBackend:
-    def __init__(self, name: str, calls: list[str]) -> None:
+    def __init__(
+        self,
+        name: str,
+        calls: list[str],
+        probe_result: TalkCapabilityProbeResult | None = None,
+    ) -> None:
         self.name = name
         self._calls = calls
+        self._probe_result = probe_result or TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.SUPPORTED
+        )
 
     @property
     def supported_codecs(self) -> list[str]:
@@ -54,7 +62,7 @@ class _FakeBackend:
 
     async def probe(self) -> TalkCapabilityProbeResult:
         self._calls.append(f"{self.name}:probe")
-        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+        return self._probe_result
 
     async def open_session(self, request: TalkSessionOpenRequest) -> _FakeSession:
         self._calls.append(f"{self.name}:open:{request.session_id}")
@@ -117,9 +125,9 @@ async def test_selector_auto_uses_standards_backend_first() -> None:
 
 
 @pytest.mark.asyncio
-async def test_selector_auto_uses_safe_high_confidence_detector_before_default() -> None:
-    """Backend auto mode should honor safe high-confidence detector matches."""
-    # Given: A selector in auto mode with a standard default and detected vendor backend
+async def test_selector_auto_uses_standards_backend_before_safe_detector() -> None:
+    """Backend auto mode should try standards before proprietary detector matches."""
+    # Given: A selector in auto mode with a supported standard backend and safe vendor detector
     calls: list[str] = []
     registry = _registry(calls)
     registry.register(
@@ -148,10 +156,70 @@ async def test_selector_auto_uses_safe_high_confidence_detector_before_default()
         TalkSessionOpenRequest(session_id="tk_detected", input=TalkInputFormat())
     )
 
-    # Then: The detector-selected backend handles the request before the standard default
+    # Then: The standards backend wins and the detected vendor is not probed
     assert probe.capability == TalkCapabilityState.SUPPORTED
     assert session.selected_codec == "PCMU/8000"
-    assert calls == ["detected_vendor:probe", "detected_vendor:open:tk_detected"]
+    assert calls == ["standard_backend:probe", "standard_backend:open:tk_detected"]
+
+
+@pytest.mark.asyncio
+async def test_selector_auto_falls_back_to_safe_detector_after_standard_unsupported() -> None:
+    """Backend auto mode should use a safe proprietary backend after standards fail."""
+    # Given: A selector in auto mode with unsupported standard talk and a safe vendor detector
+    calls: list[str] = []
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="standard_backend",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend(
+                "standard_backend",
+                calls,
+                probe_result=TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.UNSUPPORTED,
+                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                    message="standard backend unsupported",
+                ),
+            ),
+            priority=10,
+            standards_based=True,
+        )
+    )
+    registry.register(
+        TalkBackendRegistration(
+            name="detected_vendor",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend("detected_vendor", calls),
+            detector=lambda context: TalkBackendDetection(
+                backend="detected_vendor",
+                confidence="high",
+                reason="camera fingerprint matched detected vendor",
+                safe_to_probe=True,
+            ),
+            priority=200,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Probing and opening a talk session
+    probe = await selector.probe()
+    session = await selector.open_session(
+        TalkSessionOpenRequest(session_id="tk_detected", input=TalkInputFormat())
+    )
+
+    # Then: The selector falls through from standards to the safe vendor backend
+    assert probe.capability == TalkCapabilityState.SUPPORTED
+    assert selector.backend == "detected_vendor"
+    assert session.selected_codec == "PCMU/8000"
+    assert calls == [
+        "standard_backend:probe",
+        "detected_vendor:probe",
+        "detected_vendor:open:tk_detected",
+    ]
 
 
 @pytest.mark.asyncio
@@ -159,7 +227,24 @@ async def test_selector_auto_ignores_detector_that_is_not_safe_to_probe() -> Non
     """Backend auto mode should not auto-probe unsafe detector matches."""
     # Given: A selector in auto mode with a vendor detector that is not safe to probe
     calls: list[str] = []
-    registry = _registry(calls)
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="standard_backend",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend(
+                "standard_backend",
+                calls,
+                probe_result=TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.UNSUPPORTED,
+                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                    message="standard backend unsupported",
+                ),
+            ),
+            priority=10,
+            standards_based=True,
+        )
+    )
     registry.register(
         TalkBackendRegistration(
             name="unsafe_vendor",
@@ -183,8 +268,10 @@ async def test_selector_auto_ignores_detector_that_is_not_safe_to_probe() -> Non
     # When: Probing through auto selection
     probe = await selector.probe()
 
-    # Then: Selection falls back to the standard backend instead of unsafe vendor probing
-    assert probe.capability == TalkCapabilityState.SUPPORTED
+    # Then: Selection preserves the standard result instead of probing the unsafe vendor
+    assert probe.capability == TalkCapabilityState.UNSUPPORTED
+    assert probe.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
+    assert selector.backend == "standard_backend"
     assert calls == ["standard_backend:probe"]
 
 

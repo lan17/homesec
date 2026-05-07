@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -82,20 +83,35 @@ class TalkBackendSelector:
     @property
     def supported_codecs(self) -> list[str]:
         """Return supported codecs for the selected backend, if one can be built."""
+        if self._context.camera_talk.backend == "auto" and self._selection is None:
+            return _unique_codecs(
+                codec
+                for registration in self._auto_candidate_registrations()
+                for codec in self._build_registered_backend(
+                    registration.name,
+                    reason=self._auto_candidate_reason(registration),
+                ).supported_codecs
+            )
         return self._select().supported_codecs
 
     @property
     def backend(self) -> str | None:
         """Return the selected or explicitly requested backend name when known."""
+        if self._context.camera_talk.backend == "auto" and self._selection is None:
+            return None
         return self._select().backend
 
     @property
     def backend_reason(self) -> str | None:
         """Return a safe human-readable backend selection diagnostic."""
+        if self._context.camera_talk.backend == "auto" and self._selection is None:
+            return None
         return self._select().backend_reason
 
     async def probe(self) -> TalkCapabilityProbeResult:
         """Probe the selected backend or return a selection/config error."""
+        if self._context.camera_talk.backend == "auto":
+            return await self._probe_auto()
         selection = self._select()
         if isinstance(selection, _SelectionError):
             return selection.result
@@ -103,6 +119,16 @@ class TalkBackendSelector:
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkBackendSession:
         """Open a talk session through the selected backend."""
+        if self._context.camera_talk.backend == "auto" and not isinstance(
+            self._selection,
+            _SelectedBackend,
+        ):
+            probe = await self._probe_auto()
+            if probe.capability != TalkCapabilityState.SUPPORTED:
+                raise TalkBackendOpenError(
+                    probe.message or "Talk backend is not available",
+                    reason=probe.refusal_reason or TalkRefusalReason.RUNTIME_UNAVAILABLE,
+                )
         selection = self._select()
         if isinstance(selection, _SelectionError):
             raise TalkBackendOpenError(
@@ -117,8 +143,11 @@ class TalkBackendSelector:
 
         camera_talk = self._context.camera_talk
         if camera_talk.backend == "auto":
-            self._selection = self._select_auto()
-            return self._selection
+            return _SelectionError(
+                _runtime_selection_error_result("Talk backend auto selection has not been probed"),
+                backend=None,
+                backend_reason=None,
+            )
 
         registration = self._registry.get(camera_talk.backend)
         if registration is None:
@@ -136,34 +165,67 @@ class TalkBackendSelector:
         )
         return self._selection
 
-    def _select_auto(self) -> _SelectedBackend | _SelectionError:
-        detected_registration = self._detected_auto_registration()
-        if detected_registration is not None:
-            return self._build_registered_backend(
-                detected_registration.name,
-                reason=f"Selected talk backend '{detected_registration.name}' by safe camera detector",
-            )
-
-        registrations = [
-            registration
-            for registration in self._registry.standards_first()
-            if registration.standards_based
-        ]
-        if not registrations:
-            return _SelectionError(
+    async def _probe_auto(self) -> TalkCapabilityProbeResult:
+        if isinstance(self._selection, _SelectedBackend):
+            return await self._selection.adapter.probe()
+        candidates = self._auto_candidate_registrations()
+        if not candidates:
+            self._selection = _SelectionError(
                 _runtime_selection_error_result("No standards-based talk backends are registered"),
                 backend=None,
                 backend_reason="No standards-based talk backends are registered",
             )
-        return self._build_registered_backend(
-            registrations[0].name,
-            reason=(
-                f"Selected {_backend_display_name(registrations[0].name)} "
-                "by standards-first auto probing"
-            ),
-        )
+            return self._selection.result
 
-    def _detected_auto_registration(self) -> TalkBackendRegistration | None:
+        first_result: TalkCapabilityProbeResult | None = None
+        first_backend: str | None = None
+        first_reason: str | None = None
+        for registration in candidates:
+            selection = self._build_registered_backend(
+                registration.name,
+                reason=self._auto_candidate_reason(registration),
+            )
+            if isinstance(selection, _SelectionError):
+                self._selection = selection
+                return selection.result
+
+            result = await selection.adapter.probe()
+            if result.capability == TalkCapabilityState.SUPPORTED:
+                self._selection = selection
+                return result
+            if first_result is None:
+                first_result = result
+                first_backend = selection.backend
+                first_reason = selection.backend_reason
+
+        if first_result is None:
+            return _SelectionError(
+                _runtime_selection_error_result("No standards-based talk backends are registered"),
+                backend=None,
+                backend_reason="No standards-based talk backends are registered",
+            ).result
+        self._selection = _SelectionError(
+            first_result,
+            backend=first_backend,
+            backend_reason=first_reason,
+        )
+        return first_result
+
+    def _auto_candidate_registrations(self) -> list[TalkBackendRegistration]:
+        standards = [
+            registration
+            for registration in self._registry.standards_first()
+            if registration.standards_based
+        ]
+        seen = {registration.name for registration in standards}
+        detected = [
+            registration
+            for registration in self._detected_auto_registrations()
+            if registration.name not in seen
+        ]
+        return standards + detected
+
+    def _detected_auto_registrations(self) -> list[TalkBackendRegistration]:
         detected: list[tuple[int, bool, int, str, TalkBackendRegistration]] = []
         for registration in self._registry.all():
             if registration.detector is None:
@@ -190,9 +252,17 @@ class TalkBackendSelector:
                 )
             )
         if not detected:
-            return None
+            return []
         detected.sort(key=lambda item: item[:4])
-        return detected[0][4]
+        return [item[4] for item in detected]
+
+    def _auto_candidate_reason(self, registration: TalkBackendRegistration) -> str:
+        if registration.standards_based:
+            return (
+                f"Selected {_backend_display_name(registration.name)} "
+                "by standards-first auto probing"
+            )
+        return f"Selected talk backend '{registration.name}' by safe camera detector"
 
     def _build_registered_backend(
         self,
@@ -269,3 +339,14 @@ def _backend_display_name(backend_name: str) -> str:
     if backend_name == "onvif_rtsp_backchannel":
         return "ONVIF RTSP backchannel"
     return f"talk backend '{backend_name}'"
+
+
+def _unique_codecs(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
