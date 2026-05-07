@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from homesec.models.filter import FilterConfig
 from homesec.models.talk import TalkInputFormat
 from homesec.models.vlm import VLMConfig
+from homesec.talk.backend_ids import normalize_talk_backend_id, validate_talk_backend_id
 
 
 class AlertPolicyConfig(BaseModel):
@@ -287,11 +288,12 @@ class CameraTalkConfig(BaseModel):
         config = dict(value)
         backend = config.get("backend")
         if isinstance(backend, str):
-            config["backend"] = backend.lower()
+            config["backend"] = normalize_talk_backend_id(backend)
         backends = config.get("backends")
         if isinstance(backends, dict):
             config["backends"] = {
-                key.lower() if isinstance(key, str) else key: item for key, item in backends.items()
+                normalize_talk_backend_id(key) if isinstance(key, str) else key: item
+                for key, item in backends.items()
             }
         if "mode" not in config and "enabled" in config:
             config["mode"] = "auto" if _bool_config_value(config["enabled"]) else "disabled"
@@ -300,10 +302,13 @@ class CameraTalkConfig(BaseModel):
         return config
 
     @model_validator(mode="after")
-    def _validate_enabled_alias(self) -> CameraTalkConfig:
+    def _validate_enabled_alias_and_backend_ids(self) -> CameraTalkConfig:
         expected_enabled = self.mode != "disabled"
         if self.enabled != expected_enabled:
             raise ValueError("camera talk enabled must agree with mode")
+        validate_talk_backend_id(self.backend)
+        for backend_name in self.backends:
+            validate_talk_backend_id(backend_name)
         return self
 
     @property
@@ -313,7 +318,7 @@ class CameraTalkConfig(BaseModel):
 
     def config_for_backend(self, backend_name: str) -> dict[str, Any]:
         """Return backend-specific config while preserving legacy config aliases."""
-        normalized_backend = backend_name.lower()
+        normalized_backend = normalize_talk_backend_id(backend_name)
         if normalized_backend in self.backends:
             return _model_or_dict_config(self.backends[normalized_backend])
         if self.backend == normalized_backend and self.config:
@@ -330,7 +335,7 @@ class CameraTalkConfig(BaseModel):
     @classmethod
     def _normalize_backend(cls, value: Any) -> Any:
         if isinstance(value, str):
-            return value.lower()
+            return normalize_talk_backend_id(value)
         return value
 
 

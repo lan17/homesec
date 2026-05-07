@@ -14,6 +14,7 @@ from homesec.models.talk import (
     TalkRefusalReason,
     TalkSessionOpenRequest,
 )
+from homesec.talk.backend_ids import normalize_talk_backend_id, validate_talk_backend_id
 
 TalkBackendConfidence = Literal["explicit", "high", "medium", "low", "not_applicable"]
 
@@ -140,7 +141,7 @@ class TalkBackendRegistration:
     standards_based: bool = False
 
     def __post_init__(self) -> None:
-        normalized = self.name.lower()
+        normalized = validate_talk_backend_id(normalize_talk_backend_id(self.name))
         if normalized != self.name:
             object.__setattr__(self, "name", normalized)
 
@@ -153,14 +154,19 @@ class TalkBackendRegistry:
 
     def register(self, registration: TalkBackendRegistration) -> None:
         """Register one backend, failing fast on duplicate names."""
-        name = registration.name.lower()
+        name = validate_talk_backend_id(normalize_talk_backend_id(registration.name))
         if name in self._registrations:
             raise ValueError(f"Talk backend '{name}' already registered")
         self._registrations[name] = registration
 
     def get(self, name: str) -> TalkBackendRegistration | None:
         """Return a registration by backend name."""
-        return self._registrations.get(name.lower())
+        normalized = normalize_talk_backend_id(name)
+        try:
+            validate_talk_backend_id(normalized)
+        except ValueError:
+            return None
+        return self._registrations.get(normalized)
 
     def all(self) -> list[TalkBackendRegistration]:
         """Return all registrations in deterministic selection order."""

@@ -29,6 +29,8 @@ const TALK_MAX_BUFFERED_AUDIO_MS = 500
 type TalkReadyMessage = {
   type: typeof TALK_WS_READY_TYPE
   camera_codec?: unknown
+  backend?: unknown
+  backend_reason?: unknown
 }
 
 type AudioPipeline = {
@@ -192,6 +194,8 @@ function nextStatusFromState(
   sessionId: string | null,
   previous: TalkStatusResponse | null,
   selectedCameraCodec?: string | null,
+  selectedBackend?: string | null,
+  selectedBackendReason?: string | null,
 ): TalkStatusResponse {
   const optimisticCapability: TalkCapabilityState = (
     state === 'idle'
@@ -212,8 +216,8 @@ function nextStatusFromState(
     supported_codecs: previous?.supported_codecs ?? [],
     offered_codecs: previous?.offered_codecs ?? [],
     selected_codec: selectedCameraCodec ?? previous?.selected_codec ?? null,
-    backend: previous?.backend ?? null,
-    backend_reason: previous?.backend_reason ?? null,
+    backend: selectedBackend ?? previous?.backend ?? null,
+    backend_reason: selectedBackendReason ?? previous?.backend_reason ?? null,
     last_error: null,
   }
 }
@@ -329,6 +333,8 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
             return
           }
           const selectedCameraCodec = typeof parsed.camera_codec === 'string' ? parsed.camera_codec : null
+          const selectedBackend = typeof parsed.backend === 'string' ? parsed.backend : null
+          const selectedBackendReason = typeof parsed.backend_reason === 'string' ? parsed.backend_reason : null
           if (isStartCancelled()) {
             socket.close(1000, 'Talk start cancelled')
             settleReject(new Error('Talk start cancelled'))
@@ -358,6 +364,8 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
                     nextSession.session_id,
                     previous,
                     selectedCameraCodec,
+                    selectedBackend,
+                    selectedBackendReason,
                   ),
                 )
               }

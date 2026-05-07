@@ -88,6 +88,17 @@ def test_registry_rejects_duplicate_backend_names() -> None:
         registry.register(_registration("FAKE_BACKEND"))
 
 
+def test_registry_rejects_unsafe_backend_names() -> None:
+    """Talk backend registration names should be safe public identifiers."""
+    # Given: A backend registration whose name is not a safe identifier
+    registry = TalkBackendRegistry()
+
+    # When: Registering the unsafe backend
+    # Then: The registry rejects it before diagnostics can expose the name
+    with pytest.raises(ValueError, match="talk backend names"):
+        registry.register(_registration("rtsp://admin:secret@example.local/stream1"))
+
+
 def test_registry_orders_standards_backends_first() -> None:
     """Talk backend registry should return deterministic standards-first order."""
     # Given: Proprietary and standards-based backend registrations

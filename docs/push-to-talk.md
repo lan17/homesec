@@ -100,8 +100,10 @@ cameras:
 
 HomeSec currently ships the ONVIF RTSP backchannel implementation. Explicit
 future backend names are accepted by config parsing so operators can stage
-configuration, but they report a talk backend selection/config error until a
-matching backend adapter is implemented and registered.
+configuration, but backend names must be safe identifiers: lowercase letters,
+numbers, and underscores, starting with a letter. Unregistered safe backend names
+report a talk backend selection/config error until a matching backend adapter is
+implemented and registered.
 
 Use environment variables for RTSP URLs and credentials. Do not commit camera
 passwords in YAML.
@@ -136,6 +138,9 @@ Backend diagnostics are intentionally minimal:
 - `backend_reason`: safe human-readable text explaining backend selection or why
   no backend was selected.
 
+Backend names are constrained to safe identifiers before they can appear in API
+or WebSocket diagnostics. Do not put URLs, credentials, tokens, or raw protocol
+payloads in `cameras[].talk.backend` or `cameras[].talk.backends` keys.
 `backend_reason` must not include RTSP URLs, camera credentials, password
 hashes, API keys, stream tokens, raw auth headers, or raw SDP.
 

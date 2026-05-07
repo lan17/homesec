@@ -359,6 +359,8 @@ class TalkWebSocketSession:
                     "session_id": self.session_id,
                     "input": input_format.model_dump(mode="json"),
                     "camera_codec": stream.selected_codec,
+                    "backend": stream.backend,
+                    "backend_reason": stream.backend_reason,
                 }
             )
             await _forward_websocket_frames(

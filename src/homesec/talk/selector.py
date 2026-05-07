@@ -12,6 +12,7 @@ from homesec.models.talk import (
     TalkRefusalReason,
     TalkSessionOpenRequest,
 )
+from homesec.talk.backend_ids import normalize_talk_backend_id, validate_talk_backend_id
 from homesec.talk.backends import (
     TalkBackendAdapter,
     TalkBackendConfidence,
@@ -159,8 +160,13 @@ class TalkBackendSelector:
             if registration.detector is None:
                 continue
             detection = registration.detector(self._context)
+            detected_backend = normalize_talk_backend_id(detection.backend)
+            try:
+                validate_talk_backend_id(detected_backend)
+            except ValueError:
+                continue
             if (
-                detection.backend.lower() != registration.name
+                detected_backend != registration.name
                 or detection.confidence == "not_applicable"
                 or not detection.safe_to_probe
             ):

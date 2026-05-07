@@ -459,12 +459,18 @@ describe('usePushToTalk', () => {
     sockets[0].message(JSON.stringify({
       type: 'ready',
       camera_codec: 'PCMA/8000',
+      backend: 'onvif_rtsp_backchannel',
+      backend_reason: 'Selected ONVIF RTSP backchannel by standards-first auto probing',
     }))
     await waitFor(() => expect(result.current.isStreaming).toBe(true))
 
     // Then: Optimistic UI state uses the camera-side codec, not the browser PCM codec.
     expect(result.current.status?.state).toBe('active')
     expect(result.current.status?.selected_codec).toBe('PCMA/8000')
+    expect(result.current.status?.backend).toBe('onvif_rtsp_backchannel')
+    expect(result.current.status?.backend_reason).toBe(
+      'Selected ONVIF RTSP backchannel by standards-first auto probing',
+    )
     expect(result.current.status?.supported_codecs).toEqual(['PCMU/8000'])
     expect(result.current.status?.offered_codecs).toEqual(['PCMU/8000'])
     expect(result.current.status?.last_error).toBeNull()

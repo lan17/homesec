@@ -147,6 +147,8 @@ class RuntimeTalkStream:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
 
 
 @dataclass(slots=True)

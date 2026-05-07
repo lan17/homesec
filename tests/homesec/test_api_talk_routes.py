@@ -167,6 +167,8 @@ class _StubTalkApp:
             reader=cast(asyncio.StreamReader, object()),
             writer=cast(asyncio.StreamWriter, self.stream_writer),
             selected_codec=self._status.selected_codec or "PCMU/8000",
+            backend=self._status.backend,
+            backend_reason=self._status.backend_reason,
         )
 
     async def stop_camera_talk_session(
@@ -661,6 +663,8 @@ def test_talk_websocket_forwards_binary_frames_to_runtime_stream() -> None:
             "session_id": "session-1",
             "input": input_format.model_dump(mode="json"),
             "camera_codec": "PCMU/8000",
+            "backend": None,
+            "backend_reason": None,
         }
         websocket.send_bytes(frame)
         websocket.send_text(_stop_message())

@@ -568,6 +568,10 @@ class _WorkerHarnessController(RuntimeController):
             selected_codec = (
                 result.talk_status.selected_codec if result.talk_status is not None else None
             )
+            backend = result.talk_status.backend if result.talk_status is not None else None
+            backend_reason = (
+                result.talk_status.backend_reason if result.talk_status is not None else None
+            )
             close_writer = False
             return RuntimeTalkStream(
                 camera_name=camera_name,
@@ -576,6 +580,8 @@ class _WorkerHarnessController(RuntimeController):
                 reader=reader,
                 writer=writer,
                 selected_codec=selected_codec,
+                backend=backend,
+                backend_reason=backend_reason,
             )
         finally:
             if close_writer:
@@ -976,6 +982,8 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
                     "session_id": "tk_e2e",
                     "input": input_format.model_dump(mode="json"),
                     "camera_codec": "PCMU/8000",
+                    "backend": "onvif_rtsp_backchannel",
+                    "backend_reason": "Selected ONVIF RTSP backchannel by standards-first auto probing",
                 }
                 websocket.send_bytes(first_frame)
                 websocket.send_bytes(second_frame)

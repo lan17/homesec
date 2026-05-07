@@ -1042,6 +1042,27 @@ def test_camera_talk_accepts_unknown_future_backend_name() -> None:
     assert config.cameras[0].talk.backend == "tapo_local"
 
 
+def test_camera_talk_rejects_unsafe_backend_name() -> None:
+    """Camera talk backend names should be safe public diagnostics identifiers."""
+    # Given: A config that accidentally places a credential-bearing URL in backend name
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "enabled": True,
+        "backend": "rtsp://admin:secret@example.local/stream1",
+        "config": {},
+    }
+
+    # When: validating the config.
+    # Then: validation rejects the unsafe diagnostic identifier before runtime.
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(data)
+
+    message = str(exc_info.value)
+    assert "talk backend names" in message
+
+
 def test_camera_talk_backends_map_preserved_and_normalized() -> None:
     """Camera talk config should preserve backend-specific config blocks."""
     # Given: A config with future and ONVIF backend blocks
@@ -1064,6 +1085,28 @@ def test_camera_talk_backends_map_preserved_and_normalized() -> None:
     talk = config.cameras[0].talk
     assert talk.backends["tapo_local"] == {"host": "192.168.1.33", "port": 8800}
     assert talk.config_for_backend("onvif_rtsp_backchannel") == {"preferred_codecs": ["PCMA/8000"]}
+
+
+def test_camera_talk_rejects_unsafe_backend_map_key() -> None:
+    """Camera talk backend map keys should use safe public identifiers."""
+    # Given: A backend-specific config block with an unsafe key
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "mode": "auto",
+        "backends": {
+            "Bearer secret-token": {"host": "192.168.1.33"},
+        },
+    }
+
+    # When: validating the config.
+    # Then: validation rejects the unsafe key without preserving it for diagnostics.
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(data)
+
+    message = str(exc_info.value)
+    assert "talk backend names" in message
 
 
 def test_camera_talk_config_alias_for_explicit_onvif_backend() -> None:
