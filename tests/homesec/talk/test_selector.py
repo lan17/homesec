@@ -223,6 +223,104 @@ async def test_selector_auto_falls_back_to_safe_detector_after_standard_unsuppor
 
 
 @pytest.mark.asyncio
+async def test_selector_auto_reports_safe_detector_failure_after_standard_unsupported() -> None:
+    """Backend auto mode should surface actionable fallback failures when all candidates fail."""
+    # Given: A standards backend is unsupported and a safe vendor detector hits auth failure
+    calls: list[str] = []
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="standard_backend",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend(
+                "standard_backend",
+                calls,
+                probe_result=TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.UNSUPPORTED,
+                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                    message="standard backend unsupported",
+                ),
+            ),
+            priority=10,
+            standards_based=True,
+        )
+    )
+    registry.register(
+        TalkBackendRegistration(
+            name="detected_vendor",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend(
+                "detected_vendor",
+                calls,
+                probe_result=TalkCapabilityProbeResult(
+                    capability=TalkCapabilityState.ERROR,
+                    refusal_reason=TalkRefusalReason.TALK_AUTH_FAILED,
+                    message="fake vendor auth failed",
+                ),
+            ),
+            detector=lambda context: TalkBackendDetection(
+                backend="detected_vendor",
+                confidence="high",
+                reason="camera fingerprint matched detected vendor",
+                safe_to_probe=True,
+            ),
+            priority=200,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Probing all auto candidates
+    probe = await selector.probe()
+
+    # Then: The safe vendor auth failure is reported instead of hiding behind ONVIF unsupported
+    assert probe.capability == TalkCapabilityState.ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_AUTH_FAILED
+    assert probe.message == "fake vendor auth failed"
+    assert selector.backend == "detected_vendor"
+    assert calls == ["standard_backend:probe", "detected_vendor:probe"]
+
+
+def test_selector_auto_supported_codecs_does_not_build_proprietary_fallback() -> None:
+    """Startup codec metadata should not instantiate proprietary fallback backends."""
+    # Given: A safe proprietary detector whose backend factory must wait for standards failure
+    calls: list[str] = []
+    registry = _registry(calls)
+    registry.register(
+        TalkBackendRegistration(
+            name="detected_vendor",
+            config_model=_BackendConfig,
+            factory=lambda config, context: pytest.fail(
+                "proprietary fallback should not build for startup codec metadata"
+            ),
+            detector=lambda context: TalkBackendDetection(
+                backend="detected_vendor",
+                confidence="high",
+                reason="camera fingerprint matched detected vendor",
+                safe_to_probe=True,
+            ),
+            priority=200,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Source startup asks for supported codecs before any capability probe
+    codecs = selector.supported_codecs
+
+    # Then: Only standards-based codec metadata is built
+    assert codecs == ["PCMU/8000"]
+    assert selector.backend is None
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_selector_auto_ignores_detector_that_is_not_safe_to_probe() -> None:
     """Backend auto mode should not auto-probe unsafe detector matches."""
     # Given: A selector in auto mode with a vendor detector that is not safe to probe
@@ -303,6 +401,43 @@ async def test_selector_auto_refuses_vendor_only_registry_without_safe_detector(
     assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
     assert probe.message == "No standards-based talk backends are registered"
     assert selector.supported_codecs == []
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_selector_auto_refuses_safe_vendor_when_no_standard_backend_is_registered() -> None:
+    """Safe proprietary detections should not replace the standards-first prerequisite."""
+    # Given: A registry with only a safe vendor detector and no standards backend
+    calls: list[str] = []
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend("vendor_backend", calls),
+            detector=lambda context: TalkBackendDetection(
+                backend="vendor_backend",
+                confidence="high",
+                reason="camera fingerprint matched vendor",
+                safe_to_probe=True,
+            ),
+            priority=1,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Probing through auto selection
+    probe = await selector.probe()
+
+    # Then: Auto selection refuses without probing proprietary-only candidates
+    assert probe.capability == TalkCapabilityState.ERROR
+    assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert probe.message == "No standards-based talk backends are registered"
+    assert selector.backend is None
     assert calls == []
 
 
