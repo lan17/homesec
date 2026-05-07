@@ -185,7 +185,20 @@ function statusAllowsStart(status: TalkStatusResponse | null, cameraName: string
   if (!status || status.camera_name !== cameraName || !status.enabled) {
     return false
   }
-  return status.state === 'idle' || status.state === 'error'
+  if (
+    status.capability === 'disabled'
+    || status.capability === 'unknown'
+    || status.capability === 'probing'
+    || status.capability === 'unsupported'
+    || status.capability === 'unsupported_codec'
+    || status.capability === 'config_error'
+  ) {
+    return false
+  }
+  if (status.state === 'idle') {
+    return true
+  }
+  return status.state === 'error' && status.capability === 'error'
 }
 
 function nextStatusFromState(

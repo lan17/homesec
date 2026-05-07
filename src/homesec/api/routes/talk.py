@@ -181,6 +181,10 @@ def _refusal_status_and_code(reason: TalkRefusalReason) -> tuple[int, APIErrorCo
             return status.HTTP_409_CONFLICT, APIErrorCode.TALK_UNSUPPORTED_CAMERA
         case TalkRefusalReason.UNSUPPORTED_CODEC:
             return status.HTTP_400_BAD_REQUEST, APIErrorCode.TALK_UNSUPPORTED_CODEC
+        case TalkRefusalReason.TALK_CONFIG_ERROR:
+            return status.HTTP_400_BAD_REQUEST, APIErrorCode.TALK_CONFIG_ERROR
+        case TalkRefusalReason.TALK_AUTH_FAILED:
+            return status.HTTP_503_SERVICE_UNAVAILABLE, APIErrorCode.TALK_AUTH_FAILED
         case TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED:
             return status.HTTP_503_SERVICE_UNAVAILABLE, APIErrorCode.TALK_CAMERA_BACKCHANNEL_FAILED
         case TalkRefusalReason.RUNTIME_UNAVAILABLE:
@@ -451,11 +455,13 @@ def _talk_stream_refusal_close(reason: TalkRefusalReason) -> tuple[int, str]:
             | TalkRefusalReason.SESSION_BUDGET_EXHAUSTED
             | TalkRefusalReason.UNSUPPORTED_CAMERA
             | TalkRefusalReason.UNSUPPORTED_CODEC
+            | TalkRefusalReason.TALK_CONFIG_ERROR
             | TalkRefusalReason.INVALID_AUDIO_FRAME
         ):
             return status.WS_1008_POLICY_VIOLATION, "Talk stream refused"
         case (
-            TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+            TalkRefusalReason.TALK_AUTH_FAILED
+            | TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
             | TalkRefusalReason.RUNTIME_UNAVAILABLE
             | TalkRefusalReason.BACKPRESSURE
         ):

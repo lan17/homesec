@@ -32,6 +32,7 @@ class TalkCapabilityState(StrEnum):
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
     UNSUPPORTED_CODEC = "unsupported_codec"
+    CONFIG_ERROR = "config_error"
     ERROR = "error"
 
 
@@ -45,6 +46,8 @@ class TalkRefusalReason(StrEnum):
     SESSION_BUDGET_EXHAUSTED = "session_budget_exhausted"
     UNSUPPORTED_CAMERA = "unsupported_camera"
     UNSUPPORTED_CODEC = "unsupported_codec"
+    TALK_CONFIG_ERROR = "talk_config_error"
+    TALK_AUTH_FAILED = "talk_auth_failed"
     CAMERA_BACKCHANNEL_FAILED = "camera_backchannel_failed"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
     INVALID_AUDIO_FRAME = "invalid_audio_frame"

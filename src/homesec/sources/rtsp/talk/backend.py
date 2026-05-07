@@ -178,7 +178,7 @@ def _backend_open_error_from_protocol_error(exc: TalkProtocolError) -> TalkBacke
         case TalkProtocolErrorCode.RTSP_AUTH_FAILED:
             return TalkBackendOpenError(
                 "Camera talk backchannel authentication failed",
-                reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+                reason=TalkRefusalReason.TALK_AUTH_FAILED,
             )
         case (
             TalkProtocolErrorCode.CAMERA_REJECTED_SESSION

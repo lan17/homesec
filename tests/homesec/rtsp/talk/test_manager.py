@@ -51,6 +51,39 @@ def _manager(*, max_session_s: float = 60.0, idle_timeout_s: float = 60.0) -> Ta
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_prepare_maps_config_error_capability_to_config_refusal() -> None:
+    """Static backend config failures should produce operator-actionable refusals."""
+
+    async def _probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.CONFIG_ERROR,
+            message="Talk backend 'vendor_backend' config is invalid",
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=[],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_probe,
+    )
+
+    # Given: A manager whose backend selector found a static config error
+    # When: Refreshing status and preparing a session
+    status = await manager.refresh_status()
+    result = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_config"))
+
+    # Then: Status is error and prepare refuses with talk_config_error
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.state == TalkState.ERROR
+    assert result.accepted is False
+    assert result.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert result.message == "Talk backend 'vendor_backend' config is invalid"
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_refresh_status_probes_and_caches_capability() -> None:
     """Status refresh should expose discovered camera talk capability."""
     probe_calls = 0

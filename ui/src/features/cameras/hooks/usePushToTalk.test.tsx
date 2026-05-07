@@ -365,6 +365,24 @@ describe('usePushToTalk', () => {
     expect(result.current.canStart).toBe(false)
   })
 
+  it('does not allow start while talk capability has a static config error', async () => {
+    // Given: The camera talk backend has a static operator configuration error
+    vi.mocked(apiClient.getCameraTalkStatus).mockResolvedValueOnce({
+      ...idleStatus,
+      capability: 'config_error',
+      state: 'error',
+      last_error: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+      httpStatus: 200,
+    })
+
+    // When: Loading push-to-talk status
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.status?.capability).toBe('config_error'))
+
+    // Then: The hook keeps start disabled instead of retrying a static config failure
+    expect(result.current.canStart).toBe(false)
+  })
+
   it('allows a new camera start after switching away from a hung microphone request', async () => {
     // Given: The first camera start is stuck waiting for microphone capture
     const frontMedia = deferred<MediaStream>()

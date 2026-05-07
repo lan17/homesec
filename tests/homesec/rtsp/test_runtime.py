@@ -38,6 +38,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
+from homesec.sources.rtsp.talk.errors import RTSPAuthenticationError
 from homesec.sources.rtsp.talk.manager import TalkManagerError
 
 
@@ -855,13 +856,13 @@ async def test_unknown_explicit_talk_backend_reports_config_error_without_onvif_
     # Then: The source reports selection/config diagnostics, not disabled policy.
     assert status.enabled is True
     assert status.policy_enabled is True
-    assert status.capability == TalkCapabilityState.ERROR
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
     assert status.state == TalkState.ERROR
     assert status.last_error == "Talk backend 'tapo_local' is not registered in this runtime"
     assert status.backend == "tapo_local"
     assert status.backend_reason == "Talk backend 'tapo_local' is not registered"
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert prepared.message == status.last_error
 
 
@@ -897,18 +898,21 @@ async def test_talk_missing_explicit_credential_env_reports_config_error_without
     assert source.rtsp_url == "rtsp://host/stream"
     assert status.enabled is True
     assert status.policy_enabled is True
-    assert status.capability == TalkCapabilityState.ERROR
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
     assert status.state == TalkState.ERROR
-    assert status.last_error == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.last_error == (
+        "Talk backend 'onvif_rtsp_backchannel' config is invalid: "
+        "RTSP credential environment variable is not set: MISSING_TALK_USER"
+    )
     assert status.backend == "onvif_rtsp_backchannel"
-    assert status.backend_reason == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.backend_reason == status.last_error
     assert "rtsp://host/talk" not in status.backend_reason
 
     prepared = await source.prepare_talk_session(
         TalkSessionPrepareRequest(session_id="tk_missing_credentials")
     )
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert prepared.message == status.last_error
 
 
@@ -1043,13 +1047,16 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
     # Then: Talk reports a clear config error without falling back to the live stream URL
     assert status.enabled is True
     assert status.state == TalkState.ERROR
-    assert status.capability == TalkCapabilityState.ERROR
-    assert status.last_error == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.last_error == (
+        "Talk backend 'onvif_rtsp_backchannel' config is invalid: "
+        "RTSP URL environment variable is not set: MISSING_TALK_RTSP_URL"
+    )
     assert status.backend == "onvif_rtsp_backchannel"
-    assert status.backend_reason == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.backend_reason == status.last_error
     assert "rtsp://camera.local/live" not in status.backend_reason
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert prepared.message == status.last_error
 
 
@@ -1108,11 +1115,72 @@ async def test_talk_backchannel_missing_explicit_credential_env_reports_config_e
     # Then: Recording source construction survives and talk reports a config error
     assert status.enabled is True
     assert status.state == TalkState.ERROR
-    assert status.capability == TalkCapabilityState.ERROR
-    assert status.last_error == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.last_error == (
+        "Talk backend 'onvif_rtsp_backchannel' config is invalid: "
+        "RTSP credential environment variable is not set: MISSING_TALK_RTSP_USER"
+    )
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert prepared.message == status.last_error
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_open_auth_failure_reports_talk_auth_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera credential rejection should not collapse into generic backchannel failure."""
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000",
+            )
+
+        async def open_session(
+            self,
+            *,
+            session_id: str,
+            input_sample_rate: int,
+        ) -> object:
+            _ = session_id, input_sample_rate
+            raise RTSPAuthenticationError("RTSP authentication was rejected by the camera")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(),
+        },
+    )
+    source = RTSPSource(config, camera_name="cam")
+    input_format = TalkConfig().input
+
+    # Given: Capability probing succeeds but the camera rejects RTSP talk credentials.
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_auth_failure", input=input_format)
+    )
+
+    assert prepared.accepted is True
+
+    # When: Opening the reserved talk session
+    # Then: The source maps auth rejection to the stable talk-auth refusal reason.
+    with pytest.raises(TalkManagerError) as exc_info:
+        await source.open_talk_session(
+            TalkSessionOpenRequest(session_id="tk_auth_failure", input=input_format)
+        )
+    assert exc_info.value.reason == TalkRefusalReason.TALK_AUTH_FAILED
 
 
 @pytest.mark.asyncio

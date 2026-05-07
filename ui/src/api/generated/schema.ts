@@ -1221,7 +1221,7 @@ export interface components {
          * @description Discovered camera talk capability independent from session state.
          * @enum {string}
          */
-        TalkCapabilityState: "disabled" | "unknown" | "probing" | "supported" | "unsupported" | "unsupported_codec" | "error";
+        TalkCapabilityState: "disabled" | "unknown" | "probing" | "supported" | "unsupported" | "unsupported_codec" | "config_error" | "error";
         /**
          * TalkInputFormat
          * @description Browser input frame format contract for push-to-talk.

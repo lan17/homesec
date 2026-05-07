@@ -1738,6 +1738,7 @@
           "supported",
           "unsupported",
           "unsupported_codec",
+          "config_error",
           "error"
         ],
         "title": "TalkCapabilityState",

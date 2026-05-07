@@ -458,7 +458,7 @@ def _state_from_capability(capability: TalkCapabilityState) -> TalkState:
             return TalkState.IDLE
         case TalkCapabilityState.UNSUPPORTED | TalkCapabilityState.UNSUPPORTED_CODEC:
             return TalkState.UNSUPPORTED
-        case TalkCapabilityState.ERROR:
+        case TalkCapabilityState.CONFIG_ERROR | TalkCapabilityState.ERROR:
             return TalkState.ERROR
         case TalkCapabilityState.UNKNOWN | TalkCapabilityState.PROBING:
             return TalkState.TEMPORARILY_UNAVAILABLE
@@ -489,6 +489,8 @@ def _refusal_reason_from_capability(
             return TalkRefusalReason.UNSUPPORTED_CAMERA
         case TalkCapabilityState.UNSUPPORTED_CODEC:
             return TalkRefusalReason.UNSUPPORTED_CODEC
+        case TalkCapabilityState.CONFIG_ERROR:
+            return TalkRefusalReason.TALK_CONFIG_ERROR
         case TalkCapabilityState.ERROR:
             return TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
         case (
@@ -507,6 +509,8 @@ def _refusal_message_from_capability(capability: TalkCapabilityState) -> str:
             return "Camera does not advertise an ONVIF talk backchannel"
         case TalkCapabilityState.UNSUPPORTED_CODEC:
             return "Camera talk backchannel codec is not supported"
+        case TalkCapabilityState.CONFIG_ERROR:
+            return "Talk backend configuration is invalid"
         case TalkCapabilityState.ERROR:
             return "Camera talk backchannel probe failed"
         case TalkCapabilityState.UNKNOWN | TalkCapabilityState.PROBING:

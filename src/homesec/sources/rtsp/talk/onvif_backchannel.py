@@ -17,6 +17,7 @@ from homesec.sources.rtsp.talk.errors import (
     CameraRejectedTalkSessionError,
     CameraTalkStreamFailedError,
     TalkProtocolError,
+    TalkProtocolErrorCode,
     UnsupportedTalkCodecError,
 )
 from homesec.sources.rtsp.talk.g711 import encode_pcma, encode_pcmu
@@ -160,11 +161,7 @@ class ONVIFBackchannelAdapter:
                 message=str(exc),
             )
         except TalkProtocolError as exc:
-            return TalkCapabilityProbeResult(
-                capability=TalkCapabilityState.ERROR,
-                refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
-                message=str(exc) or type(exc).__name__,
-            )
+            return _probe_result_from_protocol_error(exc)
         except Exception as exc:
             return TalkCapabilityProbeResult(
                 capability=TalkCapabilityState.ERROR,
@@ -286,3 +283,17 @@ def _encode_for_codec(pcm_s16le: bytes, codec: SDPCodec) -> bytes:
     if normalized == "PCMA/8000":
         return encode_pcma(pcm_s16le)
     raise UnsupportedTalkCodecError(f"Unsupported talk codec selected: {codec.normalized_name}")
+
+
+def _probe_result_from_protocol_error(exc: TalkProtocolError) -> TalkCapabilityProbeResult:
+    if exc.code == TalkProtocolErrorCode.RTSP_AUTH_FAILED:
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.ERROR,
+            refusal_reason=TalkRefusalReason.TALK_AUTH_FAILED,
+            message="Camera talk backchannel authentication failed",
+        )
+    return TalkCapabilityProbeResult(
+        capability=TalkCapabilityState.ERROR,
+        refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+        message=str(exc) or type(exc).__name__,
+    )

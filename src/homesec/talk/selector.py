@@ -118,7 +118,7 @@ class TalkBackendSelector:
         if registration is None:
             message = f"Talk backend '{camera_talk.backend}' is not registered in this runtime"
             self._selection = _SelectionError(
-                _selection_error_result(message),
+                _config_error_result(message),
                 backend=camera_talk.backend,
                 backend_reason=f"Talk backend '{camera_talk.backend}' is not registered",
             )
@@ -145,7 +145,7 @@ class TalkBackendSelector:
         ]
         if not registrations:
             return _SelectionError(
-                _selection_error_result("No standards-based talk backends are registered"),
+                _runtime_selection_error_result("No standards-based talk backends are registered"),
                 backend=None,
                 backend_reason="No standards-based talk backends are registered",
             )
@@ -198,7 +198,7 @@ class TalkBackendSelector:
         if registration is None:
             message = f"Talk backend '{backend_name}' is not registered in this runtime"
             return _SelectionError(
-                _selection_error_result(message),
+                _config_error_result(message),
                 backend=backend_name,
                 backend_reason=f"Talk backend '{backend_name}' is not registered",
             )
@@ -211,7 +211,7 @@ class TalkBackendSelector:
                 backend_reason=reason,
             )
         except (ValueError, ValidationError) as exc:
-            public_message = f"Talk backend '{registration.name}' config is invalid"
+            public_message = _public_config_error_message(registration.name, exc)
             logger.debug(
                 "Talk backend config validation failed",
                 extra={
@@ -221,18 +221,40 @@ class TalkBackendSelector:
                 },
             )
             return _SelectionError(
-                _selection_error_result(public_message),
+                _config_error_result(public_message),
                 backend=registration.name,
                 backend_reason=public_message,
             )
 
 
-def _selection_error_result(message: str) -> TalkCapabilityProbeResult:
+def _runtime_selection_error_result(message: str) -> TalkCapabilityProbeResult:
     return TalkCapabilityProbeResult(
         capability=TalkCapabilityState.ERROR,
         refusal_reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
         message=message,
     )
+
+
+def _config_error_result(message: str) -> TalkCapabilityProbeResult:
+    return TalkCapabilityProbeResult(
+        capability=TalkCapabilityState.CONFIG_ERROR,
+        refusal_reason=TalkRefusalReason.TALK_CONFIG_ERROR,
+        message=message,
+    )
+
+
+def _public_config_error_message(backend_name: str, exc: Exception) -> str:
+    base = f"Talk backend '{backend_name}' config is invalid"
+    if not isinstance(exc, ValueError):
+        return base
+    detail = str(exc).strip()
+    if not detail:
+        return base
+    if detail.startswith("RTSP URL environment variable is not set: ") or detail.startswith(
+        "RTSP credential environment variable is not set: "
+    ):
+        return f"{base}: {detail}"
+    return base
 
 
 def _backend_display_name(backend_name: str) -> str:

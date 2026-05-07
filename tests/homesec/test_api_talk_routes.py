@@ -584,6 +584,16 @@ def test_prepare_talk_session_requires_api_key_when_auth_enabled(
             APIErrorCode.TALK_UNSUPPORTED_CODEC,
         ),
         (
+            TalkRefusalReason.TALK_CONFIG_ERROR,
+            status.HTTP_400_BAD_REQUEST,
+            APIErrorCode.TALK_CONFIG_ERROR,
+        ),
+        (
+            TalkRefusalReason.TALK_AUTH_FAILED,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            APIErrorCode.TALK_AUTH_FAILED,
+        ),
+        (
             TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
             status.HTTP_503_SERVICE_UNAVAILABLE,
             APIErrorCode.TALK_CAMERA_BACKCHANNEL_FAILED,

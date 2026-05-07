@@ -145,6 +145,9 @@ payloads in `cameras[].talk.backend` or `cameras[].talk.backends` keys.
 hashes, API keys, stream tokens, raw auth headers, or raw SDP.
 Backend config validation failures expose a stable public `last_error` rather
 than raw validator text, because validator text can include rejected input.
+Missing explicit talk URL or credential environment variables are reported as
+`capability=config_error` / `reason=talk_config_error`; the message may include
+the missing environment variable name, but never its value.
 
 ## Security and Privacy Notes
 
@@ -178,8 +181,9 @@ Before relying on talk for a camera:
 6. Test while recording and preview are active; some cameras have limited RTSP
    session budgets.
 7. Watch HomeSec logs for `unsupported_codec`, `unsupported_camera`,
-   `runtime_unavailable`, `session_budget_exhausted`,
-   `camera_backchannel_failed`, or repeated idle timeouts.
+   `talk_config_error`, `talk_auth_failed`, `runtime_unavailable`,
+   `session_budget_exhausted`, `camera_backchannel_failed`, or repeated idle
+   timeouts.
 8. Record the result in the compatibility matrix below.
 
 During operation:
@@ -239,13 +243,27 @@ Suggested result values:
 - The camera source backend does not expose the talk capability. The MVP supports
   RTSP sources with `onvif_rtsp_backchannel` talk config.
 
-### Session is refused with `runtime_unavailable`
+### Session is refused with `talk_config_error`
 
-- Check `last_error` for a talk backend selection or config error.
 - If `cameras[].talk.backend` names a future or custom backend, confirm that
   backend is installed and registered in this HomeSec runtime.
 - If `cameras[].talk.config.rtsp_url_env` or credential env vars are configured,
   confirm those environment variables are set for the HomeSec process.
+- Check `last_error` / `backend_reason` for the missing backend or environment
+  variable name.
+
+### Session is refused with `runtime_unavailable`
+
+- Confirm the runtime process is healthy and recently heartbeating.
+- Retry after a runtime reload if the process was restarted while the browser
+  had a reserved talk session.
+
+### Session is refused with `talk_auth_failed`
+
+- HomeSec API authentication already succeeded; this means the selected camera
+  backend rejected HomeSec's configured camera credentials.
+- Verify the talk backend's RTSP or vendor credentials and confirm the camera
+  account has speaker/backchannel permissions.
 
 ### Session is refused with `unsupported_camera` or `camera_backchannel_failed`
 

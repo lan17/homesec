@@ -442,6 +442,32 @@ async def test_onvif_backchannel_probe_reports_missing_backchannel() -> None:
 
 
 @pytest.mark.asyncio
+async def test_onvif_backchannel_probe_reports_auth_failure() -> None:
+    """Probe should distinguish camera auth rejection from retryable protocol failure."""
+    # Given: A camera that requires RTSP auth but no talk credentials are configured
+    server = _FakeRTSPBackchannelServer(require_basic_auth=True)
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: Probing camera talk capability
+        result = await adapter.probe()
+    finally:
+        await server.stop()
+
+    # Then: Capability is an auth failure and no SETUP/PLAY/RTP happens
+    assert result.capability == TalkCapabilityState.ERROR
+    assert result.refusal_reason == TalkRefusalReason.TALK_AUTH_FAILED
+    assert result.message == "Camera talk backchannel authentication failed"
+    assert [request.method for request in server.requests] == ["DESCRIBE"]
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
 async def test_onvif_backchannel_sends_no_rtp_before_play_200_ok() -> None:
     # Given: A fake camera accepting the ONVIF RTSP backchannel handshake
     server = _FakeRTSPBackchannelServer()

@@ -572,12 +572,13 @@ function parseTalkCapabilityState(value: unknown, fieldName: string): TalkCapabi
     || value === 'supported'
     || value === 'unsupported'
     || value === 'unsupported_codec'
+    || value === 'config_error'
     || value === 'error'
   ) {
     return value
   }
   throw new Error(
-    `${fieldName} must be one of disabled|unknown|probing|supported|unsupported|unsupported_codec|error`,
+    `${fieldName} must be one of disabled|unknown|probing|supported|unsupported|unsupported_codec|config_error|error`,
   )
 }
 

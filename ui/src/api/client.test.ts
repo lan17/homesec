@@ -1409,6 +1409,40 @@ describe('HomeSecApiClient push-to-talk', () => {
     )
   })
 
+  it('parses talk config-error capability status', async () => {
+    // Given: A talk status endpoint response with a static backend config error
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          camera_name: 'front',
+          enabled: true,
+          policy_enabled: true,
+          capability: 'config_error',
+          state: 'error',
+          active_session_id: null,
+          supported_codecs: ['PCMU/8000'],
+          offered_codecs: [],
+          selected_codec: null,
+          backend: 'onvif_rtsp_backchannel',
+          backend_reason: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+          last_error: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting talk status
+    const result = await client.getCameraTalkStatus('front')
+
+    // Then: The parser accepts the config_error capability value
+    expect(result.capability).toBe('config_error')
+    expect(result.last_error).toBe("Talk backend 'onvif_rtsp_backchannel' config is invalid")
+  })
+
   it('prepares and stops talk sessions with typed payloads', async () => {
     // Given: The prepare and stop endpoints return session lifecycle payloads
     const fetchMock = vi.spyOn(globalThis, 'fetch')

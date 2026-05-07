@@ -211,7 +211,7 @@ async def test_selector_auto_refuses_vendor_only_registry_without_safe_detector(
     # When: Probing through auto selection
     probe = await selector.probe()
 
-    # Then: Selection returns a config/runtime error without probing the vendor backend
+    # Then: Selection returns a runtime error without probing the vendor backend
     assert probe.capability == TalkCapabilityState.ERROR
     assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
     assert probe.message == "No standards-based talk backends are registered"
@@ -232,9 +232,9 @@ async def test_selector_explicit_backend_does_not_fallback_to_standards_backend(
     # When: Probing and opening through the selector
     probe = await selector.probe()
 
-    # Then: Selection reports a config/runtime error without probing fallback backends
-    assert probe.capability == TalkCapabilityState.ERROR
-    assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    # Then: Selection reports a config error without probing fallback backends
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert probe.message == "Talk backend 'missing_vendor' is not registered in this runtime"
     assert selector.supported_codecs == []
     assert calls == []
@@ -245,7 +245,7 @@ async def test_selector_explicit_backend_does_not_fallback_to_standards_backend(
         await selector.open_session(
             TalkSessionOpenRequest(session_id="tk_missing", input=TalkInputFormat())
         )
-    assert exc_info.value.reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert exc_info.value.reason == TalkRefusalReason.TALK_CONFIG_ERROR
 
 
 @pytest.mark.asyncio
@@ -308,7 +308,8 @@ async def test_selector_reports_stable_public_message_for_invalid_backend_config
     probe = await selector.probe()
 
     # Then: The public error is stable and does not include raw Pydantic input text
-    assert probe.capability == TalkCapabilityState.ERROR
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert probe.message == "Talk backend 'vendor_backend' config is invalid"
     assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
     assert "secret-config-value" not in (probe.message or "")
