@@ -21,3 +21,14 @@ def validate_talk_backend_id(value: str) -> str:
             "start with a letter, and be at most 64 characters"
         )
     return value
+
+
+def sanitize_talk_backend_id(value: object) -> str | None:
+    """Return a safe backend identifier for public diagnostics, or None."""
+    if not isinstance(value, str):
+        return None
+    normalized = normalize_talk_backend_id(value)
+    try:
+        return validate_talk_backend_id(normalized)
+    except ValueError:
+        return None

@@ -27,6 +27,10 @@ class _BackendConfig(BaseModel):
     marker: str = "default"
 
 
+class _IntBackendConfig(BaseModel):
+    marker: int
+
+
 class _FakeSession:
     session_id = "tk_fake"
     camera_name = "cam"
@@ -276,3 +280,35 @@ async def test_selector_uses_explicit_registered_backend_config() -> None:
     # Then: Backend-specific config wins over the legacy config alias
     assert probe.capability == TalkCapabilityState.SUPPORTED
     assert seen_config == [_BackendConfig(marker="backend-map")]
+
+
+@pytest.mark.asyncio
+async def test_selector_reports_stable_public_message_for_invalid_backend_config() -> None:
+    """Invalid backend config should not expose raw validation text in status errors."""
+    # Given: A registered backend whose config validation would include rejected input
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_IntBackendConfig,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(
+            CameraTalkConfig(
+                backend="vendor_backend",
+                config={"marker": "secret-config-value"},
+            )
+        ),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: The public error is stable and does not include raw Pydantic input text
+    assert probe.capability == TalkCapabilityState.ERROR
+    assert probe.message == "Talk backend 'vendor_backend' config is invalid"
+    assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
+    assert "secret-config-value" not in (probe.message or "")

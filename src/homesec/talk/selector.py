@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -55,6 +56,8 @@ _AUTO_DETECTION_CONFIDENCE_RANK: dict[TalkBackendConfidence, int] = {
     "low": 3,
     "not_applicable": 4,
 }
+
+logger = logging.getLogger(__name__)
 
 
 class TalkBackendSelector:
@@ -208,10 +211,19 @@ class TalkBackendSelector:
                 backend_reason=reason,
             )
         except (ValueError, ValidationError) as exc:
+            public_message = f"Talk backend '{registration.name}' config is invalid"
+            logger.debug(
+                "Talk backend config validation failed",
+                extra={
+                    "camera_name": self._context.camera_name,
+                    "talk_backend": registration.name,
+                    "error_type": type(exc).__name__,
+                },
+            )
             return _SelectionError(
-                _selection_error_result(str(exc)),
+                _selection_error_result(public_message),
                 backend=registration.name,
-                backend_reason=f"Talk backend '{registration.name}' config is invalid",
+                backend_reason=public_message,
             )
 
 

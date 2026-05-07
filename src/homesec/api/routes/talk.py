@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
@@ -26,6 +26,7 @@ from homesec.models.talk import (
     TalkInputFormat,
     TalkRefusalReason,
     TalkState,
+    sanitize_talk_backend_diagnostic_fields,
 )
 from homesec.runtime.errors import (
     TalkCameraNotFoundError,
@@ -65,6 +66,11 @@ class TalkStatusResponse(BaseModel):
     backend: str | None = None
     backend_reason: str | None = None
     last_error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_backend_diagnostics(cls, value: object) -> object:
+        return sanitize_talk_backend_diagnostic_fields(value)
 
 
 class TalkSessionRequest(BaseModel):

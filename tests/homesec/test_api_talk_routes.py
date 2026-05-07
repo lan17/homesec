@@ -262,6 +262,25 @@ def test_get_talk_status_returns_disabled_camera_status() -> None:
     assert app.open_calls == []
 
 
+def test_talk_status_response_sanitizes_unsafe_backend_diagnostics() -> None:
+    """API talk status responses should not expose unsafe backend identifiers."""
+    # Given: A status response is built with unsafe backend diagnostics
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend="rtsp://admin:secret@example.local/stream1",
+        backend_reason="selected rtsp://admin:secret@example.local/stream1",
+    )
+
+    # Then: The public diagnostic fields are dropped
+    assert response.backend is None
+    assert response.backend_reason is None
+
+
 def test_get_talk_status_returns_unsupported_source_status() -> None:
     """Unsupported sources should surface as talk status rather than session opens."""
     # Given: The runtime reports that the camera source has no talk support.

@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from homesec.talk.backend_ids import sanitize_talk_backend_id
+
 
 class TalkState(StrEnum):
     """Current talk capability/session state for a camera."""
@@ -101,6 +103,11 @@ class CameraTalkStatus(BaseModel):
     backend_reason: str | None = None
     last_error: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_backend_diagnostics(cls, value: object) -> object:
+        return sanitize_talk_backend_diagnostic_fields(value)
+
     @model_validator(mode="after")
     def _derive_compatibility_defaults(self) -> CameraTalkStatus:
         """Default new capability fields from the legacy status contract."""
@@ -109,6 +116,23 @@ class CameraTalkStatus(BaseModel):
         if "capability" not in self.model_fields_set:
             self.capability = _capability_from_state(self.state)
         return self
+
+
+def sanitize_talk_backend_diagnostic_fields(value: object) -> object:
+    """Normalize or drop unsafe backend IDs before public diagnostics."""
+    if not isinstance(value, dict) or "backend" not in value:
+        return value
+
+    raw_backend = value.get("backend")
+    if raw_backend is None:
+        return value
+
+    sanitized_backend = sanitize_talk_backend_id(raw_backend)
+    sanitized_value = dict(value)
+    sanitized_value["backend"] = sanitized_backend
+    if sanitized_backend is None:
+        sanitized_value["backend_reason"] = None
+    return sanitized_value
 
 
 def _capability_from_state(state: TalkState) -> TalkCapabilityState:

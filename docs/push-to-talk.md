@@ -143,6 +143,8 @@ or WebSocket diagnostics. Do not put URLs, credentials, tokens, or raw protocol
 payloads in `cameras[].talk.backend` or `cameras[].talk.backends` keys.
 `backend_reason` must not include RTSP URLs, camera credentials, password
 hashes, API keys, stream tokens, raw auth headers, or raw SDP.
+Backend config validation failures expose a stable public `last_error` rather
+than raw validator text, because validator text can include rejected input.
 
 ## Security and Privacy Notes
 
