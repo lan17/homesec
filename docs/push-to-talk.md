@@ -156,8 +156,8 @@ Before relying on talk for a camera:
 6. Test while recording and preview are active; some cameras have limited RTSP
    session budgets.
 7. Watch HomeSec logs for `unsupported_codec`, `unsupported_camera`,
-   `session_budget_exhausted`, `camera_backchannel_failed`, or repeated idle
-   timeouts.
+   `runtime_unavailable`, `session_budget_exhausted`,
+   `camera_backchannel_failed`, or repeated idle timeouts.
 8. Record the result in the compatibility matrix below.
 
 During operation:
@@ -215,6 +215,14 @@ Suggested result values:
 
 - The camera source backend does not expose the talk capability. The MVP supports
   RTSP sources with `onvif_rtsp_backchannel` talk config.
+
+### Session is refused with `runtime_unavailable`
+
+- Check `last_error` for a talk backend selection or config error.
+- If `cameras[].talk.backend` names a future or custom backend, confirm that
+  backend is installed and registered in this HomeSec runtime.
+- If `cameras[].talk.config.rtsp_url_env` or credential env vars are configured,
+  confirm those environment variables are set for the HomeSec process.
 
 ### Session is refused with `unsupported_camera` or `camera_backchannel_failed`
 

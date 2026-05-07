@@ -23,6 +23,8 @@ from homesec.talk.backends import (
     TalkBackendRegistration,
     TalkBackendRegistry,
     TalkBackendSession,
+    backend_config_for,
+    model_validate_backend_config,
 )
 
 ONVIF_RTSP_BACKCHANNEL_BACKEND = "onvif_rtsp_backchannel"
@@ -80,20 +82,35 @@ def onvif_rtsp_talk_backend_registration() -> TalkBackendRegistration:
     )
 
 
-def validate_rtsp_talk_backend_config(context: TalkBackendContext) -> None:
+def validate_rtsp_talk_backend_config(
+    context: TalkBackendContext,
+    *,
+    registry: TalkBackendRegistry | None = None,
+) -> None:
     """Validate statically known RTSP talk backend config at source-config load time."""
+    registry = registry or build_rtsp_talk_backend_registry()
     camera_talk = context.camera_talk
     if camera_talk.backend == "auto":
-        _validate_onvif_config(
-            camera_talk.config_for_backend(ONVIF_RTSP_BACKCHANNEL_BACKEND),
-            context,
-        )
+        for registration in registry.standards_first():
+            if registration.standards_based:
+                _validate_registered_backend_config(registration, context)
         return
-    if camera_talk.backend == ONVIF_RTSP_BACKCHANNEL_BACKEND:
-        _validate_onvif_config(
-            camera_talk.config_for_backend(ONVIF_RTSP_BACKCHANNEL_BACKEND),
-            context,
-        )
+
+    explicit_registration = registry.get(camera_talk.backend)
+    if explicit_registration is None:
+        return
+    _validate_registered_backend_config(explicit_registration, context)
+
+
+def _validate_registered_backend_config(
+    registration: TalkBackendRegistration,
+    context: TalkBackendContext,
+) -> None:
+    model_validate_backend_config(
+        registration,
+        backend_config_for(context.camera_talk, registration.name),
+        context=context,
+    )
 
 
 def _build_onvif_backchannel_config_data(

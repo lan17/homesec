@@ -15,6 +15,7 @@ from homesec.models.talk import (
 )
 from homesec.talk.backends import (
     TalkBackendContext,
+    TalkBackendDetection,
     TalkBackendOpenError,
     TalkBackendRegistration,
     TalkBackendRegistry,
@@ -109,6 +110,78 @@ async def test_selector_auto_uses_standards_backend_first() -> None:
     assert selector.supported_codecs == ["PCMU/8000"]
     assert session.selected_codec == "PCMU/8000"
     assert calls == ["standard_backend:probe", "standard_backend:open:tk_auto"]
+
+
+@pytest.mark.asyncio
+async def test_selector_auto_uses_safe_high_confidence_detector_before_default() -> None:
+    """Backend auto mode should honor safe high-confidence detector matches."""
+    # Given: A selector in auto mode with a standard default and detected vendor backend
+    calls: list[str] = []
+    registry = _registry(calls)
+    registry.register(
+        TalkBackendRegistration(
+            name="detected_vendor",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend("detected_vendor", calls),
+            detector=lambda context: TalkBackendDetection(
+                backend="detected_vendor",
+                confidence="high",
+                reason="camera fingerprint matched detected vendor",
+                safe_to_probe=True,
+            ),
+            priority=200,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Probing and opening a talk session
+    probe = await selector.probe()
+    session = await selector.open_session(
+        TalkSessionOpenRequest(session_id="tk_detected", input=TalkInputFormat())
+    )
+
+    # Then: The detector-selected backend handles the request before the standard default
+    assert probe.capability == TalkCapabilityState.SUPPORTED
+    assert session.selected_codec == "PCMU/8000"
+    assert calls == ["detected_vendor:probe", "detected_vendor:open:tk_detected"]
+
+
+@pytest.mark.asyncio
+async def test_selector_auto_ignores_detector_that_is_not_safe_to_probe() -> None:
+    """Backend auto mode should not auto-probe unsafe detector matches."""
+    # Given: A selector in auto mode with a vendor detector that is not safe to probe
+    calls: list[str] = []
+    registry = _registry(calls)
+    registry.register(
+        TalkBackendRegistration(
+            name="unsafe_vendor",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _FakeBackend("unsafe_vendor", calls),
+            detector=lambda context: TalkBackendDetection(
+                backend="unsafe_vendor",
+                confidence="high",
+                reason="camera fingerprint matched but probing is not safe",
+                safe_to_probe=False,
+            ),
+            priority=1,
+            standards_based=False,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: Probing through auto selection
+    probe = await selector.probe()
+
+    # Then: Selection falls back to the standard backend instead of unsafe vendor probing
+    assert probe.capability == TalkCapabilityState.SUPPORTED
+    assert calls == ["standard_backend:probe"]
 
 
 @pytest.mark.asyncio

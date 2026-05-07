@@ -14,8 +14,10 @@ from homesec.models.talk import (
 )
 from homesec.talk.backends import (
     TalkBackendAdapter,
+    TalkBackendConfidence,
     TalkBackendContext,
     TalkBackendOpenError,
+    TalkBackendRegistration,
     TalkBackendRegistry,
     TalkBackendSession,
     backend_config_for,
@@ -39,6 +41,15 @@ class _SelectionError:
     @property
     def supported_codecs(self) -> list[str]:
         return []
+
+
+_AUTO_DETECTION_CONFIDENCE_RANK: dict[TalkBackendConfidence, int] = {
+    "explicit": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+    "not_applicable": 4,
+}
 
 
 class TalkBackendSelector:
@@ -98,10 +109,40 @@ class TalkBackendSelector:
         return self._selection
 
     def _select_auto(self) -> _SelectedBackend | _SelectionError:
+        detected_registration = self._detected_auto_registration()
+        if detected_registration is not None:
+            return self._build_registered_backend(detected_registration.name)
+
         registrations = self._registry.standards_first()
         if not registrations:
             return _SelectionError(_selection_error_result("No talk backends are registered"))
         return self._build_registered_backend(registrations[0].name)
+
+    def _detected_auto_registration(self) -> TalkBackendRegistration | None:
+        detected: list[tuple[int, bool, int, str, TalkBackendRegistration]] = []
+        for registration in self._registry.all():
+            if registration.detector is None:
+                continue
+            detection = registration.detector(self._context)
+            if (
+                detection.backend.lower() != registration.name
+                or detection.confidence == "not_applicable"
+                or not detection.safe_to_probe
+            ):
+                continue
+            detected.append(
+                (
+                    _AUTO_DETECTION_CONFIDENCE_RANK[detection.confidence],
+                    not registration.standards_based,
+                    registration.priority,
+                    registration.name,
+                    registration,
+                )
+            )
+        if not detected:
+            return None
+        detected.sort(key=lambda item: item[:4])
+        return detected[0][4]
 
     def _build_registered_backend(self, backend_name: str) -> _SelectedBackend | _SelectionError:
         registration = self._registry.get(backend_name)
