@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import suppress
 from dataclasses import dataclass
@@ -215,7 +216,7 @@ class ONVIFBackchannelAdapter:
                 input_sample_rate=input_sample_rate,
                 rtp_channel=rtp_channel,
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             if setup_completed:
                 await _best_effort_teardown(client)
             await client.close()

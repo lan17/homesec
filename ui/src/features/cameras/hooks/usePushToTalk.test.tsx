@@ -308,10 +308,12 @@ describe('usePushToTalk', () => {
     await waitFor(() => expect(result.current.isStreaming).toBe(true))
     lastScriptProcessor?.emit(new Float32Array(160).fill(0.2))
 
-    // Then: The UI omits hard-coded input on prepare and uses the session input on stream
+    // Then: The UI sends only a client cleanup id on prepare and uses the session input on stream
+    const preparePayload = vi.mocked(apiClient.prepareCameraTalkSession).mock.calls[0]?.[1]
+    expect(preparePayload).toEqual({ session_id: expect.stringMatching(/^tk_/) })
     expect(apiClient.prepareCameraTalkSession).toHaveBeenCalledWith(
       'front',
-      {},
+      preparePayload,
       expect.objectContaining({ signal: expect.any(Object) }),
     )
     expect(sockets[0].sent[0]).toBe(JSON.stringify({
@@ -402,9 +404,11 @@ describe('usePushToTalk', () => {
     // Then: The stale start lock from the first camera does not block the new start
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(sockets).toHaveLength(1))
+    const preparePayload = vi.mocked(apiClient.prepareCameraTalkSession).mock.calls.at(-1)?.[1]
+    expect(preparePayload).toEqual({ session_id: expect.stringMatching(/^tk_/) })
     expect(apiClient.prepareCameraTalkSession).toHaveBeenCalledWith(
       'office',
-      {},
+      preparePayload,
       expect.objectContaining({ signal: expect.any(Object) }),
     )
   })
@@ -512,6 +516,38 @@ describe('usePushToTalk', () => {
     await waitFor(() => expect(apiClient.stopCameraTalkSession).toHaveBeenCalledTimes(1))
     expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
     expect(sockets[0].readyState).toBe(FakeWebSocket.CLOSED)
+    expect(result.current.isStreaming).toBe(false)
+  })
+
+  it('stops the client-chosen session when prepare is aborted before the response', async () => {
+    // Given: The backend prepare request is still pending after the browser has a cleanup id
+    const { stream } = createMediaStream()
+    const prepareDeferred = deferred<TalkSessionResponse & { httpStatus: number }>()
+    vi.mocked(apiClient.prepareCameraTalkSession).mockReturnValueOnce(prepareDeferred.promise)
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(apiClient.prepareCameraTalkSession).toHaveBeenCalledTimes(1))
+    const preparePayload = vi.mocked(apiClient.prepareCameraTalkSession).mock.calls[0]?.[1]
+    expect(preparePayload).toEqual({ session_id: expect.stringMatching(/^tk_/) })
+    const preparedSessionId = preparePayload?.session_id
+    expect(typeof preparedSessionId).toBe('string')
+
+    // When: The user releases before the prepare response reaches the hook
+    await act(async () => {
+      await result.current.stop()
+      prepareDeferred.reject(new DOMException('aborted', 'AbortError'))
+      await Promise.resolve()
+    })
+
+    // Then: The hook can delete the reserved session even though no response was parsed
+    await waitFor(() => {
+      expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', preparedSessionId)
+    })
+    expect(sockets).toHaveLength(0)
     expect(result.current.isStreaming).toBe(false)
   })
 

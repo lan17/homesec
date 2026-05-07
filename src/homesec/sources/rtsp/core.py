@@ -88,7 +88,10 @@ def _build_onvif_backchannel_config_data(
 ) -> dict[str, object]:
     """Build ONVIF talk adapter config with inherited source URL fallback rules."""
     adapter_config_data = _talk_config_dict(value)
-    if adapter_config_data.get("rtsp_url") or adapter_config_data.get("rtsp_url_env"):
+    if (
+        adapter_config_data.get("rtsp_url") is not None
+        or adapter_config_data.get("rtsp_url_env") is not None
+    ):
         return adapter_config_data
     if fallback_rtsp_url is not None:
         adapter_config_data["rtsp_url"] = fallback_rtsp_url

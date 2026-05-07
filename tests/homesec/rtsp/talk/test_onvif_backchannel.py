@@ -828,6 +828,76 @@ async def test_onvif_backchannel_rejects_play_failure_before_audio() -> None:
 
 
 @pytest.mark.asyncio
+async def test_onvif_backchannel_cancelled_open_tears_down_setup_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: ONVIF SETUP has succeeded and PLAY is still waiting when open is cancelled.
+    class _CancelDuringPlayClient:
+        def __init__(self) -> None:
+            self.session_id: str | None = None
+            self.play_started = asyncio.Event()
+            self.teardown_calls = 0
+            self.close_calls = 0
+
+        async def connect(self) -> None:
+            return None
+
+        async def describe(self, *, headers: dict[str, str] | None = None) -> RTSPResponse:
+            _ = headers
+            return RTSPResponse(
+                status_code=200,
+                reason="OK",
+                body=_BACKCHANNEL_SDP.encode(),
+            )
+
+        async def setup_interleaved(
+            self,
+            control_url: str,
+            *,
+            rtp_channel: int,
+            headers: dict[str, str] | None = None,
+        ) -> RTSPResponse:
+            _ = (control_url, rtp_channel, headers)
+            self.session_id = "homesec-talk"
+            return RTSPResponse(
+                status_code=200,
+                reason="OK",
+                headers={"transport": "RTP/AVP/TCP;unicast;interleaved=0-1"},
+            )
+
+        async def play(self, *, headers: dict[str, str] | None = None) -> RTSPResponse:
+            _ = headers
+            self.play_started.set()
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+        async def teardown(self, *, headers: dict[str, str] | None = None) -> None:
+            _ = headers
+            self.teardown_calls += 1
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    client = _CancelDuringPlayClient()
+    adapter = ONVIFBackchannelAdapter(
+        ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/stream1"),
+        camera_name="front_door",
+    )
+    monkeypatch.setattr(adapter, "_client", lambda: client)
+    open_task = asyncio.create_task(adapter.open_session(session_id="talk-1"))
+    await client.play_started.wait()
+
+    # When: Runtime shutdown cancels the in-flight open before PLAY completes.
+    open_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await open_task
+
+    # Then: The already-created RTSP session is torn down and the socket is closed.
+    assert client.teardown_calls == 1
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_onvif_session_rejects_writes_after_close() -> None:
     # Given: A talk session that has already been closed
     client = _NoopTalkClient()

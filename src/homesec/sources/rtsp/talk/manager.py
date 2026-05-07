@@ -264,40 +264,45 @@ class TalkManager:
                 )
             record.opening = True
 
+        session: TalkSession | None = None
+        close_unclaimed_session = False
         try:
             session = await self._open_session_factory(request)
+            async with self._lock:
+                record = self._record
+                if record is None or record.session_id != request.session_id:
+                    close_unclaimed_session = True
+                else:
+                    record.opening = False
+                    record.session = session
+                    record.state = TalkState.ACTIVE
+                    record.selected_codec = session.selected_codec
+                    record.stats.start_time = time.monotonic()
+                    record.stats.selected_codec = session.selected_codec
+                    if (
+                        record.timeout_task is not None
+                        and record.timeout_task is not asyncio.current_task()
+                    ):
+                        record.timeout_task.cancel()
+                    record.timeout_task = asyncio.create_task(
+                        self._max_duration_watch(record.session_id)
+                    )
+                    record.idle_task = asyncio.create_task(self._idle_watch(record.session_id))
+                    return session
         except asyncio.CancelledError:
+            if session is not None:
+                await _close_session_safely(session)
             await self._clear_opening_record(request.session_id, close_reason="open_cancelled")
             raise
         except Exception as exc:
             self._last_error = str(exc) or type(exc).__name__
+            if session is not None:
+                await _close_session_safely(session)
             await self._clear_opening_record(request.session_id, close_reason="open_failed")
             raise
 
-        async with self._lock:
-            record = self._record
-            if record is None or record.session_id != request.session_id:
-                close_unclaimed_session = True
-            else:
-                close_unclaimed_session = False
-                record.opening = False
-                record.session = session
-                record.state = TalkState.ACTIVE
-                record.selected_codec = session.selected_codec
-                record.stats.start_time = time.monotonic()
-                record.stats.selected_codec = session.selected_codec
-                if (
-                    record.timeout_task is not None
-                    and record.timeout_task is not asyncio.current_task()
-                ):
-                    record.timeout_task.cancel()
-                record.timeout_task = asyncio.create_task(
-                    self._max_duration_watch(record.session_id)
-                )
-                record.idle_task = asyncio.create_task(self._idle_watch(record.session_id))
-                return session
-
         if close_unclaimed_session:
+            assert session is not None
             await _close_session_safely(session)
             raise TalkManagerError(
                 "Talk session is no longer reserved",

@@ -1001,6 +1001,27 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
     assert "MISSING_TALK_RTSP_URL" in prepared.message
 
 
+@pytest.mark.parametrize("talk_config", [{"rtsp_url": ""}, {"rtsp_url_env": ""}])
+def test_talk_backchannel_blank_explicit_rtsp_url_does_not_inherit_source_url(
+    tmp_path: Path,
+    talk_config: dict[str, str],
+) -> None:
+    """A blank explicit talk URL override should be rejected instead of inherited."""
+
+    # Given: A camera with a blank explicit talk RTSP URL override
+    # When: Validating the RTSP source configuration
+    # Then: The talk config is rejected rather than inheriting the source RTSP URL
+    with pytest.raises(ValueError, match="rtsp_url_env or rtsp_url"):
+        _make_config(
+            tmp_path,
+            rtsp_url="rtsp://camera.local/live",
+            **{
+                "__runtime_talk__": TalkConfig(enabled=True),
+                "__camera_talk__": CameraTalkConfig(config=talk_config),
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_talk_backchannel_missing_explicit_credential_env_reports_config_error(
     tmp_path: Path,

@@ -83,6 +83,14 @@ function closeMediaStream(stream: MediaStream | null): void {
   })
 }
 
+function newTalkSessionId(): string {
+  const randomId = globalThis.crypto?.randomUUID?.()
+  if (randomId) {
+    return `tk_${randomId}`
+  }
+  return `tk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+}
+
 async function startAudioPipeline(
   stream: MediaStream,
   input: TalkInputFormat,
@@ -225,6 +233,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   const startGenerationRef = useRef(0)
   const startInFlightRef = useRef(false)
   const startAbortRef = useRef<AbortController | null>(null)
+  const pendingSessionIdRef = useRef<string | null>(null)
   const statusRequestGenerationRef = useRef(0)
 
   const cleanupSocketAndAudio = useCallback(async () => {
@@ -407,6 +416,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
     intentionalStopRef.current = false
     let mediaStream: MediaStream | null = null
     let preparedSession: TalkSessionResponse | null = null
+    const clientSessionId = newTalkSessionId()
     try {
       if (window.isSecureContext === false) {
         throw new Error('Microphone capture requires HTTPS or localhost.')
@@ -429,22 +439,32 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         return
       }
       pendingStreamRef.current = mediaStream
+      pendingSessionIdRef.current = clientSessionId
       const nextSession = await apiClient.prepareCameraTalkSession(
         cameraName,
-        {},
+        { session_id: clientSessionId },
         { signal: abortController.signal },
       )
       preparedSession = nextSession
+      if (pendingSessionIdRef.current === clientSessionId) {
+        pendingSessionIdRef.current = nextSession.session_id
+      }
       if (isStartCancelled()) {
         closeMediaStream(mediaStream)
         if (pendingStreamRef.current === mediaStream) {
           pendingStreamRef.current = null
+        }
+        if (pendingSessionIdRef.current === nextSession.session_id) {
+          pendingSessionIdRef.current = null
         }
         await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
         return
       }
       setSession(nextSession)
       sessionRef.current = nextSession
+      if (pendingSessionIdRef.current === nextSession.session_id) {
+        pendingSessionIdRef.current = null
+      }
       setStatus((previous) => nextStatusFromState(cameraName, 'starting', nextSession.session_id, previous))
       await openTalkSocket(nextSession, mediaStream, isStartCancelled)
       if (isStartCancelled()) {
@@ -463,8 +483,12 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       if (!startCancelled) {
         await cleanupSocketAndAudio()
       }
+      const sessionIdToStop = preparedSession?.session_id ?? clientSessionId
       if (preparedSession && !intentionalStopRef.current) {
-        await apiClient.stopCameraTalkSession(cameraName, preparedSession.session_id).catch(() => {})
+        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop).catch(() => {})
+      } else if (pendingSessionIdRef.current === sessionIdToStop) {
+        pendingSessionIdRef.current = null
+        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop).catch(() => {})
       }
       if (mountedRef.current && !startCancelled) {
         setError(nextError)
@@ -487,13 +511,20 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
 
   const stop = useCallback(async () => {
     const activeSession = sessionRef.current
+    const pendingSessionId = pendingSessionIdRef.current
     const hasStartInFlight = startInFlightRef.current
-    if (isStopping || (!activeSession && !isStreaming && !isStarting && !hasStartInFlight)) {
+    if (
+      isStopping
+      || (!activeSession && !pendingSessionId && !isStreaming && !isStarting && !hasStartInFlight)
+    ) {
       return
     }
     startGenerationRef.current += 1
     startAbortRef.current?.abort()
     intentionalStopRef.current = true
+    if (pendingSessionIdRef.current === pendingSessionId) {
+      pendingSessionIdRef.current = null
+    }
     setIsStopping(true)
     setError(null)
     try {
@@ -502,8 +533,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         socket.send(JSON.stringify({ type: TALK_WS_STOP_TYPE }))
       }
       await cleanupSocketAndAudio()
-      if (activeSession) {
-        await apiClient.stopCameraTalkSession(cameraName, activeSession.session_id)
+      const sessionIdToStop = activeSession?.session_id ?? pendingSessionId
+      if (sessionIdToStop) {
+        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop)
         if (mountedRef.current) {
           setStatus((previous) => nextStatusFromState(cameraName, 'idle', null, previous))
           void refreshStatus()
@@ -542,9 +574,13 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       startInFlightRef.current = false
       intentionalStopRef.current = true
       const activeSession = sessionRef.current
+      const pendingSessionId = pendingSessionIdRef.current
+      pendingSessionIdRef.current = null
       void cleanupSocketAndAudio()
       if (activeSession) {
         void apiClient.stopCameraTalkSession(cameraName, activeSession.session_id).catch(() => {})
+      } else if (pendingSessionId) {
+        void apiClient.stopCameraTalkSession(cameraName, pendingSessionId).catch(() => {})
       }
     }
   }, [cameraName, cleanupSocketAndAudio, refreshStatus])

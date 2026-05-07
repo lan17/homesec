@@ -532,6 +532,42 @@ async def test_talk_manager_timeout_does_not_wait_for_slow_open() -> None:
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_cancelled_open_closes_returned_session_before_claim() -> None:
+    # Given: A camera session open returns while the manager lock is still busy.
+    opened = asyncio.Event()
+    opened_sessions: list[_FakeSession] = []
+
+    async def _open_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        session = _FakeSession(session_id=request.session_id)
+        opened_sessions.append(session)
+        await manager._lock.acquire()
+        opened.set()
+        return session
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+    await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+    open_task = asyncio.create_task(manager.open_session(TalkSessionOpenRequest(session_id="tk_1")))
+    await opened.wait()
+
+    # When: The runtime cancels the open task before it can claim the returned session.
+    open_task.cancel()
+    manager._lock.release()
+    with pytest.raises(asyncio.CancelledError):
+        await open_task
+
+    # Then: The unclaimed camera session is closed and the reservation is released.
+    assert opened_sessions[0].closed is True
+    assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_stop_waits_for_in_flight_write_before_close() -> None:
     # Given: A talk session has an in-flight frame write.
     # When: The same session is stopped during that write.
