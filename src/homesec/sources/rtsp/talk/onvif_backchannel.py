@@ -29,6 +29,7 @@ from homesec.sources.rtsp.talk.rtsp_client import (
 )
 from homesec.sources.rtsp.talk.sdp import (
     SDPCodec,
+    SDPDescription,
     SelectedBackchannel,
     advertised_audio_backchannel_codecs,
     parse_sdp,
@@ -94,6 +95,15 @@ class ONVIFTalkSession:
             await self.client.close()
 
 
+@dataclass(slots=True)
+class BackchannelDescription:
+    """Parsed ONVIF backchannel DESCRIBE response used by probe and open."""
+
+    description: SDPDescription
+    offered_codecs: list[str]
+    base_control_url: str
+
+
 class ONVIFBackchannelAdapter:
     """Open ONVIF RTSP audio-backchannel sessions for one source."""
 
@@ -114,52 +124,39 @@ class ONVIFBackchannelAdapter:
         client = self._client()
         try:
             await client.connect()
-            describe = await client.describe(headers=_require_header())
-            if describe.status_code == 551:
-                return TalkCapabilityProbeResult(
-                    capability=TalkCapabilityState.UNSUPPORTED,
-                    refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
-                    message="Camera rejected ONVIF backchannel DESCRIBE",
-                )
-            if describe.status_code != 200:
-                return TalkCapabilityProbeResult(
-                    capability=TalkCapabilityState.ERROR,
-                    refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
-                    message=f"Camera rejected ONVIF backchannel DESCRIBE with RTSP {describe.status_code}",
-                )
-
-            body = describe.body.decode("utf-8", errors="replace")
-            description = parse_sdp(body)
-            offered_codecs = advertised_audio_backchannel_codecs(description)
-            base_control_url = (
-                describe.header("content-base")
-                or describe.header("content-location")
-                or self._rtsp_url
-            )
+            backchannel = await self._describe_backchannel(client)
             try:
-                selected = select_audio_backchannel(
-                    description,
-                    preferred_codecs=self._config.preferred_codecs,
-                    base_control_url=base_control_url,
-                )
+                selected = self._select_backchannel(backchannel)
             except CameraBackchannelUnsupportedError as exc:
                 return TalkCapabilityProbeResult(
                     capability=TalkCapabilityState.UNSUPPORTED,
-                    offered_codecs=offered_codecs,
+                    offered_codecs=backchannel.offered_codecs,
                     refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
                     message=str(exc),
                 )
             except UnsupportedTalkCodecError as exc:
                 return TalkCapabilityProbeResult(
                     capability=TalkCapabilityState.UNSUPPORTED_CODEC,
-                    offered_codecs=offered_codecs,
+                    offered_codecs=backchannel.offered_codecs,
                     refusal_reason=TalkRefusalReason.UNSUPPORTED_CODEC,
                     message=str(exc),
                 )
             return TalkCapabilityProbeResult(
                 capability=TalkCapabilityState.SUPPORTED,
-                offered_codecs=offered_codecs,
+                offered_codecs=backchannel.offered_codecs,
                 selected_codec=selected.selected_codec,
+            )
+        except CameraBackchannelUnsupportedError as exc:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.UNSUPPORTED,
+                refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                message=str(exc),
+            )
+        except CameraRejectedTalkSessionError as exc:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.ERROR,
+                refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+                message=str(exc),
             )
         except TalkProtocolError as exc:
             return TalkCapabilityProbeResult(
@@ -188,25 +185,8 @@ class ONVIFBackchannelAdapter:
         setup_completed = False
         await client.connect()
         try:
-            describe = await client.describe(headers=_require_header())
-            if describe.status_code == 551:
-                raise CameraBackchannelUnsupportedError(
-                    f"Camera rejected backchannel DESCRIBE with RTSP {describe.status_code}"
-                )
-            if describe.status_code != 200:
-                raise CameraRejectedTalkSessionError(
-                    f"Camera rejected backchannel DESCRIBE with RTSP {describe.status_code}"
-                )
-            base_control_url = (
-                describe.header("content-base")
-                or describe.header("content-location")
-                or self._rtsp_url
-            )
-            selected = select_audio_backchannel(
-                describe.body.decode("utf-8", errors="replace"),
-                preferred_codecs=self._config.preferred_codecs,
-                base_control_url=base_control_url,
-            )
+            backchannel = await self._describe_backchannel(client)
+            selected = self._select_backchannel(backchannel)
             setup = await client.setup_interleaved(
                 selected.control,
                 rtp_channel=0,
@@ -240,6 +220,33 @@ class ONVIFBackchannelAdapter:
                 await _best_effort_teardown(client)
             await client.close()
             raise
+
+    async def _describe_backchannel(self, client: RTSPClient) -> BackchannelDescription:
+        """Run ONVIF backchannel DESCRIBE and parse SDP diagnostics once."""
+        describe = await client.describe(headers=_require_header())
+        if describe.status_code == 551:
+            raise CameraBackchannelUnsupportedError("Camera rejected ONVIF backchannel DESCRIBE")
+        if describe.status_code != 200:
+            raise CameraRejectedTalkSessionError(
+                f"Camera rejected ONVIF backchannel DESCRIBE with RTSP {describe.status_code}"
+            )
+
+        description = parse_sdp(describe.body.decode("utf-8", errors="replace"))
+        base_control_url = (
+            describe.header("content-base") or describe.header("content-location") or self._rtsp_url
+        )
+        return BackchannelDescription(
+            description=description,
+            offered_codecs=advertised_audio_backchannel_codecs(description),
+            base_control_url=base_control_url,
+        )
+
+    def _select_backchannel(self, backchannel: BackchannelDescription) -> SelectedBackchannel:
+        return select_audio_backchannel(
+            backchannel.description,
+            preferred_codecs=self._config.preferred_codecs,
+            base_control_url=backchannel.base_control_url,
+        )
 
     def _client(self) -> RTSPClient:
         return RTSPClient(

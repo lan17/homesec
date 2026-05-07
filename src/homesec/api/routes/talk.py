@@ -309,6 +309,111 @@ async def stop_talk_session(
     return _stop_response(result)
 
 
+class TalkWebSocketSession:
+    """Orchestrate one browser-to-runtime talk WebSocket lifecycle."""
+
+    def __init__(self, websocket: WebSocket, camera_name: str, session_id: str) -> None:
+        self.websocket = websocket
+        self.camera_name = camera_name
+        self.session_id = session_id
+
+    async def run(self) -> None:
+        """Authorize, attach runtime stream, forward frames, and cleanup."""
+        app = await _get_websocket_app(self.websocket)
+        if app is None:
+            return
+
+        await self.websocket.accept()
+        if not await _authorize_talk_websocket(
+            self.websocket,
+            app,
+            self.camera_name,
+            self.session_id,
+        ):
+            return
+
+        input_format = await _receive_talk_start_message(
+            self.websocket,
+            idle_timeout_s=app.config.talk.idle_timeout_s,
+        )
+        if input_format is None:
+            await _stop_talk_session_best_effort(app, self.camera_name, self.session_id)
+            return
+
+        stream: RuntimeTalkStream | None = None
+        stop_best_effort = True
+        try:
+            stream = await self._open_runtime_stream(app, input_format)
+            if stream is None:
+                stop_best_effort = False
+                return
+
+            await self.websocket.send_json(
+                {
+                    "type": _TALK_WS_READY_TYPE,
+                    "camera_name": self.camera_name,
+                    "session_id": self.session_id,
+                    "input": input_format.model_dump(mode="json"),
+                    "camera_codec": stream.selected_codec,
+                }
+            )
+            await _forward_websocket_frames(
+                self.websocket,
+                stream,
+                input_format,
+                idle_timeout_s=app.config.talk.idle_timeout_s,
+            )
+        finally:
+            if stream is not None:
+                await _close_talk_stream_writer(stream)
+            if stop_best_effort:
+                await _stop_talk_session_best_effort(app, self.camera_name, self.session_id)
+
+    async def _open_runtime_stream(
+        self,
+        app: Application,
+        input_format: TalkInputFormat,
+    ) -> RuntimeTalkStream | None:
+        """Open the prepared runtime stream or close the WebSocket with a typed reason."""
+        try:
+            return await app.open_camera_talk_stream(
+                self.camera_name,
+                session_id=self.session_id,
+                input_format=input_format,
+            )
+        except TalkCameraNotFoundError:
+            await self.websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="Camera not found",
+            )
+            return None
+        except TalkStreamOpenRefused as exc:
+            logger.info(
+                "Talk WebSocket open refused for camera=%s session=%s reason=%s: %s",
+                self.camera_name,
+                self.session_id,
+                exc.reason.value,
+                exc,
+            )
+            await _stop_talk_session_best_effort(app, self.camera_name, self.session_id)
+            close_code, close_reason = _talk_stream_refusal_close(exc.reason)
+            await self.websocket.close(code=close_code, reason=close_reason)
+            return None
+        except TalkRuntimeUnavailableError as exc:
+            logger.info(
+                "Talk WebSocket open refused for camera=%s session=%s: %s",
+                self.camera_name,
+                self.session_id,
+                exc,
+            )
+            await _stop_talk_session_best_effort(app, self.camera_name, self.session_id)
+            await self.websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason="Talk stream unavailable",
+            )
+            return None
+
+
 @stream_router.websocket("/api/v1/talk/cameras/{camera_name}/sessions/{session_id}/stream")
 async def stream_talk_audio(
     websocket: WebSocket,
@@ -316,83 +421,7 @@ async def stream_talk_audio(
     session_id: str,
 ) -> None:
     """Bridge browser PCM frames into the runtime worker talk stream."""
-    app = await _get_websocket_app(websocket)
-    if app is None:
-        return
-
-    await websocket.accept()
-    if not await _authorize_talk_websocket(websocket, app, camera_name, session_id):
-        return
-
-    input_format = await _receive_talk_start_message(
-        websocket,
-        idle_timeout_s=app.config.talk.idle_timeout_s,
-    )
-    if input_format is None:
-        await _stop_talk_session_best_effort(app, camera_name, session_id)
-        return
-
-    stream: RuntimeTalkStream | None = None
-    stop_best_effort = True
-    try:
-        try:
-            stream = await app.open_camera_talk_stream(
-                camera_name,
-                session_id=session_id,
-                input_format=input_format,
-            )
-        except TalkCameraNotFoundError:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Camera not found")
-            stop_best_effort = False
-            return
-        except TalkStreamOpenRefused as exc:
-            logger.info(
-                "Talk WebSocket open refused for camera=%s session=%s reason=%s: %s",
-                camera_name,
-                session_id,
-                exc.reason.value,
-                exc,
-            )
-            await _stop_talk_session_best_effort(app, camera_name, session_id)
-            stop_best_effort = False
-            close_code, close_reason = _talk_stream_refusal_close(exc.reason)
-            await websocket.close(code=close_code, reason=close_reason)
-            return
-        except TalkRuntimeUnavailableError as exc:
-            logger.info(
-                "Talk WebSocket open refused for camera=%s session=%s: %s",
-                camera_name,
-                session_id,
-                exc,
-            )
-            await _stop_talk_session_best_effort(app, camera_name, session_id)
-            stop_best_effort = False
-            await websocket.close(
-                code=status.WS_1011_INTERNAL_ERROR,
-                reason="Talk stream unavailable",
-            )
-            return
-
-        await websocket.send_json(
-            {
-                "type": _TALK_WS_READY_TYPE,
-                "camera_name": camera_name,
-                "session_id": session_id,
-                "input": input_format.model_dump(mode="json"),
-                "camera_codec": stream.selected_codec,
-            }
-        )
-        await _forward_websocket_frames(
-            websocket,
-            stream,
-            input_format,
-            idle_timeout_s=app.config.talk.idle_timeout_s,
-        )
-    finally:
-        if stream is not None:
-            await _close_talk_stream_writer(stream)
-        if stop_best_effort:
-            await _stop_talk_session_best_effort(app, camera_name, session_id)
+    await TalkWebSocketSession(websocket, camera_name, session_id).run()
 
 
 def _stop_response(result: CameraTalkStopResult) -> TalkStopResponse:

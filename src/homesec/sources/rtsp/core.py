@@ -80,6 +80,23 @@ def _talk_config_dict(value: dict[str, object] | BaseModel) -> dict[str, object]
     return dict(value)
 
 
+def _build_onvif_backchannel_config_data(
+    value: dict[str, object] | BaseModel,
+    *,
+    fallback_rtsp_url: str | None,
+    fallback_rtsp_url_env: str | None = None,
+) -> dict[str, object]:
+    """Build ONVIF talk adapter config with inherited source URL fallback rules."""
+    adapter_config_data = _talk_config_dict(value)
+    if adapter_config_data.get("rtsp_url") or adapter_config_data.get("rtsp_url_env"):
+        return adapter_config_data
+    if fallback_rtsp_url is not None:
+        adapter_config_data["rtsp_url"] = fallback_rtsp_url
+    elif fallback_rtsp_url_env is not None:
+        adapter_config_data["rtsp_url_env"] = fallback_rtsp_url_env
+    return adapter_config_data
+
+
 def _talk_config_error_probe_factory(
     message: str,
 ) -> Callable[[], Awaitable[TalkCapabilityProbeResult]]:
@@ -308,13 +325,13 @@ class RTSPSourceConfig(BaseModel):
         ):
             return self
 
-        adapter_config_data = _talk_config_dict(camera_talk.config)
-        if not adapter_config_data.get("rtsp_url") and not adapter_config_data.get("rtsp_url_env"):
-            if self.rtsp_url is not None:
-                adapter_config_data["rtsp_url"] = self.rtsp_url
-            elif self.rtsp_url_env is not None:
-                adapter_config_data["rtsp_url_env"] = self.rtsp_url_env
-        ONVIFBackchannelConfig.model_validate(adapter_config_data)
+        ONVIFBackchannelConfig.model_validate(
+            _build_onvif_backchannel_config_data(
+                camera_talk.config,
+                fallback_rtsp_url=self.rtsp_url,
+                fallback_rtsp_url_env=self.rtsp_url_env,
+            )
+        )
         return self
 
 
@@ -932,9 +949,10 @@ class RTSPSource(ThreadedClipSource):
                 idle_timeout_s=runtime_talk.idle_timeout_s,
             )
 
-        adapter_config_data = _talk_config_dict(camera_talk.config)
-        if not adapter_config_data.get("rtsp_url") and not adapter_config_data.get("rtsp_url_env"):
-            adapter_config_data["rtsp_url"] = self.rtsp_url
+        adapter_config_data = _build_onvif_backchannel_config_data(
+            camera_talk.config,
+            fallback_rtsp_url=self.rtsp_url,
+        )
         adapter_config = ONVIFBackchannelConfig.model_validate(adapter_config_data)
         try:
             rtsp_url = adapter_config.resolve_rtsp_url()
