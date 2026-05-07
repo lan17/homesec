@@ -792,7 +792,7 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
         raise AssertionError("disabled talk should not construct the ONVIF backchannel adapter")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _unexpected_adapter,
     )
     config = _make_config(
@@ -820,17 +820,17 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
 
 
 @pytest.mark.asyncio
-async def test_explicit_future_talk_backend_reports_unsupported_without_onvif_probe(
+async def test_unknown_explicit_talk_backend_reports_config_error_without_onvif_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unimplemented explicit talk backends should not look policy-disabled."""
+    """Unknown explicit talk backends should not fallback or look policy-disabled."""
 
     def _unexpected_adapter(*_: object, **__: object) -> object:
         raise AssertionError("future backend should not construct the ONVIF backchannel adapter")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _unexpected_adapter,
     )
     config = _make_config(
@@ -850,14 +850,14 @@ async def test_explicit_future_talk_backend_reports_unsupported_without_onvif_pr
         TalkSessionPrepareRequest(session_id="tk_future_backend")
     )
 
-    # Then: The source reports unsupported backend diagnostics, not disabled policy.
+    # Then: The source reports selection/config diagnostics, not disabled policy.
     assert status.enabled is True
     assert status.policy_enabled is True
-    assert status.capability == TalkCapabilityState.UNSUPPORTED
-    assert status.state == TalkState.UNSUPPORTED
-    assert status.last_error == "Talk backend 'tapo_local' is not available in this runtime yet"
+    assert status.capability == TalkCapabilityState.ERROR
+    assert status.state == TalkState.ERROR
+    assert status.last_error == "Talk backend 'tapo_local' is not registered in this runtime"
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE
+    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
     assert prepared.message == status.last_error
 
 
@@ -930,7 +930,7 @@ async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe
             )
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _FakeONVIFBackchannelAdapter,
     )
     monkeypatch.setenv("TALK_RTSP_URL", "rtsp://camera.local/talk")
@@ -975,7 +975,7 @@ async def test_talk_backchannel_inherits_source_rtsp_url_when_no_override_is_con
             return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _FakeONVIFBackchannelAdapter,
     )
     config = _make_config(
@@ -1009,7 +1009,7 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
         raise AssertionError("missing talk rtsp_url_env should not construct the adapter")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _unexpected_adapter,
     )
     monkeypatch.delenv("MISSING_TALK_RTSP_URL", raising=False)
@@ -1135,7 +1135,7 @@ async def test_talk_backchannel_open_io_failure_reports_camera_backchannel_error
             raise asyncio.TimeoutError("RTSP DESCRIBE timed out")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _FakeONVIFBackchannelAdapter,
     )
     config = _make_config(

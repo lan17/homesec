@@ -11,8 +11,6 @@ import os
 import random
 import subprocess
 import time
-from asyncio import TimeoutError as AsyncioTimeoutError
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -25,8 +23,6 @@ from homesec.models.clip import Clip
 from homesec.models.config import CameraTalkConfig, PreviewConfig, TalkConfig
 from homesec.models.talk import (
     CameraTalkStatus,
-    TalkCapabilityProbeResult,
-    TalkCapabilityState,
     TalkRefusalReason,
     TalkSessionOpenRequest,
     TalkSessionPrepareRequest,
@@ -59,10 +55,11 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
-from homesec.sources.rtsp.talk.errors import TalkProtocolError, TalkProtocolErrorCode
+from homesec.sources.rtsp.talk.backend import (
+    build_rtsp_talk_backend_registry,
+    validate_rtsp_talk_backend_config,
+)
 from homesec.sources.rtsp.talk.manager import TalkManager, TalkManagerError, TalkSession
-from homesec.sources.rtsp.talk.models import ONVIFBackchannelConfig
-from homesec.sources.rtsp.talk.onvif_backchannel import ONVIFBackchannelAdapter
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
@@ -70,120 +67,10 @@ from homesec.sources.rtsp.utils import (
     _next_backoff,
     _redact_rtsp_url,
 )
+from homesec.talk.backends import TalkBackendContext, TalkBackendOpenError
+from homesec.talk.selector import TalkBackendSelector
 
 logger = logging.getLogger(__name__)
-
-
-def _talk_config_dict(value: dict[str, object] | BaseModel) -> dict[str, object]:
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    return dict(value)
-
-
-def _build_onvif_backchannel_config_data(
-    value: dict[str, object] | BaseModel,
-    *,
-    fallback_rtsp_url: str | None,
-    fallback_rtsp_url_env: str | None = None,
-) -> dict[str, object]:
-    """Build ONVIF talk adapter config with inherited source URL fallback rules."""
-    adapter_config_data = _talk_config_dict(value)
-    if (
-        adapter_config_data.get("rtsp_url") is not None
-        or adapter_config_data.get("rtsp_url_env") is not None
-    ):
-        return adapter_config_data
-    if fallback_rtsp_url is not None:
-        adapter_config_data["rtsp_url"] = fallback_rtsp_url
-    elif fallback_rtsp_url_env is not None:
-        adapter_config_data["rtsp_url_env"] = fallback_rtsp_url_env
-    return adapter_config_data
-
-
-def _camera_talk_uses_onvif_for_current_runtime(camera_talk: CameraTalkConfig) -> bool:
-    """Return whether the pre-selector runtime should use the ONVIF talk path."""
-    return camera_talk.backend in {"auto", "onvif_rtsp_backchannel"}
-
-
-def _talk_config_error_probe_factory(
-    message: str,
-) -> Callable[[], Awaitable[TalkCapabilityProbeResult]]:
-    async def _probe() -> TalkCapabilityProbeResult:
-        return TalkCapabilityProbeResult(
-            capability=TalkCapabilityState.ERROR,
-            refusal_reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
-            message=message,
-        )
-
-    return _probe
-
-
-def _talk_unsupported_backend_probe_factory(
-    backend: str,
-) -> Callable[[], Awaitable[TalkCapabilityProbeResult]]:
-    async def _probe() -> TalkCapabilityProbeResult:
-        return TalkCapabilityProbeResult(
-            capability=TalkCapabilityState.UNSUPPORTED,
-            refusal_reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
-            message=f"Talk backend '{backend}' is not available in this runtime yet",
-        )
-
-    return _probe
-
-
-def _talk_unsupported_backend_open_session_factory(
-    backend: str,
-) -> Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]]:
-    async def _open(request: TalkSessionOpenRequest) -> TalkSession:
-        _ = request
-        raise TalkManagerError(
-            f"Talk backend '{backend}' is not available in this runtime yet",
-            reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
-        )
-
-    return _open
-
-
-def _talk_config_error_manager(
-    *,
-    message: str,
-    camera_name: str,
-    camera_talk: CameraTalkConfig,
-    runtime_talk: TalkConfig,
-    preferred_codecs: list[str],
-    open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
-) -> TalkManager:
-    """Build a talk manager that reports talk-specific config errors safely."""
-    return TalkManager(
-        camera_name=camera_name,
-        enabled=True,
-        policy_enabled=camera_talk.policy_enabled,
-        supported_codecs=list(preferred_codecs),
-        open_session_factory=open_session_factory,
-        capability_probe_factory=_talk_config_error_probe_factory(message),
-        max_session_s=runtime_talk.max_session_s,
-        idle_timeout_s=runtime_talk.idle_timeout_s,
-    )
-
-
-def _talk_unsupported_backend_manager(
-    *,
-    backend: str,
-    camera_name: str,
-    camera_talk: CameraTalkConfig,
-    runtime_talk: TalkConfig,
-) -> TalkManager:
-    """Build a talk manager that reports an explicit unimplemented backend."""
-    return TalkManager(
-        camera_name=camera_name,
-        enabled=True,
-        policy_enabled=camera_talk.policy_enabled,
-        supported_codecs=[],
-        open_session_factory=_talk_unsupported_backend_open_session_factory(backend),
-        capability_probe_factory=_talk_unsupported_backend_probe_factory(backend),
-        max_session_s=runtime_talk.max_session_s,
-        idle_timeout_s=runtime_talk.idle_timeout_s,
-    )
 
 
 class RTSPMotionConfig(BaseModel):
@@ -375,15 +262,18 @@ class RTSPSourceConfig(BaseModel):
             or camera_talk is None
             or not runtime_talk.enabled
             or not camera_talk.policy_enabled
-            or not _camera_talk_uses_onvif_for_current_runtime(camera_talk)
         ):
             return self
 
-        ONVIFBackchannelConfig.model_validate(
-            _build_onvif_backchannel_config_data(
-                camera_talk.config_for_backend("onvif_rtsp_backchannel"),
-                fallback_rtsp_url=self.rtsp_url,
-                fallback_rtsp_url_env=self.rtsp_url_env,
+        validate_rtsp_talk_backend_config(
+            TalkBackendContext(
+                camera_name="",
+                source_backend="rtsp",
+                runtime_talk=runtime_talk,
+                camera_talk=camera_talk,
+                source_uri=self.rtsp_url,
+                source_uri_env=self.rtsp_url_env,
+                resolved_source_uri=self.rtsp_url,
             )
         )
         return self
@@ -521,7 +411,7 @@ class RTSPSource(ThreadedClipSource):
             camera_name=camera_name,
         )
         self._live_publisher_shutdown = False
-        self._talk_adapter: ONVIFBackchannelAdapter | None = None
+        self._talk_backend_selector: TalkBackendSelector | None = None
         self._talk_manager = self._build_talk_manager(config, camera_name=camera_name)
         self._talk_manager_shutdown = False
         self._owns_recorder = recorder is None
@@ -992,85 +882,46 @@ class RTSPSource(ThreadedClipSource):
                 max_session_s=runtime_talk.max_session_s,
                 idle_timeout_s=runtime_talk.idle_timeout_s,
             )
-        if not _camera_talk_uses_onvif_for_current_runtime(camera_talk):
-            return _talk_unsupported_backend_manager(
-                backend=camera_talk.backend,
-                camera_name=self.camera_name,
-                camera_talk=camera_talk,
-                runtime_talk=runtime_talk,
-            )
-
-        adapter_config_data = _build_onvif_backchannel_config_data(
-            camera_talk.config_for_backend("onvif_rtsp_backchannel"),
-            fallback_rtsp_url=self.rtsp_url,
+        context = TalkBackendContext(
+            camera_name=camera_name,
+            source_backend="rtsp",
+            runtime_talk=runtime_talk,
+            camera_talk=camera_talk,
+            source_uri=config.rtsp_url,
+            source_uri_env=config.rtsp_url_env,
+            resolved_source_uri=self.rtsp_url,
+            source_connect_timeout_s=self.rtsp_connect_timeout_s,
+            source_io_timeout_s=self.rtsp_io_timeout_s,
+            resolve_env=os.getenv,
+            redact=_redact_rtsp_url,
         )
-        adapter_config = ONVIFBackchannelConfig.model_validate(adapter_config_data)
-        try:
-            rtsp_url = adapter_config.resolve_rtsp_url()
-        except ValueError as exc:
-            return _talk_config_error_manager(
-                message=str(exc),
-                camera_name=self.camera_name,
-                camera_talk=camera_talk,
-                runtime_talk=runtime_talk,
-                preferred_codecs=adapter_config.preferred_codecs,
-                open_session_factory=self._open_disabled_talk_session,
-            )
-        try:
-            self._talk_adapter = ONVIFBackchannelAdapter(
-                adapter_config,
-                rtsp_url=rtsp_url,
-                camera_name=camera_name,
-            )
-        except ValueError as exc:
-            return _talk_config_error_manager(
-                message=str(exc),
-                camera_name=self.camera_name,
-                camera_talk=camera_talk,
-                runtime_talk=runtime_talk,
-                preferred_codecs=adapter_config.preferred_codecs,
-                open_session_factory=self._open_disabled_talk_session,
-            )
+        selector = TalkBackendSelector(
+            registry=build_rtsp_talk_backend_registry(),
+            context=context,
+        )
+        self._talk_backend_selector = selector
         return TalkManager(
             camera_name=self.camera_name,
             enabled=True,
             policy_enabled=camera_talk.policy_enabled,
-            supported_codecs=list(adapter_config.preferred_codecs),
-            open_session_factory=self._open_onvif_talk_session,
-            capability_probe_factory=self._probe_onvif_talk_capability,
+            supported_codecs=selector.supported_codecs,
+            open_session_factory=self._open_selected_talk_session,
+            capability_probe_factory=selector.probe,
             max_session_s=runtime_talk.max_session_s,
             idle_timeout_s=runtime_talk.idle_timeout_s,
         )
 
-    async def _probe_onvif_talk_capability(self) -> TalkCapabilityProbeResult:
-        adapter = self._talk_adapter
-        if adapter is None:
-            return TalkCapabilityProbeResult(
-                capability=TalkCapabilityState.UNSUPPORTED,
-                refusal_reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
-                message="Talk adapter is not configured",
-            )
-        return await adapter.probe()
-
-    async def _open_onvif_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
-        adapter = self._talk_adapter
-        if adapter is None:
+    async def _open_selected_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
+        selector = self._talk_backend_selector
+        if selector is None:
             raise TalkManagerError(
-                "Talk adapter is not configured",
+                "Talk backend selector is not configured",
                 reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
             )
         try:
-            return await adapter.open_session(
-                session_id=request.session_id,
-                input_sample_rate=request.input.sample_rate,
-            )
-        except TalkProtocolError as exc:
-            raise _talk_manager_error_from_protocol_error(exc) from exc
-        except (AsyncioTimeoutError, TimeoutError, EOFError, OSError) as exc:
-            raise TalkManagerError(
-                "Camera talk backchannel failed",
-                reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
-            ) from exc
+            return await selector.open_session(request)
+        except TalkBackendOpenError as exc:
+            raise TalkManagerError(str(exc), reason=exc.reason) from exc
 
     async def _open_disabled_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         _ = request
@@ -2172,28 +2023,3 @@ class RTSPSource(ThreadedClipSource):
             logger.exception("Unexpected error: %s", e)
         finally:
             self.cleanup()
-
-
-def _talk_manager_error_from_protocol_error(exc: TalkProtocolError) -> TalkManagerError:
-    """Translate RTSP-specific failures before they cross the source boundary."""
-    match exc.code:
-        case TalkProtocolErrorCode.CAMERA_BACKCHANNEL_UNSUPPORTED:
-            return TalkManagerError(
-                "Camera does not support ONVIF talk backchannel",
-                reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
-            )
-        case TalkProtocolErrorCode.UNSUPPORTED_CODEC:
-            return TalkManagerError(
-                "Camera talk backchannel codec is not supported",
-                reason=TalkRefusalReason.UNSUPPORTED_CODEC,
-            )
-        case (
-            TalkProtocolErrorCode.CAMERA_REJECTED_SESSION
-            | TalkProtocolErrorCode.CAMERA_STREAM_FAILED
-            | TalkProtocolErrorCode.RTSP_AUTH_FAILED
-            | TalkProtocolErrorCode.RTSP_PROTOCOL_ERROR
-        ):
-            return TalkManagerError(
-                "Camera talk backchannel failed",
-                reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
-            )

@@ -9,7 +9,11 @@ from typing import Literal, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from homesec.models.config import CameraTalkConfig, TalkConfig
-from homesec.models.talk import TalkCapabilityProbeResult, TalkSessionOpenRequest
+from homesec.models.talk import (
+    TalkCapabilityProbeResult,
+    TalkRefusalReason,
+    TalkSessionOpenRequest,
+)
 
 TalkBackendConfidence = Literal["explicit", "high", "medium", "low", "not_applicable"]
 
@@ -37,6 +41,9 @@ class TalkBackendAdapter(Protocol):
 @runtime_checkable
 class TalkBackendSession(Protocol):
     """Camera talk session returned by a backend adapter."""
+
+    session_id: str
+    camera_name: str
 
     @property
     def selected_codec(self) -> str:
@@ -106,6 +113,14 @@ class TalkBackendContext:
         return self.redact(value)
 
 
+class TalkBackendOpenError(RuntimeError):
+    """Raised when a selected talk backend refuses or fails session open."""
+
+    def __init__(self, message: str, *, reason: TalkRefusalReason) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 @dataclass(frozen=True, slots=True)
 class TalkBackendRegistration:
     """Factory and detector metadata for one talk backend."""
@@ -113,6 +128,13 @@ class TalkBackendRegistration:
     name: str
     config_model: type[BaseModel]
     factory: Callable[[BaseModel, TalkBackendContext], TalkBackendAdapter]
+    config_factory: (
+        Callable[
+            [Mapping[str, object] | BaseModel, TalkBackendContext],
+            BaseModel,
+        ]
+        | None
+    ) = None
     detector: Callable[[TalkBackendContext], TalkBackendDetection] | None = None
     priority: int = 100
     standards_based: bool = False
@@ -171,8 +193,14 @@ def backend_config_for(
 def model_validate_backend_config(
     registration: TalkBackendRegistration,
     raw_config: Mapping[str, object] | BaseModel,
+    *,
+    context: TalkBackendContext | None = None,
 ) -> BaseModel:
     """Validate backend-specific config against the registered config model."""
+    if registration.config_factory is not None:
+        if context is None:
+            raise ValueError("Talk backend context is required for config validation")
+        return registration.config_factory(raw_config, context)
     if isinstance(raw_config, registration.config_model):
         return raw_config
     if isinstance(raw_config, BaseModel):

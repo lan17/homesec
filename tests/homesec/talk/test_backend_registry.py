@@ -35,6 +35,8 @@ class _OtherBackendConfig(BaseModel):
 
 
 class _FakeSession:
+    session_id = "tk_fake"
+    camera_name = "front"
     selected_codec = "PCMU/8000"
 
     async def write_pcm_frame(self, frame: bytes) -> None:

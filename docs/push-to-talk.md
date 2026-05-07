@@ -100,8 +100,8 @@ cameras:
 
 HomeSec currently ships the ONVIF RTSP backchannel implementation. Explicit
 future backend names are accepted by config parsing so operators can stage
-configuration, but they report `source_not_talk_capable` until a matching backend
-adapter is implemented and registered.
+configuration, but they report a talk backend selection/config error until a
+matching backend adapter is implemented and registered.
 
 Use environment variables for RTSP URLs and credentials. Do not commit camera
 passwords in YAML.
