@@ -125,8 +125,8 @@ def test_default_talk_backend_registry_contains_onvif_backend() -> None:
     # When: Reading registered backend names
     registry = build_default_talk_backend_registry()
 
-    # Then: ONVIF remains the standards-based default backend
-    assert registry.names() == ("onvif_rtsp_backchannel",)
+    # Then: ONVIF remains first and Tapo is available after standards probing
+    assert registry.names() == ("onvif_rtsp_backchannel", "tapo_local")
     registration = registry.get("onvif_rtsp_backchannel")
     assert registration is not None
     assert registration.standards_based is True
@@ -150,7 +150,7 @@ def test_default_talk_backend_registry_imports_without_source_cycle() -> None:
 
     # Then: The lazy ONVIF registration import avoids the RTSP source import cycle
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "('onvif_rtsp_backchannel',)"
+    assert result.stdout.strip() == "('onvif_rtsp_backchannel', 'tapo_local')"
 
 
 def test_rtsp_talk_backend_registry_alias_returns_default_registry() -> None:

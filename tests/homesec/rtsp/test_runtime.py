@@ -840,7 +840,7 @@ async def test_unknown_explicit_talk_backend_reports_config_error_without_onvif_
         tmp_path,
         **{
             "__runtime_talk__": TalkConfig(enabled=True),
-            "__camera_talk__": CameraTalkConfig(backend="tapo_local"),
+            "__camera_talk__": CameraTalkConfig(backend="future_backend"),
         },
     )
 
@@ -858,9 +858,9 @@ async def test_unknown_explicit_talk_backend_reports_config_error_without_onvif_
     assert status.policy_enabled is True
     assert status.capability == TalkCapabilityState.CONFIG_ERROR
     assert status.state == TalkState.ERROR
-    assert status.last_error == "Talk backend 'tapo_local' is not registered in this runtime"
-    assert status.backend == "tapo_local"
-    assert status.backend_reason == "Talk backend 'tapo_local' is not registered"
+    assert status.last_error == "Talk backend 'future_backend' is not registered in this runtime"
+    assert status.backend == "future_backend"
+    assert status.backend_reason == "Talk backend 'future_backend' is not registered"
     assert prepared.accepted is False
     assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert prepared.message == status.last_error
