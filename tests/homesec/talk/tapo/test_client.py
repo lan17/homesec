@@ -372,6 +372,29 @@ async def test_http_response_parser_rejects_malformed_response() -> None:
         await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (b"HTTP/1.1\r\n\r\n", "status line"),
+        (b"HTTP/1.1 nope Unauthorized\r\n\r\n", "status line"),
+        (b"HTTP/1.1 401 Unauthorized\r\nBad-Header\r\n\r\n", "header"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_http_response_parser_rejects_malformed_status_or_headers(
+    payload: bytes,
+    message: str,
+) -> None:
+    """HTTP response parser should reject malformed camera response metadata."""
+    # Given: A malformed Tapo HTTP response header block
+    reader = asyncio.StreamReader()
+    reader.feed_data(payload)
+
+    # When/Then: Parsing fails with a safe protocol error
+    with pytest.raises(TapoProtocolError, match=message):
+        await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
+
+
 @pytest.mark.asyncio
 async def test_http_response_parser_rejects_oversized_body_before_read() -> None:
     """HTTP response parser should cap optional response body reads."""
@@ -382,6 +405,52 @@ async def test_http_response_parser_rejects_oversized_body_before_read() -> None
     # When/Then: Parsing fails without attempting an unbounded read
     with pytest.raises(TapoProtocolError, match="body exceeds"):
         await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
+
+
+@pytest.mark.asyncio
+async def test_http_response_parser_rejects_truncated_body() -> None:
+    """HTTP response parser should reject incomplete Tapo response bodies."""
+    # Given: A response whose declared body length is larger than the delivered body
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 5\r\n\r\nabc")
+    reader.feed_eof()
+
+    # When/Then: Parsing fails instead of accepting a partial challenge body
+    with pytest.raises(TapoProtocolError, match="response body"):
+        await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
+
+
+@pytest.mark.parametrize("content_length", ["abc", "-1"])
+@pytest.mark.asyncio
+async def test_http_response_parser_rejects_invalid_content_length(
+    content_length: str,
+) -> None:
+    """HTTP response parser should reject invalid body-length metadata."""
+    # Given: A response with an invalid Content-Length value
+    reader = asyncio.StreamReader()
+    reader.feed_data(
+        f"HTTP/1.1 401 Unauthorized\r\nContent-Length: {content_length}\r\n\r\n".encode(
+            "iso-8859-1"
+        )
+    )
+
+    # When/Then: Parsing fails before any body read is attempted
+    with pytest.raises(TapoProtocolError, match="Content-Length"):
+        await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
+
+
+def test_tapo_http_helpers_parse_boundaries_and_json_content_types() -> None:
+    """Tapo HTTP helpers should parse common content-type variants."""
+    # Given/When/Then: Multipart boundaries can be quoted or absent
+    assert tapo_client._boundary_from_content_type('multipart/mixed; boundary="abc"') == "abc"
+    assert tapo_client._boundary_from_content_type("multipart/mixed; boundary=abc") == "abc"
+    assert tapo_client._boundary_from_content_type("multipart/mixed") is None
+    assert tapo_client._boundary_from_content_type(None) is None
+
+    # Given/When/Then: JSON content types allow parameters but reject missing metadata
+    assert tapo_client._is_json_content_type("application/json; charset=utf-8") is True
+    assert tapo_client._is_json_content_type("text/plain") is False
+    assert tapo_client._is_json_content_type(None) is False
 
 
 async def _wait_for_audio_part(server: FakeTapoServer) -> None:

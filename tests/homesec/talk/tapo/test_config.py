@@ -264,6 +264,51 @@ def test_tapo_explicit_username_wins_over_admin_default() -> None:
     assert credential.username == "speaker"
 
 
+def test_tapo_username_env_overrides_config_username_and_strips_value() -> None:
+    """Tapo username env vars should override static username config."""
+    # Given: A Tapo config with both a static username and username env var
+    config = TapoLocalTalkConfig(
+        username="admin",
+        username_env="OFFICE_TAPO_USER",
+        password_sha256_env="OFFICE_TAPO_SHA256",
+    )
+
+    # When: Resolving credential material
+    credential = resolve_tapo_credential(
+        config,
+        _context(
+            env={
+                "OFFICE_TAPO_USER": " speaker ",
+                "OFFICE_TAPO_SHA256": "A" * 64,
+            }
+        ),
+    )
+
+    # Then: The env username is trimmed and used for Digest auth
+    assert credential.username == "speaker"
+
+
+def test_tapo_username_env_missing_reports_safe_env_name() -> None:
+    """Missing Tapo username env vars should fail with safe public diagnostics."""
+    # Given: A Tapo config referencing an unset username env var
+    config = TapoLocalTalkConfig(
+        username_env="OFFICE_TAPO_USER",
+        password_sha256_env="OFFICE_TAPO_SHA256",
+    )
+
+    # When: Resolving credential material
+    # Then: The error names only the env var, not any credential value
+    with pytest.raises(TalkBackendConfigError) as exc_info:
+        resolve_tapo_credential(
+            config,
+            _context(env={"OFFICE_TAPO_SHA256": "A" * 64}),
+        )
+    assert (
+        exc_info.value.public_message
+        == "Required Tapo local environment variable is not set: OFFICE_TAPO_USER"
+    )
+
+
 def test_tapo_credential_normalizes_sha256_hash_from_env() -> None:
     """Tapo credential resolution should normalize configured SHA256 hash material."""
     # Given: A lowercase SHA256 hash in the configured env var

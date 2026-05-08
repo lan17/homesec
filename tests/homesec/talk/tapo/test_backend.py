@@ -19,7 +19,12 @@ from homesec.models.talk import (
     TalkSessionPrepareRequest,
 )
 from homesec.sources.rtsp.talk.manager import TalkManager
-from homesec.talk.backends import TalkBackendContext, TalkBackendRegistration, TalkBackendRegistry
+from homesec.talk.backends import (
+    TalkBackendContext,
+    TalkBackendOpenError,
+    TalkBackendRegistration,
+    TalkBackendRegistry,
+)
 from homesec.talk.registry import build_default_talk_backend_registry
 from homesec.talk.selector import TalkBackendSelector
 from homesec.talk.tapo import backend as tapo_backend
@@ -356,6 +361,186 @@ async def test_tapo_backend_maps_non_tapo_endpoint_to_unsupported_camera() -> No
         assert prepared.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
         assert prepared.message == "Tapo local endpoint not detected"
         assert manager.status().selected_codec is None
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_open_session_maps_auth_failure_without_prepare() -> None:
+    """Direct Tapo stream open should map rejected credentials to auth refusal."""
+    # Given: A fake Tapo endpoint and an explicit backend with the wrong credential hash
+    server = FakeTapoServer(hash_kind="sha256", credential_hash=_SHA256)
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": "C" * 64}),
+        )
+
+        # When/Then: Opening without a prepare probe fails with the stable auth reason
+        with pytest.raises(TalkBackendOpenError) as exc_info:
+            await selector.open_session(TalkSessionOpenRequest(session_id="tk_direct_auth"))
+        assert exc_info.value.reason == TalkRefusalReason.TALK_AUTH_FAILED
+        assert str(exc_info.value) == "Tapo local authentication failed"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_open_session_maps_non_tapo_endpoint_without_prepare() -> None:
+    """Direct Tapo stream open should preserve unsupported-endpoint diagnostics."""
+    # Given: An explicit Tapo backend pointed at a non-Tapo HTTP endpoint
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        unsupported_endpoint=True,
+    )
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+
+        # When/Then: Opening without prepare reports unsupported camera, not runtime failure
+        with pytest.raises(TalkBackendOpenError) as exc_info:
+            await selector.open_session(TalkSessionOpenRequest(session_id="tk_direct_bad_endpoint"))
+        assert exc_info.value.reason == TalkRefusalReason.UNSUPPORTED_CAMERA
+        assert str(exc_info.value) == "Tapo local endpoint not detected"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_open_session_maps_protocol_failure_without_prepare() -> None:
+    """Direct Tapo stream open should map malformed setup to backchannel failure."""
+    # Given: An explicit Tapo backend whose endpoint returns malformed setup data
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        malformed_setup_json=True,
+    )
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+
+        # When/Then: Opening without prepare maps protocol failure to a stable reason
+        with pytest.raises(TalkBackendOpenError) as exc_info:
+            await selector.open_session(TalkSessionOpenRequest(session_id="tk_direct_protocol"))
+        assert exc_info.value.reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+        assert str(exc_info.value) == "Tapo local talk protocol failed"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_open_session_rechecks_config_after_backend_selection() -> None:
+    """Tapo open should fail safely if credential env disappears after selection."""
+    # Given: The backend is selected while the referenced credential env var exists
+    server = FakeTapoServer(hash_kind="sha256", credential_hash=_SHA256)
+    await server.start()
+    env = {"OFFICE_TAPO_SHA256": _SHA256}
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(
+                CameraTalkConfig(
+                    backend=TAPO_LOCAL_BACKEND,
+                    backends={
+                        TAPO_LOCAL_BACKEND: {
+                            "host": server.host,
+                            "port": server.port,
+                            "password_sha256_env": "OFFICE_TAPO_SHA256",
+                        }
+                    },
+                ),
+                env=env,
+            ),
+        )
+        assert selector.supported_codecs == ["PCMA/8000"]
+        env.clear()
+
+        # When/Then: Opening re-resolves config and returns a safe config refusal
+        with pytest.raises(TalkBackendOpenError) as exc_info:
+            await selector.open_session(TalkSessionOpenRequest(session_id="tk_missing_env"))
+        assert exc_info.value.reason == TalkRefusalReason.TALK_CONFIG_ERROR
+        assert (
+            str(exc_info.value)
+            == "Required Tapo local environment variable is not set: OFFICE_TAPO_SHA256"
+        )
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_probe_rechecks_config_after_backend_selection() -> None:
+    """Tapo capability probes should fail safely if env config disappears."""
+    # Given: A selected backend whose credential env var is later removed
+    server = FakeTapoServer(hash_kind="sha256", credential_hash=_SHA256)
+    await server.start()
+    env = {"OFFICE_TAPO_SHA256": _SHA256}
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env=env),
+        )
+        assert selector.supported_codecs == ["PCMA/8000"]
+        env.clear()
+
+        # When: Capability is probed again after the env var disappears
+        probe = await selector.probe()
+
+        # Then: The probe reports config_error without falling back or leaking secrets
+        assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+        assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+        assert (
+            probe.message
+            == "Required Tapo local environment variable is not set: OFFICE_TAPO_SHA256"
+        )
+        assert probe.selected_codec is None
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_open_session_closes_connected_client_when_session_claim_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tapo open should release the camera socket if session creation fails."""
+    # Given: A Tapo endpoint that authenticates, but HomeSec fails to claim the client
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        audio_part_timeout_s=5.0,
+    )
+    await server.start()
+
+    async def _fail_create(**_: object) -> object:
+        raise TapoProtocolError("simulated session claim failure")
+
+    monkeypatch.setattr(
+        tapo_backend.TapoLocalTalkSession,
+        "create",
+        staticmethod(_fail_create),
+    )
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+
+        # When: Opening reaches the authenticated stream but session creation fails
+        with pytest.raises(TalkBackendOpenError) as exc_info:
+            await selector.open_session(TalkSessionOpenRequest(session_id="tk_claim_fail"))
+
+        # Then: The failure is stable and the prepared socket is closed immediately
+        assert exc_info.value.reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+        assert str(exc_info.value) == "Tapo local talk protocol failed"
+        await _wait_for_closed_connection(server)
+        assert server.audio_parts == []
     finally:
         await server.stop()
 
