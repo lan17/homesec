@@ -1,18 +1,20 @@
 # Push-to-Talk Deployment Notes
 
 HomeSec push-to-talk is a half-duplex browser microphone to camera speaker path.
-The bundled backend supports RTSP cameras that expose an ONVIF RTSP audio
-backchannel. The protocol path stays inside HomeSec: browser PCM frames are
-authenticated by the API when API auth is enabled, bridged to the runtime worker,
-encoded to G.711 (`PCMU/8000` or `PCMA/8000`), packetized as RTP, and sent to the
-camera over RTSP-over-TCP interleaved RTP. When API auth is disabled, talk
-endpoints follow the same trusted-LAN access model as the rest of the control
-API.
+The bundled backends support RTSP cameras that expose an ONVIF RTSP audio
+backchannel and TP-Link Tapo cameras with the local Tapo talk endpoint. The
+protocol path stays inside HomeSec: browser PCM frames are authenticated by the
+API when API auth is enabled, bridged to the runtime worker, converted to the
+selected camera-side format, and sent directly to the camera over the local
+network. When API auth is disabled, talk endpoints follow the same trusted-LAN
+access model as the rest of the control API.
 
 Talk policy defaults to enabled/auto. HomeSec probes RTSP cameras for ONVIF
-backchannel support at runtime and only enables the UI when the camera advertises
-a supported backchannel. Operators can opt out globally with `talk.enabled: false`
-or per camera with `cameras[].talk.mode: disabled`.
+backchannel support first. If that fails and a safe proprietary candidate such as
+`tapo_local` is explicitly configured or safely fingerprinted, HomeSec probes
+that backend next. The UI is only enabled when a backend reports supported
+capability. Operators can opt out globally with `talk.enabled: false` or per
+camera with `cameras[].talk.mode: disabled`.
 
 ## Supported MVP Contract
 
@@ -21,9 +23,9 @@ or per camera with `cameras[].talk.mode: disabled`.
 | UI mode | Push and hold, half-duplex talk |
 | Browser input | Mono PCM S16LE frames over WebSocket |
 | Default input format | `pcm_s16le`, `16000 Hz`, `1` channel, `20 ms` frames |
-| Camera codec | `PCMU/8000` and `PCMA/8000` |
-| Camera backend | Backend adapter abstraction; bundled backend is `onvif_rtsp_backchannel` |
-| Transport | RTSP over TCP with interleaved RTP |
+| Camera codec | ONVIF: `PCMU/8000` and `PCMA/8000`; Tapo local: `PCMA/8000` |
+| Camera backend | Backend adapter abstraction; bundled backends are `onvif_rtsp_backchannel` and `tapo_local` |
+| Transport | ONVIF: RTSP over TCP with interleaved RTP; Tapo local: local HTTP Digest multipart MPEG-TS |
 | Concurrency | One reserved or active talk session per camera |
 | Session limits | Bounded by `talk.max_session_s` and `talk.idle_timeout_s` |
 | Persistence | Microphone audio is not recorded or intentionally persisted |
@@ -34,6 +36,7 @@ References:
 - RTSP 1.0: <https://www.rfc-editor.org/rfc/rfc2326>
 - RTP: <https://www.rfc-editor.org/rfc/rfc3550>
 - G.711 PCMU/PCMA payload naming: <https://www.rfc-editor.org/rfc/rfc3551>
+- MPEG-TS: ISO/IEC 13818-1 transport stream framing is used by the local Tapo backend.
 
 ## Configuration
 
@@ -124,6 +127,53 @@ If explicit talk credential env vars are configured, they must also be set;
 HomeSec reports a talk config error rather than breaking the RTSP source when
 those env vars are missing.
 
+For TP-Link Tapo C120-style local talk, keep the video source as RTSP and add
+the `tapo_local` talk backend. This backend talks to the camera's local TCP 8800
+endpoint and does not call the TP-Link cloud during runtime:
+
+```yaml
+cameras:
+  - name: office
+    source:
+      backend: rtsp
+      config:
+        rtsp_url_env: OFFICE_RTSP_URL
+    talk:
+      mode: auto
+      backend: auto
+      backends:
+        tapo_local:
+          host: 192.168.1.33
+          port: 8800
+          username_env: OFFICE_TAPO_USERNAME
+          password_sha256_env: OFFICE_TAPO_SHA256
+          # Optional fallback for older local Digest challenges:
+          # password_md5_env: OFFICE_TAPO_MD5
+```
+
+Use `backend: tapo_local` when you want to force the Tapo path and skip ONVIF
+probing:
+
+```yaml
+cameras:
+  - name: office
+    talk:
+      mode: auto
+      backend: tapo_local
+      backends:
+        tapo_local:
+          host: 192.168.1.33
+          username_env: OFFICE_TAPO_USERNAME
+          password_sha256_env: OFFICE_TAPO_SHA256
+```
+
+Tapo credentials are separate from RTSP credentials. The `username_env` value is
+optional when the camera uses the default `admin` username. Password env vars
+must contain the hex password hash expected by the local Tapo Digest challenge,
+not the raw password. `password_sha256_env` is preferred; `password_md5_env` is a
+fallback for older challenges. HomeSec normalizes hash case and never returns or
+logs the hash value.
+
 Opt out cameras that should never expose speaker access:
 
 ```yaml
@@ -156,12 +206,13 @@ cameras[].talk.backend: <name>
   unknown registered-safe names produce talk_config_error until a backend is registered
 ```
 
-The bundled registry currently includes `onvif_rtsp_backchannel`. It is marked as
-standards-based, so auto mode tries it before any future proprietary backend.
-Future proprietary detectors must return `safe_to_probe: true` before HomeSec
-will probe them automatically. A safe detector should be based on local camera
-identity, explicit backend config, or another low-risk local signal. It must not
-send credentials to an unknown local service as part of detection.
+The bundled registry currently includes `onvif_rtsp_backchannel` and
+`tapo_local`. ONVIF is marked as standards-based, so auto mode tries it before
+Tapo or any other proprietary backend. Proprietary detectors must return
+`safe_to_probe: true` before HomeSec will probe them automatically. A safe
+detector should be based on local camera identity, explicit backend config, or
+another low-risk local signal. It must not send credentials to an unknown local
+service as part of detection.
 
 Auto backend selection is sticky for the lifetime of the source instance after a
 backend is selected. A runtime reload or source rebuild re-runs discovery. This
@@ -221,14 +272,9 @@ characters. Unregistered safe backend names report a talk backend
 selection/config error until a matching backend adapter is implemented and
 registered.
 
-## Future Proprietary Backends
-
-Phase 9 provides the backend adapter abstraction, not Tapo support. The example
-below documents the intended future shape for Phase 10 only. It will not work
-until a `tapo_local` backend is implemented and registered.
+## Tapo Local Backend
 
 ```yaml
-# Future Phase 10 example only. Not supported until tapo_local lands.
 cameras:
   - name: office
     talk:
@@ -242,21 +288,28 @@ cameras:
           password_sha256_env: OFFICE_TAPO_SHA256
 ```
 
+The `tapo_local` backend is intended for Tapo cameras that expose a local
+speaker stream endpoint. HomeSec authenticates locally with HTTP Digest, asks
+the camera to start its speaker stream, converts browser PCM to `PCMA/8000`,
+wraps it as MPEG-TS, and writes it as multipart `audio/mp2t` parts. This path is
+designed for cameras that are firewalled from the internet after local
+configuration.
+
+The implementation has fake-endpoint protocol coverage in HomeSec tests. Before
+marking a specific hardware model compatible, validate it with the real camera
+and record the result in the compatibility matrix below.
+
+## Future Proprietary Backends
+
 Future proprietary backends should implement the same contracts as the bundled
-ONVIF backend:
+ONVIF and Tapo backends:
 
 - register a `TalkBackendRegistration` with a strict Pydantic config model;
-- provide a safe detector when auto selection is appropriate;
+- provide a safe local detector when auto selection is appropriate;
 - implement `probe()` for capability, codec, and auth diagnostics;
 - implement `open_session()` and return a `TalkBackendSession`;
 - write browser PCM frames through `TalkSession.write_pcm_frame()`;
 - expose selected backend and selected codec diagnostics without leaking secrets.
-
-Phase 10 Tapo work should add only the Tapo-local backend pieces: config model,
-safe detector, local auth/client code, local talk setup, packet writer/session
-implementation, fake endpoint tests, and Tapo-specific docs. It should not need
-to modify the API WebSocket protocol, runtime IPC, TalkManager lifecycle, or UI
-PCM capture path.
 
 ## Status Diagnostics
 
@@ -295,8 +348,8 @@ the missing environment variable name, but never its value.
   with credentials, tokens, password hashes, auth headers, or raw protocol
   payloads.
 - Proprietary backend probes must stay local and must not make vendor cloud calls
-  unless a future feature explicitly opts into that behavior. Phase 9 and the
-  planned Tapo-local path are local-only.
+  unless a future feature explicitly opts into that behavior. The bundled Tapo
+  local path is local-only at runtime.
 - Talk sessions are transient. The MVP does not intentionally store microphone
   audio in clips, preview storage, logs, or databases.
 - Prefer HTTPS or a trusted reverse proxy for browser access so API keys and talk
@@ -313,18 +366,19 @@ the missing environment variable name, but never its value.
 
 Before relying on talk for a camera:
 
-1. Confirm the camera has a speaker and ONVIF/RTSP audio backchannel support.
-2. Confirm the camera advertises `PCMU/8000` or `PCMA/8000` in the backchannel SDP.
-3. Confirm RTSP credentials work for the talk URI.
-4. Keep the camera and HomeSec on a low-latency local network where possible.
-5. Start with one camera and one browser client.
-6. Test while recording and preview are active; some cameras have limited RTSP
+1. Confirm the camera has a speaker.
+2. For ONVIF, confirm the camera advertises `PCMU/8000` or `PCMA/8000` in the backchannel SDP.
+3. For Tapo local, confirm the camera is reachable from HomeSec on the local LAN and has the local talk endpoint enabled.
+4. Confirm backend credentials work for the selected talk path.
+5. Keep the camera and HomeSec on a low-latency local network where possible.
+6. Start with one camera and one browser client.
+7. Test while recording and preview are active; some cameras have limited RTSP
    session budgets.
-7. Watch HomeSec logs for `unsupported_codec`, `unsupported_camera`,
+8. Watch HomeSec logs for `unsupported_codec`, `unsupported_camera`,
    `talk_config_error`, `talk_auth_failed`, `runtime_unavailable`,
    `session_budget_exhausted`, `camera_backchannel_failed`, or repeated idle
    timeouts.
-8. Record the result in the compatibility matrix below.
+9. Record the result in the compatibility matrix below.
 
 Before implementing a new proprietary backend, confirm Phase 9 already provides:
 
@@ -355,6 +409,8 @@ real camera plays browser microphone audio through HomeSec.
 | Vendor / model | Firmware | Talk URI/profile | Advertised codec | Auth | Result | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | Fake RTSP backchannel test server | N/A | Test fixture | `PCMU/8000`, `PCMA/8000` | N/A | Pass | Validates HomeSec protocol path without hardware. |
+| Fake Tapo local endpoint | N/A | Test fixture | `PCMA/8000` via MPEG-TS | Digest | Pass | Validates HomeSec Tapo backend path without hardware. |
+| TP-Link Tapo C120 | _Record firmware_ | local TCP 8800 talk endpoint | `PCMA/8000` via MPEG-TS | Digest | Untested | Complete hardware validation before marking compatible. |
 | _Add tested camera_ |  |  |  |  | Untested |  |
 
 Suggested result values:
@@ -393,7 +449,7 @@ Suggested result values:
 ### Session is refused with `source_not_talk_capable`
 
 - The camera source backend does not expose the talk capability. The MVP supports
-  RTSP sources with `onvif_rtsp_backchannel` talk config.
+  RTSP sources with bundled ONVIF or Tapo-local talk config.
 
 ### Session is refused with `talk_config_error`
 
@@ -401,6 +457,8 @@ Suggested result values:
   backend is installed and registered in this HomeSec runtime.
 - If `cameras[].talk.config.rtsp_url_env` or credential env vars are configured,
   confirm those environment variables are set for the HomeSec process.
+- For `tapo_local`, confirm `host` can be resolved and at least one of
+  `password_sha256_env` or `password_md5_env` is configured and set.
 - Check `last_error` / `backend_reason` for the missing backend or environment
   variable name.
 
@@ -414,22 +472,25 @@ Suggested result values:
 
 - HomeSec API authentication already succeeded; this means the selected camera
   backend rejected HomeSec's configured camera credentials.
-- Verify the talk backend's RTSP or vendor credentials and confirm the camera
-  account has speaker/backchannel permissions.
+- Verify the talk backend's RTSP credentials or Tapo local username/password hash
+  env vars and confirm the camera account has speaker/backchannel permissions.
 
 ### Session is refused with `unsupported_camera` or `camera_backchannel_failed`
 
-- Verify the talk RTSP URI/profile supports ONVIF audio backchannel.
-- Try the camera's primary ONVIF media profile and any vendor-documented talk URI.
-- Confirm the camera allows RTSP-over-TCP interleaved RTP.
+- For ONVIF, verify the talk RTSP URI/profile supports ONVIF audio backchannel.
+- For ONVIF, try the camera's primary media profile and any vendor-documented talk URI.
+- For ONVIF, confirm the camera allows RTSP-over-TCP interleaved RTP.
+- For Tapo local, confirm HomeSec can reach the camera host and port `8800` on
+  the LAN and that the camera rejects outside-cloud access only after local setup.
 - Check whether another client has already consumed the camera's backchannel or
   media-session budget.
 
 ### Session is refused with `unsupported_codec`
 
-- The MVP supports `PCMU/8000` and `PCMA/8000`. If the camera advertises only
-  `G726`, AAC, or a vendor-specific codec, leave talk disabled for that camera
-  until that codec or backend is implemented and tested.
+- The ONVIF backend supports `PCMU/8000` and `PCMA/8000`; the Tapo local backend
+  emits `PCMA/8000` in MPEG-TS. If the camera advertises only `G726`, AAC, or a
+  different vendor-specific codec, leave talk disabled for that camera until
+  that codec or backend is implemented and tested.
 
 ### Session is refused with `session_already_active`
 

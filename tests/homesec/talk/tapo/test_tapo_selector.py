@@ -1,4 +1,4 @@
-"""Selector tests for the built-in Tapo local backend skeleton."""
+"""Selector tests for the built-in Tapo local backend."""
 
 from __future__ import annotations
 
@@ -13,12 +13,11 @@ from homesec.models.talk import (
 )
 from homesec.talk.backends import TalkBackendContext, TalkBackendRegistration, TalkBackendRegistry
 from homesec.talk.selector import TalkBackendSelector
-from homesec.talk.tapo.backend import (
-    TAPO_LOCAL_CODEC,
-    build_tapo_local_backend,
-    tapo_local_talk_backend_registration,
-)
+from homesec.talk.tapo.backend import build_tapo_local_backend, tapo_local_talk_backend_registration
 from homesec.talk.tapo.config import TapoLocalTalkConfig
+from homesec.talk.tapo.session import TAPO_LOCAL_CODEC
+
+from .fake_server import FakeTapoServer
 
 _VALID_SHA256 = "A" * 64
 
@@ -97,7 +96,12 @@ def _registry(
     return registry
 
 
-def _context(camera_talk: CameraTalkConfig) -> TalkBackendContext:
+def _context(
+    camera_talk: CameraTalkConfig,
+    *,
+    env: dict[str, str] | None = None,
+) -> TalkBackendContext:
+    values = env or {"OFFICE_TAPO_SHA256": _VALID_SHA256}
     return TalkBackendContext(
         camera_name="office",
         source_backend="rtsp",
@@ -105,7 +109,9 @@ def _context(camera_talk: CameraTalkConfig) -> TalkBackendContext:
         camera_talk=camera_talk,
         source_uri="rtsp://admin:secret@192.168.1.33:554/stream1",
         resolved_source_uri="rtsp://admin:secret@192.168.1.33:554/stream1",
-        resolve_env=lambda name: _VALID_SHA256 if name == "OFFICE_TAPO_SHA256" else None,
+        source_connect_timeout_s=1.0,
+        source_io_timeout_s=1.0,
+        resolve_env=lambda name: values.get(name),
     )
 
 
@@ -113,32 +119,37 @@ def _context(camera_talk: CameraTalkConfig) -> TalkBackendContext:
 async def test_explicit_tapo_backend_does_not_fallback_to_onvif() -> None:
     """Explicit tapo_local selection should not probe standards backends."""
     # Given: A camera explicitly configured for the built-in Tapo local backend
+    server = FakeTapoServer(hash_kind="sha256", credential_hash=_VALID_SHA256)
+    await server.start()
     calls: list[str] = []
-    selector = TalkBackendSelector(
-        registry=_registry(calls=calls),
-        context=_context(
-            CameraTalkConfig(
-                backend="tapo_local",
-                backends={
-                    "tapo_local": {
-                        "host": "192.168.1.33",
-                        "password_sha256_env": "OFFICE_TAPO_SHA256",
-                    }
-                },
-            )
-        ),
-    )
+    try:
+        selector = TalkBackendSelector(
+            registry=_registry(calls=calls),
+            context=_context(
+                CameraTalkConfig(
+                    backend="tapo_local",
+                    backends={
+                        "tapo_local": {
+                            "host": server.host,
+                            "port": server.port,
+                            "password_sha256_env": "OFFICE_TAPO_SHA256",
+                        }
+                    },
+                )
+            ),
+        )
 
-    # When: Probing through explicit backend selection
-    probe = await selector.probe()
+        # When: Probing through explicit backend selection
+        probe = await selector.probe()
 
-    # Then: Tapo is selected, ONVIF is not probed, and protocol work is deferred
-    assert selector.backend == "tapo_local"
-    assert selector.supported_codecs == [TAPO_LOCAL_CODEC]
-    assert probe.capability == TalkCapabilityState.ERROR
-    assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
-    assert probe.message == "Tapo local protocol client is not implemented yet"
-    assert calls == []
+        # Then: Tapo is selected, ONVIF is not probed, and local probing succeeds
+        assert selector.backend == "tapo_local"
+        assert selector.supported_codecs == [TAPO_LOCAL_CODEC]
+        assert probe.capability == TalkCapabilityState.SUPPORTED
+        assert probe.selected_codec == TAPO_LOCAL_CODEC
+        assert calls == []
+    finally:
+        await server.stop()
 
 
 @pytest.mark.asyncio
@@ -244,31 +255,39 @@ def test_tapo_backend_repr_does_not_expose_hash_or_rtsp_credentials() -> None:
 async def test_auto_tapo_config_is_considered_after_onvif_unsupported() -> None:
     """Auto mode should consider Tapo only after standards probing fails."""
     # Given: ONVIF is unsupported and Tapo config makes proprietary probing safe
+    server = FakeTapoServer(hash_kind="sha256", credential_hash=_VALID_SHA256)
+    await server.start()
     calls: list[str] = []
-    selector = TalkBackendSelector(
-        registry=_registry(calls=calls),
-        context=_context(
-            CameraTalkConfig(
-                backend="auto",
-                backends={
-                    "tapo_local": {
-                        "host": "192.168.1.33",
-                        "password_sha256_env": "OFFICE_TAPO_SHA256",
-                    }
-                },
-            )
-        ),
-    )
+    try:
+        selector = TalkBackendSelector(
+            registry=_registry(calls=calls),
+            context=_context(
+                CameraTalkConfig(
+                    backend="auto",
+                    backends={
+                        "tapo_local": {
+                            "host": server.host,
+                            "port": server.port,
+                            "password_sha256_env": "OFFICE_TAPO_SHA256",
+                        }
+                    },
+                )
+            ),
+        )
 
-    # When: Probing auto selection
-    probe = await selector.probe()
+        # When: Probing auto selection
+        probe = await selector.probe()
 
-    # Then: ONVIF is tried first and Tapo becomes the selected safe fallback
-    assert probe.capability == TalkCapabilityState.ERROR
-    assert probe.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
-    assert selector.backend == "tapo_local"
-    assert selector.backend_reason == "Selected talk backend 'tapo_local' by safe camera detector"
-    assert calls == ["onvif:probe"]
+        # Then: ONVIF is tried first and Tapo becomes the selected safe fallback
+        assert probe.capability == TalkCapabilityState.SUPPORTED
+        assert probe.selected_codec == TAPO_LOCAL_CODEC
+        assert selector.backend == "tapo_local"
+        assert (
+            selector.backend_reason == "Selected talk backend 'tapo_local' by safe camera detector"
+        )
+        assert calls == ["onvif:probe"]
+    finally:
+        await server.stop()
 
 
 @pytest.mark.asyncio

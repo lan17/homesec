@@ -102,12 +102,12 @@ def resolve_tapo_credential(
     if not env_order:
         raise TalkBackendConfigError("Tapo local backend requires SHA256 or MD5 credential env var")
 
+    missing_env_names: list[str] = []
     for hash_kind, env_name in env_order:
         raw_value = context.env_value(env_name)
         if raw_value is None or raw_value.strip() == "":
-            raise TalkBackendConfigError(
-                f"Required Tapo local environment variable is not set: {env_name}"
-            )
+            missing_env_names.append(env_name)
+            continue
         normalized = raw_value.strip().upper()
         _validate_hash_shape(normalized, env_name=env_name, hash_kind=hash_kind)
         return TapoCredential(
@@ -116,6 +116,10 @@ def resolve_tapo_credential(
             hash_kind=hash_kind,
         )
 
+    if missing_env_names:
+        raise TalkBackendConfigError(
+            f"Required Tapo local environment variable is not set: {missing_env_names[0]}"
+        )
     raise TalkBackendConfigError("Tapo local backend requires SHA256 or MD5 credential env var")
 
 

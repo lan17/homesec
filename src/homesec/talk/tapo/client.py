@@ -48,6 +48,10 @@ class TapoAuthError(TapoClientError):
         super().__init__(message)
 
 
+class TapoUnsupportedEndpointError(TapoClientError):
+    """Raised when the local stream endpoint does not look like Tapo talk."""
+
+
 class TapoProtocolError(TapoClientError):
     """Raised for malformed or rejected Tapo local protocol data."""
 
@@ -188,13 +192,19 @@ async def _request_digest_challenge(
     )
     response = await _read_http_response(reader, io_timeout_s=io_timeout_s, read_body=True)
     if response.status_code != 401:
-        raise TapoProtocolError("Tapo local endpoint did not request Digest authentication")
+        raise TapoUnsupportedEndpointError(
+            "Tapo local endpoint did not request Digest authentication"
+        )
     authenticate = response.header("www-authenticate")
     if authenticate is None:
-        raise TapoProtocolError("Tapo local endpoint did not provide Digest authentication")
+        raise TapoUnsupportedEndpointError(
+            "Tapo local endpoint did not provide Digest authentication"
+        )
     challenge = parse_www_authenticate(authenticate)
     if challenge.scheme != "digest":
-        raise TapoProtocolError("Tapo local endpoint requires unsupported authentication")
+        raise TapoUnsupportedEndpointError(
+            "Tapo local endpoint requires unsupported authentication"
+        )
     return challenge
 
 
