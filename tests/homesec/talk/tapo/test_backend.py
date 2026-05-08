@@ -229,6 +229,7 @@ async def test_tapo_backend_maps_auth_failure_to_talk_auth_failed() -> None:
         assert prepared.accepted is False
         assert prepared.refusal_reason == TalkRefusalReason.TALK_AUTH_FAILED
         assert prepared.message == "Tapo local authentication failed"
+        assert manager.status().selected_codec is None
         assert wrong_hash not in (manager.status().last_error or "")
     finally:
         await server.stop()
@@ -262,6 +263,7 @@ async def test_tapo_backend_maps_missing_credential_to_talk_config_error() -> No
     assert (
         probe.message == "Required Tapo local environment variable is not set: OFFICE_TAPO_SHA256"
     )
+    assert probe.selected_codec is None
     assert selector.backend == TAPO_LOCAL_BACKEND
 
 
@@ -291,6 +293,7 @@ async def test_tapo_backend_maps_protocol_failure_to_camera_backchannel_failed()
         assert prepared.accepted is False
         assert prepared.refusal_reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
         assert prepared.message == "Tapo local talk protocol failed"
+        assert manager.status().selected_codec is None
     finally:
         await server.stop()
 
@@ -321,6 +324,7 @@ async def test_tapo_backend_maps_malformed_multipart_to_camera_backchannel_faile
         assert prepared.accepted is False
         assert prepared.refusal_reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
         assert prepared.message == "Tapo local talk protocol failed"
+        assert manager.status().selected_codec is None
     finally:
         await server.stop()
 
@@ -351,6 +355,7 @@ async def test_tapo_backend_maps_non_tapo_endpoint_to_unsupported_camera() -> No
         assert prepared.accepted is False
         assert prepared.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
         assert prepared.message == "Tapo local endpoint not detected"
+        assert manager.status().selected_codec is None
     finally:
         await server.stop()
 

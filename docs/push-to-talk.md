@@ -440,7 +440,7 @@ real camera plays browser microphone audio through HomeSec.
 | --- | --- | --- | --- | --- | --- | --- |
 | Fake RTSP backchannel test server | N/A | Test fixture | `PCMU/8000`, `PCMA/8000` | N/A | Pass | Validates HomeSec protocol path without hardware. |
 | Fake Tapo local endpoint | N/A | Test fixture | `PCMA/8000` via MPEG-TS | Digest | Pass | Validates HomeSec Tapo backend path without hardware. |
-| TP-Link Tapo C120 | _Record firmware_ | local TCP 8800 talk endpoint | `PCMA/8000` via MPEG-TS | Digest | Pass | Manual tone heard on office camera after enabling Tapo app Third-Party Compatibility; local talk accepted username `admin` plus SHA256 password material. |
+| TP-Link Tapo C120 | _Not recorded_ | local TCP 8800 talk endpoint | `PCMA/8000` via MPEG-TS | Digest | Partial | Manual local tone heard on office camera after enabling Tapo app Third-Party Compatibility; record firmware and verify browser microphone audio before marking Pass. |
 | _Add tested camera_ |  |  |  |  | Untested |  |
 
 Suggested result values:

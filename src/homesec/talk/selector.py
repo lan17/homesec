@@ -52,6 +52,7 @@ class _SelectionError:
     backend: str | None
     backend_reason: str | None
     codecs: list[str] = field(default_factory=list)
+    prefer_on_equal: bool = False
 
     @property
     def supported_codecs(self) -> list[str]:
@@ -277,6 +278,7 @@ class TalkBackendSelector:
                     backend=selection.backend,
                     backend_reason=selection.backend_reason,
                     codecs=selection.supported_codecs,
+                    prefer_on_equal=True,
                 ),
             )
 
@@ -477,7 +479,11 @@ def _better_auto_failure(
 ) -> _SelectionError:
     if current is None:
         return candidate
-    if _auto_failure_rank(candidate.result) < _auto_failure_rank(current.result):
+    candidate_rank = _auto_failure_rank(candidate.result)
+    current_rank = _auto_failure_rank(current.result)
+    if candidate_rank < current_rank:
+        return candidate
+    if candidate_rank == current_rank and candidate.prefer_on_equal and not current.prefer_on_equal:
         return candidate
     return current
 

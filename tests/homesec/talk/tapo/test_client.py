@@ -10,10 +10,12 @@ import pytest
 
 from homesec.models.config import CameraTalkConfig, TalkConfig
 from homesec.talk.backends import TalkBackendConfigError, TalkBackendContext
+from homesec.talk.tapo import client as tapo_client
 from homesec.talk.tapo.client import (
     TapoAuthError,
     TapoLocalClient,
     TapoProtocolError,
+    TapoUnsupportedEndpointError,
     _close_writer_best_effort,
     _read_http_response,
     open_tapo_local_client,
@@ -98,6 +100,29 @@ async def test_tapo_client_rejects_unsupported_digest_qop() -> None:
         with pytest.raises(TapoProtocolError, match="Digest challenge"):
             await open_tapo_local_client(config, _context({"OFFICE_TAPO_SHA256": _SHA256}))
         assert len(server.requests) == 1
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_fake_tapo_server_rejects_wrong_stream_uri(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fake Tapo endpoint should enforce the local talk stream route."""
+    # Given: A fake endpoint and a client accidentally pointed at the wrong path
+    server = FakeTapoServer(hash_kind="sha256", credential_hash=_SHA256)
+    await server.start()
+    monkeypatch.setattr(tapo_client, "_STREAM_URI", "/wrong-stream")
+    try:
+        config = TapoLocalTalkConfig(
+            host=server.host,
+            port=server.port,
+            password_sha256_env="OFFICE_TAPO_SHA256",
+        )
+
+        # When/Then: Opening the client fails before Digest auth succeeds
+        with pytest.raises(TapoUnsupportedEndpointError):
+            await open_tapo_local_client(config, _context({"OFFICE_TAPO_SHA256": _SHA256}))
     finally:
         await server.stop()
 

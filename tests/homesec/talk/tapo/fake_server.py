@@ -18,6 +18,7 @@ _CLIENT_BOUNDARY = "--client-stream-boundary--"
 _CLIENT_DELIMITER = b"----client-stream-boundary--"
 _DEVICE_BOUNDARY = "--device-stream-boundary--"
 _DEVICE_DELIMITER = "----device-stream-boundary--"
+_STREAM_URI = "/stream"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +98,10 @@ class FakeTapoServer:
             self._tasks.add(task)
         try:
             request = await self._read_request(reader)
+            if not _request_targets_stream(request):
+                writer.write(_http_response(status=404, reason="Not Found"))
+                await writer.drain()
+                return
             if self.unsupported_endpoint:
                 writer.write(_http_response(status=200, body=b"not a tapo endpoint"))
                 await writer.drain()
@@ -112,6 +117,10 @@ class FakeTapoServer:
                 await writer.drain()
 
             request = await self._read_request(reader)
+            if not _request_targets_stream(request):
+                writer.write(_http_response(status=404, reason="Not Found"))
+                await writer.drain()
+                return
             if not self._authorization_matches(request) or self.reject_auth:
                 writer.write(
                     _http_response(
@@ -270,3 +279,7 @@ def _http_response(
     lines = [f"HTTP/1.1 {status} {reason}"]
     lines.extend(f"{name}: {value}" for name, value in merged.items())
     return ("\r\n".join(lines) + "\r\n\r\n").encode("iso-8859-1") + body
+
+
+def _request_targets_stream(request: FakeTapoHTTPRequest) -> bool:
+    return request.method == "POST" and request.uri == _STREAM_URI

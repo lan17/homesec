@@ -327,6 +327,48 @@ async def test_auto_tapo_config_is_considered_after_onvif_unsupported() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_tapo_config_reports_tapo_unsupported_endpoint() -> None:
+    """Auto mode should report configured Tapo fallback failures after probing them."""
+    # Given: ONVIF is unsupported and configured Tapo points at a non-Tapo endpoint
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_VALID_SHA256,
+        unsupported_endpoint=True,
+    )
+    await server.start()
+    calls: list[str] = []
+    try:
+        selector = TalkBackendSelector(
+            registry=_registry(calls=calls),
+            context=_context(
+                CameraTalkConfig(
+                    backend="auto",
+                    backends={
+                        "tapo_local": {
+                            "host": server.host,
+                            "port": server.port,
+                            "password_sha256_env": "OFFICE_TAPO_SHA256",
+                        }
+                    },
+                )
+            ),
+        )
+
+        # When: Probing auto selection
+        probe = await selector.probe()
+
+        # Then: The attempted Tapo fallback remains visible for diagnostics
+        assert probe.capability == TalkCapabilityState.UNSUPPORTED
+        assert probe.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
+        assert probe.message == "Tapo local endpoint not detected"
+        assert probe.selected_codec is None
+        assert selector.backend == "tapo_local"
+        assert calls == ["onvif:probe"]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_auto_ignores_tapo_without_config_or_fingerprint() -> None:
     """Auto mode should not probe Tapo without config or fingerprint evidence."""
     # Given: ONVIF is unsupported and no Tapo config/fingerprint is present

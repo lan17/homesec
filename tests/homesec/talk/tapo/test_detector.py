@@ -108,7 +108,25 @@ def test_detector_marks_tp_link_tapo_fingerprint_safe_to_probe() -> None:
     assert detection.backend == "tapo_local"
     assert detection.confidence == "high"
     assert detection.safe_to_probe is True
-    assert detection.reason == "TP-Link/Tapo camera fingerprint"
+    assert detection.reason == "Tapo camera fingerprint"
+
+
+def test_detector_rejects_non_tapo_tp_link_fingerprint() -> None:
+    """A generic TP-Link fingerprint should not opt into Tapo probing."""
+    # Given: A TP-Link camera model from a different product family
+    context = _context(
+        CameraTalkConfig(backend="auto"),
+        fingerprint=CameraTalkFingerprint(manufacturer="TP-Link", model="VIGI C340"),
+    )
+
+    # When: Running the Tapo detector
+    detection = detect_tapo_local(context)
+
+    # Then: Tapo probing is not considered safe without Tapo-specific evidence
+    assert detection.backend == "tapo_local"
+    assert detection.confidence == "not_applicable"
+    assert detection.safe_to_probe is False
+    assert detection.reason == "No Tapo local config or fingerprint"
 
 
 def test_detector_rejects_auto_without_config_or_fingerprint() -> None:

@@ -208,11 +208,11 @@ def detect_tapo_local(context: TalkBackendContext) -> TalkBackendDetection:
 
     manufacturer = (context.fingerprint.manufacturer or "").lower()
     model = (context.fingerprint.model or "").lower()
-    if "tp-link" in manufacturer or "tapo" in model:
+    if "tapo" in manufacturer or "tapo" in model:
         return TalkBackendDetection(
             backend=TAPO_LOCAL_BACKEND,
             confidence="high",
-            reason="TP-Link/Tapo camera fingerprint",
+            reason="Tapo camera fingerprint",
             safe_to_probe=True,
             requires_credentials=True,
         )
@@ -267,8 +267,6 @@ def _config_error_result(message: str) -> TalkCapabilityProbeResult:
         capability=TalkCapabilityState.CONFIG_ERROR,
         refusal_reason=TalkRefusalReason.TALK_CONFIG_ERROR,
         message=message,
-        offered_codecs=[TAPO_LOCAL_CODEC],
-        selected_codec=TAPO_LOCAL_CODEC,
     )
 
 
@@ -277,8 +275,6 @@ def _auth_error_result() -> TalkCapabilityProbeResult:
         capability=TalkCapabilityState.ERROR,
         refusal_reason=TalkRefusalReason.TALK_AUTH_FAILED,
         message="Tapo local authentication failed",
-        offered_codecs=[TAPO_LOCAL_CODEC],
-        selected_codec=TAPO_LOCAL_CODEC,
     )
 
 
@@ -287,8 +283,6 @@ def _unsupported_endpoint_result() -> TalkCapabilityProbeResult:
         capability=TalkCapabilityState.UNSUPPORTED,
         refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
         message=_TAPO_UNSUPPORTED_ENDPOINT,
-        offered_codecs=[TAPO_LOCAL_CODEC],
-        selected_codec=TAPO_LOCAL_CODEC,
     )
 
 
@@ -297,8 +291,6 @@ def _protocol_error_result() -> TalkCapabilityProbeResult:
         capability=TalkCapabilityState.ERROR,
         refusal_reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
         message=_TAPO_PROTOCOL_FAILED,
-        offered_codecs=[TAPO_LOCAL_CODEC],
-        selected_codec=TAPO_LOCAL_CODEC,
     )
 
 
