@@ -142,6 +142,10 @@ class ONVIFBackchannelAdapter:
         """Probe capability and keep the successful RTSP connection for imminent open."""
         return await self._probe(keep_connection_for_open=True)
 
+    async def clear_prepared_probe(self) -> None:
+        """Clear any RTSP connection cached for a prepare-to-open handoff."""
+        await self._clear_cached_backchannel_session()
+
     async def _probe(self, *, keep_connection_for_open: bool) -> TalkCapabilityProbeResult:
         client = self._client()
         keep_client = False

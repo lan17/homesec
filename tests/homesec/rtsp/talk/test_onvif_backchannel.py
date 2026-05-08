@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+import homesec.sources.rtsp.talk.onvif_backchannel as onvif_backchannel
 from homesec.models.talk import TalkCapabilityState, TalkRefusalReason
 from homesec.sources.rtsp.talk.errors import (
     CameraBackchannelUnsupportedError,
@@ -69,6 +70,7 @@ class _FakeRTSPBackchannelServer:
     requests: list[_RTSPRequest] = field(default_factory=list)
     interleaved_before_play: list[tuple[int, bytes]] = field(default_factory=list)
     interleaved_after_play: list[tuple[int, bytes]] = field(default_factory=list)
+    closed_connections: int = 0
     _play_seen: bool = False
     _server: asyncio.AbstractServer | None = None
     _port: int | None = None
@@ -129,6 +131,7 @@ class _FakeRTSPBackchannelServer:
         finally:
             writer.close()
             await writer.wait_closed()
+            self.closed_connections += 1
 
     async def _read_request(
         self,
@@ -332,6 +335,22 @@ def _selected(codec_name: str = "PCMU", payload_type: int = 0) -> SelectedBackch
     )
 
 
+async def _wait_for_closed_connections(
+    server: _FakeRTSPBackchannelServer,
+    count: int,
+    *,
+    timeout_s: float = 0.5,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        if server.closed_connections >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        f"Expected at least {count} closed RTSP connections, got {server.closed_connections}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_onvif_backchannel_probe_reports_supported_camera_without_setup() -> None:
     """Probe should classify support from DESCRIBE without opening a talk stream."""
@@ -381,6 +400,140 @@ async def test_onvif_backchannel_reuses_successful_probe_for_session_open() -> N
     assert result.capability == TalkCapabilityState.SUPPORTED
     assert session.selected_codec == "PCMU/8000"
     assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_prepare_probe_matches_normal_probe_result() -> None:
+    """Session-open probe should report the same capability truth as normal probe."""
+    # Given: Two identical cameras, one for normal status probing and one for prepare probing
+    normal_server = _FakeRTSPBackchannelServer()
+    prepared_server = _FakeRTSPBackchannelServer()
+    await normal_server.start()
+    await prepared_server.start()
+    try:
+        normal_adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=normal_server.url),
+            camera_name="front_door",
+        )
+        prepared_adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=prepared_server.url),
+            camera_name="front_door",
+        )
+
+        # When: Running both probe variants against equivalent SDP
+        normal = await normal_adapter.probe()
+        prepared = await prepared_adapter.probe_for_session_open()
+        await prepared_adapter.clear_prepared_probe()
+    finally:
+        await normal_server.stop()
+        await prepared_server.stop()
+
+    # Then: The prepared probe differs only in resource handling, not capability truth
+    assert prepared.capability == normal.capability
+    assert prepared.offered_codecs == normal.offered_codecs
+    assert prepared.selected_codec == normal.selected_codec
+    assert prepared.refusal_reason == normal.refusal_reason
+    assert prepared.message == normal.message
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_clear_prepared_probe_releases_cached_connection() -> None:
+    """Explicit cleanup should release prepared RTSP state before open."""
+    # Given: A successful prepare probe that cached an RTSP DESCRIBE connection
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        result = await adapter.probe_for_session_open()
+
+        # When: The reservation is abandoned and the prepared probe is cleared
+        await adapter.clear_prepared_probe()
+        await _wait_for_closed_connections(server, 1)
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: Open performs a fresh DESCRIBE instead of reusing the cleared connection
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_replacing_prepared_probe_closes_old_connection() -> None:
+    """A newer prepare probe should close the older cached RTSP connection."""
+    # Given: A camera that accepts multiple prepare probes
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: A second prepare probe replaces the first cached connection
+        first = await adapter.probe_for_session_open()
+        second = await adapter.probe_for_session_open()
+        await _wait_for_closed_connections(server, 1)
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: The old connection was closed and open consumes the newer prepared probe
+    assert first.capability == TalkCapabilityState.SUPPORTED
+    assert second.capability == TalkCapabilityState.SUPPORTED
+    assert session.selected_codec == "PCMU/8000"
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_prepared_probe_cache_expires_without_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Abandoned prepared probes should expire even without explicit cleanup."""
+    # Given: A prepared probe cache with a short test TTL
+    monkeypatch.setattr(onvif_backchannel, "_PROBED_BACKCHANNEL_REUSE_TTL_S", 0.01)
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        result = await adapter.probe_for_session_open()
+
+        # When: No open consumes the cache before the TTL expires
+        await _wait_for_closed_connections(server, 1)
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: The expired cache is closed and open performs a fresh DESCRIBE
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
         "DESCRIBE",
         "SETUP",
         "PLAY",

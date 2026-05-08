@@ -22,6 +22,7 @@ from homesec.talk.backends import (
     TalkBackendConfigError,
     TalkBackendContext,
     TalkBackendOpenError,
+    TalkBackendPreparedProbeCleanup,
     TalkBackendRegistration,
     TalkBackendRegistry,
     TalkBackendSession,
@@ -60,6 +61,11 @@ class ONVIFRTSPTalkBackendAdapter:
         if isinstance(self.adapter, TalkBackendSessionProbeAdapter):
             return await self.adapter.probe_for_session_open()
         return await self.adapter.probe()
+
+    async def clear_prepared_probe(self) -> None:
+        """Clear ONVIF state cached for a prepare-to-open handoff."""
+        if isinstance(self.adapter, TalkBackendPreparedProbeCleanup):
+            await self.adapter.clear_prepared_probe()
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkBackendSession:
         """Open an ONVIF RTSP backchannel session."""

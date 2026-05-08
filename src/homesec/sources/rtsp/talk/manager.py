@@ -94,6 +94,7 @@ class TalkManager:
         prepare_capability_probe_factory: (
             Callable[[], Awaitable[TalkCapabilityProbeResult]] | None
         ) = None,
+        prepare_probe_cleanup: Callable[[], Awaitable[None]] | None = None,
         capability_ttl_s: float = 30.0,
     ) -> None:
         self._camera_name = camera_name
@@ -104,6 +105,7 @@ class TalkManager:
         self._open_session_factory = open_session_factory
         self._capability_probe_factory = capability_probe_factory
         self._prepare_capability_probe_factory = prepare_capability_probe_factory
+        self._prepare_probe_cleanup = prepare_probe_cleanup
         self._capability_ttl_s = capability_ttl_s
         self._capability = TalkCapabilityProbeResult(
             capability=(
@@ -375,11 +377,15 @@ class TalkManager:
         """Stop a reserved or active talk session if it matches the current one."""
         self._bind_loop()
         record: _SessionRecord | None
+        clear_prepared_probe = False
         async with self._lock:
             record = self._record
             if record is None or record.session_id != session_id:
                 return False
+            clear_prepared_probe = record.session is None and not record.opening
             self._clear_record_locked(record, close_reason=reason)
+        if clear_prepared_probe:
+            await self._clear_prepare_probe_safely()
         await _close_record(record)
         return True
 
@@ -387,11 +393,18 @@ class TalkManager:
         """Close any current talk session during source/runtime shutdown."""
         self._bind_loop()
         record: _SessionRecord | None
+        clear_prepared_probe = False
         async with self._lock:
             record = self._record
             if record is None:
-                return
-            self._clear_record_locked(record, close_reason="shutdown")
+                clear_prepared_probe = True
+            else:
+                clear_prepared_probe = record.session is None and not record.opening
+                self._clear_record_locked(record, close_reason="shutdown")
+        if clear_prepared_probe:
+            await self._clear_prepare_probe_safely()
+        if record is None:
+            return
         await _close_record(record)
 
     def shutdown_sync(self, *, timeout_s: float) -> None:
@@ -453,12 +466,29 @@ class TalkManager:
                 return
 
     async def _clear_opening_record(self, session_id: str, *, close_reason: str) -> None:
+        clear_prepared_probe = False
         async with self._lock:
             record = self._record
             if record is None or record.session_id != session_id:
                 return
             record.opening = False
+            clear_prepared_probe = record.session is None
             self._clear_record_locked(record, close_reason=close_reason)
+        if clear_prepared_probe:
+            await self._clear_prepare_probe_safely()
+
+    async def _clear_prepare_probe_safely(self) -> None:
+        cleanup = self._prepare_probe_cleanup
+        if cleanup is None:
+            return
+        try:
+            await cleanup()
+        except Exception:
+            logger.debug(
+                "Talk prepared-probe cleanup failed",
+                extra={"camera_name": self._camera_name},
+                exc_info=True,
+            )
 
     def _clear_record_locked(self, record: _SessionRecord, *, close_reason: str) -> None:
         if self._record is record:

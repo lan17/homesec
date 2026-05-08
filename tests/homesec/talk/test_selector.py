@@ -70,6 +70,15 @@ class _FakeBackend:
         return _FakeSession()
 
 
+class _PreparedProbeBackend(_FakeBackend):
+    async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
+        self._calls.append(f"{self.name}:prepare_probe")
+        return self._probe_result
+
+    async def clear_prepared_probe(self) -> None:
+        self._calls.append(f"{self.name}:clear_prepared_probe")
+
+
 def _context(camera_talk: CameraTalkConfig) -> TalkBackendContext:
     return TalkBackendContext(
         camera_name="cam",
@@ -123,6 +132,35 @@ async def test_selector_auto_uses_standards_backend_first() -> None:
     assert selector.supported_codecs == ["PCMU/8000"]
     assert session.selected_codec == "PCMU/8000"
     assert calls == ["standard_backend:probe", "standard_backend:open:tk_auto"]
+
+
+@pytest.mark.asyncio
+async def test_selector_clear_prepared_probe_delegates_to_selected_backend() -> None:
+    """Selector should clear prepared state on the backend selected by auto probing."""
+    # Given: A selector whose standards backend preserves state for session open
+    calls: list[str] = []
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="standard_backend",
+            config_model=_BackendConfig,
+            factory=lambda config, context: _PreparedProbeBackend("standard_backend", calls),
+            priority=10,
+            standards_based=True,
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="auto")),
+    )
+
+    # When: A prepare-time probe selects the backend and cleanup is requested
+    probe = await selector.probe_for_session_open()
+    await selector.clear_prepared_probe()
+
+    # Then: Cleanup is routed to the selected backend instance
+    assert probe.capability == TalkCapabilityState.SUPPORTED
+    assert calls == ["standard_backend:prepare_probe", "standard_backend:clear_prepared_probe"]
 
 
 @pytest.mark.asyncio

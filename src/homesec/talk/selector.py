@@ -25,6 +25,7 @@ from homesec.talk.backends import (
     TalkBackendConfigError,
     TalkBackendContext,
     TalkBackendOpenError,
+    TalkBackendPreparedProbeCleanup,
     TalkBackendRegistration,
     TalkBackendRegistry,
     TalkBackendSession,
@@ -137,6 +138,15 @@ class TalkBackendSelector:
     async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
         """Probe the selected backend while preserving state for immediate open."""
         return await self._probe(for_session_open=True)
+
+    async def clear_prepared_probe(self) -> None:
+        """Release backend state cached for a prepare-to-open handoff."""
+        selection = self._selection
+        if not isinstance(selection, _SelectedBackend):
+            return
+        adapter = selection.adapter
+        if isinstance(adapter, TalkBackendPreparedProbeCleanup):
+            await adapter.clear_prepared_probe()
 
     async def _probe(self, *, for_session_open: bool) -> TalkCapabilityProbeResult:
         if self._context.camera_talk.backend == "auto":

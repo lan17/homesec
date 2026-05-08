@@ -41,10 +41,24 @@ class TalkBackendAdapter(Protocol):
 
 @runtime_checkable
 class TalkBackendSessionProbeAdapter(Protocol):
-    """Optional backend hook for probes that will immediately open a session."""
+    """Optional backend hook for probes that will immediately open a session.
+
+    This reports the same capability truth as ``probe()``. Backends may preserve
+    transport state for the following ``open_session()``, but they must not apply
+    different product policy or backend-selection rules here.
+    """
 
     async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
         """Probe while preserving backend state needed by the following open."""
+        ...
+
+
+@runtime_checkable
+class TalkBackendPreparedProbeCleanup(Protocol):
+    """Optional backend hook to release state cached for a prepare-to-open handoff."""
+
+    async def clear_prepared_probe(self) -> None:
+        """Clear backend state preserved by a prior session-open probe."""
         ...
 
 

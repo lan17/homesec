@@ -924,6 +924,7 @@ class RTSPSource(ThreadedClipSource):
             open_session_factory=self._open_selected_talk_session,
             capability_probe_factory=selector.probe,
             prepare_capability_probe_factory=selector.probe_for_session_open,
+            prepare_probe_cleanup=selector.clear_prepared_probe,
             max_session_s=runtime_talk.max_session_s,
             idle_timeout_s=runtime_talk.idle_timeout_s,
         )
