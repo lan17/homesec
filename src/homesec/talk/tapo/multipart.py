@@ -130,7 +130,7 @@ async def _read_multipart_part(
 async def _readline(reader: asyncio.StreamReader) -> bytes:
     try:
         line = await reader.readline()
-    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError) as exc:
         raise TapoMultipartError("Tapo multipart stream ended unexpectedly") from exc
     if line == b"":
         raise TapoMultipartError("Tapo multipart stream ended unexpectedly")

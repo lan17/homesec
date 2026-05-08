@@ -188,7 +188,11 @@ async def test_explicit_tapo_backend_streams_pcm_through_talk_manager() -> None:
 async def test_abandoned_tapo_prepare_closes_prepared_client() -> None:
     """Stopping a reserved Tapo talk session should clear the prepared client immediately."""
     # Given: A prepared Tapo session that never opens a HomeSec talk stream
-    server = FakeTapoServer(hash_kind="sha256", credential_hash=_SHA256)
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        audio_part_timeout_s=5.0,
+    )
     await server.start()
     try:
         selector = TalkBackendSelector(
@@ -207,6 +211,38 @@ async def test_abandoned_tapo_prepare_closes_prepared_client() -> None:
         # Then: The prepared probe connection is closed without sending MPEG-TS audio
         assert prepared.accepted is True
         assert stopped is True
+        assert server.audio_parts == []
+        assert server.closed_connections >= 1
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_manager_shutdown_closes_prepared_client() -> None:
+    """Shutting down a manager should clear an unopened prepared Tapo stream."""
+    # Given: A prepared Tapo reservation with retained backend stream state
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        audio_part_timeout_s=5.0,
+    )
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+        manager = _tapo_manager(selector)
+        prepared = await manager.prepare_session(
+            TalkSessionPrepareRequest(session_id="tk_shutdown")
+        )
+
+        # When: The source/runtime shuts down before the WebSocket stream opens
+        await manager.shutdown()
+        await _wait_for_closed_connection(server)
+
+        # Then: The prepared camera stream is released without waiting for server timeout
+        assert prepared.accepted is True
         assert server.audio_parts == []
         assert server.closed_connections >= 1
     finally:
@@ -607,7 +643,9 @@ async def test_auto_selects_tapo_after_onvif_is_unsupported() -> None:
         assert selector.backend == TAPO_LOCAL_BACKEND
         assert selector.selected_supported_codecs == ["PCMA/8000"]
         assert calls == ["onvif:probe"]
-        assert len(server.requests) == 2
+        assert len(server.requests) == 1
+        assert "authorization" not in server.requests[0].headers
+        assert server.setup_parts == []
     finally:
         await server.stop()
 
@@ -644,9 +682,10 @@ async def test_auto_keeps_supported_onvif_ahead_of_tapo_config() -> None:
     assert calls == ["onvif:probe"]
 
 
-def test_tapo_credential_falls_back_to_available_md5_env() -> None:
-    """Tapo credential selection should try another configured hash env if preferred is unset."""
-    # Given: SHA256 is preferred but unset while an MD5 hash env is configured
+@pytest.mark.asyncio
+async def test_tapo_credential_missing_preferred_sha_env_reports_config_error() -> None:
+    """Missing preferred SHA256 hash env should not silently fall back to MD5."""
+    # Given: SHA256 is preferred and unset while an MD5 hash env is configured
     server = FakeTapoServer(hash_kind="md5", credential_hash=_MD5)
     talk = CameraTalkConfig(
         backend=TAPO_LOCAL_BACKEND,
@@ -660,14 +699,19 @@ def test_tapo_credential_falls_back_to_available_md5_env() -> None:
         },
     )
 
-    # When: Building the explicit backend for static config validation
+    # When: Probing through the explicit backend
     selector = TalkBackendSelector(
         registry=build_default_talk_backend_registry(),
         context=_context(talk, env={"OFFICE_TAPO_MD5": _MD5}),
     )
+    probe = await selector.probe()
 
-    # Then: The backend is selectable instead of failing on the missing preferred env
-    assert selector.supported_codecs == ["PCMA/8000"]
+    # Then: The preferred missing env is surfaced as a config error
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert (
+        probe.message == "Required Tapo local environment variable is not set: OFFICE_TAPO_SHA256"
+    )
 
 
 @pytest.mark.asyncio

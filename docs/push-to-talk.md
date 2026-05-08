@@ -173,9 +173,12 @@ supplied explicitly. When `username_env`, `password_sha256_env`, or
 are reported as config errors. Password env vars must contain the hex password
 hash expected by the local Tapo Digest challenge, not the raw password.
 `password_sha256_env` is preferred; `password_md5_env` is a fallback for older
-challenges. HomeSec normalizes hash case and never returns or logs the hash
-value. Explicit overrides are useful when the Tapo local endpoint uses a
-different password from RTSP:
+challenges when SHA256 material is not configured. If the camera asks for a
+configured hash type and that env var is missing, HomeSec reports
+`talk_config_error` instead of silently trying another hash type. HomeSec
+normalizes hash case and never returns or logs the hash value. Explicit
+overrides are useful when the Tapo local endpoint uses a different password from
+RTSP:
 
 ```yaml
 cameras:
@@ -238,6 +241,15 @@ another low-risk local signal. Current RTSP source construction does not populat
 Tapo camera fingerprints, so the practical `tapo_local` auto path requires
 `cameras[].talk.backends.tapo_local` config. It must not send credentials to an
 unknown local service as part of detection.
+
+Normal status/capability checks for `tapo_local` are intentionally passive:
+HomeSec opens the local `/stream` endpoint only far enough to verify a
+Tapo-looking Digest challenge and credential configuration, then closes the
+socket without sending an Authorization header or talk setup request. Credentials
+are sent only during prepare/open, when a user actually starts push-to-talk.
+Tapo hosts must be private IP addresses, loopback/link-local addresses, or local
+hostnames such as `.local`, `.lan`, `.home`, `.home.arpa`, or single-label LAN
+names.
 
 Auto backend selection is sticky for the lifetime of the source instance after a
 backend is selected. A runtime reload or source rebuild re-runs discovery. This
@@ -336,7 +348,7 @@ ONVIF and Tapo backends:
 
 - register a `TalkBackendRegistration` with a strict Pydantic config model;
 - provide a safe local detector when auto selection is appropriate;
-- implement `probe()` for capability, codec, and auth diagnostics;
+- implement passive `probe()` behavior for status/capability diagnostics;
 - implement `open_session()` and return a `TalkBackendSession`;
 - write browser PCM frames through `TalkSession.write_pcm_frame()`;
 - expose selected backend and selected codec diagnostics without leaking secrets.

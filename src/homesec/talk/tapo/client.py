@@ -116,6 +116,42 @@ class TapoLocalClient:
         await _close_writer_best_effort(self.writer, timeout_s=self.io_timeout_s)
 
 
+async def probe_tapo_local_endpoint(
+    config: TapoLocalTalkConfig,
+    context: TalkBackendContext,
+) -> None:
+    """Probe the local Tapo stream endpoint without sending credentials or setup."""
+    host = resolve_tapo_host(config, context)
+    port = config.port
+    connect_timeout_s = config.connect_timeout_s or context.source_connect_timeout_s
+    io_timeout_s = config.io_timeout_s or context.source_io_timeout_s
+    if connect_timeout_s <= 0:
+        connect_timeout_s = _DEFAULT_CONNECT_TIMEOUT_S
+    if io_timeout_s <= 0:
+        io_timeout_s = _DEFAULT_IO_TIMEOUT_S
+
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(host, port),
+        timeout=connect_timeout_s,
+    )
+    try:
+        challenge = await _request_digest_challenge(
+            reader,
+            writer,
+            host=host,
+            port=port,
+            io_timeout_s=io_timeout_s,
+        )
+        credential = resolve_tapo_credential(
+            config,
+            context,
+            preferred_hash_kind=challenge.preferred_hash_kind,
+        )
+        _validate_digest_challenge_for_auth(challenge, credential)
+    finally:
+        await _close_writer_best_effort(writer, timeout_s=io_timeout_s)
+
+
 async def open_tapo_local_client(
     config: TapoLocalTalkConfig,
     context: TalkBackendContext,
@@ -205,6 +241,10 @@ async def _request_digest_challenge(
     if challenge.scheme != "digest":
         raise TapoUnsupportedEndpointError(
             "Tapo local endpoint requires unsupported authentication"
+        )
+    if not _is_tapo_digest_challenge(challenge):
+        raise TapoUnsupportedEndpointError(
+            "Tapo local endpoint did not provide a Tapo Digest challenge"
         )
     return challenge
 
@@ -316,7 +356,7 @@ async def _read_http_response(
 ) -> TapoHTTPResponse:
     try:
         head = await asyncio.wait_for(reader.readuntil(_HEADER_SEPARATOR), timeout=io_timeout_s)
-    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError) as exc:
         raise TapoProtocolError("Malformed Tapo local HTTP response") from exc
     text = head.decode("iso-8859-1")
     lines = text.split(_CRLF)
@@ -384,6 +424,31 @@ def _is_json_content_type(content_type: str | None) -> bool:
         return False
     media_type = content_type.split(";", maxsplit=1)[0].strip().lower()
     return media_type == "application/json"
+
+
+def _is_tapo_digest_challenge(challenge: TapoDigestChallenge) -> bool:
+    realm = (challenge.realm or "").lower()
+    if "tapo" in realm:
+        return True
+    return challenge.encrypt_type == "3"
+
+
+def _validate_digest_challenge_for_auth(
+    challenge: TapoDigestChallenge,
+    credential: TapoCredential,
+) -> None:
+    try:
+        build_digest_authorization_header(
+            challenge=challenge,
+            method="POST",
+            uri=_STREAM_URI,
+            username=credential.username,
+            password_material=credential.password_hash,
+            nonce_count=1,
+            cnonce="homesec-probe",
+        )
+    except TapoDigestError as exc:
+        raise TapoProtocolError("Tapo local Digest challenge is not supported") from exc
 
 
 def _parse_content_length(value: str | None) -> int:

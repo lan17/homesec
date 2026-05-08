@@ -37,6 +37,7 @@ class FakeTapoServer:
     hash_kind: Literal["sha256", "md5"] = "sha256"
     username: str = "admin"
     credential_hash: str = "A" * 64
+    challenge_realm: str = "tapo"
     session_id: str = "tapo-session-1"
     reject_auth: bool = False
     unsupported_endpoint: bool = False
@@ -190,7 +191,7 @@ class FakeTapoServer:
         )
 
     def _challenge_header(self) -> str:
-        parts = ['Digest realm="tapo"', 'nonce="fake-nonce"']
+        parts = [f'Digest realm="{self.challenge_realm}"', 'nonce="fake-nonce"']
         if self.challenge_qop is not None:
             parts.append(f'qop="{self.challenge_qop}"')
         if self.hash_kind == "sha256":

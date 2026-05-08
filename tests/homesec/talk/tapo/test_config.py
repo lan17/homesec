@@ -130,6 +130,45 @@ def test_tapo_host_prefers_source_host_before_parsing_source_uri() -> None:
     assert host == "camera.local"
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "10.1.2.3",
+        "172.16.0.2",
+        "192.168.1.50",
+        "127.0.0.1",
+        "camera.local",
+        "camera.lan",
+        "camera",
+    ],
+)
+def test_tapo_host_accepts_private_addresses_and_local_names(host: str) -> None:
+    """Tapo host resolution should accept LAN IPs and local DNS names."""
+    # Given: A Tapo config with a private/local endpoint host
+    config = TapoLocalTalkConfig(host=host, password_sha256_env="OFFICE_SHA")
+
+    # When: Resolving the Tapo endpoint host
+    resolved = resolve_tapo_host(config, _context())
+
+    # Then: The host is accepted for local-only Tapo access
+    assert resolved == host
+
+
+@pytest.mark.parametrize("host", ["8.8.8.8", "camera.example.com", "0.0.0.0"])
+def test_tapo_host_rejects_public_or_unspecified_hosts(host: str) -> None:
+    """Tapo host resolution should reject hosts outside the local access policy."""
+    # Given: A Tapo config pointing at a non-local endpoint
+    config = TapoLocalTalkConfig(host=host, password_sha256_env="OFFICE_SHA")
+
+    # When: Resolving the Tapo endpoint host
+    # Then: The config fails before credentials can be sent to that host
+    with pytest.raises(TalkBackendConfigError) as exc_info:
+        resolve_tapo_host(config, _context())
+    assert exc_info.value.public_message == (
+        "Tapo local backend host must be a private IP address or local hostname"
+    )
+
+
 def test_tapo_host_missing_from_config_and_source_uri_reports_safe_error() -> None:
     """Tapo host resolution should fail safely when no host is available."""
     # Given: No explicit Tapo host and no source URI host

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from typing import Literal
@@ -14,6 +15,7 @@ from homesec.talk.backends import TalkBackendConfigError, TalkBackendContext
 
 _SAFE_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _HEX_PATTERN = re.compile(r"^[A-F0-9]+$")
+_LOCAL_HOST_SUFFIXES = (".local", ".localdomain", ".lan", ".home", ".home.arpa")
 
 
 class TapoLocalTalkConfig(BaseModel):
@@ -78,15 +80,15 @@ class TapoCredential:
 def resolve_tapo_host(config: TapoLocalTalkConfig, context: TalkBackendContext) -> str:
     """Resolve the Tapo LAN host from backend config or source URI context."""
     if config.host:
-        return config.host
+        return _validate_local_tapo_host(config.host)
 
     if context.source_host:
-        return context.source_host
+        return _validate_local_tapo_host(context.source_host)
 
     for uri in (context.resolved_source_uri, context.source_uri):
         host = _host_from_uri(uri)
         if host:
-            return host
+            return _validate_local_tapo_host(host)
 
     raise TalkBackendConfigError("Tapo local backend requires host or source URI host")
 
@@ -99,26 +101,19 @@ def resolve_tapo_credential(
 ) -> TapoCredential:
     """Resolve Tapo credential material from env vars or source URI credentials."""
     username = _resolve_username(config, context)
-    env_order = _credential_env_order(config, preferred_hash_kind=preferred_hash_kind)
-    if env_order:
-        missing_env_names: list[str] = []
-        for hash_kind, env_name in env_order:
-            raw_value = context.env_value(env_name)
-            if raw_value is None or raw_value.strip() == "":
-                missing_env_names.append(env_name)
-                continue
-            normalized = raw_value.strip().upper()
-            _validate_hash_shape(normalized, env_name=env_name, hash_kind=hash_kind)
-            return TapoCredential(
-                username=username,
-                password_hash=normalized,
-                hash_kind=hash_kind,
+    configured_envs = _configured_credential_envs(config)
+    if configured_envs:
+        preferred_env = configured_envs.get(preferred_hash_kind)
+        if preferred_env is not None:
+            return _credential_from_env(
+                username,
+                preferred_env,
+                preferred_hash_kind,
+                context,
             )
 
-        if missing_env_names:
-            raise TalkBackendConfigError(
-                f"Required Tapo local environment variable is not set: {missing_env_names[0]}"
-            )
+        for hash_kind, env_name in configured_envs.items():
+            return _credential_from_env(username, env_name, hash_kind, context)
 
     source_password = _source_uri_password(context)
     if source_password:
@@ -147,24 +142,60 @@ def _resolve_username(config: TapoLocalTalkConfig, context: TalkBackendContext) 
     return username.strip()
 
 
-def _credential_env_order(
+def _configured_credential_envs(
     config: TapoLocalTalkConfig,
-    *,
-    preferred_hash_kind: Literal["sha256", "md5"],
-) -> list[tuple[Literal["sha256", "md5"], str]]:
+) -> dict[Literal["sha256", "md5"], str]:
     configured: dict[Literal["sha256", "md5"], str] = {}
     if config.password_sha256_env is not None:
         configured["sha256"] = config.password_sha256_env
     if config.password_md5_env is not None:
         configured["md5"] = config.password_md5_env
+    return configured
 
-    ordered: list[tuple[Literal["sha256", "md5"], str]] = []
-    if preferred_hash_kind in configured:
-        ordered.append((preferred_hash_kind, configured[preferred_hash_kind]))
-    for hash_kind in ("sha256", "md5"):
-        if hash_kind in configured and hash_kind != preferred_hash_kind:
-            ordered.append((hash_kind, configured[hash_kind]))
-    return ordered
+
+def _credential_from_env(
+    username: str,
+    env_name: str,
+    hash_kind: Literal["sha256", "md5"],
+    context: TalkBackendContext,
+) -> TapoCredential:
+    raw_value = context.env_value(env_name)
+    if raw_value is None or raw_value.strip() == "":
+        raise TalkBackendConfigError(
+            f"Required Tapo local environment variable is not set: {env_name}"
+        )
+    normalized = raw_value.strip().upper()
+    _validate_hash_shape(normalized, env_name=env_name, hash_kind=hash_kind)
+    return TapoCredential(
+        username=username,
+        password_hash=normalized,
+        hash_kind=hash_kind,
+    )
+
+
+def _validate_local_tapo_host(host: str) -> str:
+    candidate = host.strip()
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        lowered = candidate.rstrip(".").lower()
+        if lowered == "localhost" or "." not in lowered or lowered.endswith(_LOCAL_HOST_SUFFIXES):
+            return host
+        raise TalkBackendConfigError(
+            "Tapo local backend host must be a private IP address or local hostname"
+        ) from None
+
+    if address.is_unspecified or address.is_multicast:
+        raise TalkBackendConfigError(
+            "Tapo local backend host must be a private IP address or local hostname"
+        )
+    if address.is_private or address.is_loopback or address.is_link_local:
+        return host
+    raise TalkBackendConfigError(
+        "Tapo local backend host must be a private IP address or local hostname"
+    )
 
 
 def _validate_hash_shape(

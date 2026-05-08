@@ -30,6 +30,7 @@ from homesec.talk.tapo.client import (
     TapoLocalClient,
     TapoUnsupportedEndpointError,
     open_tapo_local_client,
+    probe_tapo_local_endpoint,
 )
 from homesec.talk.tapo.config import (
     TapoLocalTalkConfig,
@@ -69,12 +70,21 @@ class TapoLocalTalkBackend:
         return [TAPO_LOCAL_CODEC]
 
     async def probe(self) -> TalkCapabilityProbeResult:
-        """Probe the Tapo local talk endpoint without retaining the connection."""
-        return await self._probe(keep_for_open=False)
+        """Probe the Tapo local endpoint without authenticating or starting talk."""
+        await self.clear_prepared_probe()
+        try:
+            await probe_tapo_local_endpoint(self.config, self.context)
+        except TalkBackendConfigError as exc:
+            return _config_error_result(exc.public_message)
+        except TapoUnsupportedEndpointError:
+            return _unsupported_endpoint_result()
+        except (TapoClientError, asyncio.TimeoutError, TimeoutError, EOFError, OSError):
+            return _protocol_error_result()
+        return _supported_result()
 
     async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
         """Probe Tapo capability while retaining setup state for immediate open."""
-        return await self._probe(keep_for_open=True)
+        return await self._probe_for_session_open()
 
     async def clear_prepared_probe(self) -> None:
         """Clear a prepared Tapo stream client if the reservation is abandoned."""
@@ -131,7 +141,7 @@ class TapoLocalTalkBackend:
                 reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
             ) from exc
 
-    async def _probe(self, *, keep_for_open: bool) -> TalkCapabilityProbeResult:
+    async def _probe_for_session_open(self) -> TalkCapabilityProbeResult:
         await self.clear_prepared_probe()
         try:
             client = await self._connect_and_setup_talk()
@@ -144,10 +154,7 @@ class TapoLocalTalkBackend:
         except (TapoClientError, asyncio.TimeoutError, TimeoutError, EOFError, OSError):
             return _protocol_error_result()
 
-        if keep_for_open:
-            await self._replace_prepared_client(client)
-        else:
-            await client.close()
+        await self._replace_prepared_client(client)
         return _supported_result()
 
     async def _connect_and_setup_talk(self) -> TapoLocalClient:

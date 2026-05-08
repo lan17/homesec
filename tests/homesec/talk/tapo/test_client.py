@@ -19,6 +19,7 @@ from homesec.talk.tapo.client import (
     _close_writer_best_effort,
     _read_http_response,
     open_tapo_local_client,
+    probe_tapo_local_endpoint,
 )
 from homesec.talk.tapo.config import TapoLocalTalkConfig
 from homesec.talk.tapo.multipart import (
@@ -75,6 +76,62 @@ async def test_tapo_client_authenticates_sha256_mode_and_parses_session_id() -> 
             "seq": 3,
             "type": "request",
         }
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_endpoint_probe_does_not_send_credentials_or_setup() -> None:
+    """Passive Tapo probes should not authenticate or start the talk stream."""
+    # Given: A fake Tapo endpoint requiring Digest authentication
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        audio_part_timeout_s=5.0,
+    )
+    await server.start()
+    try:
+        config = TapoLocalTalkConfig(
+            host=server.host,
+            port=server.port,
+            password_sha256_env="OFFICE_TAPO_SHA256",
+        )
+
+        # When: Probing the endpoint for status/capability
+        await probe_tapo_local_endpoint(config, _context({"OFFICE_TAPO_SHA256": _SHA256}))
+
+        # Then: Only an unauthenticated challenge request is sent
+        assert len(server.requests) == 1
+        assert "authorization" not in server.requests[0].headers
+        assert server.setup_parts == []
+        assert server.audio_parts == []
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_client_rejects_generic_digest_challenge_before_auth() -> None:
+    """Tapo clients should not send credential responses to generic Digest endpoints."""
+    # Given: A local endpoint that speaks Digest but does not look like Tapo
+    server = FakeTapoServer(
+        hash_kind="md5",
+        challenge_realm="generic-camera",
+        credential_hash=_MD5,
+    )
+    await server.start()
+    try:
+        config = TapoLocalTalkConfig(
+            host=server.host,
+            port=server.port,
+            password_md5_env="OFFICE_TAPO_MD5",
+        )
+
+        # When/Then: Opening rejects the endpoint before sending Authorization
+        with pytest.raises(TapoUnsupportedEndpointError):
+            await open_tapo_local_client(config, _context({"OFFICE_TAPO_MD5": _MD5}))
+        assert len(server.requests) == 1
+        assert "authorization" not in server.requests[0].headers
+        assert server.setup_parts == []
     finally:
         await server.stop()
 
@@ -361,6 +418,23 @@ async def test_multipart_parser_rejects_oversized_preamble() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multipart_parser_wraps_stream_reader_line_limit_errors() -> None:
+    """Multipart parser should map oversized stream lines to stable protocol errors."""
+    # Given: A stream reader with a line longer than its configured read limit
+    reader = asyncio.StreamReader(limit=16)
+    reader.feed_data(b"x" * 100 + b"\n")
+
+    # When/Then: Reading a part raises the Tapo multipart error type
+    with pytest.raises(TapoMultipartError):
+        await read_multipart_part(
+            reader,
+            boundary="--client-stream-boundary--",
+            max_payload_bytes=64 * 1024,
+            timeout_s=1.0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_http_response_parser_rejects_malformed_response() -> None:
     """HTTP response parser should reject malformed status lines safely."""
     # Given: A stream containing invalid HTTP response bytes
@@ -368,6 +442,18 @@ async def test_http_response_parser_rejects_malformed_response() -> None:
     reader.feed_data(b"not-http\r\n\r\n")
 
     # When/Then: Parsing the response fails with a safe protocol error
+    with pytest.raises(TapoProtocolError, match="Malformed"):
+        await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
+
+
+@pytest.mark.asyncio
+async def test_http_response_parser_wraps_stream_reader_header_limit_errors() -> None:
+    """HTTP parser should map oversized header blocks to stable protocol errors."""
+    # Given: A stream reader whose header block exceeds its read limit
+    reader = asyncio.StreamReader(limit=16)
+    reader.feed_data(b"HTTP/1.1 401 Unauthorized\r\n" + b"x" * 100 + b"\r\n\r\n")
+
+    # When/Then: Parsing fails with the stable Tapo protocol error type
     with pytest.raises(TapoProtocolError, match="Malformed"):
         await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
 

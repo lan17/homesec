@@ -57,13 +57,14 @@ def test_build_digest_authorization_header_matches_expected_response() -> None:
         cnonce="client-nonce",
     )
 
-    # Then: The header is parseable and validates against the same challenge
+    # Then: The header has the independently verified Digest response vector
     values = parse_digest_authorization(header)
     assert values["username"] == "admin"
     assert values["uri"] == "/stream"
     assert values["qop"] == "auth"
     assert values["nc"] == "00000001"
     assert values["cnonce"] == "client-nonce"
+    assert values["response"] == "ff6e38b21667d76a6346160d47069ae0"
     assert digest_authorization_matches(
         authorization_header=header,
         challenge=challenge,
