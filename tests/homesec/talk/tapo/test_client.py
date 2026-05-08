@@ -310,6 +310,31 @@ async def test_tapo_client_rejects_missing_setup_session_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tapo_client_rejects_malformed_response_boundary_as_protocol_error() -> None:
+    """Tapo client should reject malformed multipart boundaries before setup parsing."""
+    # Given: A fake endpoint that authenticates but returns an invalid boundary
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        response_boundary="bad boundary",
+    )
+    await server.start()
+    try:
+        config = TapoLocalTalkConfig(
+            host=server.host,
+            port=server.port,
+            password_sha256_env="OFFICE_TAPO_SHA256",
+        )
+
+        # When: Opening the local Tapo client
+        # Then: The malformed boundary maps to a stable protocol error
+        with pytest.raises(TapoProtocolError, match="multipart boundary"):
+            await open_tapo_local_client(config, _context({"OFFICE_TAPO_SHA256": _SHA256}))
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_tapo_client_writes_audio_mp2t_multipart_chunk() -> None:
     """Tapo client should write audio/mp2t chunks with the negotiated session id."""
     # Given: An authenticated Tapo client and fake endpoint
@@ -527,9 +552,15 @@ async def test_http_response_parser_rejects_invalid_content_length(
 
 def test_tapo_http_helpers_parse_boundaries_and_json_content_types() -> None:
     """Tapo HTTP helpers should parse common content-type variants."""
-    # Given/When/Then: Multipart boundaries can be quoted or absent
+    # Given/When/Then: Multipart boundaries can be quoted, absent, or malformed
     assert tapo_client._boundary_from_content_type('multipart/mixed; boundary="abc"') == "abc"
     assert tapo_client._boundary_from_content_type("multipart/mixed; boundary=abc") == "abc"
+    assert (
+        tapo_client._boundary_from_content_type("multipart/mixed; boundary=client:stream_1")
+        == "client:stream_1"
+    )
+    assert tapo_client._boundary_from_content_type("multipart/mixed; boundary=bad☃") is None
+    assert tapo_client._boundary_from_content_type("multipart/mixed; boundary=") is None
     assert tapo_client._boundary_from_content_type("multipart/mixed") is None
     assert tapo_client._boundary_from_content_type(None) is None
 

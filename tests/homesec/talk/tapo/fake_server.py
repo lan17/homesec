@@ -45,6 +45,7 @@ class FakeTapoServer:
     malformed_setup_json: bool = False
     malformed_setup_multipart: bool = False
     setup_content_type: str = "application/json"
+    response_boundary: str = _DEVICE_BOUNDARY
     challenge_qop: str | None = "auth"
     audio_part_timeout_s: float = 0.5
     requests: list[FakeTapoHTTPRequest] = field(default_factory=list)
@@ -136,7 +137,7 @@ class FakeTapoServer:
             writer.write(
                 _http_response(
                     status=200,
-                    headers={"Content-Type": f"multipart/mixed; boundary={_DEVICE_BOUNDARY}"},
+                    headers={"Content-Type": f"multipart/mixed; boundary={self.response_boundary}"},
                 )
             )
             await writer.drain()

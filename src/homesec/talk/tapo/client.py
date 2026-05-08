@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ _MAX_SETUP_RESPONSE_BYTES = 64 * 1024
 _MAX_HTTP_RESPONSE_BODY_BYTES = 64 * 1024
 _DEFAULT_CONNECT_TIMEOUT_S = 5.0
 _DEFAULT_IO_TIMEOUT_S = 5.0
+_MULTIPART_BOUNDARY_PATTERN = re.compile(r"^[A-Za-z0-9'()+_,./:=?-]{1,70}$")
 
 
 class TapoClientError(RuntimeError):
@@ -415,7 +417,10 @@ def _boundary_from_content_type(content_type: str | None) -> str | None:
     for part in content_type.split(";"):
         name, separator, value = part.strip().partition("=")
         if separator and name.lower() == "boundary":
-            return value.strip().strip('"')
+            boundary = value.strip().strip('"')
+            if _MULTIPART_BOUNDARY_PATTERN.fullmatch(boundary) is None:
+                return None
+            return boundary
     return None
 
 
