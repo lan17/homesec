@@ -12,6 +12,9 @@ DEVICE_BOUNDARY = "--device-stream-boundary--"
 DEVICE_PART_PREFIX = "--" + DEVICE_BOUNDARY
 
 _CRLF = b"\r\n"
+_MAX_PREAMBLE_BYTES = 8 * 1024
+_MAX_HEADER_BYTES = 16 * 1024
+_MAX_HEADER_LINE_BYTES = 4 * 1024
 
 
 class TapoMultipartError(RuntimeError):
@@ -54,11 +57,34 @@ async def read_multipart_part(
     """Read one Content-Length bounded multipart part."""
     if max_payload_bytes < 0:
         raise ValueError("max_payload_bytes must be non-negative")
+    try:
+        async with asyncio.timeout(timeout_s):
+            return await _read_multipart_part(
+                reader,
+                boundary=boundary,
+                max_payload_bytes=max_payload_bytes,
+            )
+    except TimeoutError as exc:
+        raise TapoMultipartError("Tapo multipart read timed out") from exc
+
+
+async def _read_multipart_part(
+    reader: asyncio.StreamReader,
+    *,
+    boundary: str,
+    max_payload_bytes: int,
+) -> TapoMultipartPart:
+    """Read one multipart part under the caller's total timeout."""
     delimiter = ("--" + boundary).encode("ascii")
     closing_delimiter = delimiter + b"--"
 
+    preamble_bytes = 0
     while True:
-        line = await _readline(reader, timeout_s=timeout_s)
+        line = await _readline(reader)
+        _validate_line_size(line)
+        preamble_bytes += len(line)
+        if preamble_bytes > _MAX_PREAMBLE_BYTES:
+            raise TapoMultipartError("Tapo multipart preamble exceeds configured limit")
         stripped = line.rstrip(b"\r\n")
         if stripped == delimiter:
             break
@@ -68,8 +94,13 @@ async def read_multipart_part(
             continue
 
     headers: dict[str, str] = {}
+    header_bytes = 0
     while True:
-        line = await _readline(reader, timeout_s=timeout_s)
+        line = await _readline(reader)
+        _validate_line_size(line)
+        header_bytes += len(line)
+        if header_bytes > _MAX_HEADER_BYTES:
+            raise TapoMultipartError("Tapo multipart headers exceed configured limit")
         if line in {b"\r\n", b"\n", b""}:
             break
         name, separator, value = line.decode("iso-8859-1").partition(":")
@@ -89,15 +120,23 @@ async def read_multipart_part(
     if content_length > max_payload_bytes:
         raise TapoMultipartError("Tapo multipart payload exceeds configured limit")
 
-    body = await asyncio.wait_for(reader.readexactly(content_length), timeout=timeout_s)
+    try:
+        body = await reader.readexactly(content_length)
+    except asyncio.IncompleteReadError as exc:
+        raise TapoMultipartError("Tapo multipart stream ended unexpectedly") from exc
     return TapoMultipartPart(headers=headers, body=body)
 
 
-async def _readline(reader: asyncio.StreamReader, *, timeout_s: float) -> bytes:
+async def _readline(reader: asyncio.StreamReader) -> bytes:
     try:
-        line = await asyncio.wait_for(reader.readline(), timeout=timeout_s)
-    except asyncio.IncompleteReadError as exc:
+        line = await reader.readline()
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
         raise TapoMultipartError("Tapo multipart stream ended unexpectedly") from exc
     if line == b"":
         raise TapoMultipartError("Tapo multipart stream ended unexpectedly")
     return line
+
+
+def _validate_line_size(line: bytes) -> None:
+    if len(line) > _MAX_HEADER_LINE_BYTES:
+        raise TapoMultipartError("Tapo multipart line exceeds configured limit")

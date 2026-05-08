@@ -11,16 +11,13 @@ from homesec.talk.tapo.digest import (
     digest_authorization_matches,
     parse_www_authenticate,
 )
-from homesec.talk.tapo.multipart import (
-    CLIENT_BOUNDARY,
-    DEVICE_BOUNDARY,
-    DEVICE_PART_PREFIX,
-    TapoMultipartPart,
-    multipart_part,
-    read_multipart_part,
-)
+from homesec.talk.tapo.multipart import TapoMultipartPart
 
 _HEADER_SEPARATOR = b"\r\n\r\n"
+_CLIENT_BOUNDARY = "--client-stream-boundary--"
+_CLIENT_DELIMITER = b"----client-stream-boundary--"
+_DEVICE_BOUNDARY = "--device-stream-boundary--"
+_DEVICE_DELIMITER = "----device-stream-boundary--"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,28 +119,21 @@ class FakeTapoServer:
             writer.write(
                 _http_response(
                     status=200,
-                    headers={"Content-Type": f"multipart/mixed; boundary={DEVICE_BOUNDARY}"},
+                    headers={"Content-Type": f"multipart/mixed; boundary={_DEVICE_BOUNDARY}"},
                 )
             )
             await writer.drain()
 
-            setup = await read_multipart_part(
-                reader,
-                boundary=CLIENT_BOUNDARY,
-                max_payload_bytes=64 * 1024,
-                timeout_s=2.0,
-            )
+            setup = await _read_client_part(reader, max_payload_bytes=64 * 1024)
             self.setup_parts.append(setup)
             writer.write(self._setup_response_part())
             await writer.drain()
 
             while True:
                 try:
-                    part = await read_multipart_part(
-                        reader,
-                        boundary=CLIENT_BOUNDARY,
-                        max_payload_bytes=1024 * 1024,
-                        timeout_s=0.5,
+                    part = await asyncio.wait_for(
+                        _read_client_part(reader, max_payload_bytes=1024 * 1024),
+                        timeout=0.5,
                     )
                 except (asyncio.TimeoutError, asyncio.IncompleteReadError):
                     break
@@ -202,10 +192,53 @@ class FakeTapoServer:
         else:
             body = f'{{"params":{{"session_id":"{self.session_id}"}}}}'.encode()
         return multipart_part(
-            DEVICE_PART_PREFIX,
+            _DEVICE_DELIMITER,
             {"Content-Type": self.setup_content_type},
             body,
         )
+
+
+async def _read_client_part(
+    reader: asyncio.StreamReader,
+    *,
+    max_payload_bytes: int,
+) -> TapoMultipartPart:
+    while True:
+        line = await reader.readline()
+        if line == b"":
+            raise asyncio.IncompleteReadError(line, None)
+        if line.rstrip(b"\r\n") == _CLIENT_DELIMITER:
+            break
+
+    headers: dict[str, str] = {}
+    while True:
+        line = await reader.readline()
+        if line in {b"\r\n", b"\n", b""}:
+            break
+        name, separator, value = line.decode("iso-8859-1").partition(":")
+        if separator:
+            headers[name.strip().lower()] = value.strip()
+
+    content_length = int(headers["content-length"])
+    if content_length > max_payload_bytes:
+        raise ValueError("fake Tapo client part exceeds limit")
+    body = await reader.readexactly(content_length)
+    trailer = await reader.readexactly(2)
+    if trailer != b"\r\n":
+        raise ValueError("fake Tapo client part missing trailing CRLF")
+    return TapoMultipartPart(headers=headers, body=body)
+
+
+def multipart_part(
+    boundary_prefix: str,
+    headers: dict[str, str],
+    body: bytes,
+) -> bytes:
+    rendered_headers = dict(headers)
+    rendered_headers.setdefault("Content-Length", str(len(body)))
+    lines = [boundary_prefix]
+    lines.extend(f"{name}: {value}" for name, value in rendered_headers.items())
+    return ("\r\n".join(lines) + "\r\n\r\n").encode("iso-8859-1") + body + b"\r\n"
 
 
 def _http_response(

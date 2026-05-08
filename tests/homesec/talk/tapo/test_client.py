@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import cast
 
 import pytest
 
@@ -11,6 +12,7 @@ from homesec.models.config import CameraTalkConfig, TalkConfig
 from homesec.talk.backends import TalkBackendConfigError, TalkBackendContext
 from homesec.talk.tapo.client import (
     TapoAuthError,
+    TapoLocalClient,
     TapoProtocolError,
     _read_http_response,
     open_tapo_local_client,
@@ -61,6 +63,7 @@ async def test_tapo_client_authenticates_sha256_mode_and_parses_session_id() -> 
 
         # Then: The client authenticated, sent setup JSON, and captured session_id
         assert client.tapo_session_id == server.session_id
+        assert server.session_id not in repr(client)
         assert len(server.requests) == 2
         assert server.requests[1].headers["authorization"].startswith("Digest ")
         setup = json.loads(server.setup_parts[0].body.decode("utf-8"))
@@ -69,6 +72,31 @@ async def test_tapo_client_authenticates_sha256_mode_and_parses_session_id() -> 
             "seq": 3,
             "type": "request",
         }
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_client_rejects_unsupported_digest_qop() -> None:
+    """Tapo client should fail closed when Digest qop=auth is unavailable."""
+    # Given: A fake endpoint that only advertises an unsupported qop
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        challenge_qop="auth-int",
+    )
+    await server.start()
+    try:
+        config = TapoLocalTalkConfig(
+            host=server.host,
+            port=server.port,
+            password_sha256_env="OFFICE_TAPO_SHA256",
+        )
+
+        # When/Then: Opening fails without sending a legacy no-qop Digest response
+        with pytest.raises(TapoProtocolError, match="Digest challenge"):
+            await open_tapo_local_client(config, _context({"OFFICE_TAPO_SHA256": _SHA256}))
+        assert len(server.requests) == 1
     finally:
         await server.stop()
 
@@ -228,6 +256,30 @@ async def test_tapo_client_writes_audio_mp2t_multipart_chunk() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tapo_client_closes_after_audio_write_failure() -> None:
+    """Audio write failures should close the client stream before surfacing."""
+    # Given: A connected client whose writer fails during drain
+    writer = _FailingDrainWriter()
+    client = TapoLocalClient(
+        host="127.0.0.1",
+        port=8800,
+        io_timeout_s=1.0,
+        reader=asyncio.StreamReader(),
+        writer=cast(asyncio.StreamWriter, writer),
+        tapo_session_id="session-token",
+    )
+
+    # When: Writing an audio chunk fails
+    # Then: The stream is closed and future writes fail as closed-client errors
+    with pytest.raises(ConnectionResetError):
+        await client.write_audio_mp2t(b"G" * 188)
+    assert writer.closed is True
+    assert writer.wait_closed_called is True
+    with pytest.raises(TapoProtocolError, match="closed"):
+        await client.write_audio_mp2t(b"G" * 188)
+
+
+@pytest.mark.asyncio
 async def test_multipart_parser_rejects_oversized_payload() -> None:
     """Multipart parser should reject parts over the configured payload limit."""
     # Given: A multipart part whose content length exceeds the caller limit
@@ -251,6 +303,23 @@ async def test_multipart_parser_rejects_oversized_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multipart_parser_rejects_oversized_preamble() -> None:
+    """Multipart parser should bound preamble/header scanning before payload reads."""
+    # Given: A stream that keeps sending non-boundary preamble lines
+    reader = asyncio.StreamReader()
+    reader.feed_data((b"x" * 1024 + b"\r\n") * 9)
+
+    # When/Then: Reading a part fails once the preamble exceeds the configured limit
+    with pytest.raises(TapoMultipartError, match="preamble"):
+        await read_multipart_part(
+            reader,
+            boundary="--client-stream-boundary--",
+            max_payload_bytes=64 * 1024,
+            timeout_s=1.0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_http_response_parser_rejects_malformed_response() -> None:
     """HTTP response parser should reject malformed status lines safely."""
     # Given: A stream containing invalid HTTP response bytes
@@ -262,9 +331,40 @@ async def test_http_response_parser_rejects_malformed_response() -> None:
         await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
 
 
+@pytest.mark.asyncio
+async def test_http_response_parser_rejects_oversized_body_before_read() -> None:
+    """HTTP response parser should cap optional response body reads."""
+    # Given: A response that advertises a body larger than the client limit
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 65537\r\n\r\n")
+
+    # When/Then: Parsing fails without attempting an unbounded read
+    with pytest.raises(TapoProtocolError, match="body exceeds"):
+        await _read_http_response(reader, io_timeout_s=1.0, read_body=True)
+
+
 async def _wait_for_audio_part(server: FakeTapoServer) -> None:
     for _ in range(20):
         if server.audio_parts:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("fake Tapo server did not receive an audio part")
+
+
+class _FailingDrainWriter:
+    def __init__(self) -> None:
+        self.closed = False
+        self.wait_closed_called = False
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        raise ConnectionResetError("simulated drain failure")
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        self.wait_closed_called = True

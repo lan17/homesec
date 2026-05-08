@@ -117,6 +117,22 @@ def test_build_digest_authorization_rejects_non_digest_challenge() -> None:
         )
 
 
+def test_build_digest_authorization_rejects_unsupported_qop() -> None:
+    """Digest authorization should fail closed for unsupported qop challenges."""
+    # Given: A Digest challenge that does not offer qop=auth
+    challenge = parse_www_authenticate('Digest realm="tapo", nonce="abc", qop="auth-int"')
+
+    # When/Then: Building a Tapo authorization header fails safely
+    with pytest.raises(TapoDigestError, match="qop"):
+        build_digest_authorization_header(
+            challenge=challenge,
+            method="POST",
+            uri="/stream",
+            username="admin",
+            password_material="A" * 64,
+        )
+
+
 def test_digest_mismatch_does_not_validate() -> None:
     """Digest validation should reject wrong credential material."""
     # Given: A header generated with one credential hash

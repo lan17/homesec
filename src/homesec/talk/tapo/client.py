@@ -32,6 +32,7 @@ _CRLF = "\r\n"
 _HEADER_SEPARATOR = b"\r\n\r\n"
 _STREAM_URI = "/stream"
 _MAX_SETUP_RESPONSE_BYTES = 64 * 1024
+_MAX_HTTP_RESPONSE_BODY_BYTES = 64 * 1024
 _DEFAULT_CONNECT_TIMEOUT_S = 5.0
 _DEFAULT_IO_TIMEOUT_S = 5.0
 
@@ -74,7 +75,7 @@ class TapoLocalClient:
     io_timeout_s: float
     reader: asyncio.StreamReader = field(repr=False)
     writer: asyncio.StreamWriter = field(repr=False)
-    tapo_session_id: str
+    tapo_session_id: str = field(repr=False)
     _write_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
 
@@ -94,16 +95,20 @@ class TapoLocalClient:
             payload,
         )
         async with self._write_lock:
-            self.writer.write(part)
-            await asyncio.wait_for(self.writer.drain(), timeout=self.io_timeout_s)
+            try:
+                self.writer.write(part)
+                await asyncio.wait_for(self.writer.drain(), timeout=self.io_timeout_s)
+            except BaseException:
+                self._closed = True
+                await _close_writer_best_effort(self.writer, timeout_s=self.io_timeout_s)
+                raise
 
     async def close(self) -> None:
         """Close the local stream connection."""
         if self._closed:
             return
         self._closed = True
-        self.writer.close()
-        await self.writer.wait_closed()
+        await _close_writer_best_effort(self.writer, timeout_s=self.io_timeout_s)
 
 
 async def open_tapo_local_client(
@@ -161,9 +166,8 @@ async def open_tapo_local_client(
             writer=writer,
             tapo_session_id=tapo_session_id,
         )
-    except Exception:
-        writer.close()
-        await writer.wait_closed()
+    except BaseException:
+        await _close_writer_best_effort(writer, timeout_s=io_timeout_s)
         raise
 
 
@@ -296,7 +300,10 @@ async def _read_http_response(
     io_timeout_s: float,
     read_body: bool,
 ) -> TapoHTTPResponse:
-    head = await asyncio.wait_for(reader.readuntil(_HEADER_SEPARATOR), timeout=io_timeout_s)
+    try:
+        head = await asyncio.wait_for(reader.readuntil(_HEADER_SEPARATOR), timeout=io_timeout_s)
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+        raise TapoProtocolError("Malformed Tapo local HTTP response") from exc
     text = head.decode("iso-8859-1")
     lines = text.split(_CRLF)
     if not lines or not lines[0].startswith("HTTP/"):
@@ -319,8 +326,16 @@ async def _read_http_response(
     body = b""
     if read_body:
         content_length = _parse_content_length(headers.get("content-length"))
+        if content_length > _MAX_HTTP_RESPONSE_BODY_BYTES:
+            raise TapoProtocolError("Tapo local HTTP response body exceeds configured limit")
         if content_length:
-            body = await asyncio.wait_for(reader.readexactly(content_length), timeout=io_timeout_s)
+            try:
+                body = await asyncio.wait_for(
+                    reader.readexactly(content_length),
+                    timeout=io_timeout_s,
+                )
+            except asyncio.IncompleteReadError as exc:
+                raise TapoProtocolError("Malformed Tapo local HTTP response body") from exc
     return TapoHTTPResponse(
         status_code=status_code,
         reason=parts[2].strip() if len(parts) > 2 else "",
@@ -367,3 +382,15 @@ def _parse_content_length(value: str | None) -> int:
     if content_length < 0:
         raise TapoProtocolError("Invalid Tapo local HTTP Content-Length")
     return content_length
+
+
+async def _close_writer_best_effort(
+    writer: asyncio.StreamWriter,
+    *,
+    timeout_s: float,
+) -> None:
+    writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=max(timeout_s, 0.1))
+    except BaseException:
+        pass

@@ -146,32 +146,37 @@ def digest_authorization_matches(
     qop = actual.get("qop")
     nc = actual.get("nc")
     cnonce = actual.get("cnonce")
-    if qop:
-        if nc is None or cnonce is None:
-            return False
-        try:
-            nonce_count = int(nc, 16)
-        except ValueError:
-            return False
-        if nonce_count <= 0:
-            return False
-        expected = build_digest_authorization_header(
-            challenge=challenge,
-            method=method,
-            uri=uri,
-            username=username,
-            password_material=password_material,
-            nonce_count=nonce_count,
-            cnonce=cnonce,
-        )
-    else:
-        expected = build_digest_authorization_header(
-            challenge=challenge,
-            method=method,
-            uri=uri,
-            username=username,
-            password_material=password_material,
-        )
+    try:
+        if qop is not None:
+            if qop != "auth":
+                return False
+            if nc is None or cnonce is None:
+                return False
+            try:
+                nonce_count = int(nc, 16)
+            except ValueError:
+                return False
+            if nonce_count <= 0:
+                return False
+            expected = build_digest_authorization_header(
+                challenge=challenge,
+                method=method,
+                uri=uri,
+                username=username,
+                password_material=password_material,
+                nonce_count=nonce_count,
+                cnonce=cnonce,
+            )
+        else:
+            expected = build_digest_authorization_header(
+                challenge=challenge,
+                method=method,
+                uri=uri,
+                username=username,
+                password_material=password_material,
+            )
+    except TapoDigestError:
+        return False
     return actual.get("response") == parse_digest_authorization(expected).get("response")
 
 
@@ -190,7 +195,9 @@ def _select_qop(qop_value: str | None) -> str | None:
     if qop_value is None:
         return None
     options = [item.strip().lower() for item in qop_value.split(",")]
-    return "auth" if "auth" in options else None
+    if "auth" in options:
+        return "auth"
+    raise TapoDigestError("Tapo Digest challenge uses an unsupported qop")
 
 
 def _md5_hex(value: str) -> str:
