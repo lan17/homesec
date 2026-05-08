@@ -38,10 +38,13 @@ class FakeTapoServer:
     credential_hash: str = "A" * 64
     session_id: str = "tapo-session-1"
     reject_auth: bool = False
+    unsupported_endpoint: bool = False
     omit_session_id: bool = False
     malformed_setup_json: bool = False
+    malformed_setup_multipart: bool = False
     setup_content_type: str = "application/json"
     challenge_qop: str | None = "auth"
+    audio_part_timeout_s: float = 0.5
     requests: list[FakeTapoHTTPRequest] = field(default_factory=list)
     setup_parts: list[TapoMultipartPart] = field(default_factory=list)
     audio_parts: list[TapoMultipartPart] = field(default_factory=list)
@@ -94,6 +97,10 @@ class FakeTapoServer:
             self._tasks.add(task)
         try:
             request = await self._read_request(reader)
+            if self.unsupported_endpoint:
+                writer.write(_http_response(status=200, body=b"not a tapo endpoint"))
+                await writer.drain()
+                return
             if not self._authorization_matches(request):
                 writer.write(
                     _http_response(
@@ -133,7 +140,7 @@ class FakeTapoServer:
                 try:
                     part = await asyncio.wait_for(
                         _read_client_part(reader, max_payload_bytes=1024 * 1024),
-                        timeout=0.5,
+                        timeout=self.audio_part_timeout_s,
                     )
                 except (asyncio.TimeoutError, asyncio.IncompleteReadError):
                     break
@@ -185,6 +192,15 @@ class FakeTapoServer:
         return parse_www_authenticate(self._challenge_header())
 
     def _setup_response_part(self) -> bytes:
+        if self.malformed_setup_multipart:
+            body = b'{"params":{"session_id":"broken"}}'
+            return (
+                f"{_DEVICE_DELIMITER}\r\nContent-Type: application/json\r\n\r\n".encode(
+                    "iso-8859-1"
+                )
+                + body
+                + b"\r\n"
+            )
         if self.malformed_setup_json:
             body = b"{"
         elif self.omit_session_id:

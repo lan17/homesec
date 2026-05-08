@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -37,8 +39,18 @@ from homesec.talk.tapo.config import (
 from homesec.talk.tapo.session import TAPO_LOCAL_CODEC, TapoLocalTalkSession
 
 TAPO_LOCAL_BACKEND = "tapo_local"
+_PREPARED_TAPO_CLIENT_REUSE_TTL_S = 10.0
 _TAPO_UNSUPPORTED_ENDPOINT = "Tapo local endpoint not detected"
 _TAPO_PROTOCOL_FAILED = "Tapo local talk protocol failed"
+
+
+@dataclass(slots=True)
+class _PreparedTapoClient:
+    """Recently probed Tapo client that can be reused by session open."""
+
+    client: TapoLocalClient
+    monotonic_time: float
+    cleanup_task: asyncio.Task[None] | None = None
 
 
 @dataclass(slots=True)
@@ -49,7 +61,7 @@ class TapoLocalTalkBackend:
     context: TalkBackendContext = field(repr=False)
     host: str
     name: str = TAPO_LOCAL_BACKEND
-    _prepared_client: TapoLocalClient | None = field(default=None, init=False, repr=False)
+    _prepared_client: _PreparedTapoClient | None = field(default=None, init=False, repr=False)
 
     @property
     def supported_codecs(self) -> list[str]:
@@ -66,15 +78,22 @@ class TapoLocalTalkBackend:
 
     async def clear_prepared_probe(self) -> None:
         """Clear a prepared Tapo stream client if the reservation is abandoned."""
-        client = self._prepared_client
+        prepared = self._prepared_client
         self._prepared_client = None
-        if client is not None:
-            await client.close()
+        if prepared is None:
+            return
+        if (
+            prepared.cleanup_task is not None
+            and prepared.cleanup_task is not asyncio.current_task()
+        ):
+            prepared.cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await prepared.cleanup_task
+        await prepared.client.close()
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkBackendSession:
         """Open a Tapo local talk session."""
-        client = self._prepared_client
-        self._prepared_client = None
+        client = await self._consume_prepared_client()
         try:
             if client is None:
                 client = await self._connect_and_setup_talk()
@@ -126,13 +145,45 @@ class TapoLocalTalkBackend:
             return _protocol_error_result()
 
         if keep_for_open:
-            self._prepared_client = client
+            await self._replace_prepared_client(client)
         else:
             await client.close()
         return _supported_result()
 
     async def _connect_and_setup_talk(self) -> TapoLocalClient:
         return await open_tapo_local_client(self.config, self.context)
+
+    async def _replace_prepared_client(self, client: TapoLocalClient) -> None:
+        await self.clear_prepared_probe()
+        prepared = _PreparedTapoClient(
+            client=client,
+            monotonic_time=time.monotonic(),
+        )
+        prepared.cleanup_task = asyncio.create_task(self._expire_prepared_client(prepared))
+        self._prepared_client = prepared
+
+    async def _consume_prepared_client(self) -> TapoLocalClient | None:
+        prepared = self._prepared_client
+        self._prepared_client = None
+        if prepared is None:
+            return None
+        if prepared.cleanup_task is not None:
+            prepared.cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await prepared.cleanup_task
+        if time.monotonic() - prepared.monotonic_time > _PREPARED_TAPO_CLIENT_REUSE_TTL_S:
+            await prepared.client.close()
+            return None
+        return prepared.client
+
+    async def _expire_prepared_client(self, prepared: _PreparedTapoClient) -> None:
+        try:
+            await asyncio.sleep(_PREPARED_TAPO_CLIENT_REUSE_TTL_S)
+            if self._prepared_client is prepared:
+                self._prepared_client = None
+                await prepared.client.close()
+        except asyncio.CancelledError:
+            raise
 
 
 def detect_tapo_local(context: TalkBackendContext) -> TalkBackendDetection:

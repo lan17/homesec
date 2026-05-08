@@ -14,6 +14,7 @@ from homesec.talk.tapo.client import (
     TapoAuthError,
     TapoLocalClient,
     TapoProtocolError,
+    _close_writer_best_effort,
     _read_http_response,
     open_tapo_local_client,
 )
@@ -280,6 +281,21 @@ async def test_tapo_client_closes_after_audio_write_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_writer_best_effort_preserves_cancellation() -> None:
+    """Best-effort Tapo close should not swallow task cancellation."""
+    # Given: A writer whose close wait is cancelled by the event loop
+    writer = _CancelledWaitClosedWriter()
+
+    # When/Then: The helper closes the writer but propagates cancellation
+    with pytest.raises(asyncio.CancelledError):
+        await _close_writer_best_effort(
+            cast(asyncio.StreamWriter, writer),
+            timeout_s=1.0,
+        )
+    assert writer.closed is True
+
+
+@pytest.mark.asyncio
 async def test_multipart_parser_rejects_oversized_payload() -> None:
     """Multipart parser should reject parts over the configured payload limit."""
     # Given: A multipart part whose content length exceeds the caller limit
@@ -368,3 +384,14 @@ class _FailingDrainWriter:
 
     async def wait_closed(self) -> None:
         self.wait_closed_called = True
+
+
+class _CancelledWaitClosedWriter:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        raise asyncio.CancelledError

@@ -24,6 +24,7 @@ from homesec.talk.tapo.digest import (
 from homesec.talk.tapo.multipart import (
     CLIENT_BOUNDARY,
     CLIENT_PART_PREFIX,
+    TapoMultipartError,
     multipart_part,
     read_multipart_part,
 )
@@ -266,12 +267,15 @@ async def _setup_talk(
     writer.write(part)
     await asyncio.wait_for(writer.drain(), timeout=io_timeout_s)
 
-    response = await read_multipart_part(
-        reader,
-        boundary=response_boundary,
-        max_payload_bytes=_MAX_SETUP_RESPONSE_BYTES,
-        timeout_s=io_timeout_s,
-    )
+    try:
+        response = await read_multipart_part(
+            reader,
+            boundary=response_boundary,
+            max_payload_bytes=_MAX_SETUP_RESPONSE_BYTES,
+            timeout_s=io_timeout_s,
+        )
+    except TapoMultipartError as exc:
+        raise TapoProtocolError("Tapo local talk setup multipart response failed") from exc
     if not _is_json_content_type(response.header("content-type")):
         raise TapoProtocolError("Tapo local talk setup returned a non-JSON response")
     try:
@@ -402,5 +406,7 @@ async def _close_writer_best_effort(
     writer.close()
     try:
         await asyncio.wait_for(writer.wait_closed(), timeout=max(timeout_s, 0.1))
-    except BaseException:
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         pass

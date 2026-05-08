@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
@@ -21,7 +22,10 @@ from homesec.sources.rtsp.talk.manager import TalkManager
 from homesec.talk.backends import TalkBackendContext, TalkBackendRegistration, TalkBackendRegistry
 from homesec.talk.registry import build_default_talk_backend_registry
 from homesec.talk.selector import TalkBackendSelector
+from homesec.talk.tapo import backend as tapo_backend
 from homesec.talk.tapo.backend import TAPO_LOCAL_BACKEND, tapo_local_talk_backend_registration
+from homesec.talk.tapo.client import TapoLocalClient, TapoProtocolError
+from homesec.talk.tapo.session import TapoLocalTalkSession
 
 from .fake_server import FakeTapoServer
 
@@ -292,6 +296,101 @@ async def test_tapo_backend_maps_protocol_failure_to_camera_backchannel_failed()
 
 
 @pytest.mark.asyncio
+async def test_tapo_backend_maps_malformed_multipart_to_camera_backchannel_failed() -> None:
+    """Malformed Tapo multipart setup should surface as camera backchannel failure."""
+    # Given: A fake Tapo endpoint that returns invalid multipart setup framing
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        malformed_setup_multipart=True,
+    )
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+        manager = _tapo_manager(selector)
+
+        # When: Preparing the session receives a malformed multipart setup response
+        prepared = await manager.prepare_session(
+            TalkSessionPrepareRequest(session_id="tk_multipart")
+        )
+
+        # Then: The backend returns the stable protocol failure reason
+        assert prepared.accepted is False
+        assert prepared.refusal_reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+        assert prepared.message == "Tapo local talk protocol failed"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_backend_maps_non_tapo_endpoint_to_unsupported_camera() -> None:
+    """Non-Tapo local endpoints should surface as unsupported cameras."""
+    # Given: A local HTTP endpoint that does not issue the Tapo Digest challenge
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        unsupported_endpoint=True,
+    )
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+        manager = _tapo_manager(selector)
+
+        # When: Preparing the session probes the non-Tapo endpoint
+        prepared = await manager.prepare_session(
+            TalkSessionPrepareRequest(session_id="tk_unsupported")
+        )
+
+        # Then: The refusal is unsupported_camera, not a generic runtime failure
+        assert prepared.accepted is False
+        assert prepared.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
+        assert prepared.message == "Tapo local endpoint not detected"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_tapo_prepared_probe_expires_without_manager_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prepared Tapo probe clients should expire even if no manager record owns them."""
+    # Given: A prepared Tapo probe and a short reuse TTL
+    monkeypatch.setattr(tapo_backend, "_PREPARED_TAPO_CLIENT_REUSE_TTL_S", 0.01)
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=_SHA256,
+        audio_part_timeout_s=5.0,
+    )
+    await server.start()
+    try:
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=_context(_tapo_talk_config(server), env={"OFFICE_TAPO_SHA256": _SHA256}),
+        )
+
+        # When: A session-open probe is never consumed by a reservation
+        probe = await selector.probe_for_session_open()
+        await asyncio.sleep(0.05)
+
+        # Then: The prepared socket is closed by TTL and a later open uses a fresh client
+        assert probe.capability == TalkCapabilityState.SUPPORTED
+        assert server.closed_connections >= 1
+        assert server.audio_parts == []
+        session = await selector.open_session(TalkSessionOpenRequest(session_id="tk_fresh"))
+        await _wait_for_audio_parts(server, count=1)
+        await session.close()
+        assert len(server.requests) == 4
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_auto_selects_tapo_after_onvif_is_unsupported() -> None:
     """Auto mode should pick Tapo after standards probing fails and Tapo config exists."""
     # Given: ONVIF is unsupported and Tapo config makes local probing safe
@@ -381,6 +480,48 @@ def test_tapo_credential_falls_back_to_available_md5_env() -> None:
     assert selector.supported_codecs == ["PCMA/8000"]
 
 
+@pytest.mark.asyncio
+async def test_tapo_session_closes_client_when_initial_header_write_fails() -> None:
+    """Tapo session creation should release the client if the stream header fails."""
+    # Given: A Tapo client facade that fails when the MPEG-TS header is written
+    client = _RecordingTapoClient(fail_writes=True)
+
+    # When/Then: Session creation fails and closes the underlying client
+    with pytest.raises(TapoProtocolError, match="simulated write failure"):
+        await TapoLocalTalkSession.create(
+            session_id="tk_header",
+            camera_name="office",
+            client=cast(TapoLocalClient, client),
+            input_sample_rate=16000,
+        )
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tapo_session_rejects_invalid_or_closed_pcm_writes() -> None:
+    """Tapo sessions should reject invalid PCM frames and writes after close."""
+    # Given: A Tapo session backed by a recording client facade
+    client = _RecordingTapoClient()
+    session = await TapoLocalTalkSession.create(
+        session_id="tk_pcm",
+        camera_name="office",
+        client=cast(TapoLocalClient, client),
+        input_sample_rate=16000,
+    )
+
+    # When/Then: Invalid PCM frame shape is rejected before another write is sent
+    with pytest.raises(TapoProtocolError, match="Invalid PCM frame"):
+        await session.write_pcm_frame(b"\x00")
+    assert len(client.payloads) == 1
+
+    # When/Then: Closing is idempotent and later writes fail as closed-session errors
+    await session.close()
+    await session.close()
+    with pytest.raises(TapoProtocolError, match="closed"):
+        await session.write_pcm_frame(b"\x00" * TalkInputFormat().expected_bytes_per_frame)
+    assert client.close_count == 1
+
+
 async def _wait_for_audio_parts(server: FakeTapoServer, *, count: int) -> None:
     for _ in range(50):
         if len(server.audio_parts) >= count:
@@ -395,3 +536,22 @@ async def _wait_for_closed_connection(server: FakeTapoServer) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("fake Tapo server did not observe a closed connection")
+
+
+@dataclass(slots=True)
+class _RecordingTapoClient:
+    payloads: list[bytes] = field(default_factory=list)
+    fail_writes: bool = False
+    closed: bool = False
+    close_count: int = 0
+
+    async def write_audio_mp2t(self, payload: bytes) -> None:
+        if self.fail_writes:
+            raise TapoProtocolError("simulated write failure")
+        self.payloads.append(payload)
+
+    async def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        self.close_count += 1

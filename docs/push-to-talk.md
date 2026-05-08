@@ -2,19 +2,20 @@
 
 HomeSec push-to-talk is a half-duplex browser microphone to camera speaker path.
 The bundled backends support RTSP cameras that expose an ONVIF RTSP audio
-backchannel and TP-Link Tapo cameras with the local Tapo talk endpoint. The
-protocol path stays inside HomeSec: browser PCM frames are authenticated by the
-API when API auth is enabled, bridged to the runtime worker, converted to the
-selected camera-side format, and sent directly to the camera over the local
-network. When API auth is disabled, talk endpoints follow the same trusted-LAN
-access model as the rest of the control API.
+backchannel and include a local TP-Link Tapo talkback path. The protocol path
+stays inside HomeSec: browser PCM frames are authenticated by the API when API
+auth is enabled, bridged to the runtime worker, converted to the selected
+camera-side format, and sent directly to the camera over the local network. When
+API auth is disabled, talk endpoints follow the same trusted-LAN access model as
+the rest of the control API. Physical Tapo C120 compatibility still needs
+per-firmware validation before a specific camera is marked compatible.
 
 Talk policy defaults to enabled/auto. HomeSec probes RTSP cameras for ONVIF
 backchannel support first. If that fails and a safe proprietary candidate such as
-`tapo_local` is explicitly configured or safely fingerprinted, HomeSec probes
-that backend next. The UI is only enabled when a backend reports supported
-capability. Operators can opt out globally with `talk.enabled: false` or per
-camera with `cameras[].talk.mode: disabled`.
+`tapo_local` is explicitly configured, HomeSec probes that backend next. The UI
+is only enabled when a backend reports supported capability. Operators can opt
+out globally with `talk.enabled: false` or per camera with
+`cameras[].talk.mode: disabled`.
 
 ## Supported MVP Contract
 
@@ -127,9 +128,10 @@ If explicit talk credential env vars are configured, they must also be set;
 HomeSec reports a talk config error rather than breaking the RTSP source when
 those env vars are missing.
 
-For TP-Link Tapo C120-style local talk, keep the video source as RTSP and add
-the `tapo_local` talk backend. This backend talks to the camera's local TCP 8800
-endpoint and does not call the TP-Link cloud during runtime:
+For TP-Link Tapo-style local talk, keep the video source as RTSP and add the
+`tapo_local` talk backend. This backend talks to the camera's local TCP 8800
+endpoint and does not call the TP-Link cloud during runtime. Validate real Tapo
+C120 hardware before marking a camera compatible:
 
 ```yaml
 cameras:
@@ -157,6 +159,10 @@ probing:
 ```yaml
 cameras:
   - name: office
+    source:
+      backend: rtsp
+      config:
+        rtsp_url_env: OFFICE_RTSP_URL
     talk:
       mode: auto
       backend: tapo_local
@@ -198,7 +204,7 @@ cameras[].talk.backend: auto
   probes standards-based backends first
   ONVIF wins when it is supported
   proprietary candidates are considered only after standards-based probing fails
-  proprietary candidates must be explicitly configured or safely fingerprinted
+  proprietary candidates must be explicitly configured in the current RTSP source path
 
 cameras[].talk.backend: <name>
   selects that backend only
@@ -210,9 +216,11 @@ The bundled registry currently includes `onvif_rtsp_backchannel` and
 `tapo_local`. ONVIF is marked as standards-based, so auto mode tries it before
 Tapo or any other proprietary backend. Proprietary detectors must return
 `safe_to_probe: true` before HomeSec will probe them automatically. A safe
-detector should be based on local camera identity, explicit backend config, or
-another low-risk local signal. It must not send credentials to an unknown local
-service as part of detection.
+detector should be based on explicit backend config, local camera identity, or
+another low-risk local signal. Current RTSP source construction does not populate
+Tapo camera fingerprints, so the practical `tapo_local` auto path requires
+`cameras[].talk.backends.tapo_local` config. It must not send credentials to an
+unknown local service as part of detection.
 
 Auto backend selection is sticky for the lifetime of the source instance after a
 backend is selected. A runtime reload or source rebuild re-runs discovery. This
@@ -277,6 +285,10 @@ registered.
 ```yaml
 cameras:
   - name: office
+    source:
+      backend: rtsp
+      config:
+        rtsp_url_env: OFFICE_RTSP_URL
     talk:
       mode: auto
       backend: auto
