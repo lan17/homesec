@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
@@ -45,10 +45,11 @@ class _SelectionError:
     result: TalkCapabilityProbeResult
     backend: str | None
     backend_reason: str | None
+    codecs: list[str] = field(default_factory=list)
 
     @property
     def supported_codecs(self) -> list[str]:
-        return []
+        return list(self.codecs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,11 +104,13 @@ class TalkBackendSelector:
         return self._select().supported_codecs
 
     @property
-    def selected_supported_codecs(self) -> list[str]:
-        """Return supported codecs for the selected backend, if auto selection has landed."""
+    def selected_supported_codecs(self) -> list[str] | None:
+        """Return selected backend codec hints, or None before auto selection has landed."""
+        if self._selection is None:
+            return None
         if isinstance(self._selection, _SelectedBackend):
             return self._selection.supported_codecs
-        return []
+        return self._selection.supported_codecs
 
     @property
     def backend(self) -> str | None:
@@ -214,6 +217,7 @@ class TalkBackendSelector:
                     result,
                     backend=selection.backend,
                     backend_reason=selection.backend_reason,
+                    codecs=selection.supported_codecs,
                 ),
             )
 
@@ -242,6 +246,7 @@ class TalkBackendSelector:
                     result,
                     backend=selection.backend,
                     backend_reason=selection.backend_reason,
+                    codecs=selection.supported_codecs,
                 ),
             )
 

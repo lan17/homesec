@@ -28,7 +28,13 @@ from homesec.talk.selector import TalkBackendSelector
 
 
 class _FakeConfig(BaseModel):
-    supported: bool = False
+    model_config = {"extra": "forbid"}
+
+    supported: bool
+
+
+class _StandardConfig(BaseModel):
+    model_config = {"extra": "forbid"}
 
 
 @dataclass(slots=True)
@@ -183,7 +189,7 @@ def _registry(
     registry.register(
         TalkBackendRegistration(
             name="onvif_rtsp_backchannel",
-            config_model=_FakeConfig,
+            config_model=_StandardConfig,
             factory=lambda config, context: _StandardTalkBackend(
                 calls=calls,
                 capability=standard_capability,
@@ -287,6 +293,39 @@ async def test_auto_selects_safe_fake_backend_after_onvif_is_unsupported() -> No
     assert calls == ["onvif:probe", "fake:probe"]
 
 
+@pytest.mark.parametrize(
+    "invalid_config",
+    [
+        pytest.param({}, id="missing-required-field"),
+        pytest.param({"supports": True}, id="unknown-field"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_auto_reports_fake_backend_config_error(invalid_config: dict[str, object]) -> None:
+    """Auto fallback should surface invalid proprietary config instead of silent defaults."""
+    # Given: ONVIF is unsupported and a safe fake proprietary backend has invalid config
+    calls: list[str] = []
+    selector = TalkBackendSelector(
+        registry=_registry(calls=calls),
+        context=_context(
+            CameraTalkConfig(
+                backend="auto",
+                backends={"fake_proprietary": invalid_config},
+            )
+        ),
+    )
+
+    # When: Probing auto talk capability
+    probe = await selector.probe()
+
+    # Then: Fake backend config validation fails before probing that backend
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert probe.message == "Talk backend 'fake_proprietary' config is invalid"
+    assert selector.backend == "fake_proprietary"
+    assert calls == ["onvif:probe"]
+
+
 @pytest.mark.asyncio
 async def test_auto_ignores_fake_backend_without_safe_config_or_fingerprint() -> None:
     """Auto selection should not probe unsafe proprietary candidates."""
@@ -304,6 +343,45 @@ async def test_auto_ignores_fake_backend_without_safe_config_or_fingerprint() ->
     assert probe.capability == TalkCapabilityState.UNSUPPORTED
     assert probe.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
     assert selector.backend == "onvif_rtsp_backchannel"
+    assert calls == ["onvif:probe"]
+
+
+@pytest.mark.asyncio
+async def test_fake_backend_config_error_clears_startup_codec_hints() -> None:
+    """Status should not keep ONVIF codec hints after a selected proprietary config error."""
+    # Given: A TalkManager wired to a safe fake backend with invalid proprietary config
+    calls: list[str] = []
+    selector = TalkBackendSelector(
+        registry=_registry(calls=calls),
+        context=_context(
+            CameraTalkConfig(
+                backend="auto",
+                backends={"fake_proprietary": {"supports": True}},
+            )
+        ),
+    )
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=selector.supported_codecs,
+        supported_codecs_factory=lambda: selector.selected_supported_codecs,
+        open_session_factory=selector.open_session,
+        capability_probe_factory=selector.probe,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+    )
+    initial_status = manager.status()
+
+    # When: Preparing the session forces auto selection and config validation
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_bad_config"))
+    failed_status = manager.status()
+
+    # Then: Status reports the proprietary failure without stale ONVIF codec hints
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert initial_status.supported_codecs == ["PCMU/8000"]
+    assert failed_status.supported_codecs == []
+    assert failed_status.last_error == "Talk backend 'fake_proprietary' config is invalid"
     assert calls == ["onvif:probe"]
 
 

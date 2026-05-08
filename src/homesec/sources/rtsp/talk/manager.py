@@ -89,7 +89,7 @@ class TalkManager:
         open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
         max_session_s: float,
         idle_timeout_s: float,
-        supported_codecs_factory: Callable[[], list[str]] | None = None,
+        supported_codecs_factory: Callable[[], list[str] | None] | None = None,
         capability_probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
         capability_ttl_s: float = 30.0,
     ) -> None:
@@ -151,7 +151,7 @@ class TalkManager:
         if self._supported_codecs_factory is None:
             return list(self._supported_codecs)
         try:
-            supported_codecs = list(self._supported_codecs_factory())
+            selected_codecs = self._supported_codecs_factory()
         except Exception:
             logger.debug(
                 "Talk supported codec refresh failed",
@@ -159,7 +159,9 @@ class TalkManager:
                 exc_info=True,
             )
             return list(self._supported_codecs)
-        return supported_codecs or list(self._supported_codecs)
+        if selected_codecs is None:
+            return list(self._supported_codecs)
+        return list(selected_codecs)
 
     async def refresh_status(self, *, force: bool = False) -> CameraTalkStatus:
         """Refresh capability if needed and return current source-level status."""
