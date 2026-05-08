@@ -126,6 +126,53 @@ async def test_talk_manager_refresh_status_probes_and_caches_capability() -> Non
 
 
 @pytest.mark.asyncio
+async def test_talk_manager_prepare_uses_prepare_probe_factory() -> None:
+    """Prepare can use a backend probe that preserves protocol state for open."""
+    status_probe_calls = 0
+    prepare_probe_calls = 0
+
+    async def _status_probe() -> TalkCapabilityProbeResult:
+        nonlocal status_probe_calls
+        status_probe_calls += 1
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.UNSUPPORTED,
+            refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+            message="status probe is not the open-preserving path",
+        )
+
+    async def _prepare_probe() -> TalkCapabilityProbeResult:
+        nonlocal prepare_probe_calls
+        prepare_probe_calls += 1
+        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_status_probe,
+        prepare_capability_probe_factory=_prepare_probe,
+    )
+
+    # Given: Status probing and prepare probing use different backend paths
+    status = await manager.refresh_status(force=True)
+
+    # When: Preparing a talk session after the status probe reported unsupported
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+
+    # Then: Prepare uses the open-preserving probe path and accepts the session
+    assert status.capability == TalkCapabilityState.UNSUPPORTED
+    assert prepared.accepted is True
+    assert prepared.session_id == "tk_1"
+    assert status_probe_calls == 1
+    assert prepare_probe_calls == 1
+
+    await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
 async def test_talk_manager_prepare_forces_probe_and_rejects_unsupported_codec() -> None:
     """Prepare should refuse when capability discovery finds no supported codec."""
     probe_calls = 0

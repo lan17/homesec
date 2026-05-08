@@ -991,7 +991,7 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
                 with pytest.raises(WebSocketDisconnect):
                     websocket.receive_text()
 
-        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(2)
     finally:
         if app is not None:
@@ -1005,7 +1005,6 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
 
     # Then: The fake camera sees the ONVIF handshake and only post-PLAY RTP audio.
     assert [request.method for request in requests] == [
-        "DESCRIBE",
         "DESCRIBE",
         "SETUP",
         "PLAY",
@@ -1070,7 +1069,7 @@ def test_talk_websocket_negotiates_pcma_backchannel(tmp_path: Path) -> None:
                 with pytest.raises(WebSocketDisconnect):
                     websocket.receive_text()
 
-        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(1)
     finally:
         if app is not None:
@@ -1117,7 +1116,7 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
                 websocket.receive_json()
                 websocket.send_bytes(_pcm_frame(input_format, 500))
 
-        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
     finally:
         if app is not None:
             _run(app.shutdown())
@@ -1126,7 +1125,6 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
     with server._lock:
         # Then: The worker/source cleanup sent TEARDOWN and did not emit pre-PLAY RTP.
         assert [request.method for request in server.requests] == [
-            "DESCRIBE",
             "DESCRIBE",
             "SETUP",
             "PLAY",

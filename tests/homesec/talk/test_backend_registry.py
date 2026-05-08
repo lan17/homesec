@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 from pydantic import BaseModel
 
@@ -127,6 +130,27 @@ def test_default_talk_backend_registry_contains_onvif_backend() -> None:
     registration = registry.get("onvif_rtsp_backchannel")
     assert registration is not None
     assert registration.standards_based is True
+
+
+def test_default_talk_backend_registry_imports_without_source_cycle() -> None:
+    """Default registry should be importable before source modules are initialized."""
+    # Given: A fresh Python process that has not imported HomeSec source modules
+    command = (
+        "from homesec.talk.registry import build_default_talk_backend_registry; "
+        "print(build_default_talk_backend_registry().names())"
+    )
+
+    # When: Importing and building the default talk backend registry directly
+    result = subprocess.run(
+        [sys.executable, "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    # Then: The lazy ONVIF registration import avoids the RTSP source import cycle
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "('onvif_rtsp_backchannel',)"
 
 
 def test_rtsp_talk_backend_registry_alias_returns_default_registry() -> None:

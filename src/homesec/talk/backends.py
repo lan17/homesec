@@ -40,6 +40,15 @@ class TalkBackendAdapter(Protocol):
 
 
 @runtime_checkable
+class TalkBackendSessionProbeAdapter(Protocol):
+    """Optional backend hook for probes that will immediately open a session."""
+
+    async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
+        """Probe while preserving backend state needed by the following open."""
+        ...
+
+
+@runtime_checkable
 class TalkBackendSession(Protocol):
     """Camera talk session returned by a backend adapter."""
 

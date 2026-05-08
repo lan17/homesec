@@ -28,6 +28,7 @@ from homesec.talk.backends import (
     TalkBackendRegistration,
     TalkBackendRegistry,
     TalkBackendSession,
+    TalkBackendSessionProbeAdapter,
     backend_config_for,
     model_validate_backend_config,
 )
@@ -131,12 +132,19 @@ class TalkBackendSelector:
 
     async def probe(self) -> TalkCapabilityProbeResult:
         """Probe the selected backend or return a selection/config error."""
+        return await self._probe(for_session_open=False)
+
+    async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
+        """Probe the selected backend while preserving state for immediate open."""
+        return await self._probe(for_session_open=True)
+
+    async def _probe(self, *, for_session_open: bool) -> TalkCapabilityProbeResult:
         if self._context.camera_talk.backend == "auto":
-            return await self._probe_auto()
+            return await self._probe_auto(for_session_open=for_session_open)
         selection = self._select()
         if isinstance(selection, _SelectionError):
             return selection.result
-        return await selection.adapter.probe()
+        return await _probe_backend_adapter(selection.adapter, for_session_open=for_session_open)
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkBackendSession:
         """Open a talk session through the selected backend."""
@@ -144,7 +152,7 @@ class TalkBackendSelector:
             self._selection,
             _SelectedBackend,
         ):
-            probe = await self._probe_auto()
+            probe = await self._probe_auto(for_session_open=True)
             if probe.capability != TalkCapabilityState.SUPPORTED:
                 raise TalkBackendOpenError(
                     probe.message or "Talk backend is not available",
@@ -186,9 +194,12 @@ class TalkBackendSelector:
         )
         return self._selection
 
-    async def _probe_auto(self) -> TalkCapabilityProbeResult:
+    async def _probe_auto(self, *, for_session_open: bool) -> TalkCapabilityProbeResult:
         if isinstance(self._selection, _SelectedBackend):
-            return await self._selection.adapter.probe()
+            return await _probe_backend_adapter(
+                self._selection.adapter,
+                for_session_open=for_session_open,
+            )
         standards = self._standards_registrations()
         if not standards:
             self._selection = _SelectionError(
@@ -210,7 +221,10 @@ class TalkBackendSelector:
                 best_failure = _better_auto_failure(best_failure, selection)
                 continue
 
-            result = await selection.adapter.probe()
+            result = await _probe_backend_adapter(
+                selection.adapter,
+                for_session_open=for_session_open,
+            )
             if result.capability == TalkCapabilityState.SUPPORTED:
                 self._selection = selection
                 return result
@@ -239,7 +253,10 @@ class TalkBackendSelector:
                 best_failure = _better_auto_failure(best_failure, selection)
                 continue
 
-            result = await selection.adapter.probe()
+            result = await _probe_backend_adapter(
+                selection.adapter,
+                for_session_open=for_session_open,
+            )
             if result.capability == TalkCapabilityState.SUPPORTED:
                 self._selection = selection
                 return result
@@ -391,6 +408,16 @@ def _runtime_selection_error_result(message: str) -> TalkCapabilityProbeResult:
         refusal_reason=TalkRefusalReason.RUNTIME_UNAVAILABLE,
         message=message,
     )
+
+
+async def _probe_backend_adapter(
+    adapter: TalkBackendAdapter,
+    *,
+    for_session_open: bool,
+) -> TalkCapabilityProbeResult:
+    if for_session_open and isinstance(adapter, TalkBackendSessionProbeAdapter):
+        return await adapter.probe_for_session_open()
+    return await adapter.probe()
 
 
 def _config_error_result(message: str) -> TalkCapabilityProbeResult:

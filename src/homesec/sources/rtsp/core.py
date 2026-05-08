@@ -923,6 +923,7 @@ class RTSPSource(ThreadedClipSource):
             supported_codecs_factory=lambda: selector.selected_supported_codecs,
             open_session_factory=self._open_selected_talk_session,
             capability_probe_factory=selector.probe,
+            prepare_capability_probe_factory=selector.probe_for_session_open,
             max_session_s=runtime_talk.max_session_s,
             idle_timeout_s=runtime_talk.idle_timeout_s,
         )

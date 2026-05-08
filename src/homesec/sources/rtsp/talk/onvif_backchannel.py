@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -40,6 +41,7 @@ from homesec.sources.rtsp.talk.sdp import (
 
 logger = logging.getLogger(__name__)
 _ONVIF_BACKCHANNEL_REQUIRE = "www.onvif.org/ver20/backchannel"
+_PROBED_BACKCHANNEL_REUSE_TTL_S = 10.0
 
 
 @dataclass(slots=True)
@@ -106,6 +108,16 @@ class BackchannelDescription:
     base_control_url: str
 
 
+@dataclass(slots=True)
+class _CachedBackchannelSession:
+    """Recently probed RTSP connection that can be completed by session open."""
+
+    client: RTSPClient
+    backchannel: BackchannelDescription
+    monotonic_time: float
+    cleanup_task: asyncio.Task[None] | None = None
+
+
 class ONVIFBackchannelAdapter:
     """Open ONVIF RTSP audio-backchannel sessions for one source."""
 
@@ -120,10 +132,19 @@ class ONVIFBackchannelAdapter:
         self._rtsp_url = rtsp_url or config.resolve_rtsp_url()
         self._credentials = config.resolve_credentials()
         self._camera_name = camera_name
+        self._cached_backchannel_session: _CachedBackchannelSession | None = None
 
     async def probe(self) -> TalkCapabilityProbeResult:
         """Probe camera SDP for ONVIF audio backchannel capability."""
+        return await self._probe(keep_connection_for_open=False)
+
+    async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
+        """Probe capability and keep the successful RTSP connection for imminent open."""
+        return await self._probe(keep_connection_for_open=True)
+
+    async def _probe(self, *, keep_connection_for_open: bool) -> TalkCapabilityProbeResult:
         client = self._client()
+        keep_client = False
         try:
             await client.connect()
             backchannel = await self._describe_backchannel(client)
@@ -143,6 +164,9 @@ class ONVIFBackchannelAdapter:
                     refusal_reason=TalkRefusalReason.UNSUPPORTED_CODEC,
                     message=str(exc),
                 )
+            if keep_connection_for_open:
+                await self._replace_cached_backchannel_session(client, backchannel)
+                keep_client = True
             return TalkCapabilityProbeResult(
                 capability=TalkCapabilityState.SUPPORTED,
                 offered_codecs=backchannel.offered_codecs,
@@ -169,8 +193,9 @@ class ONVIFBackchannelAdapter:
                 message=str(exc) or type(exc).__name__,
             )
         finally:
-            with suppress(Exception):
-                await client.close()
+            if not keep_client:
+                with suppress(Exception):
+                    await client.close()
 
     async def open_session(
         self,
@@ -180,10 +205,17 @@ class ONVIFBackchannelAdapter:
     ) -> ONVIFTalkSession:
         """Negotiate DESCRIBE/SETUP/PLAY and return a ready talk session."""
         client = self._client()
+        cached = await self._consume_cached_backchannel_session()
+        if cached is not None:
+            client = cached.client
         setup_completed = False
-        await client.connect()
+        if cached is None:
+            await client.connect()
         try:
-            backchannel = await self._describe_backchannel(client)
+            if cached is None:
+                backchannel = await self._describe_backchannel(client)
+            else:
+                backchannel = cached.backchannel
             selected = self._select_backchannel(backchannel)
             setup = await client.setup_interleaved(
                 selected.control,
@@ -217,6 +249,59 @@ class ONVIFBackchannelAdapter:
             if setup_completed:
                 await _best_effort_teardown(client)
             await client.close()
+            raise
+
+    async def _replace_cached_backchannel_session(
+        self,
+        client: RTSPClient,
+        backchannel: BackchannelDescription,
+    ) -> None:
+        await self._clear_cached_backchannel_session()
+        cached = _CachedBackchannelSession(
+            client=client,
+            backchannel=backchannel,
+            monotonic_time=time.monotonic(),
+        )
+        cached.cleanup_task = asyncio.create_task(self._expire_cached_backchannel_session(cached))
+        self._cached_backchannel_session = cached
+
+    async def _consume_cached_backchannel_session(
+        self,
+    ) -> _CachedBackchannelSession | None:
+        cached = self._cached_backchannel_session
+        self._cached_backchannel_session = None
+        if cached is None:
+            return None
+        if cached.cleanup_task is not None:
+            cached.cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cached.cleanup_task
+        if time.monotonic() - cached.monotonic_time > _PROBED_BACKCHANNEL_REUSE_TTL_S:
+            await _close_client_safely(cached.client)
+            return None
+        return cached
+
+    async def _clear_cached_backchannel_session(self) -> None:
+        cached = self._cached_backchannel_session
+        self._cached_backchannel_session = None
+        if cached is None:
+            return
+        if cached.cleanup_task is not None and cached.cleanup_task is not asyncio.current_task():
+            cached.cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cached.cleanup_task
+        await _close_client_safely(cached.client)
+
+    async def _expire_cached_backchannel_session(
+        self,
+        cached: _CachedBackchannelSession,
+    ) -> None:
+        try:
+            await asyncio.sleep(_PROBED_BACKCHANNEL_REUSE_TTL_S)
+            if self._cached_backchannel_session is cached:
+                self._cached_backchannel_session = None
+                await _close_client_safely(cached.client)
+        except asyncio.CancelledError:
             raise
 
     async def _describe_backchannel(self, client: RTSPClient) -> BackchannelDescription:
@@ -265,6 +350,11 @@ def _require_header() -> dict[str, str]:
 async def _best_effort_teardown(client: RTSPClient) -> None:
     with suppress(Exception):
         await client.teardown(headers=_require_header())
+
+
+async def _close_client_safely(client: RTSPClient) -> None:
+    with suppress(Exception):
+        await client.close()
 
 
 def _rtp_channel_from_setup(transport_header: str | None) -> int:

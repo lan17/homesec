@@ -63,6 +63,7 @@ class _FakeRTSPBackchannelServer:
     setup_session_header: str | None = "homesec-talk;timeout=60"
     content_base_header: str | None = None
     content_location_header: str | None = None
+    describe_statuses: list[int] = field(default_factory=list)
     interleaved_before_response_methods: set[str] = field(default_factory=set)
     sdp_body: bytes = field(default_factory=lambda: _BACKCHANNEL_SDP.encode())
     requests: list[_RTSPRequest] = field(default_factory=list)
@@ -175,9 +176,12 @@ class _FakeRTSPBackchannelServer:
                     reason="Unauthorized",
                     headers={"WWW-Authenticate": self._digest_challenge_header()},
                 )
-            if self.describe_status != 200:
+            describe_status = (
+                self.describe_statuses.pop(0) if self.describe_statuses else self.describe_status
+            )
+            if describe_status != 200:
                 return _rtsp_response(
-                    cseq=cseq, status=self.describe_status, reason="Option Not Supported"
+                    cseq=cseq, status=describe_status, reason="Option Not Supported"
                 )
             headers = {"Content-Type": "application/sdp"}
             if self.content_base_header is not None:
@@ -352,6 +356,36 @@ async def test_onvif_backchannel_probe_reports_supported_camera_without_setup() 
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_reuses_successful_probe_for_session_open() -> None:
+    """Session open should not repeat DESCRIBE after a fresh successful probe."""
+    # Given: A camera that accepts the capability DESCRIBE but rejects another immediate DESCRIBE
+    server = _FakeRTSPBackchannelServer(describe_statuses=[200, 404])
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: A session opens immediately after capability probing
+        result = await adapter.probe_for_session_open()
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: The adapter reuses the probed SDP and proceeds straight to SETUP/PLAY
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert session.selected_codec == "PCMU/8000"
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
 
 
 @pytest.mark.asyncio

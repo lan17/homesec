@@ -25,6 +25,7 @@ from homesec.talk.backends import (
     TalkBackendRegistration,
     TalkBackendRegistry,
     TalkBackendSession,
+    TalkBackendSessionProbeAdapter,
     backend_config_for,
     model_validate_backend_config,
 )
@@ -52,6 +53,12 @@ class ONVIFRTSPTalkBackendAdapter:
 
     async def probe(self) -> TalkCapabilityProbeResult:
         """Probe camera ONVIF RTSP backchannel capability."""
+        return await self.adapter.probe()
+
+    async def probe_for_session_open(self) -> TalkCapabilityProbeResult:
+        """Probe ONVIF capability while preserving the connection for session open."""
+        if isinstance(self.adapter, TalkBackendSessionProbeAdapter):
+            return await self.adapter.probe_for_session_open()
         return await self.adapter.probe()
 
     async def open_session(self, request: TalkSessionOpenRequest) -> TalkBackendSession:

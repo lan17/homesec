@@ -91,6 +91,9 @@ class TalkManager:
         idle_timeout_s: float,
         supported_codecs_factory: Callable[[], list[str] | None] | None = None,
         capability_probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
+        prepare_capability_probe_factory: (
+            Callable[[], Awaitable[TalkCapabilityProbeResult]] | None
+        ) = None,
         capability_ttl_s: float = 30.0,
     ) -> None:
         self._camera_name = camera_name
@@ -100,6 +103,7 @@ class TalkManager:
         self._supported_codecs_factory = supported_codecs_factory
         self._open_session_factory = open_session_factory
         self._capability_probe_factory = capability_probe_factory
+        self._prepare_capability_probe_factory = prepare_capability_probe_factory
         self._capability_ttl_s = capability_ttl_s
         self._capability = TalkCapabilityProbeResult(
             capability=(
@@ -172,12 +176,14 @@ class TalkManager:
         self,
         *,
         force: bool = False,
+        probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
     ) -> TalkCapabilityProbeResult:
         """Probe and cache camera talk capability when this manager has a probe source."""
         self._bind_loop()
         if not self._enabled:
             return self._capability
-        if self._capability_probe_factory is None:
+        capability_probe_factory = probe_factory or self._capability_probe_factory
+        if capability_probe_factory is None:
             return self._capability
 
         async with self._probe_lock:
@@ -196,7 +202,7 @@ class TalkManager:
                 )
 
             try:
-                result = await self._capability_probe_factory()
+                result = await capability_probe_factory()
             except Exception as exc:
                 result = TalkCapabilityProbeResult(
                     capability=TalkCapabilityState.ERROR,
@@ -218,7 +224,10 @@ class TalkManager:
     ) -> TalkSessionPrepareResult:
         """Reserve a talk slot before the browser attaches the WebSocket stream."""
         self._bind_loop()
-        capability = await self.refresh_capability(force=True)
+        capability = await self.refresh_capability(
+            force=True,
+            probe_factory=self._prepare_capability_probe_factory,
+        )
         if capability.capability != TalkCapabilityState.SUPPORTED:
             return _prepare_refusal_from_capability(capability, input_format=request.input)
 
