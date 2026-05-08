@@ -138,10 +138,6 @@ def resolve_tapo_credential(
 
 def _resolve_username(config: TapoLocalTalkConfig, context: TalkBackendContext) -> str:
     if config.username_env is None:
-        if "username" not in config.model_fields_set:
-            source_username = _source_uri_username(context)
-            if source_username:
-                return source_username
         return config.username
     username = context.env_value(config.username_env)
     if username is None or username.strip() == "":
@@ -187,16 +183,6 @@ def _host_from_uri(uri: str | None) -> str | None:
         return None
     parsed = urlsplit(uri)
     return parsed.hostname
-
-
-def _source_uri_username(context: TalkBackendContext) -> str | None:
-    for uri in (context.resolved_source_uri, context.source_uri):
-        if not uri:
-            continue
-        username = urlsplit(uri).username
-        if username:
-            return unquote(username)
-    return None
 
 
 def _source_uri_password(context: TalkBackendContext) -> str | None:

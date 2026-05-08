@@ -172,15 +172,18 @@ def test_tapo_credential_reports_missing_env_var_by_name() -> None:
     )
 
 
-def test_tapo_credential_defaults_to_rtsp_username_and_sha256_password() -> None:
-    """Tapo credentials should default to RTSP user/pass when no env override exists."""
+def test_tapo_credential_defaults_to_admin_and_rtsp_sha256_password() -> None:
+    """Tapo credentials should default to admin plus RTSP password material."""
     # Given: Tapo config without credential overrides and a credentialed RTSP URL
     config = TapoLocalTalkConfig()
 
     # When: Resolving credential material for a SHA256 Tapo challenge
-    credential = resolve_tapo_credential(config, _context())
+    credential = resolve_tapo_credential(
+        config,
+        _context(source_uri="rtsp://camera%40home:secret@192.168.1.33/stream1"),
+    )
 
-    # Then: The username and password hash are derived from the RTSP URL
+    # Then: The Tapo username defaults to admin and only password comes from RTSP
     assert credential.username == "admin"
     assert credential.password_hash == hashlib.sha256(b"secret").hexdigest().upper()
     assert credential.hash_kind == "sha256"
@@ -212,8 +215,8 @@ def test_tapo_credential_defaults_to_rtsp_md5_password_when_challenge_prefers_md
     assert credential.hash_kind == "md5"
 
 
-def test_tapo_username_can_be_derived_from_percent_encoded_rtsp_url() -> None:
-    """Tapo username/password defaults should decode RTSP URL user info."""
+def test_tapo_password_can_be_derived_from_percent_encoded_rtsp_url() -> None:
+    """Tapo password defaults should decode RTSP URL password info."""
     # Given: Tapo config without credential overrides and encoded RTSP credentials
     config = TapoLocalTalkConfig()
 
@@ -223,8 +226,8 @@ def test_tapo_username_can_be_derived_from_percent_encoded_rtsp_url() -> None:
         _context(source_uri="rtsp://camera%40home:p%40ss%3Aword@192.168.1.33/stream1"),
     )
 
-    # Then: The decoded RTSP username/password are used as credential material
-    assert credential.username == "camera@home"
+    # Then: The decoded RTSP password is used with the Tapo admin username
+    assert credential.username == "admin"
     assert credential.password_hash == hashlib.sha256(b"p@ss:word").hexdigest().upper()
 
 
@@ -246,8 +249,8 @@ def test_tapo_explicit_credential_env_wins_over_rtsp_url_password() -> None:
     assert credential.password_hash != hashlib.sha256(b"secret").hexdigest().upper()
 
 
-def test_tapo_explicit_username_wins_over_rtsp_url_username() -> None:
-    """Explicit Tapo usernames should override RTSP URL username defaults."""
+def test_tapo_explicit_username_wins_over_admin_default() -> None:
+    """Explicit Tapo usernames should override the admin default."""
     # Given: A Tapo config with an explicit username and source URL credentials
     config = TapoLocalTalkConfig(username="speaker", password_sha256_env="OFFICE_TAPO_SHA256")
 
@@ -257,7 +260,7 @@ def test_tapo_explicit_username_wins_over_rtsp_url_username() -> None:
         _context(env={"OFFICE_TAPO_SHA256": "A" * 64}),
     )
 
-    # Then: The explicitly configured username wins over the RTSP username
+    # Then: The explicitly configured username wins over the admin default
     assert credential.username == "speaker"
 
 

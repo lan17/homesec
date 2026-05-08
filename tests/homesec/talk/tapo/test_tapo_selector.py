@@ -179,7 +179,7 @@ async def test_explicit_tapo_backend_can_default_to_rtsp_credentials() -> None:
         # When: Probing through explicit backend selection with no Tapo credential env
         probe = await selector.probe()
 
-        # Then: Tapo derives username/password material from the RTSP source URL
+        # Then: Tapo uses username admin and derives password material from the RTSP URL
         assert selector.backend == "tapo_local"
         assert probe.capability == TalkCapabilityState.SUPPORTED
         assert probe.selected_codec == TAPO_LOCAL_CODEC

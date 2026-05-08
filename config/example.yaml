@@ -80,9 +80,9 @@ cameras:
     # Optional: local TP-Link Tapo talk backend. Video remains RTSP, while
     # speaker audio is sent to the camera's local TCP 8800 endpoint. This path
     # does not call TP-Link cloud during runtime; validate real hardware before
-    # marking a specific model/firmware compatible. If RTSP and Tapo local talk
-    # use the same credentials, host and credential material can be derived from
-    # the RTSP URL and port defaults to 8800.
+    # marking a specific model/firmware compatible. Tapo local talk defaults to
+    # username=admin, derives host and password material from the RTSP URL when
+    # no Tapo-specific overrides are configured, and defaults port to 8800.
     # talk:
     #   mode: auto
     #   backend: auto
