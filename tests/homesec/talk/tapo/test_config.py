@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from homesec.models.config import CameraTalkConfig, TalkConfig
 from homesec.talk.backends import TalkBackendConfigError, TalkBackendContext
 from homesec.talk.tapo.config import (
+    TapoCredential,
     TapoLocalTalkConfig,
     resolve_tapo_credential,
     resolve_tapo_host,
@@ -185,6 +186,20 @@ def test_tapo_credential_normalizes_sha256_hash_from_env() -> None:
     assert credential.username == "admin"
     assert credential.password_hash == "A" * 64
     assert credential.hash_kind == "sha256"
+
+
+def test_tapo_credential_repr_does_not_expose_hash_value() -> None:
+    """Tapo credential repr should not expose hash material by accident."""
+    # Given: Resolved Tapo credential hash material
+    secret_hash = "A" * 64
+    credential = TapoCredential(username="admin", password_hash=secret_hash, hash_kind="sha256")
+
+    # When: Formatting the credential for debugging
+    text = repr(credential)
+
+    # Then: The hash value is not included in the repr
+    assert secret_hash not in text
+    assert "password_hash" not in text
 
 
 def test_tapo_credential_rejects_invalid_hash_shape_without_exposing_value() -> None:

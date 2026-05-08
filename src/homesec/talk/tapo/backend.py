@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
@@ -42,9 +42,9 @@ class TapoLocalTalkBackend:
     """
 
     config: TapoLocalTalkConfig
-    context: TalkBackendContext
+    context: TalkBackendContext = field(repr=False)
     host: str
-    credential: TapoCredential
+    credential: TapoCredential = field(repr=False)
     name: str = TAPO_LOCAL_BACKEND
 
     @property

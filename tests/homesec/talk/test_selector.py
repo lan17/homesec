@@ -705,6 +705,47 @@ async def test_selector_preserves_safe_structured_config_error_message() -> None
 
 
 @pytest.mark.asyncio
+async def test_selector_preserves_safe_env_var_name_with_sensitive_words() -> None:
+    """Structured config errors should preserve safe env names even with secret-like words."""
+
+    # Given: A backend reports a missing env var whose safe name contains PASSWORD
+    def _raise_structured_config_error(
+        raw_config: dict[str, object] | BaseModel,
+        context: TalkBackendContext,
+    ) -> BaseModel:
+        _ = raw_config, context
+        raise TalkBackendConfigError(
+            "Required talk backend environment variable is not set: TAPO_PASSWORD_SHA256"
+        )
+
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            config_factory=_raise_structured_config_error,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="vendor_backend")),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: The env var name remains visible because it is a reference, not a secret value
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert (
+        probe.message
+        == "Required talk backend environment variable is not set: TAPO_PASSWORD_SHA256"
+    )
+    assert selector.backend_reason == probe.message
+
+
+@pytest.mark.asyncio
 async def test_selector_drops_unsafe_structured_config_error_message() -> None:
     """Structured config errors should still pass through public sanitization."""
 
@@ -741,6 +782,84 @@ async def test_selector_drops_unsafe_structured_config_error_message() -> None:
     assert probe.message == "Talk backend 'vendor_backend' config is invalid"
     assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
     assert "rtsp://alice:secret@camera.local/talk" not in (probe.message or "")
+
+
+@pytest.mark.asyncio
+async def test_selector_drops_auth_text_disguised_as_missing_env_message() -> None:
+    """Structured config errors should not let auth text bypass missing-env sanitization."""
+
+    # Given: A backend error embeds auth-like text before a safe env var name
+    def _raise_unsafe_structured_config_error(
+        raw_config: dict[str, object] | BaseModel,
+        context: TalkBackendContext,
+    ) -> BaseModel:
+        _ = raw_config, context
+        raise TalkBackendConfigError(
+            "Authorization Bearer hunter2 environment variable is not set: TAPO_PASSWORD_SHA256"
+        )
+
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            config_factory=_raise_unsafe_structured_config_error,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="vendor_backend")),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: The unsafe prefix prevents the env-var exception from preserving the message
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert probe.message == "Talk backend 'vendor_backend' config is invalid"
+    assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
+    assert "hunter2" not in (probe.message or "")
+
+
+@pytest.mark.asyncio
+async def test_selector_drops_lowercase_secret_disguised_as_env_name() -> None:
+    """Structured config errors should preserve only conventionally safe env var names."""
+
+    # Given: A backend error places raw secret-looking text in the env-var slot
+    def _raise_unsafe_structured_config_error(
+        raw_config: dict[str, object] | BaseModel,
+        context: TalkBackendContext,
+    ) -> BaseModel:
+        _ = raw_config, context
+        raise TalkBackendConfigError(
+            "Required talk backend environment variable is not set: hunter2"
+        )
+
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            config_factory=_raise_unsafe_structured_config_error,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="vendor_backend")),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: The lower-case token is not treated as a safe public env var reference
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert probe.message == "Talk backend 'vendor_backend' config is invalid"
+    assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
+    assert "hunter2" not in (probe.message or "")
 
 
 @pytest.mark.asyncio

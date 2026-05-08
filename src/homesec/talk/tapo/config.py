@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -70,7 +70,7 @@ class TapoCredential:
     """Resolved credential material for Tapo local Digest authentication."""
 
     username: str
-    password_hash: str
+    password_hash: str = field(repr=False)
     hash_kind: Literal["sha256", "md5"]
 
 

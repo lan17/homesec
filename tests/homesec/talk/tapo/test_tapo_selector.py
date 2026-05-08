@@ -13,7 +13,12 @@ from homesec.models.talk import (
 )
 from homesec.talk.backends import TalkBackendContext, TalkBackendRegistration, TalkBackendRegistry
 from homesec.talk.selector import TalkBackendSelector
-from homesec.talk.tapo.backend import TAPO_LOCAL_CODEC, tapo_local_talk_backend_registration
+from homesec.talk.tapo.backend import (
+    TAPO_LOCAL_CODEC,
+    build_tapo_local_backend,
+    tapo_local_talk_backend_registration,
+)
+from homesec.talk.tapo.config import TapoLocalTalkConfig
 
 _VALID_SHA256 = "A" * 64
 
@@ -171,6 +176,68 @@ async def test_explicit_tapo_missing_env_reports_config_error_without_onvif_prob
     )
     assert selector.backend == "tapo_local"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_tapo_missing_password_named_env_preserves_env_name() -> None:
+    """Tapo config errors should preserve safe env names that include PASSWORD."""
+    # Given: A camera explicitly configured with a common password-named env var
+    calls: list[str] = []
+    selector = TalkBackendSelector(
+        registry=_registry(calls=calls),
+        context=TalkBackendContext(
+            camera_name="office",
+            source_backend="rtsp",
+            runtime_talk=TalkConfig(),
+            camera_talk=CameraTalkConfig(
+                backend="tapo_local",
+                backends={
+                    "tapo_local": {
+                        "host": "192.168.1.33",
+                        "password_sha256_env": "TAPO_PASSWORD_SHA256",
+                    }
+                },
+            ),
+            resolve_env=lambda name: None,
+        ),
+    )
+
+    # When: Probing through explicit backend selection
+    probe = await selector.probe()
+
+    # Then: The missing env var name remains visible and ONVIF remains untouched
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert probe.message == (
+        "Required Tapo local environment variable is not set: TAPO_PASSWORD_SHA256"
+    )
+    assert selector.backend_reason == probe.message
+    assert calls == []
+
+
+def test_tapo_backend_repr_does_not_expose_hash_or_rtsp_credentials() -> None:
+    """Tapo backend repr should not expose credential hashes or source URIs."""
+    # Given: A Tapo backend built with a source URI containing RTSP credentials
+    backend = build_tapo_local_backend(
+        TapoLocalTalkConfig(
+            host="192.168.1.33",
+            password_sha256_env="OFFICE_TAPO_SHA256",
+        ),
+        _context(
+            CameraTalkConfig(
+                backend="tapo_local",
+                backends={"tapo_local": {"password_sha256_env": "OFFICE_TAPO_SHA256"}},
+            )
+        ),
+    )
+
+    # When: Formatting the backend for debugging
+    text = repr(backend)
+
+    # Then: The repr keeps secret-bearing fields out of accidental logs
+    assert _VALID_SHA256 not in text
+    assert "admin:secret" not in text
+    assert "rtsp://admin:secret@192.168.1.33" not in text
 
 
 @pytest.mark.asyncio
