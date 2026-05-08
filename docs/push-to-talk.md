@@ -1,12 +1,13 @@
 # Push-to-Talk Deployment Notes
 
-HomeSec push-to-talk is a half-duplex browser microphone to camera speaker path for
-RTSP cameras that expose an ONVIF RTSP audio backchannel. The MVP stays inside
-HomeSec: browser PCM frames are authenticated by the API when API auth is
-enabled, bridged to the runtime worker, encoded to G.711 (`PCMU/8000` or
-`PCMA/8000`), packetized as RTP, and sent to the camera over RTSP-over-TCP
-interleaved RTP. When API auth is disabled, talk endpoints follow the same
-trusted-LAN access model as the rest of the control API.
+HomeSec push-to-talk is a half-duplex browser microphone to camera speaker path.
+The bundled backend supports RTSP cameras that expose an ONVIF RTSP audio
+backchannel. The protocol path stays inside HomeSec: browser PCM frames are
+authenticated by the API when API auth is enabled, bridged to the runtime worker,
+encoded to G.711 (`PCMU/8000` or `PCMA/8000`), packetized as RTP, and sent to the
+camera over RTSP-over-TCP interleaved RTP. When API auth is disabled, talk
+endpoints follow the same trusted-LAN access model as the rest of the control
+API.
 
 Talk policy defaults to enabled/auto. HomeSec probes RTSP cameras for ONVIF
 backchannel support at runtime and only enables the UI when the camera advertises
@@ -21,7 +22,7 @@ or per camera with `cameras[].talk.mode: disabled`.
 | Browser input | Mono PCM S16LE frames over WebSocket |
 | Default input format | `pcm_s16le`, `16000 Hz`, `1` channel, `20 ms` frames |
 | Camera codec | `PCMU/8000` and `PCMA/8000` |
-| Camera backend | `onvif_rtsp_backchannel` |
+| Camera backend | Backend adapter abstraction; bundled backend is `onvif_rtsp_backchannel` |
 | Transport | RTSP over TCP with interleaved RTP |
 | Concurrency | One reserved or active talk session per camera |
 | Session limits | Bounded by `talk.max_session_s` and `talk.idle_timeout_s` |
@@ -80,6 +81,19 @@ cameras:
         io_timeout_s: 5.0
 ```
 
+If the camera should use the default source RTSP URL and default codec order, omit
+the camera `talk` block entirely:
+
+```yaml
+cameras:
+  - name: front_door
+    source:
+      backend: rtsp
+      config:
+        rtsp_url_env: FRONT_DOOR_RTSP_URL
+    # talk omitted: defaults to mode=auto, backend=auto
+```
+
 The top-level `cameras[].talk.config` field remains a compatibility alias for
 the ONVIF RTSP backchannel backend. New backend-specific options can also be
 placed under `cameras[].talk.backends.<backend_name>`:
@@ -97,13 +111,6 @@ cameras:
             - PCMU/8000
             - PCMA/8000
 ```
-
-HomeSec currently ships the ONVIF RTSP backchannel implementation. Explicit
-future backend names are accepted by config parsing so operators can stage
-configuration, but backend names must be safe identifiers: lowercase letters,
-numbers, and underscores, starting with a letter. Unregistered safe backend names
-report a talk backend selection/config error until a matching backend adapter is
-implemented and registered.
 
 Use environment variables for RTSP URLs and credentials. Do not commit camera
 passwords in YAML.
@@ -125,6 +132,122 @@ cameras:
     talk:
       mode: disabled
 ```
+
+## Backend Selection
+
+Talk policy and backend selection are separate:
+
+```plain text
+cameras[].talk.mode: disabled
+  disables talk for that camera; no backend probes run
+
+cameras[].talk.mode: auto
+  allows runtime capability discovery
+
+cameras[].talk.backend: auto
+  probes standards-based backends first
+  ONVIF wins when it is supported
+  proprietary candidates are considered only after standards-based probing fails
+  proprietary candidates must be explicitly configured or safely fingerprinted
+
+cameras[].talk.backend: <name>
+  selects that backend only
+  no fallback runs
+  unknown registered-safe names produce talk_config_error until a backend is registered
+```
+
+The bundled registry currently includes `onvif_rtsp_backchannel`. It is marked as
+standards-based, so auto mode tries it before any future proprietary backend.
+Future proprietary detectors must return `safe_to_probe: true` before HomeSec
+will probe them automatically. A safe detector should be based on local camera
+identity, explicit backend config, or another low-risk local signal. It must not
+send credentials to an unknown local service as part of detection.
+
+## Backend-Specific Configuration
+
+Camera talk config has two backend configuration forms:
+
+```yaml
+# Compatibility alias for ONVIF when backend is auto or onvif_rtsp_backchannel.
+talk:
+  mode: auto
+  backend: auto
+  config:
+    preferred_codecs:
+      - PCMU/8000
+      - PCMA/8000
+```
+
+```yaml
+# Preferred form for backend-specific config.
+talk:
+  mode: auto
+  backend: auto
+  backends:
+    onvif_rtsp_backchannel:
+      preferred_codecs:
+        - PCMU/8000
+        - PCMA/8000
+```
+
+For explicit backend selection, HomeSec only builds the named backend:
+
+```yaml
+cameras:
+  - name: front_door
+    talk:
+      mode: auto
+      backend: onvif_rtsp_backchannel
+      backends:
+        onvif_rtsp_backchannel:
+          preferred_codecs:
+            - PCMU/8000
+            - PCMA/8000
+```
+
+Explicit future backend names are accepted by config parsing so operators can
+stage configuration, but backend names must be safe identifiers: lowercase
+letters, numbers, and underscores, starting with a letter, with at most 64
+characters. Unregistered safe backend names report a talk backend
+selection/config error until a matching backend adapter is implemented and
+registered.
+
+## Future Proprietary Backends
+
+Phase 9 provides the backend adapter abstraction, not Tapo support. The example
+below documents the intended future shape for Phase 10 only. It will not work
+until a `tapo_local` backend is implemented and registered.
+
+```yaml
+# Future Phase 10 example only. Not supported until tapo_local lands.
+cameras:
+  - name: office
+    talk:
+      mode: auto
+      backend: auto
+      backends:
+        tapo_local:
+          host: 192.168.1.33
+          port: 8800
+          username_env: OFFICE_TAPO_USERNAME
+          password_sha256_env: OFFICE_TAPO_SHA256
+```
+
+Future proprietary backends should implement the same contracts as the bundled
+ONVIF backend:
+
+- register a `TalkBackendRegistration` with a strict Pydantic config model;
+- provide a safe detector when auto selection is appropriate;
+- implement `probe()` for capability, codec, and auth diagnostics;
+- implement `open_session()` and return a `TalkBackendSession`;
+- write browser PCM frames through `TalkSession.write_pcm_frame()`;
+- expose selected backend and selected codec diagnostics without leaking secrets.
+
+Phase 10 Tapo work should add only the Tapo-local backend pieces: config model,
+safe detector, local auth/client code, local talk setup, packet writer/session
+implementation, fake endpoint tests, and Tapo-specific docs. It should not need
+to modify the API WebSocket protocol, runtime IPC, TalkManager lifecycle, or UI
+PCM capture path.
 
 ## Status Diagnostics
 
@@ -157,6 +280,14 @@ the missing environment variable name, but never its value.
   tokens for WebSocket use when API auth is enabled.
 - Do not log microphone frames, decoded PCM, RTP payloads, or RTSP credentials.
   Existing protocol logging must keep credentials redacted.
+- Backend credentials should use environment variables. Missing env vars may be
+  named in public config errors, but values must never be logged or returned.
+- Proprietary backend diagnostics must not expose camera credentials, RTSP URLs
+  with credentials, tokens, password hashes, auth headers, or raw protocol
+  payloads.
+- Proprietary backend probes must stay local and must not make vendor cloud calls
+  unless a future feature explicitly opts into that behavior. Phase 9 and the
+  planned Tapo-local path are local-only.
 - Talk sessions are transient. The MVP does not intentionally store microphone
   audio in clips, preview storage, logs, or databases.
 - Prefer HTTPS or a trusted reverse proxy for browser access so API keys and talk
@@ -185,6 +316,18 @@ Before relying on talk for a camera:
    `session_budget_exhausted`, `camera_backchannel_failed`, or repeated idle
    timeouts.
 8. Record the result in the compatibility matrix below.
+
+Before implementing a new proprietary backend, confirm Phase 9 already provides:
+
+- backend registration;
+- backend-specific config validation;
+- safe detector hook;
+- `probe()` hook;
+- `open_session()` hook;
+- `TalkSession.write_pcm_frame()` hook;
+- config and auth error semantics;
+- selected backend diagnostics;
+- fake proprietary backend readiness tests.
 
 During operation:
 
