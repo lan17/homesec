@@ -621,4 +621,35 @@ describe('CameraPreviewPanel', () => {
     )).toBeTruthy()
   })
 
+  it('surfaces talk backend config errors from status', () => {
+    // Given: A camera whose selected talk backend has invalid operator config
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({
+      canStart: false,
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        policy_enabled: true,
+        capability: 'config_error',
+        state: 'error',
+        active_session_id: null,
+        supported_codecs: ['PCMU/8000'],
+        offered_codecs: [],
+        selected_codec: null,
+        backend: 'onvif_rtsp_backchannel',
+        backend_reason: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+        last_error: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+        httpStatus: 200,
+      },
+    })
+
+    // When: Rendering the preview controls
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The talk control shows the operator-actionable config message
+    expect(screen.getByText(
+      "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+    )).toBeTruthy()
+  })
+
 })

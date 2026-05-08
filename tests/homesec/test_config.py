@@ -902,6 +902,18 @@ def test_camera_talk_backend_normalized() -> None:
     assert config.cameras[0].talk.backend == "onvif_rtsp_backchannel"
 
 
+def test_camera_talk_backend_defaults_to_auto() -> None:
+    """Camera talk backend should default to backend auto selection."""
+    # Given: A config without per-camera talk backend overrides
+    data = minimal_config()
+
+    # When: Parsing config
+    config = Config.model_validate(data)
+
+    # Then: The camera is ready for backend auto selection
+    assert config.cameras[0].talk.backend == "auto"
+
+
 def test_camera_talk_defaults_to_auto_policy() -> None:
     """Omitted per-camera talk config should allow capability discovery."""
     # Given: A config without per-camera talk overrides
@@ -913,6 +925,7 @@ def test_camera_talk_defaults_to_auto_policy() -> None:
     # Then: Per-camera talk policy defaults to auto discovery
     assert config.cameras[0].talk.mode == "auto"
     assert config.cameras[0].talk.enabled is True
+    assert config.cameras[0].talk.backend == "auto"
     assert config.cameras[0].talk.policy_enabled is True
 
 
@@ -1014,20 +1027,126 @@ def test_talk_input_rejects_fractional_frame_size() -> None:
     assert "integral PCM frame size" in str(exc_info.value)
 
 
-def test_camera_talk_rejects_unsupported_backend() -> None:
-    """Camera talk config should reject deferred backends in the v1 contract."""
-    # Given: A config using a backend that is intentionally out of scope for MVP
+def test_camera_talk_accepts_unknown_future_backend_name() -> None:
+    """Camera talk config should allow future backend names for runtime selection."""
+    # Given: A config using a backend that is not registered in the current runtime
     data = minimal_config()
     camera = data["cameras"][0]
     assert isinstance(camera, dict)
-    camera["talk"] = {"enabled": True, "backend": "mediamtx", "config": {}}
+    camera["talk"] = {"enabled": True, "backend": "tapo_local", "config": {}}
 
     # When: validating the config.
-    # Then: validation rejects unsupported per-camera talk backends.
+    config = Config.model_validate(data)
+
+    # Then: config parsing preserves the future backend for runtime diagnostics.
+    assert config.cameras[0].talk.backend == "tapo_local"
+
+
+def test_camera_talk_rejects_unsafe_backend_name() -> None:
+    """Camera talk backend names should be safe public diagnostics identifiers."""
+    # Given: A config that accidentally places a credential-bearing URL in backend name
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "enabled": True,
+        "backend": "rtsp://admin:secret@example.local/stream1",
+        "config": {},
+    }
+
+    # When: validating the config.
+    # Then: validation rejects the unsafe diagnostic identifier before runtime.
     with pytest.raises(ValidationError) as exc_info:
         Config.model_validate(data)
 
-    assert "onvif_rtsp_backchannel" in str(exc_info.value)
+    message = str(exc_info.value)
+    assert "talk backend names" in message
+
+
+def test_camera_talk_backends_map_preserved_and_normalized() -> None:
+    """Camera talk config should preserve backend-specific config blocks."""
+    # Given: A config with future and ONVIF backend blocks
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "mode": "auto",
+        "backend": "auto",
+        "backends": {
+            "TAPO_LOCAL": {"host": "192.168.1.33", "port": 8800},
+            "ONVIF_RTSP_BACKCHANNEL": {"preferred_codecs": ["PCMA/8000"]},
+        },
+    }
+
+    # When: validating the config.
+    config = Config.model_validate(data)
+
+    # Then: backend config blocks are available under normalized names.
+    talk = config.cameras[0].talk
+    assert talk.backends["tapo_local"] == {"host": "192.168.1.33", "port": 8800}
+    assert talk.config_for_backend("onvif_rtsp_backchannel") == {"preferred_codecs": ["PCMA/8000"]}
+
+
+def test_camera_talk_rejects_unsafe_backend_map_key() -> None:
+    """Camera talk backend map keys should use safe public identifiers."""
+    # Given: A backend-specific config block with an unsafe key
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "mode": "auto",
+        "backends": {
+            "Bearer secret-token": {"host": "192.168.1.33"},
+        },
+    }
+
+    # When: validating the config.
+    # Then: validation rejects the unsafe key without preserving it for diagnostics.
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(data)
+
+    message = str(exc_info.value)
+    assert "talk backend names" in message
+
+
+def test_camera_talk_config_alias_for_explicit_onvif_backend() -> None:
+    """Legacy talk.config should remain the config for an explicit ONVIF backend."""
+    # Given: Existing ONVIF-style camera talk config using the legacy config field
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "backend": "onvif_rtsp_backchannel",
+        "config": {"preferred_codecs": ["PCMA/8000"]},
+    }
+
+    # When: validating the config.
+    config = Config.model_validate(data)
+
+    # Then: The compatibility config alias resolves for ONVIF.
+    assert config.cameras[0].talk.config_for_backend("onvif_rtsp_backchannel") == {
+        "preferred_codecs": ["PCMA/8000"]
+    }
+
+
+def test_camera_talk_config_alias_for_auto_onvif_backend() -> None:
+    """Legacy talk.config should remain the ONVIF config during backend auto mode."""
+    # Given: Auto backend config with legacy ONVIF options in talk.config
+    data = minimal_config()
+    camera = data["cameras"][0]
+    assert isinstance(camera, dict)
+    camera["talk"] = {
+        "backend": "auto",
+        "config": {"preferred_codecs": ["PCMA/8000"]},
+    }
+
+    # When: validating the config.
+    config = Config.model_validate(data)
+
+    # Then: The compatibility config alias resolves for the ONVIF candidate.
+    assert config.cameras[0].talk.config_for_backend("onvif_rtsp_backchannel") == {
+        "preferred_codecs": ["PCMA/8000"]
+    }
 
 
 def test_rtsp_talk_backend_config_is_validated_during_config_load() -> None:

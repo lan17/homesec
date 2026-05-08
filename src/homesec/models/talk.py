@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from homesec.talk.backend_ids import sanitize_talk_backend_id, sanitize_talk_backend_reason
+
 
 class TalkState(StrEnum):
     """Current talk capability/session state for a camera."""
@@ -30,6 +32,7 @@ class TalkCapabilityState(StrEnum):
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
     UNSUPPORTED_CODEC = "unsupported_codec"
+    CONFIG_ERROR = "config_error"
     ERROR = "error"
 
 
@@ -43,6 +46,8 @@ class TalkRefusalReason(StrEnum):
     SESSION_BUDGET_EXHAUSTED = "session_budget_exhausted"
     UNSUPPORTED_CAMERA = "unsupported_camera"
     UNSUPPORTED_CODEC = "unsupported_codec"
+    TALK_CONFIG_ERROR = "talk_config_error"
+    TALK_AUTH_FAILED = "talk_auth_failed"
     CAMERA_BACKCHANNEL_FAILED = "camera_backchannel_failed"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
     INVALID_AUDIO_FRAME = "invalid_audio_frame"
@@ -97,7 +102,14 @@ class CameraTalkStatus(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
     last_error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_backend_diagnostics(cls, value: object) -> object:
+        return sanitize_talk_backend_diagnostic_fields(value)
 
     @model_validator(mode="after")
     def _derive_compatibility_defaults(self) -> CameraTalkStatus:
@@ -107,6 +119,29 @@ class CameraTalkStatus(BaseModel):
         if "capability" not in self.model_fields_set:
             self.capability = _capability_from_state(self.state)
         return self
+
+
+def sanitize_talk_backend_diagnostic_fields(value: object) -> object:
+    """Normalize or drop unsafe backend IDs before public diagnostics."""
+    if not isinstance(value, dict):
+        return value
+
+    if "backend" not in value and "backend_reason" not in value:
+        return value
+
+    sanitized_value = dict(value)
+
+    if "backend" in sanitized_value:
+        raw_backend = sanitized_value.get("backend")
+        sanitized_value["backend"] = (
+            sanitize_talk_backend_id(raw_backend) if raw_backend is not None else None
+        )
+
+    if "backend_reason" in sanitized_value:
+        sanitized_value["backend_reason"] = sanitize_talk_backend_reason(
+            sanitized_value["backend_reason"]
+        )
+    return sanitized_value
 
 
 def _capability_from_state(state: TalkState) -> TalkCapabilityState:

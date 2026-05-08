@@ -1372,6 +1372,8 @@ describe('HomeSecApiClient push-to-talk', () => {
           supported_codecs: ['pcm_s16le'],
           offered_codecs: ['PCMU/8000'],
           selected_codec: 'pcm_s16le',
+          backend: 'onvif_rtsp_backchannel',
+          backend_reason: 'Selected ONVIF RTSP backchannel by standards-first auto probing',
           last_error: null,
         }),
         {
@@ -1396,6 +1398,8 @@ describe('HomeSecApiClient push-to-talk', () => {
       supported_codecs: ['pcm_s16le'],
       offered_codecs: ['PCMU/8000'],
       selected_codec: 'pcm_s16le',
+      backend: 'onvif_rtsp_backchannel',
+      backend_reason: 'Selected ONVIF RTSP backchannel by standards-first auto probing',
       last_error: null,
       httpStatus: 200,
     })
@@ -1403,6 +1407,40 @@ describe('HomeSecApiClient push-to-talk', () => {
       'http://localhost:8081/api/v1/talk/cameras/front',
       expect.objectContaining({ method: 'GET' }),
     )
+  })
+
+  it('parses talk config-error capability status', async () => {
+    // Given: A talk status endpoint response with a static backend config error
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          camera_name: 'front',
+          enabled: true,
+          policy_enabled: true,
+          capability: 'config_error',
+          state: 'error',
+          active_session_id: null,
+          supported_codecs: ['PCMU/8000'],
+          offered_codecs: [],
+          selected_codec: null,
+          backend: 'onvif_rtsp_backchannel',
+          backend_reason: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+          last_error: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Requesting talk status
+    const result = await client.getCameraTalkStatus('front')
+
+    // Then: The parser accepts the config_error capability value
+    expect(result.capability).toBe('config_error')
+    expect(result.last_error).toBe("Talk backend 'onvif_rtsp_backchannel' config is invalid")
   })
 
   it('prepares and stops talk sessions with typed payloads', async () => {

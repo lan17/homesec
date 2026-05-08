@@ -14,6 +14,7 @@ from homesec.models.talk import (
     TalkRefusalReason,
     TalkSessionPrepareResult,
     TalkState,
+    sanitize_talk_backend_diagnostic_fields,
 )
 from homesec.runtime.models import PreviewRefusalReason, PreviewState
 
@@ -69,7 +70,14 @@ class WorkerTalkStatusPayload(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
     last_error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_backend_diagnostics(cls, value: object) -> object:
+        return sanitize_talk_backend_diagnostic_fields(value)
 
     @model_validator(mode="after")
     def _derive_compatibility_defaults(self) -> WorkerTalkStatusPayload:
@@ -92,6 +100,8 @@ class WorkerTalkStatusPayload(BaseModel):
             supported_codecs=list(status.supported_codecs),
             offered_codecs=list(status.offered_codecs),
             selected_codec=status.selected_codec,
+            backend=status.backend,
+            backend_reason=status.backend_reason,
             last_error=status.last_error,
         )
 

@@ -6,7 +6,7 @@ import hashlib
 
 import pytest
 
-from homesec.sources.rtsp.talk.errors import RTSPProtocolError
+from homesec.sources.rtsp.talk.errors import RTSPAuthenticationError, RTSPProtocolError
 from homesec.sources.rtsp.talk.rtsp_auth import (
     RTSPCredentials,
     build_authorization_header,
@@ -293,6 +293,57 @@ async def test_rtsp_client_rejects_malformed_live_content_length(
     # Then: The live response path raises the same typed protocol error as raw parsing
     with pytest.raises(RTSPProtocolError, match="Content-Length"):
         await client.describe()
+
+
+@pytest.mark.asyncio
+async def test_rtsp_client_maps_unsupported_auth_challenge_to_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: A camera returns an unsupported RTSP auth challenge containing sensitive-looking text
+    reader = asyncio.StreamReader()
+    reader.feed_data(
+        b"RTSP/1.0 401 Unauthorized\r\n"
+        b"CSeq: 1\r\n"
+        b'WWW-Authenticate: Bearer realm="rtsp://alice:secret@camera.local"\r\n'
+        b"\r\n"
+    )
+    written: list[bytes] = []
+
+    class _Writer:
+        def write(self, data: bytes) -> None:
+            written.append(data)
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_open_connection(host: str, port: int) -> tuple[asyncio.StreamReader, _Writer]:
+        _ = (host, port)
+        return reader, _Writer()
+
+    monkeypatch.setattr(asyncio, "open_connection", _fake_open_connection)
+    client = RTSPClient(
+        RTSPConnectionConfig(
+            url="rtsp://camera.local/live",
+            credentials=RTSPCredentials(username="alice", password="secret"),
+        )
+    )
+    await client.connect()
+
+    # When: The client retries after the unsupported challenge
+    # Then: It raises a typed auth error before sending credentials or exposing challenge details
+    with pytest.raises(RTSPAuthenticationError) as exc_info:
+        await client.describe()
+
+    assert str(exc_info.value) == "Camera RTSP authentication challenge is not supported"
+    assert "alice:secret" not in str(exc_info.value)
+    assert len(written) == 1
+    assert b"Authorization" not in written[0]
 
 
 def test_parse_interleaved_channels() -> None:

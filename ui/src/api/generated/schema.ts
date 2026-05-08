@@ -653,10 +653,15 @@ export interface components {
         CameraTalkConfig: {
             /**
              * Backend
-             * @default onvif_rtsp_backchannel
-             * @constant
+             * @default auto
              */
-            backend: "onvif_rtsp_backchannel";
+            backend: string;
+            /** Backends */
+            backends?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                } | components["schemas"]["BaseModel"];
+            };
             /** Config */
             config?: {
                 [key: string]: unknown;
@@ -1216,7 +1221,7 @@ export interface components {
          * @description Discovered camera talk capability independent from session state.
          * @enum {string}
          */
-        TalkCapabilityState: "disabled" | "unknown" | "probing" | "supported" | "unsupported" | "unsupported_codec" | "error";
+        TalkCapabilityState: "disabled" | "unknown" | "probing" | "supported" | "unsupported" | "unsupported_codec" | "config_error" | "error";
         /**
          * TalkInputFormat
          * @description Browser input frame format contract for push-to-talk.
@@ -1281,6 +1286,10 @@ export interface components {
         TalkStatusResponse: {
             /** Active Session Id */
             active_session_id?: string | null;
+            /** Backend */
+            backend?: string | null;
+            /** Backend Reason */
+            backend_reason?: string | null;
             /** Camera Name */
             camera_name: string;
             capability: components["schemas"]["TalkCapabilityState"];

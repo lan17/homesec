@@ -387,6 +387,8 @@ async def test_subprocess_controller_uses_extended_timeout_for_talk_status(
                 enabled=True,
                 policy_enabled=True,
                 state=TalkState.IDLE,
+                backend="onvif_rtsp_backchannel",
+                backend_reason="Selected ONVIF RTSP backchannel by standards-first auto probing",
             ),
         )
 
@@ -399,6 +401,11 @@ async def test_subprocess_controller_uses_extended_timeout_for_talk_status(
         # Then: The command uses the extended talk timeout for camera probing
         assert observed_timeout_s == [7.5]
         assert status.state == TalkState.IDLE
+        assert status.backend == "onvif_rtsp_backchannel"
+        assert (
+            status.backend_reason
+            == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+        )
     finally:
         runtime.process = None
         await controller._finalize_handle(runtime)
@@ -669,6 +676,8 @@ async def test_subprocess_controller_uses_extended_timeout_for_talk_stream_open(
                 policy_enabled=True,
                 state=TalkState.ACTIVE,
                 selected_codec="PCMU/8000",
+                backend="onvif_rtsp_backchannel",
+                backend_reason="Selected ONVIF RTSP backchannel by standards-first auto probing",
             ),
         )
 
@@ -687,6 +696,11 @@ async def test_subprocess_controller_uses_extended_timeout_for_talk_stream_open(
 
         # Then: The controller waits for the extended talk timeout and keeps the stream open
         assert stream.selected_codec == "PCMU/8000"
+        assert stream.backend == "onvif_rtsp_backchannel"
+        assert (
+            stream.backend_reason
+            == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+        )
         assert stream.writer is writer
         assert writer.closed is False
     finally:

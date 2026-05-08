@@ -75,6 +75,8 @@ function capabilityMessage(status: TalkStatusResponse | null): string | null {
       return `Camera talkback codec is not supported. Offered: ${codecList(status.offered_codecs)}. Supported: ${codecList(status.supported_codecs)}.`
     case 'unsupported':
       return status.last_error ?? 'This camera does not advertise a talkback channel.'
+    case 'config_error':
+      return status.last_error ?? status.backend_reason ?? 'Talkback configuration is invalid.'
     case 'error':
       return status.last_error
         ? `Talkback capability check failed: ${status.last_error}`

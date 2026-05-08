@@ -167,6 +167,8 @@ class _StubTalkApp:
             reader=cast(asyncio.StreamReader, object()),
             writer=cast(asyncio.StreamWriter, self.stream_writer),
             selected_codec=self._status.selected_codec or "PCMU/8000",
+            backend=self._status.backend,
+            backend_reason=self._status.backend_reason,
         )
 
     async def stop_camera_talk_session(
@@ -204,6 +206,8 @@ def test_get_talk_status_returns_runtime_status() -> None:
             active_session_id="session-1",
             supported_codecs=["pcmu"],
             selected_codec="pcmu",
+            backend="onvif_rtsp_backchannel",
+            backend_reason="Selected ONVIF RTSP backchannel by standards-first auto probing",
             last_error=None,
         )
     )
@@ -225,6 +229,8 @@ def test_get_talk_status_returns_runtime_status() -> None:
         "supported_codecs": ["pcmu"],
         "offered_codecs": [],
         "selected_codec": "pcmu",
+        "backend": "onvif_rtsp_backchannel",
+        "backend_reason": "Selected ONVIF RTSP backchannel by standards-first auto probing",
         "last_error": None,
     }
 
@@ -251,7 +257,108 @@ def test_get_talk_status_returns_disabled_camera_status() -> None:
     assert response.status_code == 200
     assert response.json()["enabled"] is False
     assert response.json()["state"] == "disabled"
+    assert response.json()["backend"] is None
+    assert response.json()["backend_reason"] is None
     assert app.open_calls == []
+
+
+def test_talk_status_response_sanitizes_unsafe_backend_diagnostics() -> None:
+    """API talk status responses should not expose unsafe backend identifiers."""
+    # Given: A status response is built with unsafe backend diagnostics
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend="rtsp://admin:secret@example.local/stream1",
+        backend_reason="selected rtsp://admin:secret@example.local/stream1",
+    )
+
+    # Then: The public diagnostic fields are dropped
+    assert response.backend is None
+    assert response.backend_reason is None
+
+
+def test_talk_status_response_preserves_safe_backend_reason_without_backend() -> None:
+    """API talk status responses should preserve safe reason-only diagnostics."""
+    # Given: A status response is built with a safe backend reason but no backend
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="unsupported",
+        state="unsupported",
+        backend=None,
+        backend_reason=(
+            "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+        ),
+    )
+
+    # Then: The standalone public diagnostic reason is preserved
+    assert response.backend is None
+    assert response.backend_reason == (
+        "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+    )
+
+
+def test_talk_status_response_drops_unsafe_backend_reason_without_backend() -> None:
+    """API talk status responses should not expose unsafe standalone backend reasons."""
+    # Given: A status response is built with an unsafe backend reason but no backend
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend=None,
+        backend_reason="selected rtsp://admin:secret@example.local/stream1",
+    )
+
+    # Then: The unsafe standalone public diagnostic reason is dropped
+    assert response.backend is None
+    assert response.backend_reason is None
+
+
+def test_talk_status_response_drops_secret_bearing_backend_reason() -> None:
+    """API talk status responses should not expose secret-bearing backend reasons."""
+    # Given: A status response is built with a safe backend ID and unsafe reason
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend="vendor_backend",
+        backend_reason="selected rtsp://admin:secret@example.local/stream1",
+    )
+
+    # Then: The backend ID is preserved but the unsafe reason is dropped
+    assert response.backend == "vendor_backend"
+    assert response.backend_reason is None
+
+
+def test_talk_status_response_drops_raw_sdp_backend_reason() -> None:
+    """API talk status responses should not expose raw SDP backend reasons."""
+    # Given: A status response is built with a safe backend ID and SDP reason
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="error",
+        state="error",
+        backend="vendor_backend",
+        backend_reason="SDP answer v=0 m=audio 0 RTP/AVP 0",
+    )
+
+    # Then: The backend ID is preserved but the raw SDP reason is dropped
+    assert response.backend == "vendor_backend"
+    assert response.backend_reason is None
 
 
 def test_get_talk_status_returns_unsupported_source_status() -> None:
@@ -500,6 +607,16 @@ def test_prepare_talk_session_requires_api_key_when_auth_enabled(
             APIErrorCode.TALK_UNSUPPORTED_CODEC,
         ),
         (
+            TalkRefusalReason.TALK_CONFIG_ERROR,
+            status.HTTP_400_BAD_REQUEST,
+            APIErrorCode.TALK_CONFIG_ERROR,
+        ),
+        (
+            TalkRefusalReason.TALK_AUTH_FAILED,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            APIErrorCode.TALK_AUTH_FAILED,
+        ),
+        (
             TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
             status.HTTP_503_SERVICE_UNAVAILABLE,
             APIErrorCode.TALK_CAMERA_BACKCHANNEL_FAILED,
@@ -655,6 +772,8 @@ def test_talk_websocket_forwards_binary_frames_to_runtime_stream() -> None:
             "session_id": "session-1",
             "input": input_format.model_dump(mode="json"),
             "camera_codec": "PCMU/8000",
+            "backend": None,
+            "backend_reason": None,
         }
         websocket.send_bytes(frame)
         websocket.send_text(_stop_message())
@@ -967,6 +1086,33 @@ def test_talk_websocket_maps_backpressure_refusal_to_internal_error_close() -> N
 
     assert disconnect.value.code == 1011
     assert disconnect.value.reason == "Talk stream unavailable"
+    assert app.stop_calls == [("front", "session-1")]
+
+
+def test_talk_websocket_maps_auth_refusal_to_auth_close_reason() -> None:
+    """Camera credential failures should be distinguishable from transient stream failures."""
+    # Given: Runtime refuses stream attachment because the camera rejected credentials.
+    # When: The client starts the prepared WebSocket stream.
+    # Then: The API maps it to a safe auth-specific close reason and stops the session.
+    app = _StubTalkApp(
+        open_error=TalkStreamOpenRefused(
+            "Camera talk backchannel authentication failed",
+            reason=TalkRefusalReason.TALK_AUTH_FAILED,
+        )
+    )
+    client = _client(app)
+
+    with (
+        client.websocket_connect(
+            "/api/v1/talk/cameras/front/sessions/session-1/stream"
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect) as disconnect,
+    ):
+        websocket.send_text(_start_message(TalkInputFormat()))
+        websocket.receive_text()
+
+    assert disconnect.value.code == 1011
+    assert disconnect.value.reason == "Camera talk authentication failed"
     assert app.stop_calls == [("front", "session-1")]
 
 

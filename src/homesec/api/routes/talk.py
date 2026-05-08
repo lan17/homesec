@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
@@ -26,6 +26,7 @@ from homesec.models.talk import (
     TalkInputFormat,
     TalkRefusalReason,
     TalkState,
+    sanitize_talk_backend_diagnostic_fields,
 )
 from homesec.runtime.errors import (
     TalkCameraNotFoundError,
@@ -62,7 +63,14 @@ class TalkStatusResponse(BaseModel):
     supported_codecs: list[str] = Field(default_factory=list)
     offered_codecs: list[str] = Field(default_factory=list)
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
     last_error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_backend_diagnostics(cls, value: object) -> object:
+        return sanitize_talk_backend_diagnostic_fields(value)
 
 
 class TalkSessionRequest(BaseModel):
@@ -132,6 +140,8 @@ def _status_response(talk_status: CameraTalkStatus) -> TalkStatusResponse:
         supported_codecs=list(talk_status.supported_codecs),
         offered_codecs=list(talk_status.offered_codecs),
         selected_codec=talk_status.selected_codec,
+        backend=talk_status.backend,
+        backend_reason=talk_status.backend_reason,
         last_error=talk_status.last_error,
     )
 
@@ -171,6 +181,10 @@ def _refusal_status_and_code(reason: TalkRefusalReason) -> tuple[int, APIErrorCo
             return status.HTTP_409_CONFLICT, APIErrorCode.TALK_UNSUPPORTED_CAMERA
         case TalkRefusalReason.UNSUPPORTED_CODEC:
             return status.HTTP_400_BAD_REQUEST, APIErrorCode.TALK_UNSUPPORTED_CODEC
+        case TalkRefusalReason.TALK_CONFIG_ERROR:
+            return status.HTTP_400_BAD_REQUEST, APIErrorCode.TALK_CONFIG_ERROR
+        case TalkRefusalReason.TALK_AUTH_FAILED:
+            return status.HTTP_503_SERVICE_UNAVAILABLE, APIErrorCode.TALK_AUTH_FAILED
         case TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED:
             return status.HTTP_503_SERVICE_UNAVAILABLE, APIErrorCode.TALK_CAMERA_BACKCHANNEL_FAILED
         case TalkRefusalReason.RUNTIME_UNAVAILABLE:
@@ -355,6 +369,8 @@ class TalkWebSocketSession:
                     "session_id": self.session_id,
                     "input": input_format.model_dump(mode="json"),
                     "camera_codec": stream.selected_codec,
+                    "backend": stream.backend,
+                    "backend_reason": stream.backend_reason,
                 }
             )
             await _forward_websocket_frames(
@@ -439,9 +455,12 @@ def _talk_stream_refusal_close(reason: TalkRefusalReason) -> tuple[int, str]:
             | TalkRefusalReason.SESSION_BUDGET_EXHAUSTED
             | TalkRefusalReason.UNSUPPORTED_CAMERA
             | TalkRefusalReason.UNSUPPORTED_CODEC
+            | TalkRefusalReason.TALK_CONFIG_ERROR
             | TalkRefusalReason.INVALID_AUDIO_FRAME
         ):
             return status.WS_1008_POLICY_VIOLATION, "Talk stream refused"
+        case TalkRefusalReason.TALK_AUTH_FAILED:
+            return status.WS_1011_INTERNAL_ERROR, "Camera talk authentication failed"
         case (
             TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
             | TalkRefusalReason.RUNTIME_UNAVAILABLE

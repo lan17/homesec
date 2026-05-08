@@ -485,6 +485,8 @@ class _WorkerHarnessController(RuntimeController):
             supported_codecs=result.talk_status.supported_codecs,
             offered_codecs=result.talk_status.offered_codecs,
             selected_codec=result.talk_status.selected_codec,
+            backend=result.talk_status.backend,
+            backend_reason=result.talk_status.backend_reason,
             last_error=result.talk_status.last_error,
         )
 
@@ -566,6 +568,10 @@ class _WorkerHarnessController(RuntimeController):
             selected_codec = (
                 result.talk_status.selected_codec if result.talk_status is not None else None
             )
+            backend = result.talk_status.backend if result.talk_status is not None else None
+            backend_reason = (
+                result.talk_status.backend_reason if result.talk_status is not None else None
+            )
             close_writer = False
             return RuntimeTalkStream(
                 camera_name=camera_name,
@@ -574,6 +580,8 @@ class _WorkerHarnessController(RuntimeController):
                 reader=reader,
                 writer=writer,
                 selected_codec=selected_codec,
+                backend=backend,
+                backend_reason=backend_reason,
             )
         finally:
             if close_writer:
@@ -916,6 +924,11 @@ def test_talk_status_discovers_fake_onvif_backchannel(tmp_path: Path) -> None:
             assert payload["state"] == "idle"
             assert payload["offered_codecs"] == ["PCMU/8000"]
             assert payload["selected_codec"] == "PCMU/8000"
+            assert payload["backend"] == "onvif_rtsp_backchannel"
+            assert (
+                payload["backend_reason"]
+                == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+            )
         server.wait_for_methods(["DESCRIBE"])
     finally:
         if app is not None:
@@ -969,6 +982,8 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
                     "session_id": "tk_e2e",
                     "input": input_format.model_dump(mode="json"),
                     "camera_codec": "PCMU/8000",
+                    "backend": "onvif_rtsp_backchannel",
+                    "backend_reason": "Selected ONVIF RTSP backchannel by standards-first auto probing",
                 }
                 websocket.send_bytes(first_frame)
                 websocket.send_bytes(second_frame)
@@ -976,7 +991,7 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
                 with pytest.raises(WebSocketDisconnect):
                     websocket.receive_text()
 
-        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(2)
     finally:
         if app is not None:
@@ -990,7 +1005,6 @@ def test_talk_websocket_streams_pcm_to_fake_onvif_backchannel(
 
     # Then: The fake camera sees the ONVIF handshake and only post-PLAY RTP audio.
     assert [request.method for request in requests] == [
-        "DESCRIBE",
         "DESCRIBE",
         "SETUP",
         "PLAY",
@@ -1055,7 +1069,7 @@ def test_talk_websocket_negotiates_pcma_backchannel(tmp_path: Path) -> None:
                 with pytest.raises(WebSocketDisconnect):
                     websocket.receive_text()
 
-        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
         server.wait_for_rtp_packets(1)
     finally:
         if app is not None:
@@ -1102,7 +1116,7 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
                 websocket.receive_json()
                 websocket.send_bytes(_pcm_frame(input_format, 500))
 
-        server.wait_for_methods(["DESCRIBE", "DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        server.wait_for_methods(["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
     finally:
         if app is not None:
             _run(app.shutdown())
@@ -1111,7 +1125,6 @@ def test_talk_websocket_disconnect_tears_down_fake_camera_session(tmp_path: Path
     with server._lock:
         # Then: The worker/source cleanup sent TEARDOWN and did not emit pre-PLAY RTP.
         assert [request.method for request in server.requests] == [
-            "DESCRIBE",
             "DESCRIBE",
             "SETUP",
             "PLAY",

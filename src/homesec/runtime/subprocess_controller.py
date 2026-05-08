@@ -792,6 +792,10 @@ class SubprocessRuntimeController(RuntimeController):
             selected_codec = (
                 result.talk_status.selected_codec if result.talk_status is not None else None
             )
+            backend = result.talk_status.backend if result.talk_status is not None else None
+            backend_reason = (
+                result.talk_status.backend_reason if result.talk_status is not None else None
+            )
             close_writer = False
             return RuntimeTalkStream(
                 camera_name=camera_name,
@@ -800,6 +804,8 @@ class SubprocessRuntimeController(RuntimeController):
                 reader=reader,
                 writer=writer,
                 selected_codec=selected_codec,
+                backend=backend,
+                backend_reason=backend_reason,
             )
         except TalkCameraNotFoundError:
             raise
@@ -921,6 +927,8 @@ class SubprocessRuntimeController(RuntimeController):
             supported_codecs=list(payload.supported_codecs),
             offered_codecs=list(payload.offered_codecs),
             selected_codec=payload.selected_codec,
+            backend=payload.backend,
+            backend_reason=payload.backend_reason,
             last_error=payload.last_error,
         )
 

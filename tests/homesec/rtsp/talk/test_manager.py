@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import pytest
@@ -39,6 +40,15 @@ async def _open_fake_session(request: TalkSessionOpenRequest) -> _FakeSession:
     return _FakeSession(session_id=request.session_id)
 
 
+async def _wait_until(predicate: Callable[[], bool], *, timeout_s: float = 0.5) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition was not reached before timeout")
+
+
 def _manager(*, max_session_s: float = 60.0, idle_timeout_s: float = 60.0) -> TalkManager:
     return TalkManager(
         camera_name="front",
@@ -48,6 +58,39 @@ def _manager(*, max_session_s: float = 60.0, idle_timeout_s: float = 60.0) -> Ta
         max_session_s=max_session_s,
         idle_timeout_s=idle_timeout_s,
     )
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_prepare_maps_config_error_capability_to_config_refusal() -> None:
+    """Static backend config failures should produce operator-actionable refusals."""
+
+    async def _probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.CONFIG_ERROR,
+            message="Talk backend 'vendor_backend' config is invalid",
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=[],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_probe,
+    )
+
+    # Given: A manager whose backend selector found a static config error
+    # When: Refreshing status and preparing a session
+    status = await manager.refresh_status()
+    result = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_config"))
+
+    # Then: Status is error and prepare refuses with talk_config_error
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.state == TalkState.ERROR
+    assert result.accepted is False
+    assert result.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert result.message == "Talk backend 'vendor_backend' config is invalid"
 
 
 @pytest.mark.asyncio
@@ -90,6 +133,202 @@ async def test_talk_manager_refresh_status_probes_and_caches_capability() -> Non
     assert first.selected_codec == "PCMA/8000"
     assert second.capability == TalkCapabilityState.SUPPORTED
     assert probe_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_prepare_uses_prepare_probe_factory() -> None:
+    """Prepare can use a backend probe that preserves protocol state for open."""
+    status_probe_calls = 0
+    prepare_probe_calls = 0
+
+    async def _status_probe() -> TalkCapabilityProbeResult:
+        nonlocal status_probe_calls
+        status_probe_calls += 1
+        return TalkCapabilityProbeResult(
+            capability=TalkCapabilityState.UNSUPPORTED,
+            refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+            message="status probe is not the open-preserving path",
+        )
+
+    async def _prepare_probe() -> TalkCapabilityProbeResult:
+        nonlocal prepare_probe_calls
+        prepare_probe_calls += 1
+        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        capability_probe_factory=_status_probe,
+        prepare_capability_probe_factory=_prepare_probe,
+    )
+
+    # Given: Status probing and prepare probing use different backend paths
+    status = await manager.refresh_status(force=True)
+
+    # When: Preparing a talk session after the status probe reported unsupported
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_1"))
+
+    # Then: Prepare uses the open-preserving probe path and accepts the session
+    assert status.capability == TalkCapabilityState.UNSUPPORTED
+    assert prepared.accepted is True
+    assert prepared.session_id == "tk_1"
+    assert status_probe_calls == 1
+    assert prepare_probe_calls == 1
+
+    await manager.stop_session("tk_1")
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_stop_clears_prepared_probe_for_reserved_session() -> None:
+    """Stopping an unopened reservation should release prepare-time backend state."""
+    cleanup_calls = 0
+
+    async def _prepare_probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    async def _cleanup() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        prepare_capability_probe_factory=_prepare_probe,
+        prepare_probe_cleanup=_cleanup,
+    )
+
+    # Given: A prepared reservation with backend state cached for open
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_cleanup"))
+
+    # When: The browser stops before the runtime opens a camera session
+    stopped = await manager.stop_session("tk_cleanup")
+
+    # Then: The manager clears the prepared backend state immediately
+    assert prepared.accepted is True
+    assert stopped is True
+    assert cleanup_calls == 1
+    assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_timeout_clears_prepared_probe_for_reserved_session() -> None:
+    """Reservation timeout should release prepare-time backend state."""
+    cleanup_calls = 0
+
+    async def _prepare_probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    async def _cleanup() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=0.01,
+        idle_timeout_s=60.0,
+        prepare_capability_probe_factory=_prepare_probe,
+        prepare_probe_cleanup=_cleanup,
+    )
+
+    # Given: A prepared reservation that never opens
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_timeout"))
+
+    # When: The reservation reaches the max-session timeout before WebSocket open
+    await _wait_until(lambda: cleanup_calls == 1)
+
+    # Then: Timeout cleanup clears the prepared backend state and releases the slot
+    assert prepared.accepted is True
+    assert cleanup_calls == 1
+    assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_shutdown_clears_prepared_probe_for_reserved_session() -> None:
+    """Runtime shutdown should release prepare-time backend state for reservations."""
+    cleanup_calls = 0
+
+    async def _prepare_probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    async def _cleanup() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_fake_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        prepare_capability_probe_factory=_prepare_probe,
+        prepare_probe_cleanup=_cleanup,
+    )
+
+    # Given: A prepared reservation with backend state cached for open
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_shutdown"))
+
+    # When: The manager shuts down before the runtime opens a camera session
+    await manager.shutdown()
+
+    # Then: Shutdown clears the prepared backend state and releases the slot
+    assert prepared.accepted is True
+    assert cleanup_calls == 1
+    assert manager.status().state == TalkState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_talk_manager_open_failure_clears_prepared_probe() -> None:
+    """Failed session open should release any unconsumed prepare-time backend state."""
+    cleanup_calls = 0
+
+    async def _prepare_probe() -> TalkCapabilityProbeResult:
+        return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
+
+    async def _cleanup() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    async def _open_failing_session(request: TalkSessionOpenRequest) -> _FakeSession:
+        _ = request
+        raise TalkManagerError(
+            "camera rejected SETUP",
+            reason=TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED,
+        )
+
+    manager = TalkManager(
+        camera_name="front",
+        enabled=True,
+        supported_codecs=["PCMU/8000"],
+        open_session_factory=_open_failing_session,
+        max_session_s=60.0,
+        idle_timeout_s=60.0,
+        prepare_capability_probe_factory=_prepare_probe,
+        prepare_probe_cleanup=_cleanup,
+    )
+
+    # Given: A prepared reservation whose camera open fails before claiming a session
+    prepared = await manager.prepare_session(TalkSessionPrepareRequest(session_id="tk_open_failed"))
+
+    # When: Opening the reserved session fails
+    with pytest.raises(TalkManagerError):
+        await manager.open_session(TalkSessionOpenRequest(session_id="tk_open_failed"))
+
+    # Then: The manager clears prepared backend state as it releases the reservation
+    assert prepared.accepted is True
+    assert cleanup_calls == 1
+    assert manager.status().state == TalkState.IDLE
 
 
 @pytest.mark.asyncio

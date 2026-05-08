@@ -10,7 +10,12 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
-from homesec.models.talk import TalkInputFormat, TalkRefusalReason, TalkState
+from homesec.models.talk import (
+    TalkInputFormat,
+    TalkRefusalReason,
+    TalkState,
+    sanitize_talk_backend_diagnostic_fields,
+)
 from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
 
@@ -147,6 +152,19 @@ class RuntimeTalkStream:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     selected_codec: str | None = None
+    backend: str | None = None
+    backend_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """Drop unsafe backend diagnostics before WebSocket publication."""
+        sanitized = sanitize_talk_backend_diagnostic_fields(
+            {"backend": self.backend, "backend_reason": self.backend_reason}
+        )
+        if isinstance(sanitized, dict):
+            backend = sanitized.get("backend")
+            backend_reason = sanitized.get("backend_reason")
+            self.backend = backend if isinstance(backend, str) else None
+            self.backend_reason = backend_reason if isinstance(backend_reason, str) else None
 
 
 @dataclass(slots=True)

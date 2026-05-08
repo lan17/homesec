@@ -9,12 +9,14 @@ from dataclasses import dataclass, field
 
 import pytest
 
+import homesec.sources.rtsp.talk.onvif_backchannel as onvif_backchannel
 from homesec.models.talk import TalkCapabilityState, TalkRefusalReason
 from homesec.sources.rtsp.talk.errors import (
     CameraBackchannelUnsupportedError,
     CameraRejectedTalkSessionError,
     CameraTalkStreamFailedError,
     RTSPAuthenticationError,
+    RTSPProtocolError,
     UnsupportedTalkCodecError,
 )
 from homesec.sources.rtsp.talk.g711 import encode_pcma
@@ -62,11 +64,13 @@ class _FakeRTSPBackchannelServer:
     setup_session_header: str | None = "homesec-talk;timeout=60"
     content_base_header: str | None = None
     content_location_header: str | None = None
+    describe_statuses: list[int] = field(default_factory=list)
     interleaved_before_response_methods: set[str] = field(default_factory=set)
     sdp_body: bytes = field(default_factory=lambda: _BACKCHANNEL_SDP.encode())
     requests: list[_RTSPRequest] = field(default_factory=list)
     interleaved_before_play: list[tuple[int, bytes]] = field(default_factory=list)
     interleaved_after_play: list[tuple[int, bytes]] = field(default_factory=list)
+    closed_connections: int = 0
     _play_seen: bool = False
     _server: asyncio.AbstractServer | None = None
     _port: int | None = None
@@ -127,6 +131,7 @@ class _FakeRTSPBackchannelServer:
         finally:
             writer.close()
             await writer.wait_closed()
+            self.closed_connections += 1
 
     async def _read_request(
         self,
@@ -174,9 +179,12 @@ class _FakeRTSPBackchannelServer:
                     reason="Unauthorized",
                     headers={"WWW-Authenticate": self._digest_challenge_header()},
                 )
-            if self.describe_status != 200:
+            describe_status = (
+                self.describe_statuses.pop(0) if self.describe_statuses else self.describe_status
+            )
+            if describe_status != 200:
                 return _rtsp_response(
-                    cseq=cseq, status=self.describe_status, reason="Option Not Supported"
+                    cseq=cseq, status=describe_status, reason="Option Not Supported"
                 )
             headers = {"Content-Type": "application/sdp"}
             if self.content_base_header is not None:
@@ -327,6 +335,22 @@ def _selected(codec_name: str = "PCMU", payload_type: int = 0) -> SelectedBackch
     )
 
 
+async def _wait_for_closed_connections(
+    server: _FakeRTSPBackchannelServer,
+    count: int,
+    *,
+    timeout_s: float = 0.5,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        if server.closed_connections >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        f"Expected at least {count} closed RTSP connections, got {server.closed_connections}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_onvif_backchannel_probe_reports_supported_camera_without_setup() -> None:
     """Probe should classify support from DESCRIBE without opening a talk stream."""
@@ -351,6 +375,170 @@ async def test_onvif_backchannel_probe_reports_supported_camera_without_setup() 
     assert [request.method for request in server.requests] == ["DESCRIBE"]
     assert server.interleaved_before_play == []
     assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_reuses_successful_probe_for_session_open() -> None:
+    """Session open should not repeat DESCRIBE after a fresh successful probe."""
+    # Given: A camera that accepts the capability DESCRIBE but rejects another immediate DESCRIBE
+    server = _FakeRTSPBackchannelServer(describe_statuses=[200, 404])
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: A session opens immediately after capability probing
+        result = await adapter.probe_for_session_open()
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: The adapter reuses the probed SDP and proceeds straight to SETUP/PLAY
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert session.selected_codec == "PCMU/8000"
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_prepare_probe_matches_normal_probe_result() -> None:
+    """Session-open probe should report the same capability truth as normal probe."""
+    # Given: Two identical cameras, one for normal status probing and one for prepare probing
+    normal_server = _FakeRTSPBackchannelServer()
+    prepared_server = _FakeRTSPBackchannelServer()
+    await normal_server.start()
+    await prepared_server.start()
+    try:
+        normal_adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=normal_server.url),
+            camera_name="front_door",
+        )
+        prepared_adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=prepared_server.url),
+            camera_name="front_door",
+        )
+
+        # When: Running both probe variants against equivalent SDP
+        normal = await normal_adapter.probe()
+        prepared = await prepared_adapter.probe_for_session_open()
+        await prepared_adapter.clear_prepared_probe()
+    finally:
+        await normal_server.stop()
+        await prepared_server.stop()
+
+    # Then: The prepared probe differs only in resource handling, not capability truth
+    assert prepared.capability == normal.capability
+    assert prepared.offered_codecs == normal.offered_codecs
+    assert prepared.selected_codec == normal.selected_codec
+    assert prepared.refusal_reason == normal.refusal_reason
+    assert prepared.message == normal.message
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_clear_prepared_probe_releases_cached_connection() -> None:
+    """Explicit cleanup should release prepared RTSP state before open."""
+    # Given: A successful prepare probe that cached an RTSP DESCRIBE connection
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        result = await adapter.probe_for_session_open()
+
+        # When: The reservation is abandoned and the prepared probe is cleared
+        await adapter.clear_prepared_probe()
+        await _wait_for_closed_connections(server, 1)
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: Open performs a fresh DESCRIBE instead of reusing the cleared connection
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_replacing_prepared_probe_closes_old_connection() -> None:
+    """A newer prepare probe should close the older cached RTSP connection."""
+    # Given: A camera that accepts multiple prepare probes
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: A second prepare probe replaces the first cached connection
+        first = await adapter.probe_for_session_open()
+        second = await adapter.probe_for_session_open()
+        await _wait_for_closed_connections(server, 1)
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: The old connection was closed and open consumes the newer prepared probe
+    assert first.capability == TalkCapabilityState.SUPPORTED
+    assert second.capability == TalkCapabilityState.SUPPORTED
+    assert session.selected_codec == "PCMU/8000"
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_prepared_probe_cache_expires_without_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Abandoned prepared probes should expire even without explicit cleanup."""
+    # Given: A prepared probe cache with a short test TTL
+    monkeypatch.setattr(onvif_backchannel, "_PROBED_BACKCHANNEL_REUSE_TTL_S", 0.01)
+    server = _FakeRTSPBackchannelServer()
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+        result = await adapter.probe_for_session_open()
+
+        # When: No open consumes the cache before the TTL expires
+        await _wait_for_closed_connections(server, 1)
+        session = await adapter.open_session(session_id="talk-1")
+        await session.close()
+    finally:
+        await server.stop()
+
+    # Then: The expired cache is closed and open performs a fresh DESCRIBE
+    assert result.capability == TalkCapabilityState.SUPPORTED
+    assert [request.method for request in server.requests] == [
+        "DESCRIBE",
+        "DESCRIBE",
+        "SETUP",
+        "PLAY",
+        "TEARDOWN",
+    ]
 
 
 @pytest.mark.asyncio
@@ -439,6 +627,68 @@ async def test_onvif_backchannel_probe_reports_missing_backchannel() -> None:
     # Then: The result is an unsupported-camera capability
     assert result.capability == TalkCapabilityState.UNSUPPORTED
     assert result.refusal_reason == TalkRefusalReason.UNSUPPORTED_CAMERA
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_reports_auth_failure() -> None:
+    """Probe should distinguish camera auth rejection from retryable protocol failure."""
+    # Given: A camera that requires RTSP auth but no talk credentials are configured
+    server = _FakeRTSPBackchannelServer(require_basic_auth=True)
+    await server.start()
+    try:
+        adapter = ONVIFBackchannelAdapter(
+            ONVIFBackchannelConfig(rtsp_url=server.url),
+            camera_name="front_door",
+        )
+
+        # When: Probing camera talk capability
+        result = await adapter.probe()
+    finally:
+        await server.stop()
+
+    # Then: Capability is an auth failure and no SETUP/PLAY/RTP happens
+    assert result.capability == TalkCapabilityState.ERROR
+    assert result.refusal_reason == TalkRefusalReason.TALK_AUTH_FAILED
+    assert result.message == "Camera talk backchannel authentication failed"
+    assert [request.method for request in server.requests] == ["DESCRIBE"]
+    assert server.interleaved_before_play == []
+    assert server.interleaved_after_play == []
+
+
+@pytest.mark.asyncio
+async def test_onvif_backchannel_probe_redacts_protocol_parse_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probe errors should not expose raw malformed RTSP protocol payloads."""
+
+    class _ProtocolFailingClient:
+        async def connect(self) -> None:
+            return None
+
+        async def describe(self, *, headers: dict[str, str] | None = None) -> RTSPResponse:
+            _ = headers
+            raise RTSPProtocolError(
+                "Invalid RTSP status line: 'RTSP/1.0 500 rtsp://alice:secret@camera.local'"
+            )
+
+        async def close(self) -> None:
+            return None
+
+    adapter = ONVIFBackchannelAdapter(
+        ONVIFBackchannelConfig(rtsp_url="rtsp://camera.local/stream1"),
+        camera_name="front_door",
+    )
+    monkeypatch.setattr(adapter, "_client", lambda: _ProtocolFailingClient())
+
+    # Given: A camera returns malformed RTSP data containing sensitive-looking text
+    # When: Probing camera talk capability
+    result = await adapter.probe()
+
+    # Then: The public capability error is stable and omits the raw protocol payload
+    assert result.capability == TalkCapabilityState.ERROR
+    assert result.refusal_reason == TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
+    assert result.message == "Camera talk backchannel protocol failed"
+    assert "alice:secret" not in (result.message or "")
 
 
 @pytest.mark.asyncio

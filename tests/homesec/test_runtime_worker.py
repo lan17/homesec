@@ -542,6 +542,8 @@ async def test_runtime_worker_talk_status_uses_refreshable_source_status() -> No
                 state=TalkState.IDLE,
                 offered_codecs=["PCMA/8000"],
                 selected_codec="PCMA/8000",
+                backend="onvif_rtsp_backchannel",
+                backend_reason="Selected ONVIF RTSP backchannel by standards-first auto probing",
             )
 
         async def prepare_talk_session(
@@ -588,6 +590,11 @@ async def test_runtime_worker_talk_status_uses_refreshable_source_status() -> No
     assert result.talk_status.capability == TalkCapabilityState.SUPPORTED
     assert result.talk_status.state == TalkState.IDLE
     assert result.talk_status.offered_codecs == ["PCMA/8000"]
+    assert result.talk_status.backend == "onvif_rtsp_backchannel"
+    assert (
+        result.talk_status.backend_reason
+        == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+    )
 
 
 @pytest.mark.asyncio

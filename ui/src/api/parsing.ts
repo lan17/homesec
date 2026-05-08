@@ -572,12 +572,13 @@ function parseTalkCapabilityState(value: unknown, fieldName: string): TalkCapabi
     || value === 'supported'
     || value === 'unsupported'
     || value === 'unsupported_codec'
+    || value === 'config_error'
     || value === 'error'
   ) {
     return value
   }
   throw new Error(
-    `${fieldName} must be one of disabled|unknown|probing|supported|unsupported|unsupported_codec|error`,
+    `${fieldName} must be one of disabled|unknown|probing|supported|unsupported|unsupported_codec|config_error|error`,
   )
 }
 
@@ -604,6 +605,8 @@ export function parseTalkStatusResponse(payload: unknown): TalkStatusResponse {
         ? []
         : expectStringArray(rawOfferedCodecs, 'offered_codecs'),
     selected_codec: expectNullableString(payload.selected_codec, 'selected_codec'),
+    backend: expectNullableString(payload.backend, 'backend'),
+    backend_reason: expectNullableString(payload.backend_reason, 'backend_reason'),
     last_error: expectNullableString(payload.last_error, 'last_error'),
   }
 }

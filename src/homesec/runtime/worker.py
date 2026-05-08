@@ -812,13 +812,11 @@ class _RuntimeWorkerService:
             session = await source.open_talk_session(
                 TalkSessionOpenRequest(session_id=session_id, input=input_format)
             )
-            return WorkerCommandResult(
-                command=command.command,
-                command_id=command.command_id,
-                generation=self._generation,
-                correlation_id=self._correlation_id,
-                camera_name=command.camera_name,
-                talk_status=WorkerTalkStatusPayload(
+            try:
+                talk_status = source.talk_status()
+            except Exception:
+                talk_status = CameraTalkStatus(
+                    camera_name=command.camera_name,
                     enabled=True,
                     policy_enabled=self._talk_policy_enabled(command.camera_name),
                     capability=TalkCapabilityState.SUPPORTED,
@@ -827,7 +825,26 @@ class _RuntimeWorkerService:
                     supported_codecs=[session.selected_codec],
                     offered_codecs=[session.selected_codec],
                     selected_codec=session.selected_codec,
-                ),
+                )
+            else:
+                talk_status = talk_status.model_copy(
+                    update={
+                        "capability": TalkCapabilityState.SUPPORTED,
+                        "state": TalkState.ACTIVE,
+                        "active_session_id": session.session_id,
+                        "selected_codec": session.selected_codec,
+                        "supported_codecs": talk_status.supported_codecs
+                        or [session.selected_codec],
+                        "offered_codecs": talk_status.offered_codecs or [session.selected_codec],
+                    }
+                )
+            return WorkerCommandResult(
+                command=command.command,
+                command_id=command.command_id,
+                generation=self._generation,
+                correlation_id=self._correlation_id,
+                camera_name=command.camera_name,
+                talk_status=WorkerTalkStatusPayload.from_status(talk_status),
             )
         except Exception as exc:
             reason = _talk_refusal_reason_from_exception(exc)

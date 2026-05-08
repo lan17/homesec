@@ -117,7 +117,7 @@ class FakeWebSocket {
   }
 
   emitClose(code = this.lastClose?.code ?? 1000, reason = this.lastClose?.reason ?? '') {
-    this.onclose?.(new CloseEvent('close', { code, reason }))
+    this.onclose?.({ code, reason } as CloseEvent)
   }
 }
 
@@ -365,6 +365,24 @@ describe('usePushToTalk', () => {
     expect(result.current.canStart).toBe(false)
   })
 
+  it('does not allow start while talk capability has a static config error', async () => {
+    // Given: The camera talk backend has a static operator configuration error
+    vi.mocked(apiClient.getCameraTalkStatus).mockResolvedValueOnce({
+      ...idleStatus,
+      capability: 'config_error',
+      state: 'error',
+      last_error: "Talk backend 'onvif_rtsp_backchannel' config is invalid",
+      httpStatus: 200,
+    })
+
+    // When: Loading push-to-talk status
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.status?.capability).toBe('config_error'))
+
+    // Then: The hook keeps start disabled instead of retrying a static config failure
+    expect(result.current.canStart).toBe(false)
+  })
+
   it('allows a new camera start after switching away from a hung microphone request', async () => {
     // Given: The first camera start is stuck waiting for microphone capture
     const frontMedia = deferred<MediaStream>()
@@ -443,6 +461,30 @@ describe('usePushToTalk', () => {
     expect(result.current.status?.last_error).toBeNull()
   })
 
+  it('surfaces camera auth close reason when WebSocket open is refused', async () => {
+    // Given: Browser capture and session preparation succeed before camera auth fails on attach.
+    const { stream } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+
+    // When: Starting talk and receiving an auth-specific WebSocket close reason.
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].emitClose(1011, 'Camera talk authentication failed')
+
+    // Then: The hook exposes the operator-actionable auth failure to the UI.
+    await waitFor(() => {
+      expect((result.current.error as Error | null)?.message).toBe(
+        'Camera talk authentication failed',
+      )
+    })
+    expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
+  })
+
   it('uses the camera codec from the ready message for optimistic active status', async () => {
     // Given: The server reports the actual selected camera-side codec in ready.
     const { stream } = createMediaStream()
@@ -459,12 +501,18 @@ describe('usePushToTalk', () => {
     sockets[0].message(JSON.stringify({
       type: 'ready',
       camera_codec: 'PCMA/8000',
+      backend: 'onvif_rtsp_backchannel',
+      backend_reason: 'Selected ONVIF RTSP backchannel by standards-first auto probing',
     }))
     await waitFor(() => expect(result.current.isStreaming).toBe(true))
 
     // Then: Optimistic UI state uses the camera-side codec, not the browser PCM codec.
     expect(result.current.status?.state).toBe('active')
     expect(result.current.status?.selected_codec).toBe('PCMA/8000')
+    expect(result.current.status?.backend).toBe('onvif_rtsp_backchannel')
+    expect(result.current.status?.backend_reason).toBe(
+      'Selected ONVIF RTSP backchannel by standards-first auto probing',
+    )
     expect(result.current.status?.supported_codecs).toEqual(['PCMU/8000'])
     expect(result.current.status?.offered_codecs).toEqual(['PCMU/8000'])
     expect(result.current.status?.last_error).toBeNull()

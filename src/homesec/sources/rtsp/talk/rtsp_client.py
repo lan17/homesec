@@ -233,14 +233,19 @@ class RTSPClient:
             result.update(headers)
         if self._auth_challenge is not None and self._credentials is not None:
             self._auth_nonce_count += 1
-            result["Authorization"] = build_authorization_header(
-                challenge=self._auth_challenge,
-                method=method,
-                uri=uri,
-                credentials=self._credentials,
-                nonce_count=self._auth_nonce_count,
-                cnonce=self._auth_cnonce,
-            )
+            try:
+                result["Authorization"] = build_authorization_header(
+                    challenge=self._auth_challenge,
+                    method=method,
+                    uri=uri,
+                    credentials=self._credentials,
+                    nonce_count=self._auth_nonce_count,
+                    cnonce=self._auth_cnonce,
+                )
+            except ValueError as exc:
+                raise RTSPAuthenticationError(
+                    "Camera RTSP authentication challenge is not supported"
+                ) from exc
         return result
 
     async def _read_response(self) -> RTSPResponse:

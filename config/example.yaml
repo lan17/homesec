@@ -48,9 +48,46 @@ cameras:
           backoff_s: 1.0             # Backoff between reconnects
           max_attempts: 0            # 0 = retry forever
           detect_fallback_attempts: 3  # Switch detect stream to main after N failures
+    # Push-to-talk defaults to mode=auto/backend=auto for RTSP cameras.
+    # Omit talk entirely to let HomeSec probe standards-based backends first.
+    #
     # Optional: opt out a camera that advertises an unwanted speaker backchannel.
     # talk:
     #   mode: disabled
+    #
+    # Optional: explicitly use the bundled ONVIF RTSP backchannel backend.
+    # talk:
+    #   mode: auto
+    #   backend: onvif_rtsp_backchannel
+    #   backends:
+    #     onvif_rtsp_backchannel:
+    #       rtsp_url_env: FRONT_DOOR_TALK_RTSP_URL
+    #       username_env: FRONT_DOOR_RTSP_USERNAME
+    #       password_env: FRONT_DOOR_RTSP_PASSWORD
+    #       preferred_codecs: ["PCMU/8000", "PCMA/8000"]
+    #
+    # Optional: backend-specific config while keeping backend=auto.
+    # Standards-based backends are probed first. Future proprietary backends are
+    # considered only after standards probing fails and their detector says they
+    # are safe to probe.
+    # talk:
+    #   mode: auto
+    #   backend: auto
+    #   backends:
+    #     onvif_rtsp_backchannel:
+    #       preferred_codecs: ["PCMU/8000", "PCMA/8000"]
+    #
+    # Future Phase 10 example only. This is not supported until a tapo_local
+    # backend lands; it documents the intended config shape for local-only Tapo.
+    # talk:
+    #   mode: auto
+    #   backend: auto
+    #   backends:
+    #     tapo_local:
+    #       host: 192.168.1.33
+    #       port: 8800
+    #       username_env: OFFICE_TAPO_USERNAME
+    #       password_sha256_env: OFFICE_TAPO_SHA256
 
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera
@@ -117,7 +154,10 @@ preview:
 
 
 # =============================================================================
-# Talk - Push-to-talk configuration (auto-probed RTSP ONVIF G.711 backchannel)
+# Talk - Push-to-talk configuration
+# Defaults are enabled/auto. HomeSec probes RTSP cameras for the bundled ONVIF
+# G.711 backchannel, and future proprietary backends can register behind the
+# same TalkManager/API/runtime/UI path.
 # =============================================================================
 talk:
   enabled: true

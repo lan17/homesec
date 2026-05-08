@@ -89,15 +89,23 @@ class TalkManager:
         open_session_factory: Callable[[TalkSessionOpenRequest], Awaitable[TalkSession]],
         max_session_s: float,
         idle_timeout_s: float,
+        supported_codecs_factory: Callable[[], list[str] | None] | None = None,
         capability_probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
+        prepare_capability_probe_factory: (
+            Callable[[], Awaitable[TalkCapabilityProbeResult]] | None
+        ) = None,
+        prepare_probe_cleanup: Callable[[], Awaitable[None]] | None = None,
         capability_ttl_s: float = 30.0,
     ) -> None:
         self._camera_name = camera_name
         self._enabled = enabled
         self._policy_enabled = enabled if policy_enabled is None else policy_enabled
         self._supported_codecs = list(supported_codecs)
+        self._supported_codecs_factory = supported_codecs_factory
         self._open_session_factory = open_session_factory
         self._capability_probe_factory = capability_probe_factory
+        self._prepare_capability_probe_factory = prepare_capability_probe_factory
+        self._prepare_probe_cleanup = prepare_probe_cleanup
         self._capability_ttl_s = capability_ttl_s
         self._capability = TalkCapabilityProbeResult(
             capability=(
@@ -136,13 +144,30 @@ class TalkManager:
             capability=capability.capability,
             state=state,
             active_session_id=record.session_id if record is not None else None,
-            supported_codecs=self._supported_codecs,
+            supported_codecs=self._current_supported_codecs(),
             offered_codecs=capability.offered_codecs,
             selected_codec=(
                 record.selected_codec if record is not None else capability.selected_codec
             ),
             last_error=self._last_error or capability.message,
         )
+
+    def _current_supported_codecs(self) -> list[str]:
+        """Return the latest selected backend codec hints when available."""
+        if self._supported_codecs_factory is None:
+            return list(self._supported_codecs)
+        try:
+            selected_codecs = self._supported_codecs_factory()
+        except Exception:
+            logger.debug(
+                "Talk supported codec refresh failed",
+                extra={"camera_name": self._camera_name},
+                exc_info=True,
+            )
+            return list(self._supported_codecs)
+        if selected_codecs is None:
+            return list(self._supported_codecs)
+        return list(selected_codecs)
 
     async def refresh_status(self, *, force: bool = False) -> CameraTalkStatus:
         """Refresh capability if needed and return current source-level status."""
@@ -153,12 +178,14 @@ class TalkManager:
         self,
         *,
         force: bool = False,
+        probe_factory: Callable[[], Awaitable[TalkCapabilityProbeResult]] | None = None,
     ) -> TalkCapabilityProbeResult:
         """Probe and cache camera talk capability when this manager has a probe source."""
         self._bind_loop()
         if not self._enabled:
             return self._capability
-        if self._capability_probe_factory is None:
+        capability_probe_factory = probe_factory or self._capability_probe_factory
+        if capability_probe_factory is None:
             return self._capability
 
         async with self._probe_lock:
@@ -177,7 +204,7 @@ class TalkManager:
                 )
 
             try:
-                result = await self._capability_probe_factory()
+                result = await capability_probe_factory()
             except Exception as exc:
                 result = TalkCapabilityProbeResult(
                     capability=TalkCapabilityState.ERROR,
@@ -199,7 +226,10 @@ class TalkManager:
     ) -> TalkSessionPrepareResult:
         """Reserve a talk slot before the browser attaches the WebSocket stream."""
         self._bind_loop()
-        capability = await self.refresh_capability(force=True)
+        capability = await self.refresh_capability(
+            force=True,
+            probe_factory=self._prepare_capability_probe_factory,
+        )
         if capability.capability != TalkCapabilityState.SUPPORTED:
             return _prepare_refusal_from_capability(capability, input_format=request.input)
 
@@ -347,11 +377,15 @@ class TalkManager:
         """Stop a reserved or active talk session if it matches the current one."""
         self._bind_loop()
         record: _SessionRecord | None
+        clear_prepared_probe = False
         async with self._lock:
             record = self._record
             if record is None or record.session_id != session_id:
                 return False
+            clear_prepared_probe = record.session is None and not record.opening
             self._clear_record_locked(record, close_reason=reason)
+        if clear_prepared_probe:
+            await self._clear_prepare_probe_safely()
         await _close_record(record)
         return True
 
@@ -359,11 +393,18 @@ class TalkManager:
         """Close any current talk session during source/runtime shutdown."""
         self._bind_loop()
         record: _SessionRecord | None
+        clear_prepared_probe = False
         async with self._lock:
             record = self._record
             if record is None:
-                return
-            self._clear_record_locked(record, close_reason="shutdown")
+                clear_prepared_probe = True
+            else:
+                clear_prepared_probe = record.session is None and not record.opening
+                self._clear_record_locked(record, close_reason="shutdown")
+        if clear_prepared_probe:
+            await self._clear_prepare_probe_safely()
+        if record is None:
+            return
         await _close_record(record)
 
     def shutdown_sync(self, *, timeout_s: float) -> None:
@@ -425,12 +466,29 @@ class TalkManager:
                 return
 
     async def _clear_opening_record(self, session_id: str, *, close_reason: str) -> None:
+        clear_prepared_probe = False
         async with self._lock:
             record = self._record
             if record is None or record.session_id != session_id:
                 return
             record.opening = False
+            clear_prepared_probe = record.session is None
             self._clear_record_locked(record, close_reason=close_reason)
+        if clear_prepared_probe:
+            await self._clear_prepare_probe_safely()
+
+    async def _clear_prepare_probe_safely(self) -> None:
+        cleanup = self._prepare_probe_cleanup
+        if cleanup is None:
+            return
+        try:
+            await cleanup()
+        except Exception:
+            logger.debug(
+                "Talk prepared-probe cleanup failed",
+                extra={"camera_name": self._camera_name},
+                exc_info=True,
+            )
 
     def _clear_record_locked(self, record: _SessionRecord, *, close_reason: str) -> None:
         if self._record is record:
@@ -458,7 +516,7 @@ def _state_from_capability(capability: TalkCapabilityState) -> TalkState:
             return TalkState.IDLE
         case TalkCapabilityState.UNSUPPORTED | TalkCapabilityState.UNSUPPORTED_CODEC:
             return TalkState.UNSUPPORTED
-        case TalkCapabilityState.ERROR:
+        case TalkCapabilityState.CONFIG_ERROR | TalkCapabilityState.ERROR:
             return TalkState.ERROR
         case TalkCapabilityState.UNKNOWN | TalkCapabilityState.PROBING:
             return TalkState.TEMPORARILY_UNAVAILABLE
@@ -489,6 +547,8 @@ def _refusal_reason_from_capability(
             return TalkRefusalReason.UNSUPPORTED_CAMERA
         case TalkCapabilityState.UNSUPPORTED_CODEC:
             return TalkRefusalReason.UNSUPPORTED_CODEC
+        case TalkCapabilityState.CONFIG_ERROR:
+            return TalkRefusalReason.TALK_CONFIG_ERROR
         case TalkCapabilityState.ERROR:
             return TalkRefusalReason.CAMERA_BACKCHANNEL_FAILED
         case (
@@ -507,6 +567,8 @@ def _refusal_message_from_capability(capability: TalkCapabilityState) -> str:
             return "Camera does not advertise an ONVIF talk backchannel"
         case TalkCapabilityState.UNSUPPORTED_CODEC:
             return "Camera talk backchannel codec is not supported"
+        case TalkCapabilityState.CONFIG_ERROR:
+            return "Talk backend configuration is invalid"
         case TalkCapabilityState.ERROR:
             return "Camera talk backchannel probe failed"
         case TalkCapabilityState.UNKNOWN | TalkCapabilityState.PROBING:

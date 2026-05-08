@@ -38,6 +38,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
+from homesec.sources.rtsp.talk.errors import RTSPAuthenticationError
 from homesec.sources.rtsp.talk.manager import TalkManagerError
 
 
@@ -792,7 +793,7 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
         raise AssertionError("disabled talk should not construct the ONVIF backchannel adapter")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _unexpected_adapter,
     )
     config = _make_config(
@@ -815,8 +816,54 @@ async def test_talk_disabled_by_policy_does_not_build_camera_backchannel(
     assert status.enabled is False
     assert status.policy_enabled is expected_policy_enabled
     assert status.state == TalkState.DISABLED
+    assert status.backend is None
+    assert status.backend_reason is None
     assert prepared.accepted is False
     assert prepared.refusal_reason == TalkRefusalReason.TALK_DISABLED
+
+
+@pytest.mark.asyncio
+async def test_unknown_explicit_talk_backend_reports_config_error_without_onvif_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown explicit talk backends should not fallback or look policy-disabled."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("future backend should not construct the ONVIF backchannel adapter")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    config = _make_config(
+        tmp_path,
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(backend="tapo_local"),
+        },
+    )
+
+    # Given: A camera explicitly configured for a future talk backend.
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and attempting to reserve a talk session.
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_future_backend")
+    )
+
+    # Then: The source reports selection/config diagnostics, not disabled policy.
+    assert status.enabled is True
+    assert status.policy_enabled is True
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.state == TalkState.ERROR
+    assert status.last_error == "Talk backend 'tapo_local' is not registered in this runtime"
+    assert status.backend == "tapo_local"
+    assert status.backend_reason == "Talk backend 'tapo_local' is not registered"
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert prepared.message == status.last_error
 
 
 @pytest.mark.asyncio
@@ -851,17 +898,21 @@ async def test_talk_missing_explicit_credential_env_reports_config_error_without
     assert source.rtsp_url == "rtsp://host/stream"
     assert status.enabled is True
     assert status.policy_enabled is True
-    assert status.capability == TalkCapabilityState.ERROR
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
     assert status.state == TalkState.ERROR
-    assert status.last_error is not None
-    assert "RTSP credential environment variable is not set" in status.last_error
-    assert "MISSING_TALK_USER" in status.last_error
+    assert status.last_error == (
+        "Talk backend 'onvif_rtsp_backchannel' config is invalid: "
+        "RTSP credential environment variable is not set: MISSING_TALK_USER"
+    )
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert status.backend_reason == status.last_error
+    assert "rtsp://host/talk" not in status.backend_reason
 
     prepared = await source.prepare_talk_session(
         TalkSessionPrepareRequest(session_id="tk_missing_credentials")
     )
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert prepared.message == status.last_error
 
 
@@ -888,7 +939,7 @@ async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe
             )
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _FakeONVIFBackchannelAdapter,
     )
     monkeypatch.setenv("TALK_RTSP_URL", "rtsp://camera.local/talk")
@@ -913,6 +964,10 @@ async def test_talk_backchannel_uses_dedicated_rtsp_url_env_for_capability_probe
     assert status.capability == TalkCapabilityState.SUPPORTED
     assert status.state == TalkState.IDLE
     assert status.selected_codec == "PCMA/8000"
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert (
+        status.backend_reason == "Selected ONVIF RTSP backchannel by standards-first auto probing"
+    )
 
 
 @pytest.mark.asyncio
@@ -933,7 +988,7 @@ async def test_talk_backchannel_inherits_source_rtsp_url_when_no_override_is_con
             return TalkCapabilityProbeResult(capability=TalkCapabilityState.SUPPORTED)
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _FakeONVIFBackchannelAdapter,
     )
     config = _make_config(
@@ -967,7 +1022,7 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
         raise AssertionError("missing talk rtsp_url_env should not construct the adapter")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _unexpected_adapter,
     )
     monkeypatch.delenv("MISSING_TALK_RTSP_URL", raising=False)
@@ -992,13 +1047,61 @@ async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_err
     # Then: Talk reports a clear config error without falling back to the live stream URL
     assert status.enabled is True
     assert status.state == TalkState.ERROR
-    assert status.capability == TalkCapabilityState.ERROR
-    assert status.last_error is not None
-    assert "MISSING_TALK_RTSP_URL" in status.last_error
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.last_error == (
+        "Talk backend 'onvif_rtsp_backchannel' config is invalid: "
+        "RTSP URL environment variable is not set: MISSING_TALK_RTSP_URL"
+    )
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert status.backend_reason == status.last_error
+    assert "rtsp://camera.local/live" not in status.backend_reason
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
-    assert prepared.message is not None
-    assert "MISSING_TALK_RTSP_URL" in prepared.message
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert prepared.message == status.last_error
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_malformed_rtsp_url_env_name_is_not_exposed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unsafe env-name values should not be echoed in public talk diagnostics."""
+
+    def _unexpected_adapter(*_: object, **__: object) -> object:
+        raise AssertionError("missing unsafe talk rtsp_url_env should not construct the adapter")
+
+    unsafe_env_name = "rtsp://alice:secret@camera.local/talk"
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _unexpected_adapter,
+    )
+    monkeypatch.delenv(unsafe_env_name, raising=False)
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(config={"rtsp_url_env": unsafe_env_name}),
+        },
+    )
+
+    # Given: A camera with an unsafe string in the talk URL env-name field
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing capability and trying to prepare a talk session
+    status = await source.refresh_talk_status()
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_bad_env_name")
+    )
+
+    # Then: Talk reports a config error without exposing the unsafe raw value
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.last_error == "Talk backend 'onvif_rtsp_backchannel' config is invalid"
+    assert status.backend_reason == status.last_error
+    assert unsafe_env_name not in status.last_error
+    assert prepared.accepted is False
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert prepared.message == status.last_error
 
 
 @pytest.mark.parametrize("talk_config", [{"rtsp_url": ""}, {"rtsp_url_env": ""}])
@@ -1056,13 +1159,72 @@ async def test_talk_backchannel_missing_explicit_credential_env_reports_config_e
     # Then: Recording source construction survives and talk reports a config error
     assert status.enabled is True
     assert status.state == TalkState.ERROR
-    assert status.capability == TalkCapabilityState.ERROR
-    assert status.last_error is not None
-    assert "MISSING_TALK_RTSP_USER" in status.last_error
+    assert status.capability == TalkCapabilityState.CONFIG_ERROR
+    assert status.last_error == (
+        "Talk backend 'onvif_rtsp_backchannel' config is invalid: "
+        "RTSP credential environment variable is not set: MISSING_TALK_RTSP_USER"
+    )
     assert prepared.accepted is False
-    assert prepared.refusal_reason == TalkRefusalReason.RUNTIME_UNAVAILABLE
-    assert prepared.message is not None
-    assert "MISSING_TALK_RTSP_USER" in prepared.message
+    assert prepared.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert prepared.message == status.last_error
+
+
+@pytest.mark.asyncio
+async def test_talk_backchannel_open_auth_failure_reports_talk_auth_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera credential rejection should not collapse into generic backchannel failure."""
+
+    class _FakeONVIFBackchannelAdapter:
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=["PCMU/8000"],
+                selected_codec="PCMU/8000",
+            )
+
+        async def open_session(
+            self,
+            *,
+            session_id: str,
+            input_sample_rate: int,
+        ) -> object:
+            _ = session_id, input_sample_rate
+            raise RTSPAuthenticationError("RTSP authentication was rejected by the camera")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _FakeONVIFBackchannelAdapter,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(),
+        },
+    )
+    source = RTSPSource(config, camera_name="cam")
+    input_format = TalkConfig().input
+
+    # Given: Capability probing succeeds but the camera rejects RTSP talk credentials.
+    prepared = await source.prepare_talk_session(
+        TalkSessionPrepareRequest(session_id="tk_auth_failure", input=input_format)
+    )
+
+    assert prepared.accepted is True
+
+    # When: Opening the reserved talk session
+    # Then: The source maps auth rejection to the stable talk-auth refusal reason.
+    with pytest.raises(TalkManagerError) as exc_info:
+        await source.open_talk_session(
+            TalkSessionOpenRequest(session_id="tk_auth_failure", input=input_format)
+        )
+    assert exc_info.value.reason == TalkRefusalReason.TALK_AUTH_FAILED
 
 
 @pytest.mark.asyncio
@@ -1093,7 +1255,7 @@ async def test_talk_backchannel_open_io_failure_reports_camera_backchannel_error
             raise asyncio.TimeoutError("RTSP DESCRIBE timed out")
 
     monkeypatch.setattr(
-        "homesec.sources.rtsp.core.ONVIFBackchannelAdapter",
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
         _FakeONVIFBackchannelAdapter,
     )
     config = _make_config(

@@ -198,10 +198,24 @@
         "description": "Per-camera talk policy and backend override configuration.",
         "properties": {
           "backend": {
-            "const": "onvif_rtsp_backchannel",
-            "default": "onvif_rtsp_backchannel",
+            "default": "auto",
             "title": "Backend",
             "type": "string"
+          },
+          "backends": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "$ref": "#/components/schemas/BaseModel"
+                }
+              ]
+            },
+            "title": "Backends",
+            "type": "object"
           },
           "config": {
             "anyOf": [
@@ -1724,6 +1738,7 @@
           "supported",
           "unsupported",
           "unsupported_codec",
+          "config_error",
           "error"
         ],
         "title": "TalkCapabilityState",
@@ -1890,6 +1905,28 @@
               }
             ],
             "title": "Active Session Id"
+          },
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "backend_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Reason"
           },
           "camera_name": {
             "title": "Camera Name",
