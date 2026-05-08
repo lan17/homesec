@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -18,6 +19,7 @@ from homesec.sources.rtsp.talk.models import ONVIFBackchannelConfig
 from homesec.sources.rtsp.talk.onvif_backchannel import ONVIFBackchannelAdapter
 from homesec.talk.backends import (
     TalkBackendAdapter,
+    TalkBackendConfigError,
     TalkBackendContext,
     TalkBackendOpenError,
     TalkBackendRegistration,
@@ -28,6 +30,11 @@ from homesec.talk.backends import (
 )
 
 ONVIF_RTSP_BACKCHANNEL_BACKEND = "onvif_rtsp_backchannel"
+_SAFE_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_MISSING_ENV_PREFIXES = (
+    "RTSP URL environment variable is not set: ",
+    "RTSP credential environment variable is not set: ",
+)
 
 
 @dataclass(slots=True)
@@ -64,10 +71,15 @@ class ONVIFRTSPTalkBackendAdapter:
 
 
 def build_rtsp_talk_backend_registry() -> TalkBackendRegistry:
-    """Build the built-in RTSP talk backend registry."""
-    registry = TalkBackendRegistry()
-    registry.register(onvif_rtsp_talk_backend_registration())
-    return registry
+    """Build the built-in talk backend registry.
+
+    Deprecated compatibility alias. Use ``build_default_talk_backend_registry`` for
+    new source wiring so future non-RTSP talk backends do not inherit RTSP-only
+    naming.
+    """
+    from homesec.talk.registry import build_default_talk_backend_registry
+
+    return build_default_talk_backend_registry()
 
 
 def onvif_rtsp_talk_backend_registration() -> TalkBackendRegistration:
@@ -158,9 +170,30 @@ def _build_onvif_backend(
 ) -> TalkBackendAdapter:
     if not isinstance(config, ONVIFBackchannelConfig):
         raise TypeError(f"Expected ONVIFBackchannelConfig, got {type(config).__name__}")
-    rtsp_url = config.resolve_rtsp_url()
-    adapter = ONVIFBackchannelAdapter(config, rtsp_url=rtsp_url, camera_name=context.camera_name)
+    try:
+        rtsp_url = config.resolve_rtsp_url()
+        adapter = ONVIFBackchannelAdapter(
+            config,
+            rtsp_url=rtsp_url,
+            camera_name=context.camera_name,
+        )
+    except ValueError as exc:
+        raise TalkBackendConfigError(_safe_onvif_config_error(exc), cause=exc) from exc
     return ONVIFRTSPTalkBackendAdapter(config=config, adapter=adapter)
+
+
+def _safe_onvif_config_error(exc: ValueError) -> str:
+    base = f"Talk backend '{ONVIF_RTSP_BACKCHANNEL_BACKEND}' config is invalid"
+    detail = str(exc).strip()
+    if not detail:
+        return base
+    for prefix in _MISSING_ENV_PREFIXES:
+        if detail.startswith(prefix):
+            env_name = detail.removeprefix(prefix).strip()
+            if _SAFE_ENV_VAR_NAME_PATTERN.fullmatch(env_name):
+                return f"{base}: {prefix}{env_name}"
+            return base
+    return base
 
 
 def _backend_open_error_from_protocol_error(exc: TalkProtocolError) -> TalkBackendOpenError:

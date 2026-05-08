@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
@@ -15,10 +14,15 @@ from homesec.models.talk import (
     TalkRefusalReason,
     TalkSessionOpenRequest,
 )
-from homesec.talk.backend_ids import normalize_talk_backend_id, validate_talk_backend_id
+from homesec.talk.backend_ids import (
+    normalize_talk_backend_id,
+    sanitize_talk_backend_reason,
+    validate_talk_backend_id,
+)
 from homesec.talk.backends import (
     TalkBackendAdapter,
     TalkBackendConfidence,
+    TalkBackendConfigError,
     TalkBackendContext,
     TalkBackendOpenError,
     TalkBackendRegistration,
@@ -67,15 +71,14 @@ _AUTO_DETECTION_CONFIDENCE_RANK: dict[TalkBackendConfidence, int] = {
 }
 
 logger = logging.getLogger(__name__)
-_SAFE_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-_MISSING_ENV_PREFIXES = (
-    "RTSP URL environment variable is not set: ",
-    "RTSP credential environment variable is not set: ",
-)
 
 
 class TalkBackendSelector:
-    """Select and dispatch to the configured camera talk backend."""
+    """Select and dispatch to the configured camera talk backend.
+
+    Auto selection is sticky for the lifetime of the selector once a backend is
+    selected. Rebuilding the source creates a new selector and re-runs discovery.
+    """
 
     def __init__(
         self,
@@ -350,8 +353,23 @@ class TalkBackendSelector:
                 backend=registration.name,
                 backend_reason=reason,
             )
+        except TalkBackendConfigError as exc:
+            public_message = _public_structured_config_error_message(registration.name, exc)
+            logger.debug(
+                "Talk backend config validation failed",
+                extra={
+                    "camera_name": self._context.camera_name,
+                    "talk_backend": registration.name,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return _SelectionError(
+                _config_error_result(public_message),
+                backend=registration.name,
+                backend_reason=public_message,
+            )
         except (ValueError, ValidationError) as exc:
-            public_message = _public_config_error_message(registration.name, exc)
+            public_message = _public_config_error_message(registration.name)
             logger.debug(
                 "Talk backend config validation failed",
                 extra={
@@ -383,20 +401,17 @@ def _config_error_result(message: str) -> TalkCapabilityProbeResult:
     )
 
 
-def _public_config_error_message(backend_name: str, exc: Exception) -> str:
+def _public_structured_config_error_message(
+    backend_name: str,
+    exc: TalkBackendConfigError,
+) -> str:
     base = f"Talk backend '{backend_name}' config is invalid"
-    if not isinstance(exc, ValueError):
-        return base
-    detail = str(exc).strip()
-    if not detail:
-        return base
-    for prefix in _MISSING_ENV_PREFIXES:
-        if detail.startswith(prefix):
-            env_name = detail.removeprefix(prefix).strip()
-            if _SAFE_ENV_VAR_NAME_PATTERN.fullmatch(env_name):
-                return f"{base}: {prefix}{env_name}"
-            return base
-    return base
+    public_message = sanitize_talk_backend_reason(exc.public_message)
+    return public_message if public_message is not None else base
+
+
+def _public_config_error_message(backend_name: str) -> str:
+    return f"Talk backend '{backend_name}' config is invalid"
 
 
 def _backend_display_name(backend_name: str) -> str:

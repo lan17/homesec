@@ -14,6 +14,7 @@ from homesec.models.talk import (
     TalkSessionOpenRequest,
 )
 from homesec.talk.backends import (
+    TalkBackendConfigError,
     TalkBackendContext,
     TalkBackendDetection,
     TalkBackendOpenError,
@@ -626,17 +627,17 @@ async def test_selector_reports_stable_public_message_for_invalid_backend_config
 
 
 @pytest.mark.asyncio
-async def test_selector_does_not_expose_malformed_missing_env_name() -> None:
-    """Missing-env diagnostics should expose only safe environment variable names."""
+async def test_selector_preserves_safe_structured_config_error_message() -> None:
+    """Structured config errors should let backends expose safe public messages."""
 
-    # Given: A backend config factory reports a missing env value with unsafe input text
-    def _raise_unsafe_missing_env(
+    # Given: A backend config factory reports a safe public config error
+    def _raise_structured_config_error(
         raw_config: dict[str, object] | BaseModel,
         context: TalkBackendContext,
     ) -> BaseModel:
         _ = raw_config, context
-        raise ValueError(
-            "RTSP URL environment variable is not set: rtsp://alice:secret@camera.local/talk"
+        raise TalkBackendConfigError(
+            "Required talk backend environment variable is not set: OFFICE_TAPO_SHA256"
         )
 
     registry = TalkBackendRegistry()
@@ -644,7 +645,7 @@ async def test_selector_does_not_expose_malformed_missing_env_name() -> None:
         TalkBackendRegistration(
             name="vendor_backend",
             config_model=_BackendConfig,
-            config_factory=_raise_unsafe_missing_env,
+            config_factory=_raise_structured_config_error,
             factory=lambda config, context: _FakeBackend("vendor_backend", []),
         )
     )
@@ -656,9 +657,86 @@ async def test_selector_does_not_expose_malformed_missing_env_name() -> None:
     # When: Probing the selected backend
     probe = await selector.probe()
 
-    # Then: The public error drops the unsafe env-name suffix
+    # Then: The backend's safe public error is preserved
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert (
+        probe.message == "Required talk backend environment variable is not set: OFFICE_TAPO_SHA256"
+    )
+    assert selector.backend_reason == probe.message
+
+
+@pytest.mark.asyncio
+async def test_selector_drops_unsafe_structured_config_error_message() -> None:
+    """Structured config errors should still pass through public sanitization."""
+
+    # Given: A backend config factory mistakenly includes an unsafe URL in its public error
+    def _raise_unsafe_structured_config_error(
+        raw_config: dict[str, object] | BaseModel,
+        context: TalkBackendContext,
+    ) -> BaseModel:
+        _ = raw_config, context
+        raise TalkBackendConfigError(
+            "Selected rtsp://alice:secret@camera.local/talk for backend config"
+        )
+
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            config_factory=_raise_unsafe_structured_config_error,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="vendor_backend")),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: Unsafe structured detail falls back to the generic backend config error
     assert probe.capability == TalkCapabilityState.CONFIG_ERROR
     assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
     assert probe.message == "Talk backend 'vendor_backend' config is invalid"
     assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
     assert "rtsp://alice:secret@camera.local/talk" not in (probe.message or "")
+
+
+@pytest.mark.asyncio
+async def test_selector_does_not_parse_plain_value_error_missing_env_strings() -> None:
+    """Generic selection should not parse backend-specific ValueError messages."""
+
+    # Given: A backend config factory raises an RTSP-shaped plain ValueError
+    def _raise_plain_missing_env(
+        raw_config: dict[str, object] | BaseModel,
+        context: TalkBackendContext,
+    ) -> BaseModel:
+        _ = raw_config, context
+        raise ValueError("RTSP URL environment variable is not set: SAFE_TALK_RTSP_URL")
+
+    registry = TalkBackendRegistry()
+    registry.register(
+        TalkBackendRegistration(
+            name="vendor_backend",
+            config_model=_BackendConfig,
+            config_factory=_raise_plain_missing_env,
+            factory=lambda config, context: _FakeBackend("vendor_backend", []),
+        )
+    )
+    selector = TalkBackendSelector(
+        registry=registry,
+        context=_context(CameraTalkConfig(backend="vendor_backend")),
+    )
+
+    # When: Probing the selected backend
+    probe = await selector.probe()
+
+    # Then: The generic selector does not preserve backend-specific string details
+    assert probe.capability == TalkCapabilityState.CONFIG_ERROR
+    assert probe.refusal_reason == TalkRefusalReason.TALK_CONFIG_ERROR
+    assert probe.message == "Talk backend 'vendor_backend' config is invalid"
+    assert selector.backend_reason == "Talk backend 'vendor_backend' config is invalid"
+    assert "SAFE_TALK_RTSP_URL" not in (probe.message or "")

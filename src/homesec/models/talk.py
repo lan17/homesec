@@ -126,16 +126,18 @@ def sanitize_talk_backend_diagnostic_fields(value: object) -> object:
     if not isinstance(value, dict):
         return value
 
-    raw_backend = value.get("backend")
-    if raw_backend is None and "backend_reason" not in value:
+    if "backend" not in value and "backend_reason" not in value:
         return value
 
-    sanitized_backend = sanitize_talk_backend_id(raw_backend)
     sanitized_value = dict(value)
-    sanitized_value["backend"] = sanitized_backend
-    if sanitized_backend is None:
-        sanitized_value["backend_reason"] = None
-    elif "backend_reason" in sanitized_value:
+
+    if "backend" in sanitized_value:
+        raw_backend = sanitized_value.get("backend")
+        sanitized_value["backend"] = (
+            sanitize_talk_backend_id(raw_backend) if raw_backend is not None else None
+        )
+
+    if "backend_reason" in sanitized_value:
         sanitized_value["backend_reason"] = sanitize_talk_backend_reason(
             sanitized_value["backend_reason"]
         )

@@ -163,6 +163,15 @@ will probe them automatically. A safe detector should be based on local camera
 identity, explicit backend config, or another low-risk local signal. It must not
 send credentials to an unknown local service as part of detection.
 
+Auto backend selection is sticky for the lifetime of the source instance after a
+backend is selected. A runtime reload or source rebuild re-runs discovery. This
+keeps capability/status behavior deterministic and avoids backend flapping while
+the source is live.
+
+For now, auto mode requires at least one standards-based backend in the
+registry. Proprietary-only cameras should use explicit backend selection unless
+a future source/backend family defines a different safe auto policy.
+
 ## Backend-Specific Configuration
 
 Camera talk config has two backend configuration forms:

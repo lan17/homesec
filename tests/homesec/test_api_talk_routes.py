@@ -281,9 +281,32 @@ def test_talk_status_response_sanitizes_unsafe_backend_diagnostics() -> None:
     assert response.backend_reason is None
 
 
-def test_talk_status_response_drops_backend_reason_without_backend() -> None:
-    """API talk status responses should not expose backend reasons without backend IDs."""
-    # Given: A status response is built with a backend reason but no backend
+def test_talk_status_response_preserves_safe_backend_reason_without_backend() -> None:
+    """API talk status responses should preserve safe reason-only diagnostics."""
+    # Given: A status response is built with a safe backend reason but no backend
+    # When: Validating the API response model
+    response = talk_route_module.TalkStatusResponse(
+        camera_name="front",
+        enabled=True,
+        policy_enabled=True,
+        capability="unsupported",
+        state="unsupported",
+        backend=None,
+        backend_reason=(
+            "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+        ),
+    )
+
+    # Then: The standalone public diagnostic reason is preserved
+    assert response.backend is None
+    assert response.backend_reason == (
+        "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+    )
+
+
+def test_talk_status_response_drops_unsafe_backend_reason_without_backend() -> None:
+    """API talk status responses should not expose unsafe standalone backend reasons."""
+    # Given: A status response is built with an unsafe backend reason but no backend
     # When: Validating the API response model
     response = talk_route_module.TalkStatusResponse(
         camera_name="front",
@@ -295,7 +318,7 @@ def test_talk_status_response_drops_backend_reason_without_backend() -> None:
         backend_reason="selected rtsp://admin:secret@example.local/stream1",
     )
 
-    # Then: The standalone public diagnostic reason is dropped
+    # Then: The unsafe standalone public diagnostic reason is dropped
     assert response.backend is None
     assert response.backend_reason is None
 

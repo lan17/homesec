@@ -11,6 +11,7 @@ from homesec.models.talk import (
     TalkCapabilityState,
     TalkSessionOpenRequest,
 )
+from homesec.sources.rtsp.talk.backend import build_rtsp_talk_backend_registry
 from homesec.talk.backends import (
     CameraTalkFingerprint,
     TalkBackendContext,
@@ -20,6 +21,7 @@ from homesec.talk.backends import (
     backend_config_for,
     model_validate_backend_config,
 )
+from homesec.talk.registry import build_default_talk_backend_registry
 
 
 class _BackendConfig(BaseModel):
@@ -112,6 +114,30 @@ def test_registry_orders_standards_backends_first() -> None:
 
     # Then: Standards-based registrations sort before proprietary candidates
     assert names == ("other_standard", "onvif_rtsp_backchannel", "vendor_backend")
+
+
+def test_default_talk_backend_registry_contains_onvif_backend() -> None:
+    """Default talk backend registry should include the built-in ONVIF backend."""
+    # Given: The built-in HomeSec talk backend registry
+    # When: Reading registered backend names
+    registry = build_default_talk_backend_registry()
+
+    # Then: ONVIF remains the standards-based default backend
+    assert registry.names() == ("onvif_rtsp_backchannel",)
+    registration = registry.get("onvif_rtsp_backchannel")
+    assert registration is not None
+    assert registration.standards_based is True
+
+
+def test_rtsp_talk_backend_registry_alias_returns_default_registry() -> None:
+    """Legacy RTSP registry helper should remain a compatibility alias."""
+    # Given: The deprecated RTSP-named registry helper
+    # When: Building a registry through the alias and the generic helper
+    legacy_registry = build_rtsp_talk_backend_registry()
+    default_registry = build_default_talk_backend_registry()
+
+    # Then: Both expose the same built-in backend names
+    assert legacy_registry.names() == default_registry.names()
 
 
 def test_backend_context_resolves_env_and_redaction_through_injected_helpers() -> None:

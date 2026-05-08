@@ -56,10 +56,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
-from homesec.sources.rtsp.talk.backend import (
-    build_rtsp_talk_backend_registry,
-    validate_rtsp_talk_backend_config,
-)
+from homesec.sources.rtsp.talk.backend import validate_rtsp_talk_backend_config
 from homesec.sources.rtsp.talk.manager import TalkManager, TalkManagerError, TalkSession
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
@@ -69,6 +66,7 @@ from homesec.sources.rtsp.utils import (
     _redact_rtsp_url,
 )
 from homesec.talk.backends import TalkBackendContext, TalkBackendOpenError
+from homesec.talk.registry import build_default_talk_backend_registry
 from homesec.talk.selector import TalkBackendSelector
 
 logger = logging.getLogger(__name__)
@@ -913,7 +911,7 @@ class RTSPSource(ThreadedClipSource):
             redact=_redact_rtsp_url,
         )
         selector = TalkBackendSelector(
-            registry=build_rtsp_talk_backend_registry(),
+            registry=build_default_talk_backend_registry(),
             context=context,
         )
         self._talk_backend_selector = selector

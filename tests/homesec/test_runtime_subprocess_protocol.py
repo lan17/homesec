@@ -48,9 +48,32 @@ def test_camera_talk_status_sanitizes_unsafe_backend_diagnostics() -> None:
     assert status.backend_reason is None
 
 
-def test_camera_talk_status_drops_backend_reason_without_backend() -> None:
-    """Public talk status should not expose backend reasons without a backend ID."""
-    # Given: A custom source reports a backend reason without a selected backend
+def test_camera_talk_status_preserves_safe_backend_reason_without_backend() -> None:
+    """Public talk status should preserve safe explanations without a selected backend."""
+    # Given: A custom source reports a safe backend reason without a selected backend
+    payload = {
+        "camera_name": "front",
+        "enabled": True,
+        "state": "unsupported",
+        "backend": None,
+        "backend_reason": (
+            "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+        ),
+    }
+
+    # When: Parsing the public camera talk status model
+    status = CameraTalkStatus.model_validate(payload)
+
+    # Then: The safe standalone backend reason is preserved for diagnostics
+    assert status.backend is None
+    assert status.backend_reason == (
+        "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+    )
+
+
+def test_camera_talk_status_drops_unsafe_backend_reason_without_backend() -> None:
+    """Public talk status should not expose unsafe standalone backend reasons."""
+    # Given: A custom source reports an unsafe backend reason without a selected backend
     payload = {
         "camera_name": "front",
         "enabled": True,
@@ -62,7 +85,7 @@ def test_camera_talk_status_drops_backend_reason_without_backend() -> None:
     # When: Parsing the public camera talk status model
     status = CameraTalkStatus.model_validate(payload)
 
-    # Then: The standalone backend reason is dropped
+    # Then: The unsafe standalone backend reason is dropped
     assert status.backend is None
     assert status.backend_reason is None
 
@@ -123,9 +146,31 @@ def test_worker_talk_status_payload_sanitizes_unsafe_backend_diagnostics() -> No
     assert status.backend_reason is None
 
 
-def test_worker_talk_status_payload_drops_backend_reason_without_backend() -> None:
-    """Worker talk IPC should not forward backend reasons without backend IDs."""
-    # Given: A worker payload includes a backend reason without a backend identifier
+def test_worker_talk_status_payload_preserves_safe_backend_reason_without_backend() -> None:
+    """Worker talk IPC should forward safe reasons without backend IDs."""
+    # Given: A worker payload includes a safe backend reason without a backend identifier
+    payload = {
+        "enabled": True,
+        "state": "unsupported",
+        "backend": None,
+        "backend_reason": (
+            "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+        ),
+    }
+
+    # When: Parsing the worker IPC payload
+    status = WorkerTalkStatusPayload.model_validate(payload)
+
+    # Then: The safe standalone backend reason is preserved before API mapping
+    assert status.backend is None
+    assert status.backend_reason == (
+        "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+    )
+
+
+def test_worker_talk_status_payload_drops_unsafe_backend_reason_without_backend() -> None:
+    """Worker talk IPC should not forward unsafe standalone backend reasons."""
+    # Given: A worker payload includes an unsafe backend reason without a backend identifier
     payload = {
         "enabled": True,
         "state": "error",
@@ -136,7 +181,7 @@ def test_worker_talk_status_payload_drops_backend_reason_without_backend() -> No
     # When: Parsing the worker IPC payload
     status = WorkerTalkStatusPayload.model_validate(payload)
 
-    # Then: The standalone backend reason is dropped before API mapping
+    # Then: The unsafe standalone backend reason is dropped before API mapping
     assert status.backend is None
     assert status.backend_reason is None
 
@@ -196,9 +241,32 @@ def test_runtime_talk_stream_sanitizes_unsafe_backend_diagnostics() -> None:
     assert stream.backend_reason is None
 
 
-def test_runtime_talk_stream_drops_backend_reason_without_backend() -> None:
-    """Runtime talk stream ready metadata should require a safe backend ID."""
-    # Given: A runtime stream is created with a backend reason but no backend ID
+def test_runtime_talk_stream_preserves_safe_backend_reason_without_backend() -> None:
+    """Runtime talk stream ready metadata should allow safe reason-only diagnostics."""
+    # Given: A runtime stream is created with a safe backend reason but no backend ID
+    # When: The stream model is initialized
+    stream = RuntimeTalkStream(
+        camera_name="front",
+        session_id="tk_reason_only",
+        input=TalkInputFormat(),
+        reader=cast(asyncio.StreamReader, object()),
+        writer=cast(asyncio.StreamWriter, object()),
+        backend=None,
+        backend_reason=(
+            "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+        ),
+    )
+
+    # Then: The safe reason is preserved for WebSocket ready diagnostics
+    assert stream.backend is None
+    assert stream.backend_reason == (
+        "ONVIF RTSP backchannel unsupported; no safe proprietary backend candidate configured"
+    )
+
+
+def test_runtime_talk_stream_drops_unsafe_backend_reason_without_backend() -> None:
+    """Runtime talk stream ready metadata should not expose unsafe standalone reasons."""
+    # Given: A runtime stream is created with an unsafe backend reason but no backend ID
     # When: The stream model is initialized
     stream = RuntimeTalkStream(
         camera_name="front",
@@ -210,7 +278,7 @@ def test_runtime_talk_stream_drops_backend_reason_without_backend() -> None:
         backend_reason="selected rtsp://admin:secret@example.local/stream1",
     )
 
-    # Then: The reason that would be sent in WebSocket ready is dropped
+    # Then: The unsafe reason that would be sent in WebSocket ready is dropped
     assert stream.backend is None
     assert stream.backend_reason is None
 

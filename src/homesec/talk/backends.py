@@ -122,6 +122,15 @@ class TalkBackendOpenError(RuntimeError):
         self.reason = reason
 
 
+class TalkBackendConfigError(ValueError):
+    """Raised when a backend has a safe public config error to report."""
+
+    def __init__(self, public_message: str, *, cause: Exception | None = None) -> None:
+        super().__init__(public_message)
+        self.public_message = public_message
+        self.__cause__ = cause
+
+
 @dataclass(frozen=True, slots=True)
 class TalkBackendRegistration:
     """Factory and detector metadata for one talk backend."""
