@@ -80,10 +80,24 @@ cameras:
     # Optional: local TP-Link Tapo talk backend. Video remains RTSP, while
     # speaker audio is sent to the camera's local TCP 8800 endpoint. This path
     # does not call TP-Link cloud during runtime; validate real hardware before
-    # marking a specific model/firmware compatible.
+    # marking a specific model/firmware compatible. If RTSP and Tapo local talk
+    # use the same credentials, host and credential material can be derived from
+    # the RTSP URL and port defaults to 8800.
     # talk:
     #   mode: auto
     #   backend: auto
+    #   backends:
+    #     tapo_local: {}
+    #
+    # Optional: force the Tapo backend and skip ONVIF probing.
+    # talk:
+    #   mode: auto
+    #   backend: tapo_local
+    #
+    # Optional: override Tapo local host/credentials when they differ from RTSP.
+    # talk:
+    #   mode: auto
+    #   backend: tapo_local
     #   backends:
     #     tapo_local:
     #       host: 192.168.1.33
@@ -92,16 +106,6 @@ cameras:
     #       password_sha256_env: OFFICE_TAPO_SHA256
     #       # Optional fallback for older local Digest challenges:
     #       # password_md5_env: OFFICE_TAPO_MD5
-    #
-    # Optional: force the Tapo backend and skip ONVIF probing.
-    # talk:
-    #   mode: auto
-    #   backend: tapo_local
-    #   backends:
-    #     tapo_local:
-    #       host: 192.168.1.33
-    #       username_env: OFFICE_TAPO_USERNAME
-    #       password_sha256_env: OFFICE_TAPO_SHA256
 
   # FTP server (receive uploads from cameras that support FTP)
   - name: ftp_camera

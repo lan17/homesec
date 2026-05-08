@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from pydantic import ValidationError
 
@@ -141,17 +143,17 @@ def test_tapo_host_missing_from_config_and_source_uri_reports_safe_error() -> No
 
 
 def test_tapo_credential_requires_hash_env_config() -> None:
-    """Tapo credentials should require explicit hash env-var configuration."""
-    # Given: Tapo config without SHA256 or MD5 hash env references
+    """Tapo credentials should require env or source URL password material."""
+    # Given: Tapo config without hash env references and without RTSP password
     config = TapoLocalTalkConfig()
 
     # When: Resolving credential material
-    # Then: A safe config error is raised without requesting a raw password
+    # Then: A safe config error explains the missing password source
     with pytest.raises(TalkBackendConfigError) as exc_info:
-        resolve_tapo_credential(config, _context())
+        resolve_tapo_credential(config, _context(source_uri="rtsp://192.168.1.33/stream1"))
     assert (
         exc_info.value.public_message
-        == "Tapo local backend requires SHA256 or MD5 credential env var"
+        == "Tapo local backend requires password hash env var or RTSP URL password"
     )
 
 
@@ -168,6 +170,95 @@ def test_tapo_credential_reports_missing_env_var_by_name() -> None:
         exc_info.value.public_message
         == "Required Tapo local environment variable is not set: OFFICE_TAPO_SHA256"
     )
+
+
+def test_tapo_credential_defaults_to_rtsp_username_and_sha256_password() -> None:
+    """Tapo credentials should default to RTSP user/pass when no env override exists."""
+    # Given: Tapo config without credential overrides and a credentialed RTSP URL
+    config = TapoLocalTalkConfig()
+
+    # When: Resolving credential material for a SHA256 Tapo challenge
+    credential = resolve_tapo_credential(config, _context())
+
+    # Then: The username and password hash are derived from the RTSP URL
+    assert credential.username == "admin"
+    assert credential.password_hash == hashlib.sha256(b"secret").hexdigest().upper()
+    assert credential.hash_kind == "sha256"
+
+
+def test_tapo_credential_defaults_to_rtsp_md5_password_when_challenge_prefers_md5() -> None:
+    """Tapo credential defaults should match the hash kind requested by the camera."""
+    # Given: Tapo config without credential overrides and a credentialed RTSP URL
+    config = TapoLocalTalkConfig()
+
+    # When: Resolving credential material for an older MD5 Tapo challenge
+    credential = resolve_tapo_credential(
+        config,
+        _context(),
+        preferred_hash_kind="md5",
+    )
+
+    # Then: The password hash is derived from the RTSP password using MD5
+    assert credential.username == "admin"
+    assert (
+        credential.password_hash
+        == hashlib.md5(
+            b"secret",
+            usedforsecurity=False,
+        )
+        .hexdigest()
+        .upper()
+    )
+    assert credential.hash_kind == "md5"
+
+
+def test_tapo_username_can_be_derived_from_percent_encoded_rtsp_url() -> None:
+    """Tapo username/password defaults should decode RTSP URL user info."""
+    # Given: Tapo config without credential overrides and encoded RTSP credentials
+    config = TapoLocalTalkConfig()
+
+    # When: Resolving credential material
+    credential = resolve_tapo_credential(
+        config,
+        _context(source_uri="rtsp://camera%40home:p%40ss%3Aword@192.168.1.33/stream1"),
+    )
+
+    # Then: The decoded RTSP username/password are used as credential material
+    assert credential.username == "camera@home"
+    assert credential.password_hash == hashlib.sha256(b"p@ss:word").hexdigest().upper()
+
+
+def test_tapo_explicit_credential_env_wins_over_rtsp_url_password() -> None:
+    """Explicit Tapo credential env vars should override RTSP URL password defaults."""
+    # Given: A Tapo config with explicit hash env and a different RTSP password
+    config = TapoLocalTalkConfig(password_sha256_env="OFFICE_TAPO_SHA256")
+    sha256 = "A" * 64
+
+    # When: Resolving credential material
+    credential = resolve_tapo_credential(
+        config,
+        _context(env={"OFFICE_TAPO_SHA256": sha256}),
+    )
+
+    # Then: The explicit env hash wins over any derived source password hash
+    assert credential.username == "admin"
+    assert credential.password_hash == sha256
+    assert credential.password_hash != hashlib.sha256(b"secret").hexdigest().upper()
+
+
+def test_tapo_explicit_username_wins_over_rtsp_url_username() -> None:
+    """Explicit Tapo usernames should override RTSP URL username defaults."""
+    # Given: A Tapo config with an explicit username and source URL credentials
+    config = TapoLocalTalkConfig(username="speaker", password_sha256_env="OFFICE_TAPO_SHA256")
+
+    # When: Resolving credential material
+    credential = resolve_tapo_credential(
+        config,
+        _context(env={"OFFICE_TAPO_SHA256": "A" * 64}),
+    )
+
+    # Then: The explicitly configured username wins over the RTSP username
+    assert credential.username == "speaker"
 
 
 def test_tapo_credential_normalizes_sha256_hash_from_env() -> None:

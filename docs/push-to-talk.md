@@ -131,7 +131,9 @@ those env vars are missing.
 For TP-Link Tapo-style local talk, keep the video source as RTSP and add the
 `tapo_local` talk backend. This backend talks to the camera's local TCP 8800
 endpoint and does not call the TP-Link cloud during runtime. Validate real Tapo
-C120 hardware before marking a camera compatible:
+C120 hardware before marking a camera compatible. If the camera uses the same
+username and password for RTSP and local talk, the backend can derive host,
+username, and password hash material from the RTSP URL:
 
 ```yaml
 cameras:
@@ -144,17 +146,32 @@ cameras:
       mode: auto
       backend: auto
       backends:
-        tapo_local:
-          host: 192.168.1.33
-          port: 8800
-          username_env: OFFICE_TAPO_USERNAME
-          password_sha256_env: OFFICE_TAPO_SHA256
-          # Optional fallback for older local Digest challenges:
-          # password_md5_env: OFFICE_TAPO_MD5
+        tapo_local: {}
 ```
 
 Use `backend: tapo_local` when you want to force the Tapo path and skip ONVIF
-probing:
+probing. This is the recommended first hardware-test shape:
+
+```yaml
+cameras:
+  - name: office
+    source:
+      backend: rtsp
+      config:
+        rtsp_url_env: OFFICE_RTSP_URL
+    talk:
+      mode: auto
+      backend: tapo_local
+```
+
+Tapo credentials can be inherited from the RTSP URL or supplied explicitly. When
+`username_env`, `password_sha256_env`, or `password_md5_env` is configured, that
+explicit value wins and missing env vars are reported as config errors. Password
+env vars must contain the hex password hash expected by the local Tapo Digest
+challenge, not the raw password. `password_sha256_env` is preferred;
+`password_md5_env` is a fallback for older challenges. HomeSec normalizes hash
+case and never returns or logs the hash value. Explicit overrides are useful
+when the Tapo local endpoint uses different credentials from RTSP:
 
 ```yaml
 cameras:
@@ -169,16 +186,12 @@ cameras:
       backends:
         tapo_local:
           host: 192.168.1.33
+          port: 8800
           username_env: OFFICE_TAPO_USERNAME
           password_sha256_env: OFFICE_TAPO_SHA256
+          # Optional fallback for older local Digest challenges:
+          # password_md5_env: OFFICE_TAPO_MD5
 ```
-
-Tapo credentials are separate from RTSP credentials. The `username_env` value is
-optional when the camera uses the default `admin` username. Password env vars
-must contain the hex password hash expected by the local Tapo Digest challenge,
-not the raw password. `password_sha256_env` is preferred; `password_md5_env` is a
-fallback for older challenges. HomeSec normalizes hash case and never returns or
-logs the hash value.
 
 Opt out cameras that should never expose speaker access:
 
@@ -293,11 +306,7 @@ cameras:
       mode: auto
       backend: auto
       backends:
-        tapo_local:
-          host: 192.168.1.33
-          port: 8800
-          username_env: OFFICE_TAPO_USERNAME
-          password_sha256_env: OFFICE_TAPO_SHA256
+        tapo_local: {}
 ```
 
 The `tapo_local` backend is intended for Tapo cameras that expose a local
@@ -469,8 +478,9 @@ Suggested result values:
   backend is installed and registered in this HomeSec runtime.
 - If `cameras[].talk.config.rtsp_url_env` or credential env vars are configured,
   confirm those environment variables are set for the HomeSec process.
-- For `tapo_local`, confirm `host` can be resolved and at least one of
-  `password_sha256_env` or `password_md5_env` is configured and set.
+- For `tapo_local`, confirm `host` can be resolved and either the RTSP URL has a
+  password or at least one of `password_sha256_env` / `password_md5_env` is
+  configured and set.
 - Check `last_error` / `backend_reason` for the missing backend or environment
   variable name.
 

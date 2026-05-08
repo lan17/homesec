@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -96,35 +97,51 @@ def resolve_tapo_credential(
     *,
     preferred_hash_kind: Literal["sha256", "md5"] = "sha256",
 ) -> TapoCredential:
-    """Resolve Tapo credential hash material from configured environment variables."""
+    """Resolve Tapo credential material from env vars or source URI credentials."""
     username = _resolve_username(config, context)
     env_order = _credential_env_order(config, preferred_hash_kind=preferred_hash_kind)
-    if not env_order:
-        raise TalkBackendConfigError("Tapo local backend requires SHA256 or MD5 credential env var")
+    if env_order:
+        missing_env_names: list[str] = []
+        for hash_kind, env_name in env_order:
+            raw_value = context.env_value(env_name)
+            if raw_value is None or raw_value.strip() == "":
+                missing_env_names.append(env_name)
+                continue
+            normalized = raw_value.strip().upper()
+            _validate_hash_shape(normalized, env_name=env_name, hash_kind=hash_kind)
+            return TapoCredential(
+                username=username,
+                password_hash=normalized,
+                hash_kind=hash_kind,
+            )
 
-    missing_env_names: list[str] = []
-    for hash_kind, env_name in env_order:
-        raw_value = context.env_value(env_name)
-        if raw_value is None or raw_value.strip() == "":
-            missing_env_names.append(env_name)
-            continue
-        normalized = raw_value.strip().upper()
-        _validate_hash_shape(normalized, env_name=env_name, hash_kind=hash_kind)
+        if missing_env_names:
+            raise TalkBackendConfigError(
+                f"Required Tapo local environment variable is not set: {missing_env_names[0]}"
+            )
+
+    source_password = _source_uri_password(context)
+    if source_password:
         return TapoCredential(
             username=username,
-            password_hash=normalized,
-            hash_kind=hash_kind,
+            password_hash=_hash_source_password(
+                source_password,
+                hash_kind=preferred_hash_kind,
+            ),
+            hash_kind=preferred_hash_kind,
         )
 
-    if missing_env_names:
-        raise TalkBackendConfigError(
-            f"Required Tapo local environment variable is not set: {missing_env_names[0]}"
-        )
-    raise TalkBackendConfigError("Tapo local backend requires SHA256 or MD5 credential env var")
+    raise TalkBackendConfigError(
+        "Tapo local backend requires password hash env var or RTSP URL password"
+    )
 
 
 def _resolve_username(config: TapoLocalTalkConfig, context: TalkBackendContext) -> str:
     if config.username_env is None:
+        if "username" not in config.model_fields_set:
+            source_username = _source_uri_username(context)
+            if source_username:
+                return source_username
         return config.username
     username = context.env_value(config.username_env)
     if username is None or username.strip() == "":
@@ -170,3 +187,33 @@ def _host_from_uri(uri: str | None) -> str | None:
         return None
     parsed = urlsplit(uri)
     return parsed.hostname
+
+
+def _source_uri_username(context: TalkBackendContext) -> str | None:
+    for uri in (context.resolved_source_uri, context.source_uri):
+        if not uri:
+            continue
+        username = urlsplit(uri).username
+        if username:
+            return unquote(username)
+    return None
+
+
+def _source_uri_password(context: TalkBackendContext) -> str | None:
+    for uri in (context.resolved_source_uri, context.source_uri):
+        if not uri:
+            continue
+        password = urlsplit(uri).password
+        if password:
+            return unquote(password)
+    return None
+
+
+def _hash_source_password(
+    password: str,
+    *,
+    hash_kind: Literal["sha256", "md5"],
+) -> str:
+    if hash_kind == "sha256":
+        return hashlib.sha256(password.encode("utf-8")).hexdigest().upper()
+    return hashlib.md5(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()

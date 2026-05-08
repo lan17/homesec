@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from pydantic import BaseModel
 
@@ -145,6 +147,40 @@ async def test_explicit_tapo_backend_does_not_fallback_to_onvif() -> None:
         # Then: Tapo is selected, ONVIF is not probed, and local probing succeeds
         assert selector.backend == "tapo_local"
         assert selector.supported_codecs == [TAPO_LOCAL_CODEC]
+        assert probe.capability == TalkCapabilityState.SUPPORTED
+        assert probe.selected_codec == TAPO_LOCAL_CODEC
+        assert calls == []
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_explicit_tapo_backend_can_default_to_rtsp_credentials() -> None:
+    """Explicit Tapo selection should work with only backend selection configured."""
+    # Given: A fake Tapo endpoint expecting the SHA256 hash of the RTSP password
+    server = FakeTapoServer(
+        hash_kind="sha256",
+        credential_hash=hashlib.sha256(b"secret").hexdigest().upper(),
+    )
+    await server.start()
+    calls: list[str] = []
+    try:
+        selector = TalkBackendSelector(
+            registry=_registry(calls=calls),
+            context=_context(
+                CameraTalkConfig(
+                    backend="tapo_local",
+                    backends={"tapo_local": {"host": server.host, "port": server.port}},
+                ),
+                env={},
+            ),
+        )
+
+        # When: Probing through explicit backend selection with no Tapo credential env
+        probe = await selector.probe()
+
+        # Then: Tapo derives username/password material from the RTSP source URL
+        assert selector.backend == "tapo_local"
         assert probe.capability == TalkCapabilityState.SUPPORTED
         assert probe.selected_codec == TAPO_LOCAL_CODEC
         assert calls == []
