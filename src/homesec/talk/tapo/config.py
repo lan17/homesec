@@ -16,6 +16,12 @@ from homesec.talk.backends import TalkBackendConfigError, TalkBackendContext
 _SAFE_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _HEX_PATTERN = re.compile(r"^[A-F0-9]+$")
 _LOCAL_HOST_SUFFIXES = (".local", ".localdomain", ".lan", ".home", ".home.arpa")
+_PRIVATE_TAPO_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 
 
 class TapoLocalTalkConfig(BaseModel):
@@ -191,7 +197,11 @@ def _validate_local_tapo_host(host: str) -> str:
         raise TalkBackendConfigError(
             "Tapo local backend host must be a private IP address or local hostname"
         )
-    if address.is_private or address.is_loopback or address.is_link_local:
+    if (
+        address.is_loopback
+        or address.is_link_local
+        or any(address in network for network in _PRIVATE_TAPO_NETWORKS)
+    ):
         return host
     raise TalkBackendConfigError(
         "Tapo local backend host must be a private IP address or local hostname"

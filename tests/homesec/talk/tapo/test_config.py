@@ -154,7 +154,16 @@ def test_tapo_host_accepts_private_addresses_and_local_names(host: str) -> None:
     assert resolved == host
 
 
-@pytest.mark.parametrize("host", ["8.8.8.8", "camera.example.com", "0.0.0.0"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "8.8.8.8",
+        "camera.example.com",
+        "0.0.0.0",
+        "192.0.2.1",
+        "2001:db8::1",
+    ],
+)
 def test_tapo_host_rejects_public_or_unspecified_hosts(host: str) -> None:
     """Tapo host resolution should reject hosts outside the local access policy."""
     # Given: A Tapo config pointing at a non-local endpoint
