@@ -3,9 +3,11 @@ import { createSearchParams, Link } from 'react-router-dom'
 import type { CameraCreate, CameraResponse } from '../../../api/generated/types'
 import { Button } from '../../../components/ui/Button'
 import { Card } from '../../../components/ui/Card'
+import { EmptyState } from '../../../components/ui/EmptyState'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
 import { TechnicalDetailsDisclosure } from '../../../components/ui/TechnicalDetailsDisclosure'
 import { cameraHealthLabel, cameraHealthTone, formatLastSeen } from '../cameraHealth'
+import { formatCameraSourceLabel } from '../presentation'
 import { CameraPreviewPanel } from './CameraPreviewPanel'
 import { CameraSourceConfigEditor } from './CameraSourceConfigEditor'
 
@@ -38,11 +40,20 @@ export function CameraList({
   onDelete,
 }: CameraListProps) {
   return (
-    <Card title="Camera Inventory" subtitle="Current runtime camera definitions">
-      {isPending && cameras.length === 0 ? <p className="muted">Loading cameras...</p> : null}
+    <Card title="Cameras" subtitle="Configured HomeSec cameras">
+      {isPending && cameras.length === 0 ? (
+        <EmptyState
+          title="Loading cameras"
+          description="Checking your configured cameras."
+          tone="loading"
+        />
+      ) : null}
 
       {!isPending && cameras.length === 0 ? (
-        <p className="muted">No cameras configured yet. Create your first camera above.</p>
+        <EmptyState
+          title="No cameras yet"
+          description="Add a camera above to start live view and event recording."
+        />
       ) : null}
 
       {cameras.length > 0 ? (
@@ -55,7 +66,7 @@ export function CameraList({
                   <StatusBadge tone={cameraHealthTone(camera)}>
                     {cameraHealthLabel(camera)}
                   </StatusBadge>
-                  <span className="camera-chip">{camera.source_backend}</span>
+                  <span className="camera-chip">{formatCameraSourceLabel(camera.source_backend)}</span>
                 </div>
               </header>
 

@@ -108,7 +108,7 @@ export function CamerasPage() {
       <header className="page__header">
         <div>
           <h1 className="page__title">Cameras</h1>
-          <p className="page__lead">Manage camera definitions and apply runtime reloads.</p>
+          <p className="page__lead">Add cameras, check status, and apply pending changes.</p>
         </div>
         <Button
           variant="ghost"
@@ -132,7 +132,7 @@ export function CamerasPage() {
       ) : null}
 
       {pageError ? (
-        <Card title="Camera operations failed">
+        <Card title="Camera change could not finish">
           <p className="error-text">{pageError}</p>
         </Card>
       ) : null}
@@ -153,7 +153,7 @@ export function CamerasPage() {
           }}
         />
       ) : (
-        <Card title="Add Camera" subtitle="Launch reusable camera onboarding flow">
+        <Card title="Add camera" subtitle="Add a new HomeSec camera">
           <div className="inline-form__actions">
             <Button
               onClick={() => {

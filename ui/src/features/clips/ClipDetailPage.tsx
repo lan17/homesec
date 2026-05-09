@@ -17,10 +17,12 @@ import { Button } from '../../components/ui/Button'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { MediaPanel } from '../../components/ui/MediaPanel'
 import { RiskBadge } from '../../components/ui/RiskBadge'
+import { riskLabelForLevel } from '../../components/ui/riskTone'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { TechnicalDetailsDisclosure } from '../../components/ui/TechnicalDetailsDisclosure'
 import {
   describeClipError,
+  formatAlertStatus,
   formatActivityType,
   formatDetectedObjects,
   formatEventTime,
@@ -152,7 +154,7 @@ export function ClipDetailPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Event Detail</h1>
+          <h1 className="page__title">Event</h1>
           <p className="page__lead">
             {clip ? `${clip.camera} - ${formatTimestamp(clip.created_at)}` : 'Recorded security event'}
           </p>
@@ -211,7 +213,7 @@ export function ClipDetailPage() {
           >
             <div className="clip-detail-video-shell">
               {mediaQuery.isPending ? (
-                <p className="muted">Preparing secure playback URL...</p>
+                <p className="muted">Preparing event video.</p>
               ) : mediaQuery.mediaUrl ? (
                 <video
                   className="clip-detail-video"
@@ -225,7 +227,7 @@ export function ClipDetailPage() {
                   Your browser does not support video playback.
                 </video>
               ) : (
-                <p className="muted">Event media is not available for playback.</p>
+                <p className="muted">Event video is not available for playback.</p>
               )}
             </div>
           </MediaPanel>
@@ -241,12 +243,12 @@ export function ClipDetailPage() {
                   {formatActivityType(clip.activity_type)}
                 </h2>
               </div>
-              <StatusBadge tone={clip.alerted ? 'unhealthy' : 'unknown'}>
-                {clip.alerted ? 'Alert sent' : 'No alert'}
+              <StatusBadge tone={clip.alerted ? 'unhealthy' : 'healthy'}>
+                {formatAlertStatus(clip.alerted)}
               </StatusBadge>
             </div>
             <p className="clip-detail-summary__text">
-              {clip.summary?.trim() || 'No summary available yet.'}
+              {clip.summary?.trim() || 'No summary is available yet.'}
             </p>
 
             <div className="clip-detail-actions">
@@ -288,7 +290,7 @@ export function ClipDetailPage() {
                 </div>
                 <div className="clip-detail-kv-row">
                   <dt>Risk</dt>
-                  <dd>{clip.risk_level ?? 'not available'}</dd>
+                  <dd>{riskLabelForLevel(clip.risk_level)}</dd>
                 </div>
                 <div className="clip-detail-kv-row">
                   <dt>Detected Objects</dt>

@@ -34,8 +34,10 @@ import {
 } from './cursorState'
 import {
   describeClipError,
+  formatAlertStatus,
   formatActivityType,
   formatDetectedObjects,
+  formatEventCount,
   formatEventTime,
   groupClipsByDate,
 } from './presentation'
@@ -105,7 +107,7 @@ function ClipsFilterPanel({
             <option value="">Any</option>
             {CLIP_STATUS_OPTIONS.map((status) => (
               <option key={status} value={status}>
-                {status}
+                {formatActivityType(status)}
               </option>
             ))}
           </select>
@@ -122,7 +124,7 @@ function ClipsFilterPanel({
           >
             <option value="any">Any</option>
             <option value="true">Alert sent</option>
-            <option value="false">No alert</option>
+            <option value="false">{formatAlertStatus(false)}</option>
           </select>
         </label>
 
@@ -233,6 +235,20 @@ function isTodayFilterActive(since: string | null | undefined): boolean {
   )
 }
 
+function hasActiveEventFilters(query: ReturnType<typeof queryWithoutCursor>): boolean {
+  return Boolean(
+    query.camera
+    || query.status
+    || typeof query.alerted === 'boolean'
+    || query.detected !== DEFAULT_DETECTED_FILTER
+    || query.risk_level
+    || query.activity_type
+    || query.since
+    || query.until
+    || query.limit !== DEFAULT_CLIPS_LIMIT,
+  )
+}
+
 export function ClipsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
@@ -255,6 +271,7 @@ export function ClipsPage() {
   const unauthorized = isUnauthorizedAPIError(clipsQuery.error)
   const clipItems = useMemo(() => clipsQuery.data?.clips ?? [], [clipsQuery.data])
   const eventGroups = useMemo(() => groupClipsByDate(clipItems), [clipItems])
+  const activeEventFilters = hasActiveEventFilters(filterQuery)
   const cameraOptions = useMemo(() => {
     const uniqueNames = new Set<string>()
     for (const camera of camerasQuery.data ?? []) {
@@ -402,7 +419,7 @@ export function ClipsPage() {
       <header className="page__header">
         <div>
           <h1 className="page__title">Events</h1>
-          <p className="page__lead">Filter and page through recorded security events.</p>
+          <p className="page__lead">Review recorded security events and quickly filter what matters.</p>
         </div>
         <Button variant="ghost" onClick={refreshClips} disabled={clipsQuery.isFetching}>
           {clipsQuery.isFetching ? 'Refreshing...' : 'Refresh'}
@@ -431,7 +448,7 @@ export function ClipsPage() {
           <div>
             <h2 id="events-results-title" className="section-title">Results</h2>
             {clipItems.length > 0 ? (
-              <p className="muted">{clipItems.length} event(s)</p>
+              <p className="muted">{formatEventCount(clipItems.length)}</p>
             ) : null}
           </div>
         </header>
@@ -463,7 +480,22 @@ export function ClipsPage() {
         {!clipsQuery.isPending && !clipsQuery.error && clipItems.length === 0 ? (
           <EmptyState
             title="No events found"
-            description="No recorded security events match the current filters."
+            description={
+              activeEventFilters
+                ? 'No recorded security events match the current filters.'
+                : 'Recorded security events will appear here after a camera captures activity.'
+            }
+            action={
+              activeEventFilters ? (
+                <Button variant="ghost" onClick={resetFilters}>
+                  Clear filters
+                </Button>
+              ) : (
+                <Link className="button button--primary" to="/live">
+                  Open Live
+                </Link>
+              )
+            }
           />
         ) : null}
 
@@ -491,13 +523,13 @@ export function ClipsPage() {
                           <MediaPanel
                             aspect="video"
                             className="event-card__media-panel"
-                            placeholder="Open event to view video"
+                            placeholder="Open this event to view video."
                           />
                         )}
                         risk={<RiskBadge level={clip.risk_level} />}
                         status={(
-                          <StatusBadge tone={clip.alerted ? 'unhealthy' : 'unknown'}>
-                            {clip.alerted ? 'Alert sent' : 'No alert'}
+                          <StatusBadge tone={clip.alerted ? 'unhealthy' : 'healthy'}>
+                            {formatAlertStatus(clip.alerted)}
                           </StatusBadge>
                         )}
                         meta={[

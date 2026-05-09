@@ -1,14 +1,9 @@
 import type { HTMLAttributes } from 'react'
 
-import { riskToneForLevel } from './riskTone'
+import { riskLabelForLevel, riskToneForLevel } from './riskTone'
 
 interface RiskBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   level: string | null | undefined
-}
-
-function riskLabel(level: string | null | undefined): string {
-  const trimmed = level?.trim()
-  return trimmed ? trimmed : 'Risk unavailable'
 }
 
 export function RiskBadge({ level, className, role, ...props }: RiskBadgeProps) {
@@ -19,7 +14,7 @@ export function RiskBadge({ level, className, role, ...props }: RiskBadgeProps) 
 
   return (
     <span className={classes} role={role ?? 'status'} {...props}>
-      {riskLabel(level)}
+      {riskLabelForLevel(level)}
     </span>
   )
 }

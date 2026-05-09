@@ -152,6 +152,7 @@ describe('ClipsPage event list', () => {
 
     // Then: Empty results should be homeowner-readable and avoid the old table shell
     expect(emptyState).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeTruthy()
     expect(screen.queryByRole('table')).toBeNull()
   })
 

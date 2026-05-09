@@ -38,7 +38,7 @@ const SETTINGS_SECTIONS = [
   {
     title: 'Advanced',
     subtitle: 'System status and diagnostics',
-    description: 'Runtime health, database backups, reload controls, and diagnostics live in System.',
+    description: 'Runtime health, backups, reload controls, and diagnostics live in System.',
     to: '/system',
     action: 'Open System',
     primary: false,
@@ -52,7 +52,7 @@ export function SettingsPage() {
         <div>
           <h1 className="page__title">Settings</h1>
           <p className="page__lead">
-            Manage homeowner-facing configuration first. System details stay under Advanced.
+            Manage cameras, alerts, detection, and storage. System details stay under Advanced.
           </p>
         </div>
       </header>

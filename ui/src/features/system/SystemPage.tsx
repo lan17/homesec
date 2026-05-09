@@ -8,9 +8,17 @@ import { useStatsQuery } from '../../api/hooks/useStatsQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { EmptyState } from '../../components/ui/EmptyState'
 import { useSetupRedirect } from '../setup/useSetupRedirect'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-import { describeAPIError, formatLastUpdated, healthTone } from './status'
+import {
+  describeAPIError,
+  formatHealthStatusLabel,
+  formatLastUpdated,
+  formatSystemValue,
+  formatUptime,
+  healthTone,
+} from './status'
 
 export function SystemPage() {
   const { shouldRedirect, isChecking } = useSetupRedirect()
@@ -90,13 +98,15 @@ export function SystemPage() {
       </header>
 
       {showLoadingState ? (
-        <Card title="Loading system status">
-          <p className="muted">Fetching /api/v1/health and /api/v1/stats...</p>
-        </Card>
+        <EmptyState
+          title="Loading system status"
+          description="Checking runtime health and activity."
+          tone="loading"
+        />
       ) : null}
 
       {healthQuery.error && !healthQuery.data ? (
-        <Card title="Health query failed" subtitle="Connection or API issue">
+        <Card title="System health unavailable" subtitle="Connection or API issue">
           <p className="error-text">
             {healthAPIError ? describeAPIError(healthAPIError) : healthQuery.error.message}
           </p>
@@ -107,14 +117,14 @@ export function SystemPage() {
         <div className="grid grid--cards">
           <Card title="System status" subtitle={`HTTP ${healthQuery.data.httpStatus}`}>
             <StatusBadge tone={healthTone(healthQuery.data.status)}>
-              {healthQuery.data.status.toUpperCase()}
+              {formatHealthStatusLabel(healthQuery.data.status)}
             </StatusBadge>
           </Card>
           <Card title="Pipeline">
-            <p className="metric">{healthQuery.data.pipeline}</p>
+            <p className="metric">{formatSystemValue(healthQuery.data.pipeline)}</p>
           </Card>
           <Card title="Postgres">
-            <p className="metric">{healthQuery.data.postgres}</p>
+            <p className="metric">{formatSystemValue(healthQuery.data.postgres)}</p>
           </Card>
           <Card title="Cameras online">
             <p className="metric">{healthQuery.data.cameras_online}</p>
@@ -124,7 +134,7 @@ export function SystemPage() {
 
       <Card title="Daily stats">
         {statsQuery.isPending && !statsQuery.data ? (
-          <p className="muted">Fetching /api/v1/stats...</p>
+          <p className="muted">Checking today&apos;s activity.</p>
         ) : null}
 
         {statsUnauthorized ? (
@@ -153,8 +163,8 @@ export function SystemPage() {
             <Card title="Cameras online">
               <p className="metric">{statsQuery.data.cameras_online}</p>
             </Card>
-            <Card title="Runtime uptime (s)">
-              <p className="metric">{Math.round(statsQuery.data.uptime_seconds)}</p>
+            <Card title="Runtime uptime">
+              <p className="metric">{formatUptime(statsQuery.data.uptime_seconds)}</p>
             </Card>
           </div>
         ) : null}

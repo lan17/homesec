@@ -8,6 +8,7 @@ import { StatusBadge } from '../../components/ui/StatusBadge'
 import { TechnicalDetailsDisclosure } from '../../components/ui/TechnicalDetailsDisclosure'
 import { CameraPreviewPanel } from '../cameras/components/CameraPreviewPanel'
 import { cameraHealthLabel, cameraHealthTone, formatLastSeen } from '../cameras/cameraHealth'
+import { formatCameraSourceLabel } from '../cameras/presentation'
 
 interface LiveCameraCardProps {
   camera: CameraResponse
@@ -92,11 +93,11 @@ export function LiveCameraCard(props: LiveCameraCardProps) {
           <dl className="camera-card__meta">
             <div className="camera-card__meta-row">
               <dt>Source</dt>
-              <dd>{camera.source_backend}</dd>
+              <dd>{formatCameraSourceLabel(camera.source_backend)}</dd>
             </div>
             <div className="camera-card__meta-row">
               <dt>Enabled</dt>
-              <dd>{camera.enabled ? 'true' : 'false'}</dd>
+              <dd>{camera.enabled ? 'Yes' : 'No'}</dd>
             </div>
           </dl>
         </TechnicalDetailsDisclosure>

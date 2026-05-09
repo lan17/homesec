@@ -98,6 +98,14 @@ export function formatDetectedObjects(clip: ClipResponse): string {
   return detectedObjects.join(', ')
 }
 
+export function formatAlertStatus(alerted: boolean): string {
+  return alerted ? 'Alert sent' : 'Quiet'
+}
+
+export function formatEventCount(count: number): string {
+  return `${count} ${count === 1 ? 'event' : 'events'}`
+}
+
 export function formatActivityType(activityType: string | null | undefined): string {
   const normalized = activityType?.trim()
   if (!normalized) {

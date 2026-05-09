@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { APIError } from '../../api/client'
 import {
   describeClipError,
+  formatAlertStatus,
   formatActivityType,
   formatDetectedObjects,
+  formatEventCount,
   formatEventDateGroup,
   formatEventTime,
   groupClipsByDate,
@@ -63,12 +65,16 @@ describe('event presentation helpers', () => {
     const group = formatEventDateGroup(clip.created_at, new Date('2026-02-15T20:00:00'))
     const activity = formatActivityType(clip.activity_type)
     const objects = formatDetectedObjects(clip)
+    const alertStatus = formatAlertStatus(clip.alerted)
+    const count = formatEventCount(1)
 
     // Then: Labels should be scan-friendly and avoid raw API casing
     expect(time).toMatch(/6:30|18:30/)
     expect(group).toBe('Yesterday')
     expect(activity).toBe('Package Drop')
     expect(objects).toBe('person, package')
+    expect(alertStatus).toBe('Alert sent')
+    expect(count).toBe('1 event')
   })
 
   it('groups clips by local event date without changing list order', () => {

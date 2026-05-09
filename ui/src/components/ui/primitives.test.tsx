@@ -80,7 +80,7 @@ describe('shared UI primitives', () => {
     // Then: Existing values are displayed without requiring extra backend reason codes
     expect(badges.map((badge) => badge.textContent)).toEqual([
       'Online',
-      'high',
+      'High',
       'Risk unavailable',
     ])
     expect(riskToneForLevel('moderate')).toBe('medium')

@@ -175,10 +175,11 @@ describe('CamerasPage', () => {
     setupPage({ cameras: [] })
 
     // When: The cameras page is rendered
-    const emptyState = screen.getByText('No cameras configured yet. Create your first camera above.')
+    const emptyState = screen.getByRole('heading', { name: 'No cameras yet' })
 
     // Then: The empty-state guidance is shown
     expect(emptyState).toBeTruthy()
+    expect(screen.getByText('Add a camera above to start live view and event recording.')).toBeTruthy()
   })
 
   it('submits create camera payload from form values', async () => {

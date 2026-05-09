@@ -50,7 +50,7 @@ export function LivePage() {
   return (
     <ResponsivePageShell
       title="Live"
-      lead="See your cameras first, then jump to camera controls or events."
+      lead="Check your cameras first, then jump to controls or recent events."
       actions={
         <Button variant="ghost" onClick={refreshCameras} disabled={camerasQuery.isFetching}>
           {camerasQuery.isFetching ? 'Refreshing...' : 'Refresh'}
@@ -76,7 +76,7 @@ export function LivePage() {
       {camerasQuery.isPending && cameras.length === 0 ? (
         <EmptyState
           title="Loading cameras"
-          description="Checking configured cameras..."
+          description="Checking configured cameras."
           tone="loading"
         />
       ) : null}
@@ -84,10 +84,10 @@ export function LivePage() {
       {!camerasQuery.isPending && !camerasQuery.error && cameras.length === 0 ? (
         <EmptyState
           title="No cameras yet"
-          description="Add a camera in Settings to start using live view."
+          description="Add a camera to start using live view."
           action={
-            <Link className="button button--primary" to="/settings">
-              Open Settings
+            <Link className="button button--primary" to="/cameras">
+              Open Cameras
             </Link>
           }
         />

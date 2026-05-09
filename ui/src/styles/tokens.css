@@ -1,10 +1,10 @@
 :root {
-  --font-sans: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', 'Consolas', monospace;
 
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 24px;
+  --radius-sm: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -31,7 +31,7 @@
   --success: #157347;
   --warning: #ac6b08;
   --danger: #b42318;
-  --shadow: 0 14px 40px rgba(32, 53, 82, 0.14);
+  --shadow: 0 12px 30px rgba(32, 53, 82, 0.11);
   --gradient-start: #d5ecff;
   --gradient-end: #f5f9ff;
 }
@@ -51,7 +51,7 @@
   --success: #36c48b;
   --warning: #f0b34e;
   --danger: #fd7068;
-  --shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  --shadow: 0 16px 36px rgba(0, 0, 0, 0.32);
   --gradient-start: #10192a;
   --gradient-end: #06090f;
 }
