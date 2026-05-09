@@ -4,36 +4,16 @@ import type { CameraResponse } from '../../api/generated/types'
 import { Button } from '../../components/ui/Button'
 import { CameraCard } from '../../components/ui/CameraCard'
 import { MediaPanel } from '../../components/ui/MediaPanel'
-import { StatusBadge, type StatusBadgeTone } from '../../components/ui/StatusBadge'
+import { StatusBadge } from '../../components/ui/StatusBadge'
 import { TechnicalDetailsDisclosure } from '../../components/ui/TechnicalDetailsDisclosure'
 import { CameraPreviewPanel } from '../cameras/components/CameraPreviewPanel'
+import { cameraHealthLabel, cameraHealthTone, formatLastSeen } from '../cameras/cameraHealth'
 
 interface LiveCameraCardProps {
   camera: CameraResponse
   isCompactViewport?: boolean
   isFocused?: boolean
   onFocusCamera?: (cameraName: string) => void
-}
-
-function cameraStatusTone(camera: CameraResponse): StatusBadgeTone {
-  if (!camera.enabled) {
-    return 'unknown'
-  }
-  return camera.healthy ? 'healthy' : 'unhealthy'
-}
-
-function cameraStatusLabel(camera: CameraResponse): string {
-  if (!camera.enabled) {
-    return 'Disabled'
-  }
-  return camera.healthy ? 'Online' : 'Offline'
-}
-
-function formatLastSeen(value: number | null): string {
-  if (!value) {
-    return 'Status unavailable'
-  }
-  return new Date(value * 1000).toLocaleString()
 }
 
 function eventsSearch(cameraName: string): string {
@@ -99,8 +79,8 @@ export function LiveCameraCard(props: LiveCameraCardProps) {
     <CameraCard
       title={camera.name}
       status={
-        <StatusBadge tone={cameraStatusTone(camera)}>
-          {cameraStatusLabel(camera)}
+        <StatusBadge tone={cameraHealthTone(camera)}>
+          {cameraHealthLabel(camera)}
         </StatusBadge>
       }
       media={renderPreview(props)}

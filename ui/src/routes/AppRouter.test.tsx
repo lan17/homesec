@@ -8,9 +8,14 @@ import { ThemeProvider } from '../app/providers/ThemeProvider'
 import { AppRouter } from './AppRouter'
 
 const useHealthQueryMock = vi.fn()
+const useCamerasQueryMock = vi.fn()
 
 vi.mock('../api/hooks/useHealthQuery', () => ({
   useHealthQuery: () => useHealthQueryMock(),
+}))
+
+vi.mock('../api/hooks/useCamerasQuery', () => ({
+  useCamerasQuery: () => useCamerasQueryMock(),
 }))
 
 vi.mock('../features/live/LivePage', () => ({
@@ -51,6 +56,10 @@ function renderRouter(initialPath: string) {
     data: { status: 'healthy' },
     isError: false,
   })
+  useCamerasQueryMock.mockReturnValue({
+    data: [],
+    isError: false,
+  })
 
   render(
     <ThemeProvider>
@@ -66,6 +75,7 @@ describe('AppRouter route cleanup', () => {
   afterEach(() => {
     cleanup()
     useHealthQueryMock.mockReset()
+    useCamerasQueryMock.mockReset()
   })
 
   it('redirects the root route to Live', async () => {

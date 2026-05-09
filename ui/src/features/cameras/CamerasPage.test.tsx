@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 
 import type { RuntimeStatusSnapshot } from '../../api/client'
 import type { CameraResponse } from '../../api/generated/types'
@@ -124,7 +125,11 @@ function setupPage({
     errors: { create: null, update: null, delete: null, reload: null },
   } as unknown as ReturnType<typeof useCameraActions>)
 
-  render(<CamerasPage />)
+  render(
+    <MemoryRouter initialEntries={['/cameras']}>
+      <CamerasPage />
+    </MemoryRouter>,
+  )
 
   return {
     createCamera,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import { APIError } from '../../../api/client'
 import { CameraPreviewPanel } from './CameraPreviewPanel'
 
 const DEFAULT_PLAYLIST_URL =
@@ -692,6 +693,26 @@ describe('CameraPreviewPanel', () => {
       'Microphone blocked. Allow microphone access in your browser and try again.',
     )).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Microphone blocked' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('keeps talk API failure details out of the default message', () => {
+    // Given: The existing talk status API reports a backend error
+    const apiError = new APIError(
+      'Unhandled GET /api/v1/talk/cameras/front',
+      404,
+      { detail: 'Unhandled GET /api/v1/talk/cameras/front' },
+      null,
+    )
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({ canStart: false, error: apiError })
+
+    // When: Rendering the preview controls
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The default copy stays homeowner-readable and raw details stay technical
+    expect(screen.getByText('Talk status could not load.')).toBeTruthy()
+    expect(screen.queryByText('Unhandled GET /api/v1/talk/cameras/front')).toBeNull()
+    expect(screen.getByText('Technical talk details')).toBeTruthy()
   })
 
 })

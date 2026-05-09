@@ -1,7 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom'
 
+import { useCamerasQuery } from '../../api/hooks/useCamerasQuery'
 import { useHealthQuery } from '../../api/hooks/useHealthQuery'
 import { MobileBottomNav, type MobileBottomNavLink } from '../../components/ui/MobileBottomNav'
+import { cameraIssueSummary } from '../../features/cameras/cameraHealth'
 import { useTheme } from '../providers/theme-context'
 
 const DESKTOP_NAV_LINKS = [
@@ -39,7 +41,10 @@ function systemStatusText(status: string | undefined, isError: boolean): string 
 export function AppShell() {
   const { theme, toggleTheme } = useTheme()
   const healthQuery = useHealthQuery()
-  const systemStatusClassName = !healthQuery.isError && healthQuery.data?.status === 'healthy'
+  const camerasQuery = useCamerasQuery()
+  const cameraIssue = cameraIssueSummary(camerasQuery.data)
+  const systemStatus = cameraIssue ?? systemStatusText(healthQuery.data?.status, healthQuery.isError)
+  const systemStatusClassName = !cameraIssue && !healthQuery.isError && healthQuery.data?.status === 'healthy'
     ? 'app-shell__header-status app-shell__header-status--nominal'
     : 'app-shell__header-status'
 
@@ -61,7 +66,7 @@ export function AppShell() {
       <div className="app-shell__main">
         <header className="app-shell__header">
           <NavLink className={systemStatusClassName} to="/system">
-            {systemStatusText(healthQuery.data?.status, healthQuery.isError)}
+            {systemStatus}
           </NavLink>
           <button type="button" className="button button--ghost" onClick={toggleTheme}>
             Theme: {theme === 'dark' ? 'Dark' : 'Light'}

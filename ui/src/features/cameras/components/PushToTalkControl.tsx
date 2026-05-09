@@ -173,6 +173,9 @@ function userMessage({
     if (isAPIError(error) && error.errorCode === 'TALK_SESSION_ALREADY_ACTIVE') {
       return 'Another talk session is already active.'
     }
+    if (isAPIError(error)) {
+      return 'Talk status could not load.'
+    }
     return describeUnknownError(error)
   }
   if (isPending) {
