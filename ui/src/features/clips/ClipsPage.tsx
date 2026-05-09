@@ -7,6 +7,11 @@ import { useClipsQuery } from '../../api/hooks/useClipsQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { EmptyState } from '../../components/ui/EmptyState'
+import { EventCard } from '../../components/ui/EventCard'
+import { MediaPanel } from '../../components/ui/MediaPanel'
+import { RiskBadge } from '../../components/ui/RiskBadge'
+import { StatusBadge } from '../../components/ui/StatusBadge'
 import {
   CLIP_LIMIT_OPTIONS,
   CLIP_STATUS_OPTIONS,
@@ -27,7 +32,13 @@ import {
   resetCursorHistory,
   type CursorHistoryState,
 } from './cursorState'
-import { describeClipError, formatTimestamp, renderDetectedObjects } from './presentation'
+import {
+  describeClipError,
+  formatActivityType,
+  formatDetectedObjects,
+  formatEventTime,
+  groupClipsByDate,
+} from './presentation'
 
 interface ClipsFilterPanelProps {
   cameraOptions: string[]
@@ -186,8 +197,14 @@ function ClipsFilterPanel({
   )
 }
 
+function eventDetailPath(clipId: string, routeSearch: string): string {
+  const suffix = routeSearch ? `?${routeSearch}` : ''
+  return `/events/${encodeURIComponent(clipId)}${suffix}`
+}
+
 export function ClipsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const routeSearch = searchParams.toString()
   const query = useMemo(() => parseClipsQuery(searchParams), [searchParams])
   const filterQuery = useMemo(() => queryWithoutCursor(query), [query])
   const filterSignature = useMemo(
@@ -205,6 +222,7 @@ export function ClipsPage() {
 
   const unauthorized = isUnauthorizedAPIError(clipsQuery.error)
   const clipItems = useMemo(() => clipsQuery.data?.clips ?? [], [clipsQuery.data])
+  const eventGroups = useMemo(() => groupClipsByDate(clipItems), [clipItems])
   const cameraOptions = useMemo(() => {
     const uniqueNames = new Set<string>()
     for (const camera of camerasQuery.data ?? []) {
@@ -300,10 +318,15 @@ export function ClipsPage() {
         onReset={resetFilters}
       />
 
-      <Card title="Results" subtitle={clipItems.length > 0 ? `${clipItems.length} event(s)` : undefined}>
-        {clipsQuery.isPending ? (
-          <p className="muted">Loading events...</p>
-        ) : null}
+      <section className="events-results" aria-labelledby="events-results-title">
+        <header className="events-results__header">
+          <div>
+            <h2 id="events-results-title" className="section-title">Results</h2>
+            {clipItems.length > 0 ? (
+              <p className="muted">{clipItems.length} event(s)</p>
+            ) : null}
+          </div>
+        </header>
 
         {unauthorized ? (
           <ApiKeyGate
@@ -313,68 +336,79 @@ export function ClipsPage() {
           />
         ) : null}
 
+        {clipsQuery.isPending ? (
+          <EmptyState
+            title="Loading events"
+            description="Fetching recorded security events with the current filters."
+            tone="loading"
+          />
+        ) : null}
+
         {clipsQuery.error && !unauthorized ? (
-          <p className="error-text">{describeClipError(clipsQuery.error)}</p>
+          <EmptyState
+            title="Events could not load"
+            description={describeClipError(clipsQuery.error)}
+            tone="error"
+          />
         ) : null}
 
         {!clipsQuery.isPending && !clipsQuery.error && clipItems.length === 0 ? (
-          <p className="muted">No events match the current filters.</p>
+          <EmptyState
+            title="No events found"
+            description="No recorded security events match the current filters."
+          />
         ) : null}
 
         {clipItems.length > 0 ? (
           <>
-            <div className="clips-table-wrap">
-              <table className="clips-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Camera</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th>Activity</th>
-                    <th>Risk</th>
-                    <th>Alerted</th>
-                    <th>Detected</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {clipItems.map((clip) => (
-                    <tr key={clip.id}>
-                      <td>
-                        <Link to={`/events/${encodeURIComponent(clip.id)}`}>{clip.id}</Link>
-                      </td>
-                      <td>{clip.camera}</td>
-                      <td>
-                        <span className="clips-chip">{clip.status}</span>
-                      </td>
-                      <td>{formatTimestamp(clip.created_at)}</td>
-                      <td>{clip.activity_type ?? '-'}</td>
-                      <td>{clip.risk_level ?? '-'}</td>
-                      <td>{clip.alerted ? 'true' : 'false'}</td>
-                      <td>{renderDetectedObjects(clip)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <ul className="clips-mobile-list">
-              {clipItems.map((clip) => (
-                <li key={clip.id} className="clips-mobile-item">
-                  <Link to={`/events/${encodeURIComponent(clip.id)}`} className="clips-mobile-id">
-                    {clip.id}
-                  </Link>
-                  <p className="muted">{clip.camera}</p>
-                  <p className="muted">{formatTimestamp(clip.created_at)}</p>
-                  <div className="clips-mobile-meta">
-                    <span className="clips-chip">{clip.status}</span>
-                    <span className="clips-chip">{clip.activity_type ?? 'n/a'}</span>
-                    <span className="clips-chip">{clip.risk_level ?? 'n/a'}</span>
-                    <span className="clips-chip">{clip.alerted ? 'alerted' : 'no alert'}</span>
+            <div className="event-groups">
+              {eventGroups.map((group) => (
+                <section
+                  key={group.key}
+                  className="event-group"
+                  aria-labelledby={`events-${group.key}`}
+                >
+                  <h3 id={`events-${group.key}`} className="event-group__title">
+                    {group.label}
+                  </h3>
+                  <div className="event-list">
+                    {group.clips.map((clip) => (
+                      <EventCard
+                        key={clip.id}
+                        camera={clip.camera}
+                        time={formatEventTime(clip.created_at)}
+                        title={formatActivityType(clip.activity_type)}
+                        summary={clip.summary?.trim() || 'No summary available yet.'}
+                        media={(
+                          <MediaPanel
+                            aspect="video"
+                            className="event-card__media-panel"
+                            placeholder="Open event to view video"
+                          />
+                        )}
+                        risk={<RiskBadge level={clip.risk_level} />}
+                        status={(
+                          <StatusBadge tone={clip.alerted ? 'unhealthy' : 'unknown'}>
+                            {clip.alerted ? 'Alert sent' : 'No alert'}
+                          </StatusBadge>
+                        )}
+                        meta={[
+                          { label: 'Objects', value: formatDetectedObjects(clip) },
+                        ]}
+                        actions={(
+                          <Link
+                            to={eventDetailPath(clip.id, routeSearch)}
+                            className="button button--primary"
+                          >
+                            View event
+                          </Link>
+                        )}
+                      />
+                    ))}
                   </div>
-                </li>
+                </section>
               ))}
-            </ul>
+            </div>
 
             <div className="clips-pagination">
               <Button
@@ -397,7 +431,7 @@ export function ClipsPage() {
             </div>
           </>
         ) : null}
-      </Card>
+      </section>
     </section>
   )
 }

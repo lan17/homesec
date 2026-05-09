@@ -351,6 +351,11 @@ a:hover {
   color: var(--text-secondary);
 }
 
+.section-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
 .camera-chip {
   display: inline-flex;
   align-items: center;
@@ -633,6 +638,35 @@ a:hover {
 .event-card__camera {
   margin: 0;
   font-weight: 600;
+}
+
+.events-results,
+.event-groups,
+.event-group,
+.event-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.events-results__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.event-group__title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.event-card__media-panel {
+  height: 100%;
+}
+
+.event-card__media-panel .media-panel__viewport {
+  height: 100%;
 }
 
 .clips-mobile-list {

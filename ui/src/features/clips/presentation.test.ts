@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { APIError } from '../../api/client'
 import {
   describeClipError,
+  formatActivityType,
+  formatDetectedObjects,
+  formatEventDateGroup,
+  formatEventTime,
+  groupClipsByDate,
   renderDetectedObjects,
   resolveClipExternalLink,
   resolveClipViewLink,
@@ -37,6 +42,61 @@ describe('renderDetectedObjects', () => {
 
     // Then: UI should show explicit empty-state text
     expect(value).toBe('None')
+  })
+})
+
+describe('event presentation helpers', () => {
+  it('formats event time, grouping, activity, and object labels for cards', () => {
+    // Given: Event metadata from the existing clips API
+    const clip = {
+      id: 'clip-1',
+      camera: 'front_door',
+      status: 'done',
+      created_at: '2026-02-14T18:30:00',
+      activity_type: 'package_drop',
+      detected_objects: ['person', 'package'],
+      alerted: true,
+    }
+
+    // When: Formatting event metadata for the refreshed list
+    const time = formatEventTime(clip.created_at)
+    const group = formatEventDateGroup(clip.created_at, new Date('2026-02-15T20:00:00'))
+    const activity = formatActivityType(clip.activity_type)
+    const objects = formatDetectedObjects(clip)
+
+    // Then: Labels should be scan-friendly and avoid raw API casing
+    expect(time).toMatch(/6:30|18:30/)
+    expect(group).toBe('Yesterday')
+    expect(activity).toBe('Package Drop')
+    expect(objects).toBe('person, package')
+  })
+
+  it('groups clips by local event date without changing list order', () => {
+    // Given: A list of clips already ordered by the API
+    const clips = [
+      {
+        id: 'clip-1',
+        camera: 'front_door',
+        status: 'done',
+        created_at: '2026-02-14T18:30:00.000Z',
+        alerted: true,
+      },
+      {
+        id: 'clip-2',
+        camera: 'garage',
+        status: 'done',
+        created_at: '2026-02-13T18:30:00.000Z',
+        alerted: false,
+      },
+    ]
+
+    // When: Grouping clips for the event list
+    const groups = groupClipsByDate(clips)
+
+    // Then: Date grouping should preserve the API result order within each group
+    expect(groups).toHaveLength(2)
+    expect(groups[0]?.clips.map((clip) => clip.id)).toEqual(['clip-1'])
+    expect(groups[1]?.clips.map((clip) => clip.id)).toEqual(['clip-2'])
   })
 })
 
