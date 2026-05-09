@@ -679,7 +679,22 @@ a:hover {
 }
 
 .event-card {
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 36%) minmax(0, 1fr);
+  align-items: start;
+}
+
+.event-card__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.event-card__header > div {
+  min-width: 0;
+}
+
+.event-card__badges {
+  justify-content: flex-start;
 }
 
 .event-card__content {
@@ -715,11 +730,37 @@ a:hover {
 }
 
 .event-card__media-panel {
-  height: 100%;
+  min-width: 0;
 }
 
 .event-card__media-panel .media-panel__viewport {
+  height: auto;
+}
+
+.event-card__actions {
+  justify-content: flex-start;
+}
+
+.event-card__video-shell {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  background: #000;
+  overflow: hidden;
+}
+
+.event-card__video {
+  display: block;
+  width: 100%;
   height: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  object-fit: contain;
+}
+
+.event-inline-details {
+  display: grid;
+  gap: var(--space-3);
 }
 
 .clips-mobile-list {

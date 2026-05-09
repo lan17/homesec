@@ -8,11 +8,13 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import type { ClipListSnapshot } from '../../api/client'
 import type { CameraResponse } from '../../api/generated/types'
 import type { useCamerasQuery } from '../../api/hooks/useCamerasQuery'
+import type { useClipMediaUrl } from '../../api/hooks/useClipMediaUrl'
 import type { useClipsQuery } from '../../api/hooks/useClipsQuery'
 import { ClipsPage } from './ClipsPage'
 
 const useClipsQueryMock = vi.fn()
 const useCamerasQueryMock = vi.fn()
+const useClipMediaUrlMock = vi.fn()
 
 vi.mock('../../api/hooks/useClipsQuery', () => ({
   useClipsQuery: (...args: unknown[]) => useClipsQueryMock(...args),
@@ -20,6 +22,10 @@ vi.mock('../../api/hooks/useClipsQuery', () => ({
 
 vi.mock('../../api/hooks/useCamerasQuery', () => ({
   useCamerasQuery: () => useCamerasQueryMock(),
+}))
+
+vi.mock('../../api/hooks/useClipMediaUrl', () => ({
+  useClipMediaUrl: (...args: unknown[]) => useClipMediaUrlMock(...args),
 }))
 
 function makeCamera(name: string): CameraResponse {
@@ -42,6 +48,15 @@ function renderEventsPage({
   cameras?: CameraResponse[]
   route?: string
 }) {
+  useClipMediaUrlMock.mockImplementation((clipId: string | undefined) => ({
+    mediaUrl: clipId ? `/api/v1/clips/${encodeURIComponent(clipId)}/media` : null,
+    expiresAt: null,
+    usesToken: false,
+    isPending: false,
+    error: null,
+    refresh: vi.fn().mockResolvedValue(undefined),
+  } as ReturnType<typeof useClipMediaUrl>))
+
   useClipsQueryMock.mockReturnValue({
     data: clipList,
     isPending: false,
@@ -76,10 +91,12 @@ describe('ClipsPage event list', () => {
     cleanup()
     useClipsQueryMock.mockReset()
     useCamerasQueryMock.mockReset()
+    useClipMediaUrlMock.mockReset()
   })
 
-  it('renders grouped media-first event cards without the technical table default', () => {
+  it('renders grouped media-first event cards with inline video and details', async () => {
     // Given: Existing clip list API data with event-facing metadata
+    const user = userEvent.setup()
     renderEventsPage({
       clipList: {
         httpStatus: 200,
@@ -121,18 +138,32 @@ describe('ClipsPage event list', () => {
     // When: Reading the refreshed event list
     const cards = screen.getAllByRole('article')
     const firstCard = cards[0]
-    const links = screen.getAllByRole('link', { name: 'View event' })
+    const firstVideo = firstCard?.querySelector('video')
 
-    // Then: The default list should prioritize what happened over raw clip fields
+    // Then: The default list should prioritize playable video and what happened over raw clip fields
     expect(screen.queryByRole('columnheader', { name: 'ID' })).toBeNull()
     expect(screen.queryByText('clip-1')).toBeNull()
     expect(screen.queryByText('dropbox:/clips/clip-1.mp4')).toBeNull()
+    expect(screen.queryByText('Open this event to view video.')).toBeNull()
     expect(firstCard ? within(firstCard).getByText('Package Drop') : null).toBeTruthy()
     expect(firstCard ? within(firstCard).getByText('Package left near the front door.') : null).toBeTruthy()
     expect(firstCard ? within(firstCard).getByText('front_door') : null).toBeTruthy()
     expect(firstCard ? within(firstCard).getByText('person, package') : null).toBeTruthy()
     expect(firstCard ? within(firstCard).getByText('Alert sent') : null).toBeTruthy()
-    expect(links[0]?.getAttribute('href')).toBe('/events/clip-1?detected=any')
+    expect(firstVideo?.getAttribute('src')).toBe('/api/v1/clips/clip-1/media')
+    expect(screen.queryByRole('link', { name: 'View event' })).toBeNull()
+
+    // When: Opening the inline details panel
+    if (!firstCard) {
+      throw new Error('expected first event card')
+    }
+    await user.click(within(firstCard).getByRole('button', { name: 'Details' }))
+
+    // Then: More detail should be available inline without navigating to a separate page
+    const details = within(firstCard).getByLabelText('Event details')
+    expect(within(details).getByText('clip-1')).toBeTruthy()
+    expect(within(details).getByText('Direct media endpoint')).toBeTruthy()
+    expect(within(firstCard).getByRole('button', { name: 'Hide details' })).toBeTruthy()
   })
 
   it('shows a no-results state without a table shell', () => {
