@@ -43,9 +43,10 @@ class TalkBackendAdapter(Protocol):
 class TalkBackendSessionProbeAdapter(Protocol):
     """Optional backend hook for probes that will immediately open a session.
 
-    This reports the same capability truth as ``probe()``. Backends may preserve
-    transport state for the following ``open_session()``, but they must not apply
-    different product policy or backend-selection rules here.
+    This uses the same product policy and backend-selection rules as ``probe()``.
+    Backends may perform stronger auth/session validation and preserve transport
+    state for the following ``open_session()``, but they must not use different
+    applicability rules here.
     """
 
     async def probe_for_session_open(self) -> TalkCapabilityProbeResult:

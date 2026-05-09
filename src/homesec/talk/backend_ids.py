@@ -6,6 +6,12 @@ import re
 
 TALK_BACKEND_ID_PATTERN_TEXT = r"^[a-z][a-z0-9_]{0,63}$"
 _TALK_BACKEND_ID_PATTERN = re.compile(TALK_BACKEND_ID_PATTERN_TEXT)
+_SAFE_PUBLIC_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+_SAFE_ENV_VAR_DIAGNOSTIC_PATTERN = re.compile(
+    r"^(?:Required talk backend|Required Tapo local|RTSP URL|RTSP credential) "
+    r"environment variable is not set: "
+    r"(?P<env>[A-Za-z_][A-Za-z0-9_]{0,127})$"
+)
 _UNSAFE_TALK_BACKEND_REASON_PATTERN = re.compile(
     r"://|authorization|bearer|basic|digest|password|passwd|secret|token|api[_-]?key|"
     r"\bsdp\b|(?:^|\s)(?:v=0|m=|a=)",
@@ -47,6 +53,12 @@ def sanitize_talk_backend_reason(value: object) -> str | None:
         return None
     reason = value.strip()
     if not reason or len(reason) > 256 or "\n" in reason or "\r" in reason:
+        return None
+    env_match = _SAFE_ENV_VAR_DIAGNOSTIC_PATTERN.fullmatch(reason)
+    if env_match is not None:
+        env_name = env_match["env"]
+        if "_" in env_name and _SAFE_PUBLIC_ENV_VAR_NAME_PATTERN.fullmatch(env_name):
+            return reason
         return None
     if _UNSAFE_TALK_BACKEND_REASON_PATTERN.search(reason):
         return None
