@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
 import type { CameraResponse } from '../../api/generated/types'
@@ -63,8 +64,26 @@ function renderLivePage(cameras: CameraResponse[]) {
   )
 }
 
+function setCompactViewport(matches: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  })
+}
+
 describe('LivePage camera cards', () => {
   beforeEach(() => {
+    setCompactViewport(false)
     useCamerasQueryMock.mockReset()
     useSetupRedirectMock.mockReset()
   })
@@ -114,5 +133,25 @@ describe('LivePage camera cards', () => {
         : null,
     ).toBeTruthy()
     expect(screen.queryByTestId('preview-dropbox_uploads')).toBeNull()
+  })
+
+  it('keeps only one live preview panel focused on compact viewports', async () => {
+    // Given: A mobile viewport with multiple RTSP cameras
+    const user = userEvent.setup()
+    setCompactViewport(true)
+    renderLivePage([
+      makeCamera({ name: 'front_door' }),
+      makeCamera({ name: 'driveway' }),
+    ])
+
+    // When: The compact Live view renders and the homeowner switches cameras
+    expect(await screen.findByTestId('preview-front_door')).toBeTruthy()
+    expect(screen.queryByTestId('preview-driveway')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Open live view' }))
+
+    // Then: Only the selected camera exposes preview controls
+    expect(await screen.findByTestId('preview-driveway')).toBeTruthy()
+    expect(screen.queryByTestId('preview-front_door')).toBeNull()
+    expect(screen.getByText('Open live view to start preview controls.')).toBeTruthy()
   })
 })

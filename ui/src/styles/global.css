@@ -412,7 +412,7 @@ a:hover {
 }
 
 .filter-chip {
-  min-height: 2.35rem;
+  min-height: 2.75rem;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-1) 76%, transparent);
@@ -501,6 +501,9 @@ a:hover {
 
 .technical-details__summary {
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
   padding: 0.65rem 0.75rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
@@ -1047,15 +1050,17 @@ a:hover {
   right: 0.65rem;
   bottom: 0.65rem;
   z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 2.25rem;
-  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   border: 1px solid rgb(255 255 255 / 48%);
   border-radius: var(--radius-sm);
   background: rgb(0 0 0 / 58%);
   color: #fff;
   cursor: pointer;
+  padding: 0.52rem 0.7rem;
 }
 
 .camera-preview__fullscreen-button:hover {
@@ -1069,6 +1074,7 @@ a:hover {
 
 .camera-preview__fullscreen-icon {
   display: block;
+  flex: 0 0 auto;
   width: 1rem;
   height: 1rem;
   background:
@@ -1080,6 +1086,11 @@ a:hover {
     linear-gradient(currentColor, currentColor) left bottom / 0.12rem 0.45rem no-repeat,
     linear-gradient(currentColor, currentColor) right bottom / 0.45rem 0.12rem no-repeat,
     linear-gradient(currentColor, currentColor) right bottom / 0.12rem 0.45rem no-repeat;
+}
+
+.camera-preview__fullscreen-label {
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .camera-preview__placeholder {
@@ -1332,6 +1343,10 @@ a:hover {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   font-family: inherit;
@@ -1344,6 +1359,7 @@ a:hover {
     background-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
   padding: 0.54rem 0.9rem;
+  text-align: center;
 }
 
 .button:disabled {
@@ -1471,6 +1487,14 @@ a:hover {
     margin-bottom: 0;
   }
 
+  .app-shell__header {
+    align-items: stretch;
+  }
+
+  .app-shell__header-status--nominal {
+    display: none;
+  }
+
   .app-shell__content {
     padding-bottom: calc(var(--space-7) + 4.5rem);
   }
@@ -1495,7 +1519,7 @@ a:hover {
   .mobile-nav-link {
     display: grid;
     place-items: center;
-    min-height: 2.8rem;
+    min-height: 3rem;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
@@ -1537,6 +1561,23 @@ a:hover {
 
   .camera-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .inline-form__actions,
+  .camera-card__actions,
+  .event-card__actions,
+  .clip-detail-actions,
+  .push-to-talk__actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .inline-form__actions .button,
+  .camera-card__actions .button,
+  .event-card__actions .button,
+  .clip-detail-actions .button,
+  .push-to-talk__actions .button {
+    width: 100%;
   }
 
   .clips-table-wrap {

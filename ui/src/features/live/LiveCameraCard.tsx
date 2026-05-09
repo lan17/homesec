@@ -1,6 +1,7 @@
 import { createSearchParams, Link } from 'react-router-dom'
 
 import type { CameraResponse } from '../../api/generated/types'
+import { Button } from '../../components/ui/Button'
 import { CameraCard } from '../../components/ui/CameraCard'
 import { MediaPanel } from '../../components/ui/MediaPanel'
 import { StatusBadge, type StatusBadgeTone } from '../../components/ui/StatusBadge'
@@ -9,6 +10,9 @@ import { CameraPreviewPanel } from '../cameras/components/CameraPreviewPanel'
 
 interface LiveCameraCardProps {
   camera: CameraResponse
+  isCompactViewport?: boolean
+  isFocused?: boolean
+  onFocusCamera?: (cameraName: string) => void
 }
 
 function cameraStatusTone(camera: CameraResponse): StatusBadgeTone {
@@ -40,8 +44,33 @@ function canShowPreview(camera: CameraResponse): boolean {
   return camera.enabled && camera.source_backend === 'rtsp'
 }
 
-function renderPreview(camera: CameraResponse) {
+function renderPreview({
+  camera,
+  isCompactViewport = false,
+  isFocused = false,
+  onFocusCamera,
+}: LiveCameraCardProps) {
   if (canShowPreview(camera)) {
+    if (isCompactViewport && !isFocused) {
+      return (
+        <MediaPanel
+          title="Preview"
+          subtitle="Open one camera at a time on mobile."
+          actions={
+            <Button
+              variant="ghost"
+              onClick={() => {
+                onFocusCamera?.(camera.name)
+              }}
+            >
+              Open live view
+            </Button>
+          }
+          placeholder="Open live view to start preview controls."
+        />
+      )
+    }
+
     return (
       <CameraPreviewPanel
         cameraName={camera.name}
@@ -64,7 +93,8 @@ function renderPreview(camera: CameraResponse) {
   )
 }
 
-export function LiveCameraCard({ camera }: LiveCameraCardProps) {
+export function LiveCameraCard(props: LiveCameraCardProps) {
+  const { camera } = props
   return (
     <CameraCard
       title={camera.name}
@@ -73,7 +103,7 @@ export function LiveCameraCard({ camera }: LiveCameraCardProps) {
           {cameraStatusLabel(camera)}
         </StatusBadge>
       }
-      media={renderPreview(camera)}
+      media={renderPreview(props)}
       meta={[
         { label: 'Last seen', value: formatLastSeen(camera.last_heartbeat) },
       ]}

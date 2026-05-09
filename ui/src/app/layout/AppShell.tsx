@@ -39,6 +39,9 @@ function systemStatusText(status: string | undefined, isError: boolean): string 
 export function AppShell() {
   const { theme, toggleTheme } = useTheme()
   const healthQuery = useHealthQuery()
+  const systemStatusClassName = !healthQuery.isError && healthQuery.data?.status === 'healthy'
+    ? 'app-shell__header-status app-shell__header-status--nominal'
+    : 'app-shell__header-status'
 
   return (
     <div className="app-shell">
@@ -57,7 +60,7 @@ export function AppShell() {
 
       <div className="app-shell__main">
         <header className="app-shell__header">
-          <NavLink className="app-shell__header-status" to="/system">
+          <NavLink className={systemStatusClassName} to="/system">
             {systemStatusText(healthQuery.data?.status, healthQuery.isError)}
           </NavLink>
           <button type="button" className="button button--ghost" onClick={toggleTheme}>

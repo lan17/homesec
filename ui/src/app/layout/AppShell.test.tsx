@@ -55,7 +55,9 @@ describe('AppShell navigation', () => {
     expect(within(primaryNav).getByRole('link', { name: 'Cameras' })).toBeTruthy()
     expect(within(primaryNav).getByRole('link', { name: 'Settings' })).toBeTruthy()
     expect(within(primaryNav).getByRole('link', { name: 'System' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'System OK' }).getAttribute('href')).toBe('/system')
+    const systemStatus = screen.getByRole('link', { name: 'System OK' })
+    expect(systemStatus.getAttribute('href')).toBe('/system')
+    expect(systemStatus.className).toContain('app-shell__header-status--nominal')
   })
 
   it('keeps System out of mobile bottom navigation', () => {

@@ -435,6 +435,9 @@ export function CameraPreviewPanel({
               }}
             >
               <span className="camera-preview__fullscreen-icon" aria-hidden="true" />
+              <span className="camera-preview__fullscreen-label">
+                {isPreviewFullscreen ? 'Exit' : 'Fullscreen'}
+              </span>
             </button>
           </>
         ) : (
