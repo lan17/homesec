@@ -198,19 +198,23 @@ describe('ClipsPage event list', () => {
         has_more: false,
         clips: [],
       },
+      cameras: [makeCamera('front_door'), makeCamera('driveway')],
       route: '/events?detected=any',
     })
 
-    // When: Applying quick filters and opening the advanced sheet
+    // When: Applying the always-visible camera filter, quick filters, and opening the advanced sheet
+    await user.selectOptions(screen.getByLabelText('Camera'), 'front_door')
     await user.click(screen.getByRole('button', { name: 'Alerts' }))
     await user.click(screen.getByRole('button', { name: 'Packages' }))
     await user.click(screen.getByRole('button', { name: 'High risk' }))
     await user.click(screen.getByRole('button', { name: 'More filters' }))
 
     // Then: Quick filters should use existing query params and full filters stay available
+    expect(screen.getByTestId('location').textContent).toContain('camera=front_door')
     expect(screen.getByTestId('location').textContent).toContain('alerted=true')
     expect(screen.getByTestId('location').textContent).toContain('activity_type=package')
     expect(screen.getByTestId('location').textContent).toContain('risk_level=high')
+    expect(screen.getByRole('dialog', { name: 'More filters' })).toBeTruthy()
     expect(screen.getByLabelText('Alert status')).toBeTruthy()
     expect(screen.getByLabelText('Detection')).toBeTruthy()
     expect(screen.getByLabelText('Results per page')).toBeTruthy()

@@ -283,12 +283,14 @@ a:hover {
 }
 
 .field-label {
+  min-width: 0;
   color: var(--text-secondary);
   font-size: 0.85rem;
 }
 
 .input {
   width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface-1) 85%, transparent);
@@ -449,6 +451,27 @@ a:hover {
 .events-filter-bar {
   display: grid;
   gap: var(--space-2);
+}
+
+.events-primary-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.events-primary-filters .filter-chips {
+  flex: 1 1 24rem;
+}
+
+.events-camera-filter {
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(100%, 14rem);
+}
+
+.events-camera-filter .input {
+  min-height: 2.75rem;
 }
 
 .filters-sheet {
@@ -1631,14 +1654,30 @@ a:hover {
     grid-template-columns: 1fr;
   }
 
+  .events-primary-filters {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .events-primary-filters .filter-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    scrollbar-width: none;
+  }
+
+  .events-primary-filters .filter-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .events-primary-filters .filter-chip {
+    flex: 0 0 auto;
+  }
+
   .filters-sheet {
-    position: fixed;
-    left: var(--space-3);
-    right: var(--space-3);
-    bottom: calc(var(--space-7) + 4.75rem);
-    z-index: 12;
-    max-height: calc(100vh - 8rem);
-    overflow: auto;
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .advanced-filters__header {

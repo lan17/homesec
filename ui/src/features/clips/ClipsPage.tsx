@@ -54,7 +54,6 @@ import {
 } from './playbackRetry'
 
 interface ClipsFilterPanelProps {
-  cameraOptions: string[]
   initialFormState: ClipsFilterFormState
   onApply: (form: ClipsFilterFormState) => void
   onClose: () => void
@@ -62,7 +61,6 @@ interface ClipsFilterPanelProps {
 }
 
 function ClipsFilterPanel({
-  cameraOptions,
   initialFormState,
   onApply,
   onClose,
@@ -90,22 +88,6 @@ function ClipsFilterPanel({
         <Button variant="ghost" onClick={onClose}>Close</Button>
       </header>
       <div className="clips-filter-grid">
-        <label className="field-label">
-          Camera
-          <select
-            className="input"
-            value={formState.camera}
-            onChange={(event) => updateFormState('camera', event.target.value)}
-          >
-            <option value="">Any</option>
-            {cameraOptions.map((cameraName) => (
-              <option key={cameraName} value={cameraName}>
-                {cameraName}
-              </option>
-            ))}
-          </select>
-        </label>
-
         <label className="field-label">
           Processing status
           <select
@@ -475,6 +457,14 @@ export function ClipsPage() {
     setSearchParams(nextParams)
   }
 
+  function selectCameraFilter(cameraName: string): void {
+    applyQuery({
+      ...query,
+      cursor: undefined,
+      camera: cameraName || undefined,
+    })
+  }
+
   function toggleQueryValue(
     field: 'alerted' | 'activity_type' | 'risk_level',
     value: boolean | string,
@@ -587,14 +577,30 @@ export function ClipsPage() {
       </header>
 
       <section className="events-filter-bar" aria-label="Event filters">
-        <FilterChips chips={quickFilterChips} onSelect={selectQuickFilter} />
+        <div className="events-primary-filters">
+          <label className="field-label events-camera-filter">
+            Camera
+            <select
+              className="input"
+              value={query.camera ?? ''}
+              onChange={(event) => selectCameraFilter(event.target.value)}
+            >
+              <option value="">All cameras</option>
+              {cameraOptions.map((cameraName) => (
+                <option key={cameraName} value={cameraName}>
+                  {cameraName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <FilterChips chips={quickFilterChips} onSelect={selectQuickFilter} />
+        </div>
       </section>
 
       {showAdvancedFilters ? (
         <div className="filters-sheet" role="dialog" aria-modal="false" aria-label="More filters">
           <ClipsFilterPanel
             key={filterSignature}
-            cameraOptions={cameraOptions}
             initialFormState={initialFormState}
             onApply={applyFilters}
             onClose={() => setShowAdvancedFilters(false)}
