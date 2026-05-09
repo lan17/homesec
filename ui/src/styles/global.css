@@ -990,11 +990,11 @@ a:hover {
 
 .push-to-talk {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface-1) 58%, transparent);
-  padding: 0.65rem 0.7rem;
+  padding: var(--space-3);
 }
 
 .push-to-talk__header {
@@ -1004,8 +1004,22 @@ a:hover {
   gap: var(--space-2);
 }
 
+.push-to-talk__hint {
+  margin: 0;
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.push-to-talk__actions {
+  align-items: stretch;
+}
+
 .push-to-talk__button {
-  min-width: 9.5rem;
+  min-height: 3.75rem;
+  min-width: min(100%, 12rem);
+  padding-inline: var(--space-4);
+  font-size: 1rem;
+  font-weight: 750;
   touch-action: none;
   user-select: none;
 }
@@ -1018,6 +1032,17 @@ a:hover {
 
 .push-to-talk__button--active:hover {
   background: color-mix(in srgb, var(--danger) 84%, #000);
+}
+
+.technical-details__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.technical-details__list li + li {
+  margin-top: 0.35rem;
 }
 
 .camera-config-editor {

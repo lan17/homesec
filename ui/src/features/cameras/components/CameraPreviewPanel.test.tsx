@@ -515,7 +515,7 @@ describe('CameraPreviewPanel', () => {
       },
     })
     render(<CameraPreviewPanel cameraName="front" />)
-    screen.getByRole('button', { name: 'Release to stop' }).focus()
+    screen.getByRole('button', { name: 'Talking' }).focus()
     await user.keyboard('[Space>]')
     await user.keyboard('[/Space]')
 
@@ -572,7 +572,8 @@ describe('CameraPreviewPanel', () => {
       const video = container.querySelector('video')
       expect(video?.muted).toBe(true)
       expect(video?.getAttribute('muted')).toBe('')
-      expect(screen.getByText('TALKING')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Talking' })).toBeTruthy()
+      expect(screen.getByText('Talking. Release to stop.')).toBeTruthy()
     })
   })
 
@@ -599,7 +600,10 @@ describe('CameraPreviewPanel', () => {
     // When: Rendering the preview controls
     render(<CameraPreviewPanel cameraName="front" />)
 
-    // Then: The talk control shows codec-specific diagnostics instead of generic copy
+    // Then: The talk control keeps user-facing copy simple and hides codec diagnostics by default
+    expect(screen.getByRole('button', { name: 'Talk unavailable' })).toBeTruthy()
+    expect(screen.getByText('Talk unavailable on this camera.')).toBeTruthy()
+    expect(screen.getByText('Technical talk details')).toBeTruthy()
     expect(screen.getByText(
       'Camera talkback codec is not supported. Offered: OPUS/48000. Supported: PCMU/8000, PCMA/8000.',
     )).toBeTruthy()
@@ -628,7 +632,10 @@ describe('CameraPreviewPanel', () => {
     // When: Rendering the preview controls
     render(<CameraPreviewPanel cameraName="front" />)
 
-    // Then: The talk control shows the probe failure message
+    // Then: The talk control keeps probe failure details under technical disclosure
+    expect(screen.getByRole('button', { name: 'Talk unavailable' })).toBeTruthy()
+    expect(screen.getByText('Talk unavailable on this camera.')).toBeTruthy()
+    expect(screen.getByText('Technical talk details')).toBeTruthy()
     expect(screen.getByText(
       'Talkback capability check failed: RTSP authentication was rejected by the camera',
     )).toBeTruthy()
@@ -659,10 +666,32 @@ describe('CameraPreviewPanel', () => {
     // When: Rendering the preview controls
     render(<CameraPreviewPanel cameraName="front" />)
 
-    // Then: The talk control shows the operator-actionable config message
+    // Then: The talk control keeps backend config details under technical disclosure
+    expect(screen.getByRole('button', { name: 'Talk unavailable' })).toBeTruthy()
+    expect(screen.getByText('Talk unavailable on this camera.')).toBeTruthy()
+    expect(screen.getByText('Technical talk details')).toBeTruthy()
     expect(screen.getByText(
       "Talk backend 'onvif_rtsp_backchannel' config is invalid",
     )).toBeTruthy()
+  })
+
+  it('shows a clear blocked-microphone state', () => {
+    // Given: Browser microphone permission was denied
+    const blockedError = Object.assign(new Error('Permission denied'), {
+      name: 'NotAllowedError',
+    })
+    mockReadyPreviewSession()
+    mockIdlePushToTalk({ canStart: false, error: blockedError })
+
+    // When: Rendering the preview controls
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The talk control explains the browser permission state in homeowner terms
+    expect(screen.getByRole('button', { name: 'Microphone blocked' })).toBeTruthy()
+    expect(screen.getByText(
+      'Microphone blocked. Allow microphone access in your browser and try again.',
+    )).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Microphone blocked' }).hasAttribute('disabled')).toBe(true)
   })
 
 })
