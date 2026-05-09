@@ -6,9 +6,9 @@ import { useCamerasQuery } from '../../api/hooks/useCamerasQuery'
 import { useClipsQuery } from '../../api/hooks/useClipsQuery'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
-import { Card } from '../../components/ui/Card'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { EventCard } from '../../components/ui/EventCard'
+import { FilterChips, type FilterChip } from '../../components/ui/FilterChips'
 import { MediaPanel } from '../../components/ui/MediaPanel'
 import { RiskBadge } from '../../components/ui/RiskBadge'
 import { StatusBadge } from '../../components/ui/StatusBadge'
@@ -44,6 +44,7 @@ interface ClipsFilterPanelProps {
   cameraOptions: string[]
   initialFormState: ClipsFilterFormState
   onApply: (form: ClipsFilterFormState) => void
+  onClose: () => void
   onReset: () => void
 }
 
@@ -51,6 +52,7 @@ function ClipsFilterPanel({
   cameraOptions,
   initialFormState,
   onApply,
+  onClose,
   onReset,
 }: ClipsFilterPanelProps) {
   const [formState, setFormState] = useState<ClipsFilterFormState>(initialFormState)
@@ -66,7 +68,14 @@ function ClipsFilterPanel({
   }
 
   return (
-    <Card title="Filters">
+    <section className="advanced-filters" aria-label="More event filters">
+      <header className="advanced-filters__header">
+        <div>
+          <h2 className="section-title">More filters</h2>
+          <p className="muted">Use detailed filters when the quick chips are not enough.</p>
+        </div>
+        <Button variant="ghost" onClick={onClose}>Close</Button>
+      </header>
       <div className="clips-filter-grid">
         <label className="field-label">
           Camera
@@ -85,7 +94,7 @@ function ClipsFilterPanel({
         </label>
 
         <label className="field-label">
-          Status
+          Processing status
           <select
             className="input"
             value={formState.status}
@@ -103,7 +112,7 @@ function ClipsFilterPanel({
         </label>
 
         <label className="field-label">
-          Alerted
+          Alert status
           <select
             className="input"
             value={formState.alerted}
@@ -112,13 +121,13 @@ function ClipsFilterPanel({
             }
           >
             <option value="any">Any</option>
-            <option value="true">true</option>
-            <option value="false">false</option>
+            <option value="true">Alert sent</option>
+            <option value="false">No alert</option>
           </select>
         </label>
 
         <label className="field-label">
-          Detected
+          Detection
           <select
             className="input"
             value={formState.detected}
@@ -127,18 +136,18 @@ function ClipsFilterPanel({
             }
           >
             <option value="any">Any</option>
-            <option value="true">true</option>
-            <option value="false">false</option>
+            <option value="true">Something detected</option>
+            <option value="false">No detection</option>
           </select>
         </label>
 
         <label className="field-label">
-          Risk level
+          Risk
           <input
             className="input"
             value={formState.riskLevel}
             onChange={(event) => updateFormState('riskLevel', event.target.value)}
-            placeholder="high"
+            placeholder="High, medium, critical"
           />
         </label>
 
@@ -173,7 +182,7 @@ function ClipsFilterPanel({
         </label>
 
         <label className="field-label">
-          Limit
+          Results per page
           <select
             className="input"
             value={String(formState.limit)}
@@ -193,7 +202,7 @@ function ClipsFilterPanel({
           Reset
         </Button>
       </div>
-    </Card>
+    </section>
   )
 }
 
@@ -202,8 +211,31 @@ function eventDetailPath(clipId: string, routeSearch: string): string {
   return `/events/${encodeURIComponent(clipId)}${suffix}`
 }
 
+function startOfTodayIso(): string {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  return date.toISOString()
+}
+
+function isTodayFilterActive(since: string | null | undefined): boolean {
+  if (!since) {
+    return false
+  }
+  const sinceDate = new Date(since)
+  if (Number.isNaN(sinceDate.valueOf())) {
+    return false
+  }
+  const today = new Date()
+  return (
+    sinceDate.getFullYear() === today.getFullYear()
+    && sinceDate.getMonth() === today.getMonth()
+    && sinceDate.getDate() === today.getDate()
+  )
+}
+
 export function ClipsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
   const routeSearch = searchParams.toString()
   const query = useMemo(() => parseClipsQuery(searchParams), [searchParams])
   const filterQuery = useMemo(() => queryWithoutCursor(query), [query])
@@ -246,6 +278,7 @@ export function ClipsPage() {
     const nextParams = formStateToSearchParams(formState)
     clearCursorHistory(queryToSearchParams(queryWithoutCursor(nextQuery)).toString())
     setSearchParams(nextParams)
+    setShowAdvancedFilters(false)
   }
 
   function resetFilters(): void {
@@ -256,6 +289,34 @@ export function ClipsPage() {
     const nextParams = queryToSearchParams(resetQuery)
     clearCursorHistory(nextParams.toString())
     setSearchParams(nextParams)
+    setShowAdvancedFilters(false)
+  }
+
+  function applyQuery(nextQuery: ReturnType<typeof queryWithoutCursor>): void {
+    const nextParams = queryToRouteSearchParams(queryWithoutCursor(nextQuery))
+    clearCursorHistory(nextParams.toString())
+    setSearchParams(nextParams)
+  }
+
+  function toggleQueryValue(
+    field: 'alerted' | 'activity_type' | 'risk_level',
+    value: boolean | string,
+  ): void {
+    const currentValue = query[field]
+    applyQuery({
+      ...query,
+      cursor: undefined,
+      [field]: currentValue === value ? undefined : value,
+    })
+  }
+
+  function toggleTodayFilter(): void {
+    applyQuery({
+      ...query,
+      cursor: undefined,
+      since: isTodayFilterActive(query.since) ? undefined : startOfTodayIso(),
+      until: undefined,
+    })
   }
 
   async function submitApiKey(apiKey: string): Promise<void> {
@@ -298,6 +359,44 @@ export function ClipsPage() {
     setSearchParams(queryToRouteSearchParams({ ...query, cursor: popped.previousCursor }))
   }
 
+  const quickFilterChips: FilterChip[] = [
+    { id: 'today', label: 'Today', active: isTodayFilterActive(query.since) },
+    { id: 'alerts', label: 'Alerts', active: query.alerted === true },
+    { id: 'people', label: 'People', active: query.activity_type === 'person' },
+    { id: 'vehicles', label: 'Vehicles', active: query.activity_type === 'vehicle' },
+    { id: 'packages', label: 'Packages', active: query.activity_type === 'package' },
+    { id: 'high-risk', label: 'High risk', active: query.risk_level === 'high' },
+    { id: 'more', label: 'More filters', active: showAdvancedFilters },
+  ]
+
+  function selectQuickFilter(id: string): void {
+    switch (id) {
+      case 'today':
+        toggleTodayFilter()
+        break
+      case 'alerts':
+        toggleQueryValue('alerted', true)
+        break
+      case 'people':
+        toggleQueryValue('activity_type', 'person')
+        break
+      case 'vehicles':
+        toggleQueryValue('activity_type', 'vehicle')
+        break
+      case 'packages':
+        toggleQueryValue('activity_type', 'package')
+        break
+      case 'high-risk':
+        toggleQueryValue('risk_level', 'high')
+        break
+      case 'more':
+        setShowAdvancedFilters((current) => !current)
+        break
+      default:
+        break
+    }
+  }
+
   return (
     <section className="page fade-in-up">
       <header className="page__header">
@@ -310,13 +409,22 @@ export function ClipsPage() {
         </Button>
       </header>
 
-      <ClipsFilterPanel
-        key={filterSignature}
-        cameraOptions={cameraOptions}
-        initialFormState={initialFormState}
-        onApply={applyFilters}
-        onReset={resetFilters}
-      />
+      <section className="events-filter-bar" aria-label="Event filters">
+        <FilterChips chips={quickFilterChips} onSelect={selectQuickFilter} />
+      </section>
+
+      {showAdvancedFilters ? (
+        <div className="filters-sheet" role="dialog" aria-modal="false" aria-label="More filters">
+          <ClipsFilterPanel
+            key={filterSignature}
+            cameraOptions={cameraOptions}
+            initialFormState={initialFormState}
+            onApply={applyFilters}
+            onClose={() => setShowAdvancedFilters(false)}
+            onReset={resetFilters}
+          />
+        </div>
+      ) : null}
 
       <section className="events-results" aria-labelledby="events-results-title">
         <header className="events-results__header">

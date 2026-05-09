@@ -439,6 +439,31 @@ a:hover {
   opacity: 0.62;
 }
 
+.events-filter-bar {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.filters-sheet {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  padding: var(--space-4);
+  box-shadow: var(--shadow);
+}
+
+.advanced-filters {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.advanced-filters__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .empty-state {
   display: grid;
   gap: var(--space-2);
@@ -1494,6 +1519,20 @@ a:hover {
 
   .clips-filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .filters-sheet {
+    position: fixed;
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: calc(var(--space-7) + 4.75rem);
+    z-index: 12;
+    max-height: calc(100vh - 8rem);
+    overflow: auto;
+  }
+
+  .advanced-filters__header {
+    flex-direction: column;
   }
 
   .camera-form-grid {

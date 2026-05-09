@@ -2,7 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 
 import type { ClipListSnapshot } from '../../api/client'
 import type { CameraResponse } from '../../api/generated/types'
@@ -60,8 +61,14 @@ function renderEventsPage({
   render(
     <MemoryRouter initialEntries={[route]}>
       <ClipsPage />
+      <LocationProbe />
     </MemoryRouter>,
   )
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  return <p data-testid="location">{`${location.pathname}${location.search}`}</p>
 }
 
 describe('ClipsPage event list', () => {
@@ -146,5 +153,34 @@ describe('ClipsPage event list', () => {
     // Then: Empty results should be homeowner-readable and avoid the old table shell
     expect(emptyState).toBeTruthy()
     expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('maps quick filters to existing URL-synced clip query params', async () => {
+    // Given: The Events page is open with existing URL-backed filter state
+    const user = userEvent.setup()
+    renderEventsPage({
+      clipList: {
+        httpStatus: 200,
+        limit: 25,
+        next_cursor: null,
+        has_more: false,
+        clips: [],
+      },
+      route: '/events?detected=any',
+    })
+
+    // When: Applying quick filters and opening the advanced sheet
+    await user.click(screen.getByRole('button', { name: 'Alerts' }))
+    await user.click(screen.getByRole('button', { name: 'Packages' }))
+    await user.click(screen.getByRole('button', { name: 'High risk' }))
+    await user.click(screen.getByRole('button', { name: 'More filters' }))
+
+    // Then: Quick filters should use existing query params and full filters stay available
+    expect(screen.getByTestId('location').textContent).toContain('alerted=true')
+    expect(screen.getByTestId('location').textContent).toContain('activity_type=package')
+    expect(screen.getByTestId('location').textContent).toContain('risk_level=high')
+    expect(screen.getByLabelText('Alert status')).toBeTruthy()
+    expect(screen.getByLabelText('Detection')).toBeTruthy()
+    expect(screen.getByLabelText('Results per page')).toBeTruthy()
   })
 })
