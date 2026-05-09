@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 
 import { useHealthQuery } from '../../api/hooks/useHealthQuery'
+import { MobileBottomNav, type MobileBottomNavLink } from '../../components/ui/MobileBottomNav'
 import { useTheme } from '../providers/theme-context'
 
 const DESKTOP_NAV_LINKS = [
@@ -11,7 +12,7 @@ const DESKTOP_NAV_LINKS = [
   { to: '/system', label: 'System' },
 ]
 
-const MOBILE_NAV_LINKS = [
+const MOBILE_NAV_LINKS: readonly MobileBottomNavLink[] = [
   { to: '/live', label: 'Live' },
   { to: '/events', label: 'Events' },
   { to: '/cameras', label: 'Cameras' },
@@ -20,10 +21,6 @@ const MOBILE_NAV_LINKS = [
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'nav-link nav-link--active' : 'nav-link'
-}
-
-function mobileNavLinkClassName({ isActive }: { isActive: boolean }): string {
-  return isActive ? 'mobile-nav-link mobile-nav-link--active' : 'mobile-nav-link'
 }
 
 function systemStatusText(status: string | undefined, isError: boolean): string {
@@ -72,13 +69,7 @@ export function AppShell() {
         </main>
       </div>
 
-      <nav className="mobile-bottom-nav" aria-label="Mobile primary">
-        {MOBILE_NAV_LINKS.map((link) => (
-          <NavLink key={link.to} to={link.to} className={mobileNavLinkClassName}>
-            {link.label}
-          </NavLink>
-        ))}
-      </nav>
+      <MobileBottomNav links={MOBILE_NAV_LINKS} />
     </div>
   )
 }
