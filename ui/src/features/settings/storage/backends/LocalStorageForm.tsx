@@ -21,9 +21,7 @@ export function LocalStorageForm({ config, onChange }: StorageBackendFormProps) 
           }}
         />
       </label>
-      <p className="subtle">
-        HomeSec writes uploaded clips under this local filesystem path.
-      </p>
+      <p className="subtle">HomeSec writes event media under this local filesystem path.</p>
     </div>
   )
 }

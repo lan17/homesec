@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 
 import type { RuntimeStatusSnapshot } from '../../api/client'
 import type { CameraResponse } from '../../api/generated/types'
@@ -124,7 +125,11 @@ function setupPage({
     errors: { create: null, update: null, delete: null, reload: null },
   } as unknown as ReturnType<typeof useCameraActions>)
 
-  render(<CamerasPage />)
+  render(
+    <MemoryRouter initialEntries={['/settings/cameras']}>
+      <CamerasPage />
+    </MemoryRouter>,
+  )
 
   return {
     createCamera,
@@ -170,10 +175,11 @@ describe('CamerasPage', () => {
     setupPage({ cameras: [] })
 
     // When: The cameras page is rendered
-    const emptyState = screen.getByText('No cameras configured yet. Create your first camera above.')
+    const emptyState = screen.getByRole('heading', { name: 'No cameras yet' })
 
     // Then: The empty-state guidance is shown
     expect(emptyState).toBeTruthy()
+    expect(screen.getByText('Add a camera above to start live view and event recording.')).toBeTruthy()
   })
 
   it('submits create camera payload from form values', async () => {

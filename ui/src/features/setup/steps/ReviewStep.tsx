@@ -21,7 +21,7 @@ interface ReviewStepProps {
   skippedSteps: ReadonlySet<string>
   onGoToStep: (stepId: ReviewSectionStepId) => void
   onLaunchSuccess: () => void
-  onGoDashboard: () => void
+  onGoLive: () => void
 }
 
 function _abortError(): Error {
@@ -133,7 +133,7 @@ export function ReviewStep({
   skippedSteps,
   onGoToStep,
   onLaunchSuccess,
-  onGoDashboard,
+  onGoLive,
 }: ReviewStepProps) {
   const finalizeMutation = useFinalizeMutation()
   const summaries = useMemo(
@@ -257,7 +257,7 @@ export function ReviewStep({
 
       <div className="inline-form__actions">
         {launchStatus === 'started' ? (
-          <Button onClick={onGoDashboard}>Go to Dashboard</Button>
+          <Button onClick={onGoLive}>Go to Live</Button>
         ) : (
           <Button onClick={() => void handleLaunch()} disabled={launchPending}>
             {launchPending

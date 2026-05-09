@@ -26,7 +26,7 @@ function checkLabel(check: PreflightCheckResponse): string {
 
 function toPreflightErrorMessage(error: unknown): string {
   if (isUnauthorizedAPIError(error)) {
-    return 'Authentication required to run setup checks. Apply API key from Dashboard and retry.'
+    return 'Authentication required to run setup checks. Apply API key from Settings and retry.'
   }
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message
@@ -51,12 +51,12 @@ export function WelcomeStep({ isComplete, onComplete }: WelcomeStepProps) {
 
       <div className="welcome-step__overview">
         <p className="welcome-step__lead">
-          HomeSec helps you capture, analyze, and review security clips from your cameras.
+          HomeSec helps you capture, analyze, and review security events from your cameras.
         </p>
         <ul className="welcome-step__bullets">
           <li>Configure camera, storage, detection, and notifier settings.</li>
           <li>Run checks before launch to catch environment issues early.</li>
-          <li>Skip steps now and return later from the dashboard.</li>
+          <li>Skip steps now and return later from Settings.</li>
         </ul>
       </div>
 

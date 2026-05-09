@@ -149,7 +149,7 @@ export function CameraAddFlow({
   const stage = cameraAddState.state.step
 
   return (
-    <Card title="Add Camera" subtitle="Choose a backend, test connectivity, and confirm creation.">
+    <Card title="Add camera" subtitle="Choose a source, test the connection, and confirm creation.">
       {stage === 'pick-backend' ? (
         <BackendPicker onSelect={handleSelectBackend} onCancel={handleCancel} />
       ) : null}

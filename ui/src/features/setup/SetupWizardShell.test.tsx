@@ -98,15 +98,15 @@ describe('SetupWizardShell', () => {
     expect(skipButton).toBeNull()
   })
 
-  it('routes Exit to Dashboard link to root path', () => {
+  it('routes Exit to Live link to live path', () => {
     // Given: Wizard shell is mounted in router context
     renderShell()
 
     // When: Reading the exit link
-    const exitLink = screen.getByRole('link', { name: 'Exit to Dashboard' })
+    const exitLink = screen.getByRole('link', { name: 'Exit to Live' })
 
-    // Then: Link points to root dashboard route
-    expect(exitLink.getAttribute('href')).toBe('/')
+    // Then: Link points to the homeowner live route
+    expect(exitLink.getAttribute('href')).toBe('/live')
   })
 
   it('invokes back, skip, and next callbacks from footer actions', async () => {

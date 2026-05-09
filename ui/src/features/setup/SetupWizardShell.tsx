@@ -92,8 +92,8 @@ export function SetupWizardShell({
             </Button>
           ) : null}
         </div>
-        <Link className="wizard__exit-link" to="/">
-          Exit to Dashboard
+        <Link className="wizard__exit-link" to="/live">
+          Exit to Live
         </Link>
       </footer>
     </section>

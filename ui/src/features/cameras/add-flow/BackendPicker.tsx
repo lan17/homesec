@@ -20,7 +20,7 @@ export function BackendPicker({
         </Button>
       </div>
 
-      <p className="subtle">Choose how this camera will deliver clips into HomeSec.</p>
+      <p className="subtle">Choose how this camera will deliver event media into HomeSec.</p>
 
       <div className="camera-add-flow__backend-grid">
         {CAMERA_BACKEND_ORDER.map((backendId) => {

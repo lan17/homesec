@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatLastUpdated, healthTone } from './status'
+import { formatHealthStatusLabel, formatLastUpdated, formatSystemValue, formatUptime, healthTone } from './status'
 
 describe('healthTone', () => {
   it('maps known backend statuses to matching UI tones', () => {
@@ -23,8 +23,20 @@ describe('healthTone', () => {
 describe('formatLastUpdated', () => {
   it('returns placeholder text for empty timestamps', () => {
     // Given: No successful query update timestamp
-    // When: Formatting for dashboard display
+    // When: Formatting for system display
     // Then: A placeholder string should be returned
     expect(formatLastUpdated(0)).toBe('Not yet updated')
+  })
+})
+
+describe('system presentation helpers', () => {
+  it('formats health, runtime, and uptime values for product copy', () => {
+    // Given: Existing health and stats API values
+    // When: Formatting them for System cards
+    // Then: Visible labels should avoid raw casing and unit suffixes
+    expect(formatHealthStatusLabel('healthy')).toBe('Healthy')
+    expect(formatHealthStatusLabel('other')).toBe('Status unavailable')
+    expect(formatSystemValue('pipeline_running')).toBe('Pipeline Running')
+    expect(formatUptime(120)).toBe('2 min')
   })
 })

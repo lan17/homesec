@@ -107,8 +107,10 @@ export function CamerasPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Cameras</h1>
-          <p className="page__lead">Manage camera definitions and apply runtime reloads.</p>
+          <h1 className="page__title">Camera setup</h1>
+          <p className="page__lead">
+            Add cameras or change configuration. Daily viewing and talk controls stay on Live.
+          </p>
         </div>
         <Button
           variant="ghost"
@@ -132,7 +134,7 @@ export function CamerasPage() {
       ) : null}
 
       {pageError ? (
-        <Card title="Camera operations failed">
+        <Card title="Camera change could not finish">
           <p className="error-text">{pageError}</p>
         </Card>
       ) : null}
@@ -153,7 +155,7 @@ export function CamerasPage() {
           }}
         />
       ) : (
-        <Card title="Add Camera" subtitle="Launch reusable camera onboarding flow">
+        <Card title="Add camera" subtitle="Add a new HomeSec camera">
           <div className="inline-form__actions">
             <Button
               onClick={() => {

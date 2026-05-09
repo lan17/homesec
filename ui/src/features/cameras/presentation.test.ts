@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import { APIError } from '../../api/client'
-import { formatRuntimeTimestamp, runtimeStatusTone, describeCameraError } from './presentation'
+import {
+  describeCameraError,
+  formatCameraSourceLabel,
+  formatRuntimeTimestamp,
+  runtimeStatusTone,
+} from './presentation'
 
 describe('describeCameraError', () => {
   it('renders canonical API errors with error_code suffix', () => {
@@ -94,5 +99,16 @@ describe('formatRuntimeTimestamp', () => {
 
     // Then: Fallback should keep UI deterministic
     expect(formatted).toBe('n/a')
+  })
+})
+
+describe('formatCameraSourceLabel', () => {
+  it('maps camera source backends to homeowner-readable labels', () => {
+    // Given: Camera source values from the existing camera API
+    // When: Formatting them for visible camera cards
+    // Then: Labels should avoid raw backend identifiers in the default view
+    expect(formatCameraSourceLabel('rtsp')).toBe('Live camera')
+    expect(formatCameraSourceLabel('ftp')).toBe('File drop')
+    expect(formatCameraSourceLabel('local_folder')).toBe('Local folder')
   })
 })

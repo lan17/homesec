@@ -5,7 +5,7 @@ import { LocalStorageForm } from './LocalStorageForm'
 const LOCAL_BACKEND: StorageBackendDef = {
   id: 'local',
   label: 'Local',
-  description: 'Store clips on local disk.',
+  description: 'Store event media on local disk.',
   defaultConfig: {
     root: './storage',
   },
@@ -22,7 +22,7 @@ const LOCAL_BACKEND: StorageBackendDef = {
 const DROPBOX_BACKEND: StorageBackendDef = {
   id: 'dropbox',
   label: 'Dropbox',
-  description: 'Upload clips to Dropbox storage.',
+  description: 'Upload event media to Dropbox storage.',
   defaultConfig: {
     root: '/homesec',
     token_env: 'DROPBOX_TOKEN',

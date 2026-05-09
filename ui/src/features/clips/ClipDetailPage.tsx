@@ -1,16 +1,32 @@
-import { useEffect, useRef } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Link, useLocation, useParams } from 'react-router-dom'
 
-import { clearApiKey, isUnauthorizedAPIError, saveApiKey } from '../../api/client'
+import {
+  clearApiKey,
+  isUnauthorizedAPIError,
+  saveApiKey,
+  type ClipListSnapshot,
+} from '../../api/client'
+import type { ClipResponse, ListClipsQuery } from '../../api/generated/types'
 import { useClipMediaUrl } from '../../api/hooks/useClipMediaUrl'
 import { useClipQuery } from '../../api/hooks/useClipQuery'
+import { QUERY_KEYS } from '../../api/hooks/queryKeys'
 import { ApiKeyGate } from '../../components/ui/ApiKeyGate'
 import { Button } from '../../components/ui/Button'
-import { Card } from '../../components/ui/Card'
+import { EmptyState } from '../../components/ui/EmptyState'
+import { MediaPanel } from '../../components/ui/MediaPanel'
+import { RiskBadge } from '../../components/ui/RiskBadge'
+import { riskLabelForLevel } from '../../components/ui/riskTone'
+import { StatusBadge } from '../../components/ui/StatusBadge'
+import { TechnicalDetailsDisclosure } from '../../components/ui/TechnicalDetailsDisclosure'
 import {
   describeClipError,
+  formatAlertStatus,
+  formatActivityType,
+  formatDetectedObjects,
+  formatEventTime,
   formatTimestamp,
-  renderDetectedObjects,
   resolveClipExternalLink,
   resolveClipViewLink,
 } from './presentation'
@@ -18,15 +34,82 @@ import {
   nextAttemptsAfterMediaSourceChange,
   shouldRefreshPlaybackSource,
 } from './playbackRetry'
+import { parseClipsQuery } from './queryParams'
+
+interface NeighborEvents {
+  previous: ClipResponse | null
+  next: ClipResponse | null
+}
+
+function eventDetailPath(clipId: string, routeSearch: string): string {
+  return `/events/${encodeURIComponent(clipId)}${routeSearch}`
+}
+
+function eventListPath(routeSearch: string): string {
+  return `/events${routeSearch}`
+}
+
+function findClipWindow(
+  queryClient: ReturnType<typeof useQueryClient>,
+  currentClipId: string | undefined,
+  query: ListClipsQuery,
+): ClipResponse[] {
+  if (!currentClipId) {
+    return []
+  }
+
+  const preferredWindow = queryClient.getQueryData<ClipListSnapshot>(
+    QUERY_KEYS.clips(query),
+  )?.clips
+  if (preferredWindow?.some((clip) => clip.id === currentClipId)) {
+    return preferredWindow
+  }
+
+  const cachedWindows = queryClient.getQueriesData<ClipListSnapshot>({ queryKey: ['clips'] })
+  for (const [, data] of cachedWindows) {
+    if (data?.clips.some((clip) => clip.id === currentClipId)) {
+      return data.clips
+    }
+  }
+
+  return []
+}
+
+function findNeighbors(clips: readonly ClipResponse[], currentClipId: string | undefined): NeighborEvents {
+  const currentIndex = clips.findIndex((clip) => clip.id === currentClipId)
+  if (currentIndex < 0) {
+    return { previous: null, next: null }
+  }
+
+  return {
+    previous: clips[currentIndex - 1] ?? null,
+    next: clips[currentIndex + 1] ?? null,
+  }
+}
 
 export function ClipDetailPage() {
   const { clipId } = useParams<{ clipId: string }>()
+  const location = useLocation()
+  const queryClient = useQueryClient()
   const clipQuery = useClipQuery(clipId)
   const mediaQuery = useClipMediaUrl(clipId)
   const unauthorized = isUnauthorizedAPIError(clipQuery.error)
   const clip = clipQuery.data
   const externalLink = clip ? resolveClipExternalLink(clip) : null
   const viewUrlLink = clip ? resolveClipViewLink(clip) : null
+  const externalStorageLink = externalLink && externalLink !== viewUrlLink ? externalLink : null
+  const listQuery = useMemo(
+    () => parseClipsQuery(new URLSearchParams(location.search)),
+    [location.search],
+  )
+  const clipWindow = useMemo(
+    () => findClipWindow(queryClient, clipId, listQuery),
+    [clipId, listQuery, queryClient],
+  )
+  const neighbors = useMemo(
+    () => findNeighbors(clipWindow, clipId),
+    [clipId, clipWindow],
+  )
   const playbackRefreshAttempts = useRef(0)
   const previousMediaUrl = useRef<string | null>(null)
 
@@ -71,8 +154,10 @@ export function ClipDetailPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Clip Detail</h1>
-          <p className="page__lead">Clip ID: {clipId ?? 'unknown'}</p>
+          <h1 className="page__title">Event</h1>
+          <p className="page__lead">
+            {clip ? `${clip.camera} - ${formatTimestamp(clip.created_at)}` : 'Recorded security event'}
+          </p>
         </div>
         <Button variant="ghost" onClick={refreshClip} disabled={clipQuery.isFetching || !clipId}>
           {clipQuery.isFetching ? 'Refreshing...' : 'Refresh'}
@@ -80,42 +165,55 @@ export function ClipDetailPage() {
       </header>
 
       {!clipId ? (
-        <Card title="Invalid clip request">
-          <p className="error-text">Missing clip ID in route.</p>
-          <p className="muted">
-            Return to <Link to="/clips">clips list</Link>.
-          </p>
-        </Card>
+        <EmptyState
+          title="Invalid event request"
+          description={(
+            <>
+              Missing event ID. Return to <Link to={eventListPath(location.search)}>events</Link>.
+            </>
+          )}
+          tone="error"
+        />
       ) : null}
 
       {clipQuery.isPending ? (
-        <Card title="Loading clip">
-          <p className="muted">Fetching clip metadata...</p>
-        </Card>
+        <EmptyState
+          title="Loading event"
+          description="Fetching event video and metadata."
+          tone="loading"
+        />
       ) : null}
 
       {unauthorized ? (
-        <Card title="Authentication required">
+        <section className="auth-panel" aria-label="Authentication required">
           <ApiKeyGate
             busy={clipQuery.isFetching}
             onSubmit={submitApiKey}
             onClear={clearStoredApiKey}
           />
-        </Card>
+        </section>
       ) : null}
 
       {clipQuery.error && !unauthorized ? (
-        <Card title="Clip query failed">
-          <p className="error-text">{describeClipError(clipQuery.error)}</p>
-        </Card>
+        <EmptyState
+          title="Event could not load"
+          description={describeClipError(clipQuery.error)}
+          tone="error"
+        />
       ) : null}
 
       {clip ? (
-        <>
-          <Card title="Playback + Storage" subtitle="Primary playback is served by HomeSec /media">
+        <div className="clip-detail-layout">
+          <MediaPanel
+            title="Event video"
+            subtitle={`${clip.camera} at ${formatEventTime(clip.created_at)}`}
+            status={<RiskBadge level={clip.risk_level} />}
+            aspect="video"
+            className="clip-detail-media"
+          >
             <div className="clip-detail-video-shell">
               {mediaQuery.isPending ? (
-                <p className="muted">Preparing secure playback URL...</p>
+                <p className="muted">Preparing event video.</p>
               ) : mediaQuery.mediaUrl ? (
                 <video
                   className="clip-detail-video"
@@ -129,94 +227,128 @@ export function ClipDetailPage() {
                   Your browser does not support video playback.
                 </video>
               ) : (
-                <p className="muted">Clip media is not available for playback.</p>
+                <p className="muted">Event video is not available for playback.</p>
               )}
             </div>
+          </MediaPanel>
 
+          <section className="clip-detail-summary" aria-label="Event summary">
             {mediaQuery.error ? (
               <p className="error-text">{describeClipError(mediaQuery.error)}</p>
             ) : null}
+            <div className="clip-detail-summary__header">
+              <div>
+                <p className="clip-detail-eyebrow">{clip.camera}</p>
+                <h2 className="clip-detail-heading">
+                  {formatActivityType(clip.activity_type)}
+                </h2>
+              </div>
+              <StatusBadge tone={clip.alerted ? 'unhealthy' : 'healthy'}>
+                {formatAlertStatus(clip.alerted)}
+              </StatusBadge>
+            </div>
+            <p className="clip-detail-summary__text">
+              {clip.summary?.trim() || 'No summary is available yet.'}
+            </p>
 
             <div className="clip-detail-actions">
-              {externalLink ? (
-                <a
-                  className="button button--primary"
-                  href={externalLink}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  Open in storage
-                </a>
-              ) : null}
-              <Link className="button button--ghost" to="/clips">
-                Back to clips
+              <Link className="button button--ghost" to={eventListPath(location.search)}>
+                Back to events
               </Link>
+              {neighbors.previous ? (
+                <Link
+                  className="button button--ghost"
+                  to={eventDetailPath(neighbors.previous.id, location.search)}
+                >
+                  Previous event
+                </Link>
+              ) : (
+                <span className="button button--ghost button--disabled" aria-disabled="true">
+                  Previous event
+                </span>
+              )}
+              {neighbors.next ? (
+                <Link
+                  className="button button--primary"
+                  to={eventDetailPath(neighbors.next.id, location.search)}
+                >
+                  Next event
+                </Link>
+              ) : (
+                <span className="button button--primary button--disabled" aria-disabled="true">
+                  Next event
+                </span>
+              )}
             </div>
-            <div className="clip-detail-link-list">
-              <p className="muted">
-                <strong>view_url:</strong>{' '}
-                {viewUrlLink ? (
-                  <a href={viewUrlLink} target="_blank" rel="noreferrer noopener">
-                    {viewUrlLink}
-                  </a>
-                ) : (
-                  'not available'
-                )}
-              </p>
-              <p className="muted clip-detail-mono">
-                <strong>storage_uri:</strong> {clip.storage_uri ?? 'not available'}
-              </p>
-            </div>
-          </Card>
 
-          <div className="clip-detail-grid">
-            <Card title="Analysis" subtitle="VLM + detection fields from API">
+            <section className="clip-detail-section" aria-labelledby="event-ai-metadata">
+              <h3 id="event-ai-metadata" className="section-title">AI metadata</h3>
               <dl className="clip-detail-kv">
                 <div className="clip-detail-kv-row">
-                  <dt>Summary</dt>
-                  <dd>{clip.summary ?? 'not available'}</dd>
+                  <dt>Activity</dt>
+                  <dd>{formatActivityType(clip.activity_type)}</dd>
                 </div>
                 <div className="clip-detail-kv-row">
-                  <dt>Activity Type</dt>
-                  <dd>{clip.activity_type ?? 'not available'}</dd>
-                </div>
-                <div className="clip-detail-kv-row">
-                  <dt>Risk Level</dt>
-                  <dd>{clip.risk_level ?? 'not available'}</dd>
+                  <dt>Risk</dt>
+                  <dd>{riskLabelForLevel(clip.risk_level)}</dd>
                 </div>
                 <div className="clip-detail-kv-row">
                   <dt>Detected Objects</dt>
-                  <dd>{renderDetectedObjects(clip)}</dd>
+                  <dd>{formatDetectedObjects(clip)}</dd>
                 </div>
                 <div className="clip-detail-kv-row">
-                  <dt>Alerted</dt>
-                  <dd>{clip.alerted ? 'true' : 'false'}</dd>
-                </div>
-              </dl>
-            </Card>
-
-            <Card title="Metadata">
-              <dl className="clip-detail-kv">
-                <div className="clip-detail-kv-row">
-                  <dt>ID</dt>
-                  <dd className="clip-detail-mono">{clip.id}</dd>
-                </div>
-                <div className="clip-detail-kv-row">
-                  <dt>Camera</dt>
-                  <dd>{clip.camera}</dd>
-                </div>
-                <div className="clip-detail-kv-row">
-                  <dt>Status</dt>
-                  <dd>{clip.status}</dd>
-                </div>
-                <div className="clip-detail-kv-row">
-                  <dt>Created At</dt>
+                  <dt>Time</dt>
                   <dd>{formatTimestamp(clip.created_at)}</dd>
                 </div>
               </dl>
-            </Card>
-          </div>
-        </>
+            </section>
+
+            <TechnicalDetailsDisclosure summary="Technical event details">
+              <dl className="clip-detail-kv">
+                <div className="clip-detail-kv-row">
+                  <dt>Event ID</dt>
+                  <dd className="clip-detail-mono">{clip.id}</dd>
+                </div>
+                <div className="clip-detail-kv-row">
+                  <dt>Processing Status</dt>
+                  <dd>{clip.status}</dd>
+                </div>
+                <div className="clip-detail-kv-row">
+                  <dt>Storage URI</dt>
+                  <dd className="clip-detail-mono">{clip.storage_uri ?? 'not available'}</dd>
+                </div>
+                <div className="clip-detail-kv-row">
+                  <dt>View URL</dt>
+                  <dd>
+                    {viewUrlLink ? (
+                      <a href={viewUrlLink} target="_blank" rel="noreferrer noopener">
+                        Open external view
+                      </a>
+                    ) : (
+                      'not available'
+                    )}
+                  </dd>
+                </div>
+                <div className="clip-detail-kv-row">
+                  <dt>Playback Source</dt>
+                  <dd>{mediaQuery.usesToken ? 'Tokenized media URL' : 'Direct media endpoint'}</dd>
+                </div>
+                <div className="clip-detail-kv-row">
+                  <dt>External Storage Link</dt>
+                  <dd>
+                    {externalStorageLink ? (
+                      <a href={externalStorageLink} target="_blank" rel="noreferrer noopener">
+                        Open external link
+                      </a>
+                    ) : (
+                      'not available'
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            </TechnicalDetailsDisclosure>
+          </section>
+        </div>
       ) : null}
     </section>
   )

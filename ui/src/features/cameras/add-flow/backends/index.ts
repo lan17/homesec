@@ -37,7 +37,7 @@ const RTSP_BACKEND: BackendFormDef = {
 const FTP_BACKEND: BackendFormDef = {
   id: 'ftp',
   label: 'FTP',
-  description: 'Receive uploaded clips from camera FTP server mode.',
+  description: 'Receive uploaded event media from camera FTP server mode.',
   steps: [{ title: 'Configure FTP source', component: FtpForm }],
   defaultConfig: {
     host: '0.0.0.0',
@@ -71,7 +71,7 @@ const FTP_BACKEND: BackendFormDef = {
 const LOCAL_FOLDER_BACKEND: BackendFormDef = {
   id: 'local_folder',
   label: 'Local Folder',
-  description: 'Watch a local directory for incoming clips.',
+  description: 'Watch a local directory for incoming event media.',
   steps: [{ title: 'Configure local folder source', component: LocalFolderForm }],
   defaultConfig: {
     watch_dir: './recordings',
@@ -147,4 +147,3 @@ export function suggestCameraName(prefix: string, existingNames: readonly string
   }
   return `${prefix}_${index}`
 }
-
