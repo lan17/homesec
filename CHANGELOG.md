@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-05-09)
+
+### Features
+
+- Add Phase 10 Tapo local talkback support ([#94](https://github.com/lan17/homesec/pull/94),
+  [`60a76e7`](https://github.com/lan17/homesec/commit/60a76e7c53fca38942cb76360ec1a7facebff709))
+
+- Add Phase 9 talk backend abstraction
+  ([`3e5c6fb`](https://github.com/lan17/homesec/commit/3e5c6fbd67f5f6c41854d6d37a04bbee1af4ad52))
+
+- Polish M1 home security UI ([#104](https://github.com/lan17/homesec/pull/104),
+  [`31a0fff`](https://github.com/lan17/homesec/commit/31a0fff0e57d2a291ec653cd2666a98129ae435e))
+
+
 ## v1.10.0 (2026-05-07)
 
 ### Bug Fixes
