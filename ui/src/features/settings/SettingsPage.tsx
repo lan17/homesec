@@ -5,10 +5,10 @@ import { Card } from '../../components/ui/Card'
 const SETTINGS_SECTIONS = [
   {
     title: 'Cameras',
-    subtitle: 'Camera setup and controls',
-    description: 'Add cameras, enable or disable existing cameras, and open camera controls.',
-    to: '/cameras',
-    action: 'Manage cameras',
+    subtitle: 'Camera setup',
+    description: 'Add cameras or change camera configuration. Daily camera use stays on Live.',
+    to: '/settings/cameras',
+    action: 'Camera setup',
     primary: true,
   },
   {
@@ -52,7 +52,7 @@ export function SettingsPage() {
         <div>
           <h1 className="page__title">Settings</h1>
           <p className="page__lead">
-            Manage cameras, alerts, detection, and storage. System details stay under Advanced.
+            Configure cameras, alerts, detection, and storage. Daily camera controls live on Live.
           </p>
         </div>
       </header>

@@ -96,7 +96,7 @@ describe('shared UI primitives', () => {
     )
 
     // When: The disclosure is rendered
-    const summary = screen.getByText('Technical details')
+    const summary = screen.getByText('Advanced details')
     const details = summary.closest('details')
 
     // Then: The details are collapsed until the user opens them

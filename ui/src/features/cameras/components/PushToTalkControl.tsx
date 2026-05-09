@@ -203,7 +203,7 @@ function technicalDetails(status: TalkStatusResponse | null, error: unknown): st
   if (status?.backend_reason) {
     details.push(`Backend detail: ${status.backend_reason}`)
   }
-  if (status?.selected_codec) {
+  if (status?.selected_codec && status.capability !== 'supported') {
     details.push(`Selected codec: ${status.selected_codec}`)
   }
   if (error && !isMicrophoneBlocked(error)) {
@@ -326,12 +326,12 @@ export function PushToTalkControl({ cameraName }: PushToTalkControlProps) {
           }}
           disabled={isPending || isStarting || isStopping}
         >
-          Refresh talk
+          Refresh
         </Button>
       </div>
 
       {details.length > 0 ? (
-        <TechnicalDetailsDisclosure summary="Technical talk details">
+        <TechnicalDetailsDisclosure summary="Advanced talk details">
           <ul className="technical-details__list">
             {details.map((detail) => (
               <li key={detail}>{detail}</li>

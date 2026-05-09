@@ -126,7 +126,7 @@ function setupPage({
   } as unknown as ReturnType<typeof useCameraActions>)
 
   render(
-    <MemoryRouter initialEntries={['/cameras']}>
+    <MemoryRouter initialEntries={['/settings/cameras']}>
       <CamerasPage />
     </MemoryRouter>,
   )

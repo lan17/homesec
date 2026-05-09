@@ -104,6 +104,19 @@ describe('AppRouter route cleanup', () => {
     expect(screen.getByText('System Page')).toBeTruthy()
   })
 
+  it('redirects the old cameras route to Settings camera setup', async () => {
+    // Given: User opens the old top-level camera management route
+    renderRouter('/cameras')
+
+    // When: Route redirects settle
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/settings/cameras')
+    })
+
+    // Then: Camera setup lives under Settings instead of competing with Live
+    expect(screen.getByText('Cameras Page')).toBeTruthy()
+  })
+
   it('redirects clips list to Events while preserving filters', async () => {
     // Given: User opens a clips URL with URL-synced filters
     renderRouter('/clips?camera=front_door&detected=any')

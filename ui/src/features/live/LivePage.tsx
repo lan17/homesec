@@ -50,10 +50,10 @@ export function LivePage() {
   return (
     <ResponsivePageShell
       title="Live"
-      lead="Check your cameras first, then jump to controls or recent events."
+      lead="Watch cameras, talk through supported speakers, and jump to recent events."
       actions={
         <Button variant="ghost" onClick={refreshCameras} disabled={camerasQuery.isFetching}>
-          {camerasQuery.isFetching ? 'Refreshing...' : 'Refresh'}
+          {camerasQuery.isFetching ? 'Refreshing...' : 'Refresh cameras'}
         </Button>
       }
     >
@@ -86,8 +86,8 @@ export function LivePage() {
           title="No cameras yet"
           description="Add a camera to start using live view."
           action={
-            <Link className="button button--primary" to="/cameras">
-              Open Cameras
+            <Link className="button button--primary" to="/settings">
+              Open Settings
             </Link>
           }
         />

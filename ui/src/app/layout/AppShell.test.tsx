@@ -43,7 +43,6 @@ function renderShell(
           <Route element={<AppShell />}>
             <Route path="/live" element={<p>Live route</p>} />
             <Route path="/events" element={<p>Events route</p>} />
-            <Route path="/cameras" element={<p>Cameras route</p>} />
             <Route path="/settings" element={<p>Settings route</p>} />
             <Route path="/system" element={<p>System route</p>} />
           </Route>
@@ -67,13 +66,13 @@ describe('AppShell navigation', () => {
     // When: Desktop primary navigation is inspected
     const primaryNav = screen.getByRole('navigation', { name: 'Primary' })
 
-    // Then: Main desktop nav uses M1 homeowner labels including System
+    // Then: Main desktop nav keeps camera operation on Live and diagnostics in System
     expect(within(primaryNav).getByRole('link', { name: 'Live' })).toBeTruthy()
     expect(within(primaryNav).getByRole('link', { name: 'Events' })).toBeTruthy()
-    expect(within(primaryNav).getByRole('link', { name: 'Cameras' })).toBeTruthy()
     expect(within(primaryNav).getByRole('link', { name: 'Settings' })).toBeTruthy()
     expect(within(primaryNav).getByRole('link', { name: 'System' })).toBeTruthy()
-    const systemStatus = screen.getByRole('link', { name: 'System OK' })
+    expect(within(primaryNav).queryByRole('link', { name: 'Cameras' })).toBeNull()
+    const systemStatus = screen.getByRole('link', { name: 'All systems normal' })
     expect(systemStatus.getAttribute('href')).toBe('/system')
     expect(systemStatus.className).toContain('app-shell__header-status--nominal')
   })
@@ -85,11 +84,11 @@ describe('AppShell navigation', () => {
     // When: Mobile primary navigation is inspected
     const mobileNav = screen.getByRole('navigation', { name: 'Mobile primary' })
 
-    // Then: Mobile nav exposes only the four homeowner-first destinations
+    // Then: Mobile nav exposes only the primary homeowner destinations
     expect(within(mobileNav).getByRole('link', { name: 'Live' })).toBeTruthy()
     expect(within(mobileNav).getByRole('link', { name: 'Events' })).toBeTruthy()
-    expect(within(mobileNav).getByRole('link', { name: 'Cameras' })).toBeTruthy()
     expect(within(mobileNav).getByRole('link', { name: 'Settings' })).toBeTruthy()
+    expect(within(mobileNav).queryByRole('link', { name: 'Cameras' })).toBeNull()
     expect(within(mobileNav).queryByRole('link', { name: 'System' })).toBeNull()
   })
 
@@ -111,7 +110,7 @@ describe('AppShell navigation', () => {
     // When: The shell status is rendered
     const systemStatus = screen.getByRole('link', { name: '1 camera offline' })
 
-    // Then: The non-nominal camera state stays visible instead of being hidden as System OK
+    // Then: The non-nominal camera state stays visible instead of being hidden as nominal
     expect(systemStatus.getAttribute('href')).toBe('/system')
     expect(systemStatus.className).not.toContain('app-shell__header-status--nominal')
   })

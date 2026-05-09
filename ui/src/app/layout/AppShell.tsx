@@ -9,7 +9,6 @@ import { useTheme } from '../providers/theme-context'
 const DESKTOP_NAV_LINKS = [
   { to: '/live', label: 'Live' },
   { to: '/events', label: 'Events' },
-  { to: '/cameras', label: 'Cameras' },
   { to: '/settings', label: 'Settings' },
   { to: '/system', label: 'System' },
 ]
@@ -17,7 +16,6 @@ const DESKTOP_NAV_LINKS = [
 const MOBILE_NAV_LINKS: readonly MobileBottomNavLink[] = [
   { to: '/live', label: 'Live' },
   { to: '/events', label: 'Events' },
-  { to: '/cameras', label: 'Cameras' },
   { to: '/settings', label: 'Settings' },
 ]
 
@@ -27,13 +25,13 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
 
 function systemStatusText(status: string | undefined, isError: boolean): string {
   if (isError) {
-    return 'System unavailable'
+    return 'System needs attention'
   }
   if (!status) {
-    return 'Checking system'
+    return 'Checking'
   }
   if (status === 'healthy') {
-    return 'System OK'
+    return 'All systems normal'
   }
   return `System ${status}`
 }
@@ -51,9 +49,11 @@ export function AppShell() {
   return (
     <div className="app-shell">
       <div className="app-shell__background" />
-      <aside className="app-shell__sidebar">
-        <p className="app-shell__brand">HomeSec</p>
-        <h1 className="app-shell__title">Home security</h1>
+      <header className="app-shell__topbar">
+        <NavLink className="app-shell__brand-link" to="/live" aria-label="HomeSec Live">
+          <p className="app-shell__brand">HomeSec</p>
+          <p className="app-shell__title">Home security</p>
+        </NavLink>
         <nav className="app-shell__nav" aria-label="Primary">
           {DESKTOP_NAV_LINKS.map((link) => (
             <NavLink key={link.to} to={link.to} className={navLinkClassName}>
@@ -61,21 +61,24 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
-      </aside>
 
-      <div className="app-shell__main">
-        <header className="app-shell__header">
+        <div className="app-shell__header">
           <NavLink className={systemStatusClassName} to="/system">
             {systemStatus}
           </NavLink>
-          <button type="button" className="button button--ghost" onClick={toggleTheme}>
-            Theme: {theme === 'dark' ? 'Dark' : 'Light'}
+          <button
+            type="button"
+            className="button button--ghost app-shell__theme-button"
+            onClick={toggleTheme}
+          >
+            {theme === 'dark' ? 'Dark' : 'Light'}
           </button>
-        </header>
-        <main className="app-shell__content" role="main">
-          <Outlet />
-        </main>
-      </div>
+        </div>
+      </header>
+
+      <main className="app-shell__content" role="main">
+        <Outlet />
+      </main>
 
       <MobileBottomNav links={MOBILE_NAV_LINKS} />
     </div>

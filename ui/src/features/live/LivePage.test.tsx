@@ -102,16 +102,16 @@ describe('LivePage camera cards', () => {
     // Then: The card exposes status, preview, and event navigation using existing data
     expect(card ? within(card).getByText('Online') : null).toBeTruthy()
     expect(card ? within(card).getByTestId('preview-front_door') : null).toBeTruthy()
-    expect(screen.getByTestId('preview-front_door').getAttribute('data-talk')).toBe('false')
+    expect(screen.getByTestId('preview-front_door').getAttribute('data-talk')).toBe('true')
     expect(card ? within(card).getByText('Last seen') : null).toBeTruthy()
     expect(
       card ? within(card).getByRole('link', { name: 'View Events' }).getAttribute('href') : null,
     ).toBe('/events?camera=front_door')
     expect(
       card
-        ? within(card).getByRole('link', { name: 'Camera controls' }).getAttribute('href')
+        ? within(card).getByRole('link', { name: 'Camera settings' }).getAttribute('href')
         : null,
-    ).toBe('/cameras')
+    ).toBe('/settings/cameras')
   })
 
   it('uses lightweight placeholders for cameras without live preview support', () => {

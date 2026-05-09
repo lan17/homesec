@@ -197,11 +197,11 @@ describe('CameraPreviewPanel', () => {
     render(<CameraPreviewPanel cameraName="front" />)
 
     // Then: The panel surfaces the disabled state and blocks start
-    expect(screen.getByText('Preview is disabled for this runtime.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Start preview' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('Live view is disabled.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start live view' }).hasAttribute('disabled')).toBe(true)
   })
 
-  it('wires start, refresh, and stop actions from the preview hook', async () => {
+  it('wires start and stop actions from the preview hook', async () => {
     // Given: A ready preview panel with active session
     const start = vi.fn().mockResolvedValue(undefined)
     const stop = vi.fn().mockResolvedValue(undefined)
@@ -242,15 +242,14 @@ describe('CameraPreviewPanel', () => {
 
     // When: Rendering and using the preview controls
     render(<CameraPreviewPanel cameraName="front" />)
-    await user.click(screen.getByRole('button', { name: 'Attach preview' }))
-    await user.click(screen.getByRole('button', { name: 'Refresh status' }))
-    await user.click(screen.getByRole('button', { name: 'Stop preview' }))
+    await user.click(screen.getByRole('button', { name: 'Show live view' }))
+    await user.click(screen.getByRole('button', { name: 'Stop live view' }))
 
     // Then: The panel forwards button actions to the hook handlers
     expect(start).toHaveBeenCalledTimes(1)
-    expect(refreshStatus).toHaveBeenCalledTimes(1)
     expect(stop).toHaveBeenCalledTimes(1)
-    expect(screen.getByText('viewers 2')).toBeTruthy()
+    expect(refreshStatus).not.toHaveBeenCalled()
+    expect(screen.getByText('2 viewers')).toBeTruthy()
   })
 
   it('can hide push-to-talk for compact live camera cards', () => {
@@ -261,7 +260,7 @@ describe('CameraPreviewPanel', () => {
     render(<CameraPreviewPanel cameraName="front" showTalkControl={false} />)
 
     // Then: Preview controls remain while push-to-talk is not mounted
-    expect(screen.getByRole('button', { name: 'Attach preview' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show live view' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Hold to talk' })).toBeNull()
     expect(usePushToTalkMock).not.toHaveBeenCalled()
   })
@@ -408,10 +407,10 @@ describe('CameraPreviewPanel', () => {
     render(<CameraPreviewPanel cameraName="front" />)
 
     // Then: Stop remains available because an active session still exists
-    expect(screen.getByRole('button', { name: 'Stop preview' }).hasAttribute('disabled')).toBe(
+    expect(screen.getByRole('button', { name: 'Stop live view' }).hasAttribute('disabled')).toBe(
       false,
     )
-    expect(screen.getByText('READY')).toBeTruthy()
+    expect(screen.getByText('Ready')).toBeTruthy()
   })
 
   it('prefers the active session state over a stale terminal status snapshot', () => {
@@ -453,8 +452,8 @@ describe('CameraPreviewPanel', () => {
     render(<CameraPreviewPanel cameraName="front" />)
 
     // Then: The session stays labeled as active instead of regressing to stale idle state
-    expect(screen.getByText('READY')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Attach preview' })).toBeTruthy()
+    expect(screen.getByText('Ready')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show live view' })).toBeTruthy()
   })
 
   it('wires push-to-talk hold and release actions', async () => {
@@ -604,7 +603,7 @@ describe('CameraPreviewPanel', () => {
     // Then: The talk control keeps user-facing copy simple and hides codec diagnostics by default
     expect(screen.getByRole('button', { name: 'Talk unavailable' })).toBeTruthy()
     expect(screen.getByText('Talk unavailable on this camera.')).toBeTruthy()
-    expect(screen.getByText('Technical talk details')).toBeTruthy()
+    expect(screen.getByText('Advanced talk details')).toBeTruthy()
     expect(screen.getByText(
       'Camera talkback codec is not supported. Offered: OPUS/48000. Supported: PCMU/8000, PCMA/8000.',
     )).toBeTruthy()
@@ -636,7 +635,7 @@ describe('CameraPreviewPanel', () => {
     // Then: The talk control keeps probe failure details under technical disclosure
     expect(screen.getByRole('button', { name: 'Talk unavailable' })).toBeTruthy()
     expect(screen.getByText('Talk unavailable on this camera.')).toBeTruthy()
-    expect(screen.getByText('Technical talk details')).toBeTruthy()
+    expect(screen.getByText('Advanced talk details')).toBeTruthy()
     expect(screen.getByText(
       'Talkback capability check failed: RTSP authentication was rejected by the camera',
     )).toBeTruthy()
@@ -670,7 +669,7 @@ describe('CameraPreviewPanel', () => {
     // Then: The talk control keeps backend config details under technical disclosure
     expect(screen.getByRole('button', { name: 'Talk unavailable' })).toBeTruthy()
     expect(screen.getByText('Talk unavailable on this camera.')).toBeTruthy()
-    expect(screen.getByText('Technical talk details')).toBeTruthy()
+    expect(screen.getByText('Advanced talk details')).toBeTruthy()
     expect(screen.getByText(
       "Talk backend 'onvif_rtsp_backchannel' config is invalid",
     )).toBeTruthy()
@@ -712,7 +711,7 @@ describe('CameraPreviewPanel', () => {
     // Then: The default copy stays homeowner-readable and raw details stay technical
     expect(screen.getByText('Talk status could not load.')).toBeTruthy()
     expect(screen.queryByText('Unhandled GET /api/v1/talk/cameras/front')).toBeNull()
-    expect(screen.getByText('Technical talk details')).toBeTruthy()
+    expect(screen.getByText('Advanced talk details')).toBeTruthy()
   })
 
 })

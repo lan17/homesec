@@ -25,6 +25,10 @@ function canShowPreview(camera: CameraResponse): boolean {
   return camera.enabled && camera.source_backend === 'rtsp'
 }
 
+function cardClassName(isFocused: boolean | undefined): string {
+  return isFocused ? 'live-camera-card live-camera-card--focused' : 'live-camera-card'
+}
+
 function renderPreview({
   camera,
   isCompactViewport = false,
@@ -55,9 +59,9 @@ function renderPreview({
     return (
       <CameraPreviewPanel
         cameraName={camera.name}
-        title="Preview"
-        subtitle="Start preview when you want to watch this camera."
-        showTalkControl={false}
+        title="Live view"
+        subtitle="Watch this camera and use push-to-talk when available."
+        showTalkControl
       />
     )
   }
@@ -75,9 +79,10 @@ function renderPreview({
 }
 
 export function LiveCameraCard(props: LiveCameraCardProps) {
-  const { camera } = props
+  const { camera, isFocused } = props
   return (
     <CameraCard
+      className={cardClassName(isFocused)}
       title={camera.name}
       status={
         <StatusBadge tone={cameraHealthTone(camera)}>
@@ -107,8 +112,8 @@ export function LiveCameraCard(props: LiveCameraCardProps) {
           <Link className="button button--primary" to={`/events?${eventsSearch(camera.name)}`}>
             View Events
           </Link>
-          <Link className="button button--ghost" to="/cameras">
-            Camera controls
+          <Link className="button button--ghost" to="/settings/cameras">
+            Camera settings
           </Link>
         </>
       }

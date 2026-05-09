@@ -54,28 +54,28 @@ function previewTone(
 function previewLabel(state: string | undefined): string {
   switch (state) {
     case 'ready':
-      return 'READY'
+      return 'Ready'
     case 'starting':
-      return 'STARTING'
+      return 'Starting'
     case 'degraded':
-      return 'DEGRADED'
+      return 'Degraded'
     case 'stopping':
-      return 'STOPPING'
+      return 'Stopping'
     case 'error':
-      return 'ERROR'
+      return 'Unavailable'
     default:
-      return 'IDLE'
+      return 'Idle'
   }
 }
 
 function startLabel(statusState: string | undefined): string {
   if (statusState === 'ready' || statusState === 'degraded' || statusState === 'starting') {
-    return 'Attach preview'
+    return 'Show live view'
   }
   if (statusState === 'error') {
-    return 'Retry preview'
+    return 'Retry live view'
   }
-  return 'Start preview'
+  return 'Start live view'
 }
 
 function activeFullscreenElement(): Element | null {
@@ -110,7 +110,7 @@ async function exitActiveFullscreen(): Promise<void> {
 export function CameraPreviewPanel({
   cameraName,
   title = 'Live preview',
-  subtitle = 'On-demand HLS stream from the active runtime.',
+  subtitle = 'Start a live view when you need it.',
   showTalkControl = true,
   className,
 }: CameraPreviewPanelProps) {
@@ -120,7 +120,6 @@ export function CameraPreviewPanel({
     isStarting,
     isStopping,
     playlistUrl,
-    refreshStatus,
     session,
     start,
     status,
@@ -391,10 +390,10 @@ export function CameraPreviewPanel({
       return describeUnknownError(error)
     }
     if (playlistUrl && !playlistReady) {
-      return 'Preparing preview stream...'
+      return 'Starting live view.'
     }
     if (status?.enabled === false) {
-      return 'Preview is disabled for this runtime.'
+      return 'Live view is disabled.'
     }
     return null
   }, [error, playerError, playlistReady, playlistUrl, status?.enabled, warning])
@@ -409,7 +408,9 @@ export function CameraPreviewPanel({
         <div className="camera-item__badges">
           <StatusBadge tone={previewTone(effectiveState)}>{previewLabel(effectiveState)}</StatusBadge>
           {viewerCount !== null && viewerCount !== undefined ? (
-            <span className="camera-chip">viewers {viewerCount}</span>
+            <span className="camera-chip">
+              {viewerCount} {viewerCount === 1 ? 'viewer' : 'viewers'}
+            </span>
           ) : null}
         </div>
       </header>
@@ -442,7 +443,7 @@ export function CameraPreviewPanel({
           </>
         ) : (
           <div className="camera-preview__placeholder">
-            {statusMessage ?? 'Start preview to attach to the live stream.'}
+            {statusMessage ?? 'Start live view to watch this camera.'}
           </div>
         )}
       </div>
@@ -465,20 +466,11 @@ export function CameraPreviewPanel({
         <Button
           variant="ghost"
           onClick={() => {
-            void refreshStatus()
-          }}
-          disabled={isPending}
-        >
-          Refresh status
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={() => {
             void stop()
           }}
           disabled={isStopping || (!session && (effectiveState ?? 'idle') === 'idle')}
         >
-          {isStopping ? 'Stopping...' : 'Stop preview'}
+          {isStopping ? 'Stopping...' : 'Stop live view'}
         </Button>
       </div>
     </section>

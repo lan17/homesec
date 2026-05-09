@@ -107,8 +107,10 @@ export function CamerasPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Cameras</h1>
-          <p className="page__lead">Add cameras, check status, and apply pending changes.</p>
+          <h1 className="page__title">Camera setup</h1>
+          <p className="page__lead">
+            Add cameras or change configuration. Daily viewing and talk controls stay on Live.
+          </p>
         </div>
         <Button
           variant="ghost"

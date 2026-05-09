@@ -30,9 +30,10 @@ export function AppRouter() {
         <Route path="/live" element={<LivePage />} />
         <Route path="/events" element={<ClipsPage />} />
         <Route path="/events/:clipId" element={<ClipDetailPage />} />
-        <Route path="/cameras" element={<CamerasPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/cameras" element={<CamerasPage />} />
         <Route path="/system" element={<SystemPage />} />
+        <Route path="/cameras" element={<RedirectWithSearch to="/settings/cameras" />} />
         <Route path="/clips" element={<RedirectWithSearch to="/events" />} />
         <Route path="/clips/:clipId" element={<RedirectClipDetailToEvent />} />
         <Route path="/dashboard" element={<RedirectWithSearch to="/system" />} />

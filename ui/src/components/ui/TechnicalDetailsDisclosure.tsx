@@ -6,7 +6,7 @@ interface TechnicalDetailsDisclosureProps extends PropsWithChildren {
 }
 
 export function TechnicalDetailsDisclosure({
-  summary = 'Technical details',
+  summary = 'Advanced details',
   className,
   children,
 }: TechnicalDetailsDisclosureProps) {
