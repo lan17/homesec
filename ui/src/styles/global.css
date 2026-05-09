@@ -711,6 +711,57 @@ a:hover {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+.clip-detail-layout,
+.clip-detail-summary,
+.clip-detail-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.clip-detail-media .media-panel__viewport {
+  background: #000;
+}
+
+.clip-detail-summary {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  padding: var(--space-4);
+}
+
+.clip-detail-summary__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.clip-detail-eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.clip-detail-heading {
+  margin: 0.2rem 0 0;
+  font-size: 1.25rem;
+}
+
+.clip-detail-summary__text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.auth-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  padding: var(--space-4);
+}
+
 .form-checkbox-field {
   display: flex;
   align-items: center;
@@ -1203,10 +1254,10 @@ a:hover {
 }
 
 .clip-detail-video-shell {
-  margin-bottom: var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  background: #000;
   overflow: hidden;
 }
 
@@ -1296,6 +1347,12 @@ a:hover {
 
 .button--ghost:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.button--disabled,
+.button--disabled:hover {
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .status-badge {
