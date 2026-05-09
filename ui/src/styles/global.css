@@ -549,6 +549,11 @@ a:hover {
   gap: var(--space-3);
 }
 
+.live-camera-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  align-items: start;
+}
+
 .settings-grid {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }

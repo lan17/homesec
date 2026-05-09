@@ -252,6 +252,19 @@ describe('CameraPreviewPanel', () => {
     expect(screen.getByText('viewers 2')).toBeTruthy()
   })
 
+  it('can hide push-to-talk for compact live camera cards', () => {
+    // Given: A ready preview rendered in a compact Live card context
+    mockReadyPreviewSession()
+
+    // When: The preview panel opts out of talk controls
+    render(<CameraPreviewPanel cameraName="front" showTalkControl={false} />)
+
+    // Then: Preview controls remain while push-to-talk is not mounted
+    expect(screen.getByRole('button', { name: 'Attach preview' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Hold to talk' })).toBeNull()
+    expect(usePushToTalkMock).not.toHaveBeenCalled()
+  })
+
   it('initializes hls.js playback when a playlist URL becomes ready', async () => {
     // Given: A ready preview session with a tokenized playlist URL
     mockReadyPreviewSession()

@@ -28,6 +28,10 @@ type WebKitVideoElement = HTMLVideoElement & {
 
 interface CameraPreviewPanelProps {
   cameraName: string
+  title?: string
+  subtitle?: string
+  showTalkControl?: boolean
+  className?: string
 }
 
 function previewTone(
@@ -103,7 +107,13 @@ async function exitActiveFullscreen(): Promise<void> {
   }
 }
 
-export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
+export function CameraPreviewPanel({
+  cameraName,
+  title = 'Live preview',
+  subtitle = 'On-demand HLS stream from the active runtime.',
+  showTalkControl = true,
+  className,
+}: CameraPreviewPanelProps) {
   const {
     error,
     isPending,
@@ -390,11 +400,11 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
   }, [error, playerError, playlistReady, playlistUrl, status?.enabled, warning])
 
   return (
-    <section className="camera-preview">
+    <section className={className ? `camera-preview ${className}` : 'camera-preview'}>
       <header className="camera-preview__header">
         <div>
-          <p className="camera-preview__title">Live preview</p>
-          <p className="camera-preview__subtitle">On-demand HLS stream from the active runtime.</p>
+          <p className="camera-preview__title">{title}</p>
+          <p className="camera-preview__subtitle">{subtitle}</p>
         </div>
         <div className="camera-item__badges">
           <StatusBadge tone={previewTone(effectiveState)}>{previewLabel(effectiveState)}</StatusBadge>
@@ -438,7 +448,7 @@ export function CameraPreviewPanel({ cameraName }: CameraPreviewPanelProps) {
         <p className="camera-preview__message">{statusMessage}</p>
       ) : null}
 
-      <PushToTalkControl cameraName={cameraName} />
+      {showTalkControl ? <PushToTalkControl cameraName={cameraName} /> : null}
 
       <div className="inline-form__actions">
         <Button
