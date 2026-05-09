@@ -71,8 +71,8 @@ export function ClipDetailPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Clip Detail</h1>
-          <p className="page__lead">Clip ID: {clipId ?? 'unknown'}</p>
+          <h1 className="page__title">Event Detail</h1>
+          <p className="page__lead">Event ID: {clipId ?? 'unknown'}</p>
         </div>
         <Button variant="ghost" onClick={refreshClip} disabled={clipQuery.isFetching || !clipId}>
           {clipQuery.isFetching ? 'Refreshing...' : 'Refresh'}
@@ -80,17 +80,17 @@ export function ClipDetailPage() {
       </header>
 
       {!clipId ? (
-        <Card title="Invalid clip request">
-          <p className="error-text">Missing clip ID in route.</p>
+        <Card title="Invalid event request">
+          <p className="error-text">Missing event ID in route.</p>
           <p className="muted">
-            Return to <Link to="/clips">clips list</Link>.
+            Return to <Link to="/events">events list</Link>.
           </p>
         </Card>
       ) : null}
 
       {clipQuery.isPending ? (
-        <Card title="Loading clip">
-          <p className="muted">Fetching clip metadata...</p>
+        <Card title="Loading event">
+          <p className="muted">Fetching event metadata...</p>
         </Card>
       ) : null}
 
@@ -105,14 +105,14 @@ export function ClipDetailPage() {
       ) : null}
 
       {clipQuery.error && !unauthorized ? (
-        <Card title="Clip query failed">
+        <Card title="Event query failed">
           <p className="error-text">{describeClipError(clipQuery.error)}</p>
         </Card>
       ) : null}
 
       {clip ? (
         <>
-          <Card title="Playback + Storage" subtitle="Primary playback is served by HomeSec /media">
+          <Card title="Event video" subtitle="Primary playback is served by HomeSec /media">
             <div className="clip-detail-video-shell">
               {mediaQuery.isPending ? (
                 <p className="muted">Preparing secure playback URL...</p>
@@ -129,7 +129,7 @@ export function ClipDetailPage() {
                   Your browser does not support video playback.
                 </video>
               ) : (
-                <p className="muted">Clip media is not available for playback.</p>
+                <p className="muted">Event media is not available for playback.</p>
               )}
             </div>
 
@@ -148,8 +148,8 @@ export function ClipDetailPage() {
                   Open in storage
                 </a>
               ) : null}
-              <Link className="button button--ghost" to="/clips">
-                Back to clips
+              <Link className="button button--ghost" to="/events">
+                Back to events
               </Link>
             </div>
             <div className="clip-detail-link-list">

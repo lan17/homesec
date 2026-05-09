@@ -164,9 +164,9 @@ export function SetupPage() {
     clearPersistedState()
   }
 
-  function handleGoDashboard(): void {
+  function handleGoLive(): void {
     clearPersistedState()
-    navigate('/', { replace: true })
+    navigate('/live', { replace: true })
   }
 
   function renderActiveStepContent() {
@@ -222,7 +222,7 @@ export function SetupPage() {
           skippedSteps={state.skippedSteps}
           onGoToStep={goToStep}
           onLaunchSuccess={handleReviewLaunchSuccess}
-          onGoDashboard={handleGoDashboard}
+          onGoLive={handleGoLive}
         />
       )
     }
@@ -270,7 +270,7 @@ export function SetupPage() {
           </dl>
           {isReviewStep ? (
             <p className="subtle">
-              Launch clears persisted wizard state and returns to the dashboard.
+              Launch clears persisted wizard state and returns to Live.
             </p>
           ) : null}
         </section>

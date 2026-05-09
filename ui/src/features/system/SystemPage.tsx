@@ -12,7 +12,7 @@ import { useSetupRedirect } from '../setup/useSetupRedirect'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { describeAPIError, formatLastUpdated, healthTone } from './status'
 
-export function DashboardPage() {
+export function SystemPage() {
   const { shouldRedirect, isChecking } = useSetupRedirect()
   const healthQuery = useHealthQuery()
   const statsQuery = useStatsQuery()
@@ -77,8 +77,8 @@ export function DashboardPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Runtime Overview</h1>
-          <p className="page__lead">Live health and stats from FastAPI control plane.</p>
+          <h1 className="page__title">System</h1>
+          <p className="page__lead">Runtime health, diagnostics, and backups.</p>
           <p className="subtle">Last updated: {formatLastUpdated(latestUpdateAt)}</p>
           <Link to="/setup" className="subtle">
             Re-run setup wizard
@@ -90,7 +90,7 @@ export function DashboardPage() {
       </header>
 
       {showLoadingState ? (
-        <Card title="Loading dashboard">
+        <Card title="Loading system status">
           <p className="muted">Fetching /api/v1/health and /api/v1/stats...</p>
         </Card>
       ) : null}
@@ -141,7 +141,7 @@ export function DashboardPage() {
 
         {statsQuery.data ? (
           <div className="grid grid--cards">
-            <Card title="Clips today">
+            <Card title="Events today">
               <p className="metric">{statsQuery.data.clips_today}</p>
             </Card>
             <Card title="Alerts today">

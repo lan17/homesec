@@ -21,7 +21,7 @@ export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
   return (
     <section className="inline-form">
       <h3 className="backend-picker__title">Configure storage backend</h3>
-      <p className="subtle">Choose where clips are uploaded after capture.</p>
+      <p className="subtle">Choose where event media is stored after capture.</p>
 
       <div className="backend-picker__grid">
         {STORAGE_BACKEND_ORDER.map((backendId) => {

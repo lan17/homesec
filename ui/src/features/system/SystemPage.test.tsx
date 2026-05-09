@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
 import type { HealthSnapshot, PostgresBackupStatusSnapshot, StatsSnapshot } from '../../api/client'
-import { DashboardPage } from './DashboardPage'
+import { SystemPage } from './SystemPage'
 
 const useSetupRedirectMock = vi.fn()
 const useHealthQueryMock = vi.fn()
@@ -73,7 +73,7 @@ function defaultPostgresBackupStatus(): PostgresBackupStatusSnapshot {
   }
 }
 
-function setupDashboard({
+function setupSystem({
   isChecking = false,
   shouldRedirect = false,
 }: {
@@ -115,13 +115,13 @@ function setupDashboard({
   })
 
   render(
-    <MemoryRouter initialEntries={['/']}>
-      <DashboardPage />
+    <MemoryRouter initialEntries={['/system']}>
+      <SystemPage />
     </MemoryRouter>,
   )
 }
 
-describe('DashboardPage setup redirect behavior', () => {
+describe('SystemPage setup redirect behavior', () => {
   beforeEach(() => {
     useSetupRedirectMock.mockReset()
     useHealthQueryMock.mockReset()
@@ -136,23 +136,23 @@ describe('DashboardPage setup redirect behavior', () => {
 
   it('renders nothing while setup redirect state is still checking', () => {
     // Given: Setup redirect hook reports a pending setup-status check
-    setupDashboard({ isChecking: true, shouldRedirect: false })
+    setupSystem({ isChecking: true, shouldRedirect: false })
 
-    // When: Dashboard page is rendered
-    const title = screen.queryByRole('heading', { name: 'Runtime Overview' })
+    // When: System page is rendered
+    const title = screen.queryByRole('heading', { name: 'System' })
 
-    // Then: Dashboard content is withheld to avoid first-run flash
+    // Then: System content is withheld to avoid first-run flash
     expect(title).toBeNull()
   })
 
-  it('shows a Re-run setup link during normal dashboard rendering', () => {
-    // Given: Setup redirect hook indicates dashboard can render normally
-    setupDashboard({ isChecking: false, shouldRedirect: false })
+  it('shows a Re-run setup link during normal system rendering', () => {
+    // Given: Setup redirect hook indicates system page can render normally
+    setupSystem({ isChecking: false, shouldRedirect: false })
 
-    // When: Dashboard header is rendered
+    // When: System header is rendered
     const setupLink = screen.getByRole('link', { name: 'Re-run setup wizard' })
 
-    // Then: Operator can navigate back to the setup flow from dashboard
+    // Then: Operator can navigate back to the setup flow from system diagnostics
     expect(setupLink.getAttribute('href')).toBe('/setup')
   })
 
@@ -165,7 +165,7 @@ describe('DashboardPage setup redirect behavior', () => {
       message: 'Postgres backup accepted',
       httpStatus: 202,
     })
-    setupDashboard({ isChecking: false, shouldRedirect: false })
+    setupSystem({ isChecking: false, shouldRedirect: false })
     usePostgresBackupStatusQueryMock.mockReturnValue({
       data: defaultPostgresBackupStatus(),
       isPending: false,
@@ -181,8 +181,8 @@ describe('DashboardPage setup redirect behavior', () => {
     })
     cleanup()
     render(
-      <MemoryRouter initialEntries={['/']}>
-        <DashboardPage />
+      <MemoryRouter initialEntries={['/system']}>
+        <SystemPage />
       </MemoryRouter>,
     )
 

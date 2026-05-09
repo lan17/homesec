@@ -58,7 +58,7 @@ describe('WelcomeStep', () => {
     // Then: Intro copy and preflight CTA are visible
     expect(
       screen.getByText(
-        'HomeSec helps you capture, analyze, and review security clips from your cameras.',
+        'HomeSec helps you capture, analyze, and review security events from your cameras.',
       ),
     ).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Run checks' })).toBeTruthy()
@@ -110,7 +110,7 @@ describe('WelcomeStep', () => {
     // Then: Operator gets explicit auth guidance rather than generic crash
     expect(
       screen.getByText(
-        'Authentication required to run setup checks. Apply API key from Dashboard and retry.',
+        'Authentication required to run setup checks. Apply API key from Settings and retry.',
       ),
     ).toBeTruthy()
   })

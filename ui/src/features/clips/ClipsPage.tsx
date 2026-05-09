@@ -284,8 +284,8 @@ export function ClipsPage() {
     <section className="page fade-in-up">
       <header className="page__header">
         <div>
-          <h1 className="page__title">Clips</h1>
-          <p className="page__lead">Filter and page through clips with URL-synced state.</p>
+          <h1 className="page__title">Events</h1>
+          <p className="page__lead">Filter and page through recorded security events.</p>
         </div>
         <Button variant="ghost" onClick={refreshClips} disabled={clipsQuery.isFetching}>
           {clipsQuery.isFetching ? 'Refreshing...' : 'Refresh'}
@@ -300,9 +300,9 @@ export function ClipsPage() {
         onReset={resetFilters}
       />
 
-      <Card title="Results" subtitle={clipItems.length > 0 ? `${clipItems.length} clip(s)` : undefined}>
+      <Card title="Results" subtitle={clipItems.length > 0 ? `${clipItems.length} event(s)` : undefined}>
         {clipsQuery.isPending ? (
-          <p className="muted">Loading clips...</p>
+          <p className="muted">Loading events...</p>
         ) : null}
 
         {unauthorized ? (
@@ -318,7 +318,7 @@ export function ClipsPage() {
         ) : null}
 
         {!clipsQuery.isPending && !clipsQuery.error && clipItems.length === 0 ? (
-          <p className="muted">No clips match the current filters.</p>
+          <p className="muted">No events match the current filters.</p>
         ) : null}
 
         {clipItems.length > 0 ? (
@@ -341,7 +341,7 @@ export function ClipsPage() {
                   {clipItems.map((clip) => (
                     <tr key={clip.id}>
                       <td>
-                        <Link to={`/clips/${clip.id}`}>{clip.id}</Link>
+                        <Link to={`/events/${encodeURIComponent(clip.id)}`}>{clip.id}</Link>
                       </td>
                       <td>{clip.camera}</td>
                       <td>
@@ -361,7 +361,7 @@ export function ClipsPage() {
             <ul className="clips-mobile-list">
               {clipItems.map((clip) => (
                 <li key={clip.id} className="clips-mobile-item">
-                  <Link to={`/clips/${clip.id}`} className="clips-mobile-id">
+                  <Link to={`/events/${encodeURIComponent(clip.id)}`} className="clips-mobile-id">
                     {clip.id}
                   </Link>
                   <p className="muted">{clip.camera}</p>

@@ -23,7 +23,7 @@ describe('healthTone', () => {
 describe('formatLastUpdated', () => {
   it('returns placeholder text for empty timestamps', () => {
     // Given: No successful query update timestamp
-    // When: Formatting for dashboard display
+    // When: Formatting for system display
     // Then: A placeholder string should be returned
     expect(formatLastUpdated(0)).toBe('Not yet updated')
   })

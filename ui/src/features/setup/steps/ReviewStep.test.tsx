@@ -44,7 +44,7 @@ describe('ReviewStep', () => {
         skippedSteps={new Set(['storage'])}
         onGoToStep={onGoToStep}
         onLaunchSuccess={vi.fn()}
-        onGoDashboard={vi.fn()}
+        onGoLive={vi.fn()}
       />,
     )
     const user = userEvent.setup()
@@ -62,7 +62,7 @@ describe('ReviewStep', () => {
   it('launches setup and transitions to started state when pipeline health becomes ready', async () => {
     // Given: Finalize precheck + launch succeed and setup status poll reports running pipeline
     const onLaunchSuccess = vi.fn()
-    const onGoDashboard = vi.fn()
+    const onGoLive = vi.fn()
     const precheckResponse: FinalizeSnapshot = {
       success: true,
       config_path: '/tmp/config.yaml',
@@ -101,7 +101,7 @@ describe('ReviewStep', () => {
         skippedSteps={new Set<string>()}
         onGoToStep={vi.fn()}
         onLaunchSuccess={onLaunchSuccess}
-        onGoDashboard={onGoDashboard}
+        onGoLive={onGoLive}
       />,
     )
     const user = userEvent.setup()
@@ -109,7 +109,7 @@ describe('ReviewStep', () => {
     // When: Launch is requested from review step
     await user.click(screen.getByRole('button', { name: 'Launch pipeline' }))
 
-    // Then: Finalize runs, launch success callback fires, and dashboard action becomes available
+    // Then: Finalize runs, launch success callback fires, and live action becomes available
     await waitFor(() => {
       expect(finalizeMutationState.mutateAsync).toHaveBeenCalledTimes(2)
       expect(finalizeMutationState.mutateAsync).toHaveBeenNthCalledWith(
@@ -127,11 +127,11 @@ describe('ReviewStep', () => {
         }),
       )
       expect(onLaunchSuccess).toHaveBeenCalledTimes(1)
-      expect(screen.getByRole('button', { name: 'Go to Dashboard' })).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Go to Live' })).toBeTruthy()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Go to Dashboard' }))
-    expect(onGoDashboard).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Go to Live' }))
+    expect(onGoLive).toHaveBeenCalledTimes(1)
   })
 
   it('surfaces precheck errors and skips launch polling', async () => {
@@ -161,7 +161,7 @@ describe('ReviewStep', () => {
         skippedSteps={new Set<string>()}
         onGoToStep={vi.fn()}
         onLaunchSuccess={vi.fn()}
-        onGoDashboard={vi.fn()}
+        onGoLive={vi.fn()}
       />,
     )
     const user = userEvent.setup()
@@ -234,7 +234,7 @@ describe('ReviewStep', () => {
         skippedSteps={new Set<string>()}
         onGoToStep={vi.fn()}
         onLaunchSuccess={vi.fn()}
-        onGoDashboard={vi.fn()}
+        onGoLive={vi.fn()}
       />,
     )
     const user = userEvent.setup()

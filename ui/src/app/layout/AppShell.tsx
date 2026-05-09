@@ -1,30 +1,57 @@
 import { NavLink, Outlet } from 'react-router-dom'
 
+import { useHealthQuery } from '../../api/hooks/useHealthQuery'
 import { useTheme } from '../providers/theme-context'
 
-const NAV_LINKS = [
-  { to: '/', label: 'Dashboard' },
+const DESKTOP_NAV_LINKS = [
+  { to: '/live', label: 'Live' },
+  { to: '/events', label: 'Events' },
   { to: '/cameras', label: 'Cameras' },
-  { to: '/clips', label: 'Clips' },
-  { to: '/setup', label: 'Setup' },
+  { to: '/settings', label: 'Settings' },
+  { to: '/system', label: 'System' },
+]
+
+const MOBILE_NAV_LINKS = [
+  { to: '/live', label: 'Live' },
+  { to: '/events', label: 'Events' },
+  { to: '/cameras', label: 'Cameras' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'nav-link nav-link--active' : 'nav-link'
 }
 
+function mobileNavLinkClassName({ isActive }: { isActive: boolean }): string {
+  return isActive ? 'mobile-nav-link mobile-nav-link--active' : 'mobile-nav-link'
+}
+
+function systemStatusText(status: string | undefined, isError: boolean): string {
+  if (isError) {
+    return 'System unavailable'
+  }
+  if (!status) {
+    return 'Checking system'
+  }
+  if (status === 'healthy') {
+    return 'System OK'
+  }
+  return `System ${status}`
+}
+
 export function AppShell() {
   const { theme, toggleTheme } = useTheme()
+  const healthQuery = useHealthQuery()
 
   return (
     <div className="app-shell">
       <div className="app-shell__background" />
       <aside className="app-shell__sidebar">
-        <p className="app-shell__brand">HOMESEC</p>
-        <h1 className="app-shell__title">Control Plane</h1>
+        <p className="app-shell__brand">HomeSec</p>
+        <h1 className="app-shell__title">Home security</h1>
         <nav className="app-shell__nav" aria-label="Primary">
-          {NAV_LINKS.map((link) => (
-            <NavLink key={link.to} to={link.to} end={link.to === '/'} className={navLinkClassName}>
+          {DESKTOP_NAV_LINKS.map((link) => (
+            <NavLink key={link.to} to={link.to} className={navLinkClassName}>
               {link.label}
             </NavLink>
           ))}
@@ -33,7 +60,9 @@ export function AppShell() {
 
       <div className="app-shell__main">
         <header className="app-shell__header">
-          <p className="app-shell__header-text">MVP self-serve</p>
+          <NavLink className="app-shell__header-status" to="/system">
+            {systemStatusText(healthQuery.data?.status, healthQuery.isError)}
+          </NavLink>
           <button type="button" className="button button--ghost" onClick={toggleTheme}>
             Theme: {theme === 'dark' ? 'Dark' : 'Light'}
           </button>
@@ -42,6 +71,14 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      <nav className="mobile-bottom-nav" aria-label="Mobile primary">
+        {MOBILE_NAV_LINKS.map((link) => (
+          <NavLink key={link.to} to={link.to} className={mobileNavLinkClassName}>
+            {link.label}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   )
 }
