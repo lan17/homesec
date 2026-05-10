@@ -59,18 +59,23 @@ describe('BrowserServerBaseUrlProvider', () => {
     expect(afterClear).toBe('http://localhost:8081')
   })
 
-  it('falls back to the build-time base URL when runtime value is blank', async () => {
+  it('distinguishes explicit same-origin override from clearing runtime config', async () => {
     // Given: A provider with a stored runtime value and Vite-provided fallback
     const storage = createStorage()
     const provider = new BrowserServerBaseUrlProvider('http://localhost:8081', () => storage)
     await provider.setBaseUrl('http://192.168.1.10:8081')
 
-    // When: Replacing the runtime value with a blank string
+    // When: Replacing the runtime value with a blank string and then clearing it
     await provider.setBaseUrl('   ')
-    const resolved = await provider.getBaseUrl()
+    const sameOrigin = await provider.getBaseUrl()
+    const persistedSameOrigin = storage.values.get(BROWSER_SERVER_BASE_URL_STORAGE_KEY)
+    await provider.clearBaseUrl()
+    const afterClear = await provider.getBaseUrl()
 
-    // Then: Blank runtime values are cleared and the fallback is used
-    expect(resolved).toBe('http://localhost:8081')
+    // Then: Blank runtime values force same-origin; explicit clearing returns to fallback
+    expect(sameOrigin).toBeNull()
+    expect(persistedSameOrigin).toBe('')
+    expect(afterClear).toBe('http://localhost:8081')
     expect(storage.values.has(BROWSER_SERVER_BASE_URL_STORAGE_KEY)).toBe(false)
   })
 })

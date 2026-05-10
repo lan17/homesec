@@ -50,8 +50,12 @@ export class BrowserServerBaseUrlProvider implements ClientServerBaseUrlProvider
 
   getBaseUrlSync(): string | null {
     const storage = this.getStorage()
-    const stored = storage ? normalizeServerBaseUrl(storage.getItem(this.storageKey)) : null
-    return stored ?? this.fallbackBaseUrl
+    const stored = storage?.getItem(this.storageKey)
+    if (stored !== null && stored !== undefined) {
+      return normalizeServerBaseUrl(stored)
+    }
+
+    return this.fallbackBaseUrl
   }
 
   setBaseUrlSync(value: string | null): void {
@@ -60,13 +64,12 @@ export class BrowserServerBaseUrlProvider implements ClientServerBaseUrlProvider
       return
     }
 
-    const normalized = normalizeServerBaseUrl(value)
-    if (!normalized) {
+    if (value === null) {
       storage.removeItem(this.storageKey)
       return
     }
 
-    storage.setItem(this.storageKey, normalized)
+    storage.setItem(this.storageKey, normalizeServerBaseUrl(value) ?? '')
   }
 
   clearBaseUrlSync(): void {
