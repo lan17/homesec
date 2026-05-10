@@ -5,6 +5,7 @@ import { CamerasPage } from '../features/cameras/CamerasPage'
 import { ClipDetailPage } from '../features/clips/ClipDetailPage'
 import { ClipsPage } from '../features/clips/ClipsPage'
 import { LivePage } from '../features/live/LivePage'
+import { NativeSetupPage } from '../features/native-setup/NativeSetupPage'
 import { NotFoundPage } from '../features/not-found/NotFoundPage'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { SetupPage } from '../features/setup/SetupPage'
@@ -25,6 +26,7 @@ export function AppRouter() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
+      <Route path="/native-setup" element={<NativeSetupPage />} />
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/live" replace />} />
         <Route path="/live" element={<LivePage />} />

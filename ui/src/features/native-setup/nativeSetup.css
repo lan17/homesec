@@ -1,0 +1,70 @@
+.native-setup-page {
+  min-height: 100vh;
+  padding: var(--space-6);
+  display: grid;
+  place-items: center;
+}
+
+.native-setup-panel {
+  width: min(560px, 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-1) 82%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+  padding: var(--space-6);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.native-setup-panel__header {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.native-setup-panel__title {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.native-setup-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.native-setup-form__field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.native-setup-status,
+.native-setup-warning {
+  border: 1px solid color-mix(in srgb, var(--success) 36%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--success);
+  padding: 0.7rem 0.8rem;
+}
+
+.native-setup-warning {
+  border-color: color-mix(in srgb, var(--warning) 44%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+}
+
+.native-setup-warning--strong {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .native-setup-page {
+    padding: var(--space-4);
+    align-items: stretch;
+  }
+
+  .native-setup-panel {
+    padding: var(--space-4);
+  }
+}

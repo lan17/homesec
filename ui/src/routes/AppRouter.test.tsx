@@ -46,6 +46,10 @@ vi.mock('../features/setup/SetupPage', () => ({
   SetupPage: () => <p>Setup Page</p>,
 }))
 
+vi.mock('../features/native-setup/NativeSetupPage', () => ({
+  NativeSetupPage: () => <p>Native Setup Page</p>,
+}))
+
 function LocationProbe() {
   const location = useLocation()
   return <p data-testid="location">{`${location.pathname}${location.search}`}</p>
@@ -102,6 +106,16 @@ describe('AppRouter route cleanup', () => {
 
     // Then: Runtime-style content is reached through System
     expect(screen.getByText('System Page')).toBeTruthy()
+  })
+
+  it('renders native setup without mounting app shell queries', () => {
+    // Given: User opens the native setup route before API settings exist
+    renderRouter('/native-setup')
+
+    // When / Then: The native setup surface is isolated from shell API queries
+    expect(screen.getByText('Native Setup Page')).toBeTruthy()
+    expect(useHealthQueryMock).not.toHaveBeenCalled()
+    expect(useCamerasQueryMock).not.toHaveBeenCalled()
   })
 
   it('redirects the old cameras route to Settings camera setup', async () => {
