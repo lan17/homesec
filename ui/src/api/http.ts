@@ -1,7 +1,12 @@
 import type { ApiRequestOptions } from './generated/client'
 
-import { resolveApiKey } from './apiKeyStorage'
 import { APIError, extractAPIErrorEnvelope } from './errors'
+import {
+  browserAuthTokenProvider,
+  resolveAuthToken,
+  type AuthTokenProvider,
+} from './tokenProvider'
+import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
 
 type QueryValue = string | number | boolean | null | undefined
 
@@ -15,6 +20,11 @@ export interface RequestJsonOptions extends ApiRequestOptions {
 export interface JsonResponse {
   status: number
   payload: unknown
+}
+
+export interface JsonHttpClientOptions {
+  authTokenProvider?: AuthTokenProvider
+  serverBaseUrlProvider?: ClientServerBaseUrlProvider
 }
 
 function joinUrl(baseUrl: string, path: string): string {
@@ -72,13 +82,29 @@ async function parseResponsePayload(response: Response): Promise<unknown> {
 
 export class JsonHttpClient {
   private readonly baseUrl: string
+  private readonly authTokenProvider: AuthTokenProvider
+  private readonly serverBaseUrlProvider: ClientServerBaseUrlProvider | undefined
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options: JsonHttpClientOptions = {}) {
     this.baseUrl = baseUrl
+    this.authTokenProvider = options.authTokenProvider ?? browserAuthTokenProvider
+    this.serverBaseUrlProvider = options.serverBaseUrlProvider
+  }
+
+  private resolveBaseUrlSync(): string {
+    return this.serverBaseUrlProvider?.getBaseUrlSync() ?? this.baseUrl
+  }
+
+  private async resolveBaseUrl(): Promise<string> {
+    if (!this.serverBaseUrlProvider) {
+      return this.baseUrl
+    }
+
+    return (await this.serverBaseUrlProvider.getBaseUrl()) ?? this.baseUrl
   }
 
   resolvePath(path: string): string {
-    return joinUrl(this.baseUrl, path)
+    return joinUrl(this.resolveBaseUrlSync(), path)
   }
 
   async requestJson(
@@ -86,9 +112,11 @@ export class JsonHttpClient {
     { signal, apiKey, allowStatuses = [], query, method = 'GET', body }: RequestJsonOptions,
   ): Promise<JsonResponse> {
     const hasJsonBody = body !== undefined
-    const response = await fetch(joinUrl(this.baseUrl, withQueryString(path, query)), {
+    const resolvedApiKey = await resolveAuthToken(apiKey, this.authTokenProvider)
+    const resolvedBaseUrl = await this.resolveBaseUrl()
+    const response = await fetch(joinUrl(resolvedBaseUrl, withQueryString(path, query)), {
       method,
-      headers: buildHeaders(resolveApiKey(apiKey), hasJsonBody),
+      headers: buildHeaders(resolvedApiKey, hasJsonBody),
       signal,
       body: hasJsonBody ? JSON.stringify(body) : undefined,
     })

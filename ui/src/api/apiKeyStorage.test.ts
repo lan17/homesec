@@ -62,4 +62,19 @@ describe('apiKeyStorage', () => {
     expect(explicit).toBe('explicit-secret')
     expect(implicit).toBe('stored-secret')
   })
+
+  it('normalizes blank API key values as absent', () => {
+    // Given: A browser storage area and a whitespace API key
+    installWindowSessionStorageMock()
+
+    // When: Saving a blank key value
+    saveApiKey('   ')
+    const stored = getStoredApiKey()
+    const hasKey = hasStoredApiKey()
+
+    // Then: Blank keys are treated as missing credentials
+    expect(stored).toBeNull()
+    expect(hasKey).toBe(false)
+    expect(resolveApiKey('  ')).toBeNull()
+  })
 })

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { JsonHttpClient } from './http'
+import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import type { AuthTokenProvider } from './tokenProvider'
 
 function installWindowSessionStorageMock(): void {
   const store = new Map<string, string>()
@@ -28,7 +30,7 @@ describe('JsonHttpClient.requestJson', () => {
 
   it('serializes query params, auth header, and JSON body', async () => {
     // Given: A fetch mock and an authenticated POST request with query/body
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -66,7 +68,7 @@ describe('JsonHttpClient.requestJson', () => {
     // Given: A stored API key and a request without explicit apiKey option
     installWindowSessionStorageMock()
     window.sessionStorage.setItem('homesec.apiKey', 'stored-secret')
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -84,6 +86,67 @@ describe('JsonHttpClient.requestJson', () => {
         Authorization: 'Bearer stored-secret',
       },
     })
+  })
+
+  it('supports an injected auth token provider for native runtime storage', async () => {
+    // Given: A client backed by a custom token provider
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const authTokenProvider: AuthTokenProvider = {
+      getToken: vi.fn().mockResolvedValue('provider-secret'),
+      setToken: vi.fn(),
+      clearToken: vi.fn(),
+    }
+    const client = new JsonHttpClient('http://localhost:8081', { authTokenProvider })
+
+    // When: Sending a request without an explicit apiKey option
+    await client.requestJson('/api/v1/health', {})
+
+    // Then: Authorization header is derived from the injected provider
+    expect(authTokenProvider.getToken).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer provider-secret',
+      },
+    })
+  })
+
+  it('resolves request paths through the base URL provider at call time', async () => {
+    // Given: A client backed by a runtime-configurable base URL provider
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    let baseUrl: string | null = 'http://localhost:8081'
+    const serverBaseUrlProvider = {
+      getBaseUrl: vi.fn(async () => baseUrl),
+      setBaseUrl: vi.fn(async (value: string | null) => {
+        baseUrl = value
+      }),
+      clearBaseUrl: vi.fn(async () => {
+        baseUrl = null
+      }),
+      getBaseUrlSync: (): string | null => baseUrl,
+    } satisfies ClientServerBaseUrlProvider
+    const client = new JsonHttpClient('', { serverBaseUrlProvider })
+
+    // When: The runtime base URL changes after the client is constructed
+    await client.requestJson('/api/v1/health', {})
+    await serverBaseUrlProvider.setBaseUrl('http://192.168.1.10:8081')
+    const resolvedPath = client.resolvePath('/api/v1/clips')
+    await client.requestJson('/api/v1/stats', {})
+
+    // Then: Requests and path resolution use the current provider value
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:8081/api/v1/health')
+    expect(resolvedPath).toBe('http://192.168.1.10:8081/api/v1/clips')
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('http://192.168.1.10:8081/api/v1/stats')
   })
 
   it('throws APIError with canonical metadata for non-allowed non-2xx responses', async () => {

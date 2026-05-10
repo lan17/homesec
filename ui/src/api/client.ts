@@ -39,6 +39,9 @@ import type {
 } from './generated/types'
 
 import { JsonHttpClient } from './http'
+import { createBrowserServerBaseUrlProvider } from './serverBaseUrlProvider'
+import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import type { AuthTokenProvider } from './tokenProvider'
 import type { ApiSnapshot, ClipMediaTokenResponsePayload } from './parsing'
 import {
   parseCameraListResponse,
@@ -72,6 +75,11 @@ import { APIError } from './errors'
 
 const DEFAULT_API_BASE_URL = ''
 
+export interface HomeSecApiClientOptions {
+  authTokenProvider?: AuthTokenProvider
+  serverBaseUrlProvider?: ClientServerBaseUrlProvider
+}
+
 export type HealthSnapshot = ApiSnapshot<HealthResponse>
 export type StatsSnapshot = ApiSnapshot<StatsResponse>
 export type DiagnosticsSnapshot = ApiSnapshot<DiagnosticsResponse>
@@ -97,8 +105,11 @@ export type ClipMediaTokenSnapshot = ApiSnapshot<ClipMediaTokenResponsePayload>
 export class HomeSecApiClient implements GeneratedHomeSecClient {
   private readonly httpClient: JsonHttpClient
 
-  constructor(baseUrl = DEFAULT_API_BASE_URL) {
-    this.httpClient = new JsonHttpClient(baseUrl)
+  constructor(baseUrl = DEFAULT_API_BASE_URL, options: HomeSecApiClientOptions = {}) {
+    this.httpClient = new JsonHttpClient(baseUrl, {
+      authTokenProvider: options.authTokenProvider,
+      serverBaseUrlProvider: options.serverBaseUrlProvider,
+    })
   }
 
   async getCameras(options: ApiRequestOptions = {}): Promise<CameraListResponse> {
@@ -602,7 +613,28 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
   }
 }
 
-export const apiClient = new HomeSecApiClient(import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL)
+export const browserServerBaseUrlProvider = createBrowserServerBaseUrlProvider(
+  import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL,
+)
+
+export const apiClient = new HomeSecApiClient(
+  DEFAULT_API_BASE_URL,
+  { serverBaseUrlProvider: browserServerBaseUrlProvider },
+)
 
 export { APIError, isAPIError, isUnauthorizedAPIError } from './errors'
 export { clearApiKey, getStoredApiKey, hasStoredApiKey, saveApiKey } from './apiKeyStorage'
+export {
+  BROWSER_SERVER_BASE_URL_STORAGE_KEY,
+  BrowserServerBaseUrlProvider,
+  createBrowserServerBaseUrlProvider,
+  normalizeServerBaseUrl,
+} from './serverBaseUrlProvider'
+export {
+  BROWSER_AUTH_TOKEN_STORAGE_KEY,
+  BrowserAuthTokenProvider,
+  browserAuthTokenProvider,
+  normalizeAuthToken,
+} from './tokenProvider'
+export type { AuthTokenProvider } from './tokenProvider'
+export type { ClientServerBaseUrlProvider, ServerBaseUrlProvider } from './serverBaseUrlProvider'
