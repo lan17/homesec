@@ -41,6 +41,10 @@ import type {
 import { JsonHttpClient } from './http'
 import { createBrowserServerBaseUrlProvider } from './serverBaseUrlProvider'
 import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import {
+  hasAuthToken,
+  runtimeAuthTokenProvider,
+} from './tokenProvider'
 import type { AuthTokenProvider } from './tokenProvider'
 import type { ApiSnapshot, ClipMediaTokenResponsePayload } from './parsing'
 import {
@@ -619,8 +623,15 @@ export const browserServerBaseUrlProvider = createBrowserServerBaseUrlProvider(
 
 export const apiClient = new HomeSecApiClient(
   DEFAULT_API_BASE_URL,
-  { serverBaseUrlProvider: browserServerBaseUrlProvider },
+  {
+    authTokenProvider: runtimeAuthTokenProvider,
+    serverBaseUrlProvider: browserServerBaseUrlProvider,
+  },
 )
+
+export function hasConfiguredApiToken(): boolean {
+  return hasAuthToken(runtimeAuthTokenProvider)
+}
 
 export { APIError, isAPIError, isUnauthorizedAPIError } from './errors'
 export { clearApiKey, getStoredApiKey, hasStoredApiKey, saveApiKey } from './apiKeyStorage'
@@ -631,10 +642,18 @@ export {
   normalizeServerBaseUrl,
 } from './serverBaseUrlProvider'
 export {
+  BROWSER_AUTH_DISABLED_SESSION_READY_STORAGE_KEY,
   BROWSER_AUTH_TOKEN_STORAGE_KEY,
   BrowserAuthTokenProvider,
   browserAuthTokenProvider,
+  clearRuntimeAuthSessionReady,
+  hasAuthToken,
+  InMemoryAuthTokenProvider,
+  isRuntimeAuthSessionReady,
+  markRuntimeAuthSessionReady,
+  nativeAuthTokenProvider,
   normalizeAuthToken,
+  runtimeAuthTokenProvider,
 } from './tokenProvider'
-export type { AuthTokenProvider } from './tokenProvider'
+export type { AuthTokenProvider, SyncAuthTokenProvider } from './tokenProvider'
 export type { ClientServerBaseUrlProvider, ServerBaseUrlProvider } from './serverBaseUrlProvider'

@@ -33,8 +33,8 @@ pnpm ios:run
 ```
 
 `ios:build` builds the Vite app and copies web assets into the Capacitor iOS
-project. `ios:sync` also updates native dependencies, `ios:open` opens the Xcode
-project, and `ios:run` syncs and launches the app through Capacitor.
+project. `ios:sync` also updates native dependencies, `ios:open` syncs and opens
+the Xcode project, and `ios:run` syncs and launches the app through Capacitor.
 
 Make target shortcuts are available too:
 

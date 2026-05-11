@@ -1,13 +1,17 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
-import { BROWSER_AUTH_TOKEN_STORAGE_KEY } from '../../api/tokenProvider'
+import {
+  BROWSER_AUTH_TOKEN_STORAGE_KEY,
+  InMemoryAuthTokenProvider,
+} from '../../api/tokenProvider'
 import { BROWSER_SERVER_BASE_URL_STORAGE_KEY } from '../../api/serverBaseUrlProvider'
-import { NativeSetupPage } from './NativeSetupPage'
+import { NativeSetupPage, type NativeSetupPageProps } from './NativeSetupPage'
 
 const HEALTH_PAYLOAD = {
   status: 'healthy',
@@ -35,15 +39,41 @@ function authorizationHeader(call: Parameters<typeof fetch>[1] | undefined): str
     : undefined
 }
 
-function renderNativeSetup(): void {
+function createTestQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+}
+
+function renderNativeSetup(
+  props: NativeSetupPageProps = {},
+  queryClient: QueryClient = createTestQueryClient(),
+  setupState: unknown = undefined,
+): QueryClient {
+  const initialEntry =
+    setupState === undefined
+      ? '/native-setup'
+      : {
+          pathname: '/native-setup',
+          state: setupState,
+        }
+
   render(
-    <MemoryRouter initialEntries={['/native-setup']}>
-      <Routes>
-        <Route path="/native-setup" element={<NativeSetupPage />} />
-        <Route path="/live" element={<p>Live route</p>} />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/native-setup" element={<NativeSetupPage {...props} />} />
+          <Route path="/live" element={<p>Live route</p>} />
+          <Route path="/events/:clipId" element={<p>Event route</p>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   )
+  return queryClient
 }
 
 describe('NativeSetupPage', () => {
@@ -145,6 +175,102 @@ describe('NativeSetupPage', () => {
 
     // Then: Warning state from the previous validated URL is cleared
     expect(screen.queryByText('Plain HTTP is visible on the network. Prefer HTTPS or VPN for iOS access.')).toBeNull()
+  })
+
+  it('clears stale token input when the validated server URL changes', async () => {
+    // Given: User validated a protected server and entered its API token
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+    renderNativeSetup()
+    await user.type(screen.getByLabelText('Server URL'), 'https://homesec.example.com')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'token-for-first-server')
+
+    // When: The server URL field changes before saving
+    await user.clear(screen.getByLabelText('Server URL'))
+    await user.type(screen.getByLabelText('Server URL'), 'https://homesec-new.example.com')
+
+    // Then: The previous server token cannot be saved against the new server
+    expect((screen.getByLabelText('API token') as HTMLInputElement).value).toBe('')
+  })
+
+  it('can save tokens through an in-memory provider without writing browser token storage', async () => {
+    // Given: Native setup uses an in-memory token provider
+    const user = userEvent.setup()
+    const authTokenProvider = new InMemoryAuthTokenProvider()
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+      .mockResolvedValueOnce(jsonResponse([]))
+    renderNativeSetup({ authTokenProvider })
+
+    // When: User validates and saves a protected server
+    await user.type(screen.getByLabelText('Server URL'), 'https://homesec.example.com')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'native-token')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    // Then: The token is available to API clients through the provider only
+    await waitFor(() => {
+      expect(screen.getByText('Live route')).toBeTruthy()
+    })
+    expect(await authTokenProvider.getToken()).toBe('native-token')
+    expect(window.sessionStorage.getItem(BROWSER_AUTH_TOKEN_STORAGE_KEY)).toBeNull()
+  })
+
+  it('clears cached API data after saving a server URL', async () => {
+    // Given: Cached data from a previous HomeSec server
+    const user = userEvent.setup()
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(['cameras'], [{ name: 'old-server-camera' }])
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+      .mockResolvedValueOnce(jsonResponse([]))
+    renderNativeSetup({}, queryClient)
+
+    // When: User validates and saves a new server
+    await user.type(screen.getByLabelText('Server URL'), 'https://homesec.example.com')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'token-123')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    // Then: Server-agnostic React Query cache entries cannot leak across servers
+    await waitFor(() => {
+      expect(screen.getByText('Live route')).toBeTruthy()
+    })
+    expect(queryClient.getQueryData(['cameras'])).toBeUndefined()
+  })
+
+  it('returns to the requested route after native setup succeeds', async () => {
+    // Given: Setup was opened by a guard for an event deep link
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+      .mockResolvedValueOnce(jsonResponse([]))
+    renderNativeSetup(
+      {},
+      createTestQueryClient(),
+      { nativeSetupReturnTo: '/events/clip-42?camera=front' },
+    )
+
+    // When: User completes setup
+    await user.type(screen.getByLabelText('Server URL'), 'https://homesec.example.com')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'token-123')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    // Then: The original route intent wins over the default Live destination
+    await waitFor(() => {
+      expect(screen.getByText('Event route')).toBeTruthy()
+    })
   })
 
   it('warns and allows continuing when auth-disabled mode is detectable', async () => {

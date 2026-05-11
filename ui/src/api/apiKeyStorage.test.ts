@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  API_KEY_STORAGE_KEY,
   clearApiKey,
   getStoredApiKey,
   hasStoredApiKey,
@@ -76,5 +77,30 @@ describe('apiKeyStorage', () => {
     expect(stored).toBeNull()
     expect(hasKey).toBe(false)
     expect(resolveApiKey('  ')).toBeNull()
+  })
+
+  it('uses the native runtime token provider when iOS mode is active', async () => {
+    // Given: The runtime is loaded in native iOS mode with browser session storage available
+    vi.resetModules()
+    installWindowSessionStorageMock()
+    vi.doMock('../runtime/nativeRuntime', () => ({
+      isIOSNativeApp: () => true,
+    }))
+    const nativeApiKeyStorage = await import('./apiKeyStorage')
+    const tokenProvider = await import('./tokenProvider')
+
+    // When: The shared auth recovery helpers save an API key
+    nativeApiKeyStorage.saveApiKey(' native-secret ')
+    const stored = nativeApiKeyStorage.getStoredApiKey()
+    const ready = tokenProvider.isRuntimeAuthSessionReady()
+    nativeApiKeyStorage.clearApiKey()
+
+    // Then: The iOS API client token source is updated without writing WebView storage
+    expect(stored).toBe('native-secret')
+    expect(ready).toBe(true)
+    expect(tokenProvider.nativeAuthTokenProvider.getTokenSync()).toBeNull()
+    expect(window.sessionStorage.getItem(API_KEY_STORAGE_KEY)).toBeNull()
+
+    vi.doUnmock('../runtime/nativeRuntime')
   })
 })

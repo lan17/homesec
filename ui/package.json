@@ -18,7 +18,7 @@
     "build": "pnpm typecheck && vite build",
     "ios:build": "pnpm build && cap copy ios",
     "ios:sync": "pnpm build && cap sync ios",
-    "ios:open": "cap open ios",
+    "ios:open": "pnpm ios:sync && cap open ios",
     "ios:run": "pnpm ios:sync && cap run ios",
     "lint": "eslint .",
     "check": "pnpm api:check && pnpm lint && pnpm test && pnpm build",

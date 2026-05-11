@@ -1,12 +1,14 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
   HomeSecApiClient,
-  browserAuthTokenProvider,
   browserServerBaseUrlProvider,
   isAPIError,
   isUnauthorizedAPIError,
+  markRuntimeAuthSessionReady,
+  runtimeAuthTokenProvider,
 } from '../../api/client'
 import type { AuthTokenProvider, ClientServerBaseUrlProvider } from '../../api/client'
 import { Button } from '../../components/ui/Button'
@@ -48,12 +50,32 @@ function describeTokenError(error: unknown): string {
   return 'Unable to validate the API token. Try again.'
 }
 
+function nativeSetupReturnTo(state: unknown): string {
+  if (!state || typeof state !== 'object') {
+    return '/live'
+  }
+
+  const returnTo = (state as { nativeSetupReturnTo?: unknown }).nativeSetupReturnTo
+  if (
+    typeof returnTo !== 'string' ||
+    !returnTo.startsWith('/') ||
+    returnTo.startsWith('//') ||
+    returnTo === '/native-setup'
+  ) {
+    return '/live'
+  }
+
+  return returnTo
+}
+
 export function NativeSetupPage({
-  authTokenProvider = browserAuthTokenProvider,
+  authTokenProvider = runtimeAuthTokenProvider,
   createClient = (baseUrl: string) => new HomeSecApiClient(baseUrl),
   serverBaseUrlProvider = browserServerBaseUrlProvider,
 }: NativeSetupPageProps = {}) {
   const navigate = useNavigate()
+  const location = useLocation()
+  const queryClient = useQueryClient()
   const [serverUrl, setServerUrl] = useState('')
   const [apiToken, setApiToken] = useState('')
   const [validatedServerUrl, setValidatedServerUrl] = useState<string | null>(null)
@@ -67,6 +89,7 @@ export function NativeSetupPage({
 
   function handleServerUrlChange(value: string): void {
     setServerUrl(value)
+    setApiToken('')
     setValidatedServerUrl(null)
     setIsPlainHttp(false)
     setAuthDisabled(false)
@@ -142,7 +165,9 @@ export function NativeSetupPage({
       }
       await serverBaseUrlProvider.setBaseUrl(validatedServerUrl)
       await authTokenProvider.setToken(authDisabled ? null : apiKey || null)
-      navigate('/live', { replace: true })
+      markRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })
+      queryClient.clear()
+      navigate(nativeSetupReturnTo(location.state), { replace: true })
     } catch (error) {
       setTokenError(describeTokenError(error))
     } finally {

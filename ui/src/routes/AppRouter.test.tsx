@@ -1,14 +1,33 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 
 import { ThemeProvider } from '../app/providers/ThemeProvider'
 import { AppRouter } from './AppRouter'
 
-const useHealthQueryMock = vi.fn()
-const useCamerasQueryMock = vi.fn()
+const routeMocks = vi.hoisted(() => ({
+  getBaseUrlSync: vi.fn<() => string | null>(() => null),
+  isRuntimeAuthSessionReady: vi.fn<() => boolean>(() => true),
+  isIOSNativeApp: vi.fn<() => boolean>(() => false),
+  useCamerasQuery: vi.fn(),
+  useHealthQuery: vi.fn(),
+}))
+
+const useHealthQueryMock = routeMocks.useHealthQuery
+const useCamerasQueryMock = routeMocks.useCamerasQuery
+
+vi.mock('../api/client', () => ({
+  browserServerBaseUrlProvider: {
+    getBaseUrlSync: () => routeMocks.getBaseUrlSync(),
+  },
+  isRuntimeAuthSessionReady: () => routeMocks.isRuntimeAuthSessionReady(),
+}))
+
+vi.mock('../runtime/nativeRuntime', () => ({
+  isIOSNativeApp: () => routeMocks.isIOSNativeApp(),
+}))
 
 vi.mock('../api/hooks/useHealthQuery', () => ({
   useHealthQuery: () => useHealthQueryMock(),
@@ -47,7 +66,16 @@ vi.mock('../features/setup/SetupPage', () => ({
 }))
 
 vi.mock('../features/native-setup/NativeSetupPage', () => ({
-  NativeSetupPage: () => <p>Native Setup Page</p>,
+  NativeSetupPage: () => {
+    const location = useLocation()
+    const state = location.state as { nativeSetupReturnTo?: string } | null
+    return (
+      <>
+        <p>Native Setup Page</p>
+        <p data-testid="native-setup-return-to">{state?.nativeSetupReturnTo ?? ''}</p>
+      </>
+    )
+  },
 }))
 
 function LocationProbe() {
@@ -76,10 +104,19 @@ function renderRouter(initialPath: string) {
 }
 
 describe('AppRouter route cleanup', () => {
+  beforeEach(() => {
+    routeMocks.getBaseUrlSync.mockReturnValue(null)
+    routeMocks.isRuntimeAuthSessionReady.mockReturnValue(true)
+    routeMocks.isIOSNativeApp.mockReturnValue(false)
+  })
+
   afterEach(() => {
     cleanup()
     useHealthQueryMock.mockReset()
     useCamerasQueryMock.mockReset()
+    routeMocks.getBaseUrlSync.mockReset()
+    routeMocks.isRuntimeAuthSessionReady.mockReset()
+    routeMocks.isIOSNativeApp.mockReset()
   })
 
   it('redirects the root route to Live', async () => {
@@ -116,6 +153,77 @@ describe('AppRouter route cleanup', () => {
     expect(screen.getByText('Native Setup Page')).toBeTruthy()
     expect(useHealthQueryMock).not.toHaveBeenCalled()
     expect(useCamerasQueryMock).not.toHaveBeenCalled()
+  })
+
+  it('redirects iOS shell routes to native setup until a server URL is configured', async () => {
+    // Given: The iOS shell starts without a configured HomeSec server URL
+    routeMocks.isIOSNativeApp.mockReturnValue(true)
+    routeMocks.getBaseUrlSync.mockReturnValue(null)
+
+    // When: User opens the default shell route
+    renderRouter('/live')
+
+    // Then: The setup route is reached before shell API queries mount
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/native-setup')
+    })
+    expect(screen.getByText('Native Setup Page')).toBeTruthy()
+    expect(screen.getByTestId('native-setup-return-to').textContent).toBe('/live')
+    expect(useHealthQueryMock).not.toHaveBeenCalled()
+    expect(useCamerasQueryMock).not.toHaveBeenCalled()
+  })
+
+  it('redirects iOS shell routes to native setup when the auth session was lost', async () => {
+    // Given: The iOS shell retained a server URL but lost in-memory auth state
+    routeMocks.isIOSNativeApp.mockReturnValue(true)
+    routeMocks.getBaseUrlSync.mockReturnValue('https://homesec.example.com')
+    routeMocks.isRuntimeAuthSessionReady.mockReturnValue(false)
+
+    // When: User opens a protected shell route after a WebView reload
+    renderRouter('/events')
+
+    // Then: The setup route is reached before unauthenticated API queries mount
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/native-setup')
+    })
+    expect(screen.getByText('Native Setup Page')).toBeTruthy()
+    expect(screen.getByTestId('native-setup-return-to').textContent).toBe('/events')
+    expect(useHealthQueryMock).not.toHaveBeenCalled()
+    expect(useCamerasQueryMock).not.toHaveBeenCalled()
+  })
+
+  it('preserves native setup return intent for deep links with filters', async () => {
+    // Given: The iOS shell needs setup before opening a deep-linked event
+    routeMocks.isIOSNativeApp.mockReturnValue(true)
+    routeMocks.getBaseUrlSync.mockReturnValue('https://homesec.example.com')
+    routeMocks.isRuntimeAuthSessionReady.mockReturnValue(false)
+
+    // When: User opens a protected route with list context
+    renderRouter('/events/clip-42?camera=front')
+
+    // Then: Setup receives enough state to return to the intended route
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/native-setup')
+    })
+    expect(screen.getByTestId('native-setup-return-to').textContent).toBe(
+      '/events/clip-42?camera=front',
+    )
+  })
+
+  it('allows iOS shell routes after a server URL is configured', async () => {
+    // Given: The iOS shell already has a HomeSec server URL
+    routeMocks.isIOSNativeApp.mockReturnValue(true)
+    routeMocks.getBaseUrlSync.mockReturnValue('https://homesec.example.com')
+    routeMocks.isRuntimeAuthSessionReady.mockReturnValue(true)
+
+    // When: User opens the native shell route
+    renderRouter('/live')
+
+    // Then: The app shell renders instead of returning to setup
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/live')
+    })
+    expect(screen.getByText('Live Page')).toBeTruthy()
   })
 
   it('redirects the old cameras route to Settings camera setup', async () => {

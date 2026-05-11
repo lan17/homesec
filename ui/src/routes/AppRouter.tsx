@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 
+import { browserServerBaseUrlProvider, isRuntimeAuthSessionReady } from '../api/client'
 import { AppShell } from '../app/layout/AppShell'
+import { isIOSNativeApp } from '../runtime/nativeRuntime'
 import { CamerasPage } from '../features/cameras/CamerasPage'
 import { ClipDetailPage } from '../features/clips/ClipDetailPage'
 import { ClipsPage } from '../features/clips/ClipsPage'
@@ -22,12 +24,31 @@ function RedirectClipDetailToEvent() {
   return <Navigate to={`/events/${encodeURIComponent(clipId ?? '')}${location.search}`} replace />
 }
 
+function NativeSetupGuard() {
+  const location = useLocation()
+
+  if (
+    isIOSNativeApp() &&
+    (!browserServerBaseUrlProvider.getBaseUrlSync() || !isRuntimeAuthSessionReady())
+  ) {
+    return (
+      <Navigate
+        to="/native-setup"
+        replace
+        state={{ nativeSetupReturnTo: `${location.pathname}${location.search}${location.hash}` }}
+      />
+    )
+  }
+
+  return <AppShell />
+}
+
 export function AppRouter() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/native-setup" element={<NativeSetupPage />} />
-      <Route element={<AppShell />}>
+      <Route element={<NativeSetupGuard />}>
         <Route path="/" element={<Navigate to="/live" replace />} />
         <Route path="/live" element={<LivePage />} />
         <Route path="/events" element={<ClipsPage />} />
