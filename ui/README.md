@@ -4,6 +4,7 @@ React + TypeScript SPA for HomeSec self-serve control plane.
 
 ## Toolchain
 
+- Node.js: `>=22.12.0` for Vite and Capacitor CLI support.
 - Package manager: `pnpm` (pinned in `packageManager`).
 - Build/runtime: `Vite + React + TypeScript`.
 - Router/data: `react-router-dom` + `@tanstack/react-query`.
@@ -21,6 +22,19 @@ pnpm check
 ```
 
 `pnpm check` runs lint, unit tests, typecheck, and production build.
+
+For the iOS shell:
+
+```bash
+pnpm ios:build
+pnpm ios:sync
+pnpm ios:open
+pnpm ios:run
+```
+
+`ios:build` builds the Vite app and copies web assets into the Capacitor iOS
+project. `ios:sync` also updates native dependencies, `ios:open` opens the Xcode
+project, and `ios:run` syncs and launches the app through Capacitor.
 
 Make target shortcuts are available too:
 

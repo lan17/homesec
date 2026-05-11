@@ -318,8 +318,9 @@ make ui-check
 For the Capacitor scaffold, also verify:
 
 ```bash
-cd ui && pnpm build
+cd ui && pnpm ios:build
 cd ui && pnpm ios:sync
+cd ui && pnpm ios:run
 ```
 
 Launching in the simulator is expected for `iOS-04` when local Xcode setup
