@@ -12,6 +12,7 @@ from homesec.talk.backends import CameraTalkFingerprint, TalkBackendContext
 from homesec.talk.registry import build_default_talk_backend_registry
 from homesec.talk.tapo.backend import (
     TAPO_LOCAL_BACKEND,
+    TAPO_LOCAL_DISCOVERY_HINT,
     detect_tapo_local,
     tapo_local_talk_backend_registration,
 )
@@ -109,6 +110,26 @@ def test_detector_marks_tp_link_tapo_fingerprint_safe_to_probe() -> None:
     assert detection.confidence == "high"
     assert detection.safe_to_probe is True
     assert detection.reason == "Tapo camera fingerprint"
+
+
+def test_detector_marks_tapo_local_endpoint_hint_safe_to_probe() -> None:
+    """A passive local endpoint hint should make Tapo fallback safe."""
+    # Given: A camera fingerprint with a Tapo local digest endpoint hint
+    context = _context(
+        CameraTalkConfig(backend="auto"),
+        fingerprint=CameraTalkFingerprint(
+            local_protocol_hints=(TAPO_LOCAL_DISCOVERY_HINT,),
+        ),
+    )
+
+    # When: Running the Tapo detector
+    detection = detect_tapo_local(context)
+
+    # Then: Tapo is considered safe after standards probing fails
+    assert detection.backend == "tapo_local"
+    assert detection.confidence == "medium"
+    assert detection.safe_to_probe is True
+    assert detection.reason == "Tapo local endpoint fingerprint"
 
 
 def test_detector_rejects_non_tapo_tp_link_fingerprint() -> None:

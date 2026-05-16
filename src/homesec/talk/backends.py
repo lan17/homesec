@@ -94,6 +94,7 @@ class CameraTalkFingerprint:
     profile_names: tuple[str, ...] = ()
     rtsp_hosts: tuple[str, ...] = ()
     open_ports: tuple[int, ...] = ()
+    local_protocol_hints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

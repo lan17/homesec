@@ -123,6 +123,20 @@ async def probe_tapo_local_endpoint(
     context: TalkBackendContext,
 ) -> None:
     """Probe the local Tapo stream endpoint without sending credentials or setup."""
+    challenge = await detect_tapo_local_endpoint(config, context)
+    credential = resolve_tapo_credential(
+        config,
+        context,
+        preferred_hash_kind=challenge.preferred_hash_kind,
+    )
+    _validate_digest_challenge_for_auth(challenge, credential)
+
+
+async def detect_tapo_local_endpoint(
+    config: TapoLocalTalkConfig,
+    context: TalkBackendContext,
+) -> TapoDigestChallenge:
+    """Verify the local endpoint looks like Tapo without sending credentials."""
     host = resolve_tapo_host(config, context)
     port = config.port
     connect_timeout_s = config.connect_timeout_s or context.source_connect_timeout_s
@@ -137,19 +151,13 @@ async def probe_tapo_local_endpoint(
         timeout=connect_timeout_s,
     )
     try:
-        challenge = await _request_digest_challenge(
+        return await _request_digest_challenge(
             reader,
             writer,
             host=host,
             port=port,
             io_timeout_s=io_timeout_s,
         )
-        credential = resolve_tapo_credential(
-            config,
-            context,
-            preferred_hash_kind=challenge.preferred_hash_kind,
-        )
-        _validate_digest_challenge_for_auth(challenge, credential)
     finally:
         await _close_writer_best_effort(writer, timeout_s=io_timeout_s)
 
