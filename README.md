@@ -6,35 +6,37 @@
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-2b825b)](https://peps.python.org/pep-0561/)
 [![codecov](https://codecov.io/gh/lan17/homesec/branch/main/graph/badge.svg)](https://codecov.io/gh/lan17/homesec)
 
-**Local-first AI security cameras for people who want smarter alerts without handing their footage to a vendor cloud.**
+**HomeSec helps your cameras tell you when something actually matters.**
 
-HomeSec is a self-hosted camera system and video intelligence pipeline. It can watch live RTSP feeds, capture motion events, filter noisy clips with object detection, ask an OpenAI-compatible vision model what happened, and send policy-driven alerts only when something matters. Footage stays local by default; cloud storage, VLM calls, and notifications are explicit opt-ins.
+Most home camera setups have the same two problems: they either bury you in motion spam, or they make you send your footage through someone else's cloud. HomeSec is a self-hosted alternative. It watches your cameras, records motion events, filters out boring clips, asks a vision model what happened when needed, and only alerts when the event looks worth your attention.
 
-> **Status:** HomeSec is an alpha-stage home-lab project. It is designed for trusted local networks, VPNs, and carefully managed self-hosted deployments. Enable API-key auth and put it behind your own access controls before exposing it outside your LAN.
+Footage is written locally first. Cloud storage, vision-model calls, MQTT, and email alerts are all things you choose to turn on.
+
+> **Status:** HomeSec is still an alpha-stage home-lab project. It works best on trusted local networks or behind your own VPN/reverse proxy. If you expose it outside your LAN, enable API-key auth and put proper access controls in front of it.
 
 ## Why HomeSec?
 
-- **High-signal alerts** — YOLO filters boring motion before VLM analysis, then alert policy decides what deserves a notification.
-- **Local-first privacy** — raw clips are written locally first; Dropbox, OpenAI-compatible VLMs, MQTT, and email are all configurable integrations.
-- **Self-serve control plane** — a FastAPI backend serves a React UI for setup, live view, events, camera settings, health, stats, and backups.
-- **Real camera support** — RTSP motion recording, FTP uploads, watched folders, ONVIF discovery/preflight, live HLS previews, and experimental push-to-talk paths.
-- **Hackable by design** — sources, filters, storage, VLM analyzers, alert policies, and notifiers are plugins with typed config boundaries.
+- **Fewer useless alerts** — motion starts the pipeline, but YOLO and the alert policy decide whether a clip is actually interesting.
+- **Your footage stays yours** — clips live locally by default, and cloud integrations are optional.
+- **A web UI for the everyday loop** — check live feeds, review events, adjust settings, and see system health without SSHing into the box.
+- **Works with normal IP-camera setups** — RTSP, FTP uploads, watched folders, ONVIF discovery/preflight, HLS preview, and experimental push-to-talk support.
+- **Easy to tinker with** — swap in different sources, filters, storage backends, vision models, alert rules, or notification targets.
 
 ## What it does
 
-| Area | Capabilities |
+| Area | What you get |
 | --- | --- |
-| Camera ingest | RTSP motion recording, FTP uploads, local folder watching |
-| Live view | On-demand HLS previews for RTSP sources, with UI cards for each camera |
-| Event intelligence | YOLO object filtering, VLM scene analysis, risk/activity classification |
-| Alerts | Per-camera policy overrides, MQTT for Home Assistant/Node-RED, SendGrid email |
-| Storage | Local filesystem or Dropbox, with clip/event state tracked in Postgres |
-| Operations | React setup wizard, config validation, runtime reloads, health/stats APIs, Postgres backups |
-| Advanced camera control | ONVIF setup/probing and push-to-talk support for compatible RTSP/Tapo cameras |
+| Camera ingest | RTSP motion recording, FTP uploads, and local folder watching |
+| Live view | On-demand HLS previews for RTSP cameras, shown as camera cards in the UI |
+| Event review | A searchable event list with clips, detection results, VLM summaries, and alert decisions |
+| Smarter alerts | Object filtering, vision-model analysis, per-camera policy overrides, MQTT, and SendGrid email |
+| Storage | Local filesystem or Dropbox, with clip state and events tracked in Postgres |
+| Day-to-day ops | Setup wizard, config validation, runtime reloads, health checks, stats, and Postgres backups |
+| Camera extras | ONVIF setup/probing and push-to-talk paths for compatible RTSP/Tapo cameras |
 
 ## Quickstart: Docker Compose
 
-Docker Compose is the easiest way to run HomeSec with the bundled FastAPI server, React UI, and Postgres.
+Docker Compose is the simplest way to try HomeSec. It runs HomeSec, the web UI, and Postgres together.
 
 ```bash
 git clone https://github.com/lan17/homesec.git
@@ -63,11 +65,11 @@ docker compose logs -f homesec
 docker compose down
 ```
 
-The example config includes RTSP, FTP, local folder, Dropbox, MQTT, SendGrid, YOLO, OpenAI-compatible VLM, preview, and backup settings. Disable anything you do not use; notifiers are optional.
+The example config is intentionally broad: it shows RTSP, FTP, local folders, Dropbox, MQTT, SendGrid, YOLO, OpenAI-compatible VLMs, live preview, and backups. Start by disabling what you do not need. You can run HomeSec with no notifiers if you only want analysis and event history.
 
 ## Quickstart: Python package
 
-The Docker image is the recommended path for the bundled web UI because it ships with built React assets. Direct package installs are useful for custom deployments, source development, or runtime/API-only packaging where you control `server.ui_dist_dir`.
+The Docker image is the best path if you want the bundled web UI right away, because it already includes the built React assets. A direct package install is useful when you are building your own deployment, running from source, or controlling `server.ui_dist_dir` yourself.
 
 ```bash
 pip install homesec
@@ -82,17 +84,17 @@ homesec validate --config config/config.yaml
 homesec run --config config/config.yaml
 ```
 
-If you run from a source checkout and want the web UI, build it first with `make ui-install && make ui-build` or set `server.ui_dist_dir` to an existing UI build. If the configured file is missing, `homesec run` starts the API/UI in bootstrap mode so you can use the setup wizard.
+If you run from a source checkout and want the web UI, build it first with `make ui-install && make ui-build`, or point `server.ui_dist_dir` at an existing UI build. If the config file is missing, `homesec run` starts in bootstrap mode so you can use the setup wizard.
 
 ## Web UI
 
-The backend serves the built UI on the same port as the API. The UI is organized around the daily operator loop:
+The backend serves the built UI on the same port as the API. The main pages are:
 
 - **Live** — watch configured cameras, start previews, use push-to-talk where supported, and jump to recent events.
-- **Events** — browse clips, filter by camera/detection/alert state, and inspect VLM summaries and media.
-- **Settings** — add or edit cameras, storage, detection, VLM, alert policy, and notifiers with secret-safe config handling.
+- **Events** — review clips, filter by camera/detection/alert state, and inspect the media and VLM summary.
+- **Settings** — add or edit cameras, storage, detection, VLM, alert policy, and notifiers.
 - **System** — check health, daily stats, runtime uptime, camera status, and Postgres backup status.
-- **Setup** — first-run wizard for cameras, storage, detection, notifications, review, and launch.
+- **Setup** — walk through cameras, storage, detection, notifications, review, and launch on first run.
 
 UI development notes live in [`ui/README.md`](ui/README.md).
 
@@ -137,11 +139,13 @@ flowchart LR
     Policy --> DB
 ```
 
-A clip is written locally first, then upload and filtering run in parallel. If the filter sees a configured trigger class, HomeSec sends sampled frames to the VLM. The alert policy combines VLM risk/activity output with per-camera overrides before notifying. Postgres records clip state and events for the UI and operational visibility.
+A clip is saved locally first. Upload and object detection then run in parallel, so a storage hiccup does not stop detection and an empty clip does not waste a VLM call. If the detector sees one of your trigger classes, HomeSec samples frames for the vision model. The alert policy combines that result with your per-camera rules before sending notifications.
+
+Postgres keeps the event history and clip state that power the UI. The pipeline is designed to degrade gracefully: camera footage is still written locally even when an external service is unavailable.
 
 ## Configuration
 
-HomeSec configuration is YAML-based and validated with Pydantic. Secrets should be referenced via environment variables instead of committed to YAML.
+Configuration is YAML, validated with Pydantic. Put secrets in `.env`, then reference them from YAML with `*_env` fields.
 
 ```yaml
 cameras:
@@ -184,12 +188,12 @@ alert_policy:
     notify_on_activity_types: [person_at_door, delivery, suspicious]
 ```
 
-See [`config/example.yaml`](config/example.yaml) for the full reference example and [`docs/preview-deployment.md`](docs/preview-deployment.md), [`docs/postgres-backups.md`](docs/postgres-backups.md), and [`docs/push-to-talk.md`](docs/push-to-talk.md) for deployment-specific notes.
+See [`config/example.yaml`](config/example.yaml) for the full example. There are also focused notes for [`live preview`](docs/preview-deployment.md), [`Postgres backups`](docs/postgres-backups.md), and [`push-to-talk`](docs/push-to-talk.md).
 
 ### Security and privacy notes
 
-- Keep camera credentials and API tokens in `.env`, then reference them with `*_env` fields.
-- HomeSec binds to `0.0.0.0:8081` by default so Docker/LAN access works. Treat that as a trusted-network service unless you add your own perimeter controls.
+- Keep camera credentials and API tokens in `.env`; do not commit them to YAML.
+- HomeSec binds to `0.0.0.0:8081` by default so Docker and LAN access work. Treat it like a trusted-network service unless you add your own perimeter controls.
 - API-key auth is available with:
 
   ```yaml
@@ -198,8 +202,8 @@ See [`config/example.yaml`](config/example.yaml) for the full reference example 
     api_key_env: HOMESEC_API_KEY
   ```
 
-- VLM analysis sends selected frames to the configured OpenAI-compatible endpoint only when `vlm.run_mode` and `trigger_classes` allow it.
-- Push-to-talk microphone audio is streamed for the active talk session and is not intentionally persisted; camera compatibility still varies by model/firmware.
+- VLM analysis only sends selected frames to the configured OpenAI-compatible endpoint when `vlm.run_mode` and `trigger_classes` allow it.
+- Push-to-talk microphone audio is streamed for the active talk session and is not intentionally persisted. Camera compatibility still varies by model and firmware.
 
 ## Built-in integrations
 
@@ -214,7 +218,7 @@ See [`config/example.yaml`](config/example.yaml) for the full reference example 
 
 ## Extending HomeSec
 
-HomeSec is built around strict interfaces and runtime plugin discovery. Each major capability is replaceable:
+HomeSec is meant to be changed. The core pipeline talks to interfaces, and plugins provide the concrete behavior:
 
 - `ClipSource` for new camera/event sources
 - `ObjectFilter` for different detectors
@@ -223,7 +227,7 @@ HomeSec is built around strict interfaces and runtime plugin discovery. Each maj
 - `AlertPolicy` for custom notification rules
 - `Notifier` for chat, paging, automations, or smart-home integrations
 
-See [`PLUGIN_DEVELOPMENT.md`](PLUGIN_DEVELOPMENT.md) for the complete plugin guide.
+See [`PLUGIN_DEVELOPMENT.md`](PLUGIN_DEVELOPMENT.md) for the full plugin guide.
 
 ## CLI reference
 
@@ -258,7 +262,7 @@ make check
 
 The UI uses Vite + React + TypeScript and lives under [`ui/`](ui/). API client types are generated from the FastAPI OpenAPI contract.
 
-For architecture notes, see [`DESIGN.md`](DESIGN.md). Some sections are intentionally deeper than the README and may describe historical design context.
+For architecture notes, see [`DESIGN.md`](DESIGN.md). It goes deeper than the README and includes some historical design context.
 
 ## Contributing
 
@@ -266,8 +270,8 @@ Contributions are welcome, especially around camera compatibility, storage/notif
 
 1. Fork and clone the repository.
 2. Create a focused branch.
-3. Run the relevant tests/checks.
-4. Open a pull request with the behavior change, validation, and any compatibility notes.
+3. Run the relevant checks.
+4. Open a pull request with what changed, how you tested it, and any compatibility notes.
 
 Found a bug or have a feature request? Please [open an issue](https://github.com/lan17/homesec/issues) with reproduction steps, environment details, and relevant logs.
 
