@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint lock-check check db-migrate db-migration publish ui-% fake-camera
+.PHONY: help up down docker-build docker-push local local-setup run db test coverage typecheck lint lock-check check db-migrate db-migration publish ui-% fake-camera
 
 help:
 	@echo "Targets:"
@@ -13,6 +13,8 @@ help:
 	@echo "    make docker-push   Push to DockerHub"
 	@echo ""
 	@echo "  Local dev:"
+	@echo "    make local         Set up local config, build UI, start Postgres, and run HomeSec"
+	@echo "    make local-setup   Copy starter config and create local data directories"
 	@echo "    make run           Run HomeSec locally (requires Postgres)"
 	@echo "    make db            Start just Postgres"
 	@echo "    make test          Run tests with coverage"
@@ -62,6 +64,25 @@ docker-push: docker-build
 	docker push $(DOCKERHUB_USER)/$(DOCKER_IMAGE):latest
 
 # Local dev
+local: local-setup db ui-install ui-build run
+
+local-setup:
+	@mkdir -p config recordings/inbox storage backups/postgres
+	@if [ ! -f .env ]; then \
+		cp .env.example .env; \
+		echo "Created .env from .env.example"; \
+	else \
+		echo ".env already exists; leaving it unchanged"; \
+	fi
+	@if [ ! -f "$(HOMESEC_CONFIG)" ]; then \
+		cp config/local.yaml "$(HOMESEC_CONFIG)"; \
+		chmod 600 "$(HOMESEC_CONFIG)"; \
+		echo "Created $(HOMESEC_CONFIG) from config/local.yaml"; \
+	else \
+		echo "$(HOMESEC_CONFIG) already exists; leaving it unchanged"; \
+	fi
+	@echo "Local setup ready. Add clips to recordings/inbox or edit $(HOMESEC_CONFIG) for real cameras."
+
 run:
 	@echo "Running database migrations..."
 	@$(UV_RUN) alembic -c alembic.ini upgrade head

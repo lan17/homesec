@@ -34,22 +34,14 @@ Footage is written locally first. Cloud storage, vision-model calls, MQTT, and e
 | Day-to-day ops | Setup wizard, config validation, runtime reloads, health checks, stats, and Postgres backups |
 | Camera extras | ONVIF setup/probing and push-to-talk paths for compatible RTSP/Tapo cameras |
 
-## Quickstart: Docker Compose
+## Quickstart: local Makefile
 
-Docker Compose is the simplest way to try HomeSec. It runs HomeSec, the web UI, and Postgres together.
+The quickest path is local-only: local folder ingest, local clip storage, no notifications, and VLM analysis disabled until you add an API key.
 
 ```bash
 git clone https://github.com/lan17/homesec.git
 cd homesec
-
-cp .env.example .env
-cp config/example.yaml config/config.yaml
-
-# Edit at least one camera URL and any provider secrets.
-$EDITOR .env
-$EDITOR config/config.yaml
-
-docker compose up -d --build
+make local
 ```
 
 Then open:
@@ -58,33 +50,27 @@ Then open:
 http://localhost:8081
 ```
 
+`make local` does the boring setup for you:
+
+- copies `.env.example` to `.env` if needed
+- copies `config/local.yaml` to `config/config.yaml` if needed
+- creates `recordings/inbox`, `storage`, and backup directories
+- starts Postgres with Docker Compose
+- installs/builds the React UI
+- runs HomeSec with `config/config.yaml`
+
+Drop a video file into `recordings/inbox` to exercise the pipeline, or edit `config/config.yaml` when you are ready to point HomeSec at a real RTSP/FTP camera.
+
 Useful follow-up commands:
 
 ```bash
-docker compose logs -f homesec
-docker compose down
+make local-setup       # create/update the local starter files without running
+make db                # start only Postgres
+make run               # run HomeSec against config/config.yaml
+make down              # stop Docker Compose services
 ```
 
-The example config is intentionally broad: it shows RTSP, FTP, local folders, Dropbox, MQTT, SendGrid, YOLO, OpenAI-compatible VLMs, live preview, and backups. Start by disabling what you do not need. You can run HomeSec with no notifiers if you only want analysis and event history.
-
-## Quickstart: Python package
-
-The Docker image is the best path if you want the bundled web UI right away, because it already includes the built React assets. A direct package install is useful when you are building your own deployment, running from source, or controlling `server.ui_dist_dir` yourself.
-
-```bash
-pip install homesec
-curl -O https://raw.githubusercontent.com/lan17/homesec/main/config/example.yaml
-curl -O https://raw.githubusercontent.com/lan17/homesec/main/.env.example
-mkdir -p config
-mv example.yaml config/config.yaml
-mv .env.example .env
-
-# Set DB_DSN, camera URLs, and provider secrets in .env.
-homesec validate --config config/config.yaml
-homesec run --config config/config.yaml
-```
-
-If you run from a source checkout and want the web UI, build it first with `make ui-install && make ui-build`, or point `server.ui_dist_dir` at an existing UI build. If the config file is missing, `homesec run` starts in bootstrap mode so you can use the setup wizard.
+For a fuller deployment-style example, see [`config/example.yaml`](config/example.yaml). It shows RTSP, FTP, Dropbox, MQTT, SendGrid, OpenAI-compatible VLMs, live preview, push-to-talk, and backups.
 
 ## Web UI
 
