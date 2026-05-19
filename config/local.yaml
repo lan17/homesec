@@ -1,0 +1,49 @@
+# Local-only starter config for HomeSec.
+# Copy with: make local-setup
+
+version: 1
+
+cameras:
+  - name: local_folder
+    source:
+      backend: local_folder
+      config:
+        watch_dir: ./recordings/inbox
+        poll_interval: 1.0
+        stability_threshold_s: 1.0
+
+storage:
+  backend: local
+  config:
+    root: ./storage
+
+state_store:
+  dsn_env: DB_DSN
+
+# Start quiet: keep notifications off until you choose MQTT/email/etc.
+notifiers: []
+
+filter:
+  backend: yolo
+  config:
+    classes: [person, car, dog, cat]
+    min_confidence: 0.5
+
+# Local getting-started should not require an OpenAI key.
+# Switch run_mode to trigger_only and set OPENAI_API_KEY when you want VLM summaries.
+vlm:
+  backend: openai
+  run_mode: never
+  trigger_classes: [person]
+  config:
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o
+
+alert_policy:
+  backend: default
+  enabled: true
+  config:
+    min_risk_level: high
+
+preview:
+  enabled: false
