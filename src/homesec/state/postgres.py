@@ -9,11 +9,13 @@ from typing import Any, cast
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
     Table,
     Text,
+    UniqueConstraint,
     and_,
     func,
     or_,
@@ -148,6 +150,47 @@ class ClipEvent(Base):
     )
 
 
+class MobileDevice(Base):
+    """Registered mobile device for APNs notification delivery."""
+
+    __tablename__ = "mobile_devices"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    platform: Mapped[str] = mapped_column(Text, nullable=False)
+    apns_token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    apns_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    apns_environment: Mapped[str] = mapped_column(Text, nullable=False)
+    bundle_id: Mapped[str] = mapped_column(Text, nullable=False)
+    device_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    app_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=text("true"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_push_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_push_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("apns_token_hash", name="uq_mobile_devices_apns_token_hash"),
+        Index("idx_mobile_devices_enabled", "enabled"),
+        Index("idx_mobile_devices_platform_environment", "platform", "apns_environment"),
+        Index("idx_mobile_devices_updated_at_desc", text("updated_at DESC")),
+    )
+
+
 class PostgresStateStore(StateStore):
     """Postgres implementation of StateStore interface.
 
@@ -192,6 +235,13 @@ class PostgresStateStore(StateStore):
                 await self._engine.dispose()
             self._engine = None
             return False
+
+    @property
+    def engine(self) -> AsyncEngine:
+        """Return the initialized SQLAlchemy engine owned by this state store."""
+        if self._engine is None:
+            raise RuntimeError("StateStore not initialized")
+        return self._engine
 
     async def upsert(self, clip_id: str, data: ClipStateData) -> None:
         """Insert or update clip state.
