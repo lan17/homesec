@@ -3,11 +3,32 @@ import { describe, expect, it } from 'vitest'
 import {
   BROWSER_SERVER_BASE_URL_STORAGE_KEY,
   BrowserServerBaseUrlProvider,
+  NativeServerBaseUrlProvider,
   normalizeServerBaseUrl,
 } from './serverBaseUrlProvider'
+import type { HomeSecAuthPlugin } from './homeSecAuthPlugin'
 
 type TestStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'> & {
   values: Map<string, string>
+}
+
+function createNativePluginMock(initialBaseUrl: string | null = null): HomeSecAuthPlugin {
+  let baseUrl = initialBaseUrl
+  return {
+    getServerBaseUrl: async () => ({ value: baseUrl }),
+    setServerBaseUrl: async ({ value }) => {
+      baseUrl = value
+    },
+    clearServerBaseUrl: async () => {
+      baseUrl = null
+    },
+    getApiToken: async () => ({ value: null }),
+    setApiToken: async () => {},
+    clearApiToken: async () => {},
+    getAuthDisabledReady: async () => ({ value: false }),
+    setAuthDisabledReady: async () => {},
+    clearAuthDisabledReady: async () => {},
+  }
 }
 
 function createStorage(): TestStorage {
@@ -77,5 +98,26 @@ describe('BrowserServerBaseUrlProvider', () => {
     expect(persistedSameOrigin).toBe('')
     expect(afterClear).toBe('http://localhost:8081')
     expect(storage.values.has(BROWSER_SERVER_BASE_URL_STORAGE_KEY)).toBe(false)
+  })
+})
+
+describe('NativeServerBaseUrlProvider', () => {
+  it('hydrates, updates, and clears server URL values through the native bridge', async () => {
+    // Given: A native bridge with a stored HomeSec server URL
+    const plugin = createNativePluginMock(' http://192.168.1.10:8081/// ')
+    const provider = new NativeServerBaseUrlProvider(plugin)
+
+    // When: Hydrating, updating, and clearing the native URL cache
+    await provider.hydrate()
+    const hydrated = provider.getBaseUrlSync()
+    await provider.setBaseUrl('https://homesec.example.com/')
+    const updated = await provider.getBaseUrl()
+    await provider.clearBaseUrl()
+    const cleared = provider.getBaseUrlSync()
+
+    // Then: Values are normalized and remain available synchronously after hydration
+    expect(hydrated).toBe('http://192.168.1.10:8081')
+    expect(updated).toBe('https://homesec.example.com')
+    expect(cleared).toBeNull()
   })
 })

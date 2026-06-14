@@ -1,3 +1,5 @@
+import { homeSecAuthPlugin, type HomeSecAuthPlugin } from './homeSecAuthPlugin'
+
 export const BROWSER_SERVER_BASE_URL_STORAGE_KEY = 'homesec.serverBaseUrl'
 
 export interface ServerBaseUrlProvider {
@@ -91,6 +93,52 @@ export class BrowserServerBaseUrlProvider implements ClientServerBaseUrlProvider
 
   async clearBaseUrl(): Promise<void> {
     this.clearBaseUrlSync()
+  }
+}
+
+export class NativeServerBaseUrlProvider implements ClientServerBaseUrlProvider {
+  private baseUrl: string | null = null
+  private hydrated = false
+  private readonly plugin: HomeSecAuthPlugin
+
+  constructor(plugin: HomeSecAuthPlugin = homeSecAuthPlugin) {
+    this.plugin = plugin
+  }
+
+  async hydrate(): Promise<void> {
+    const result = await this.plugin.getServerBaseUrl()
+    this.baseUrl = normalizeServerBaseUrl(result.value)
+    this.hydrated = true
+  }
+
+  getBaseUrlSync(): string | null {
+    return this.baseUrl
+  }
+
+  async getBaseUrl(): Promise<string | null> {
+    if (!this.hydrated) {
+      await this.hydrate()
+    }
+
+    return this.getBaseUrlSync()
+  }
+
+  async setBaseUrl(value: string | null): Promise<void> {
+    const normalized = normalizeServerBaseUrl(value)
+    if (normalized) {
+      await this.plugin.setServerBaseUrl({ value: normalized })
+    } else {
+      await this.plugin.clearServerBaseUrl()
+    }
+
+    this.baseUrl = normalized
+    this.hydrated = true
+  }
+
+  async clearBaseUrl(): Promise<void> {
+    await this.plugin.clearServerBaseUrl()
+    this.baseUrl = null
+    this.hydrated = true
   }
 }
 

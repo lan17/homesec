@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 
-import { browserServerBaseUrlProvider, isRuntimeAuthSessionReady } from '../api/client'
+import { isRuntimeAuthSessionReady, runtimeServerBaseUrlProvider } from '../api/client'
 import { AppShell } from '../app/layout/AppShell'
 import { isIOSNativeApp } from '../runtime/nativeRuntime'
 import { CamerasPage } from '../features/cameras/CamerasPage'
@@ -29,7 +29,7 @@ function NativeSetupGuard() {
 
   if (
     isIOSNativeApp() &&
-    (!browserServerBaseUrlProvider.getBaseUrlSync() || !isRuntimeAuthSessionReady())
+    (!runtimeServerBaseUrlProvider.getBaseUrlSync() || !isRuntimeAuthSessionReady())
   ) {
     return (
       <Navigate

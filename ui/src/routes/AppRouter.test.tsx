@@ -19,7 +19,7 @@ const useHealthQueryMock = routeMocks.useHealthQuery
 const useCamerasQueryMock = routeMocks.useCamerasQuery
 
 vi.mock('../api/client', () => ({
-  browserServerBaseUrlProvider: {
+  runtimeServerBaseUrlProvider: {
     getBaseUrlSync: () => routeMocks.getBaseUrlSync(),
   },
   isRuntimeAuthSessionReady: () => routeMocks.isRuntimeAuthSessionReady(),

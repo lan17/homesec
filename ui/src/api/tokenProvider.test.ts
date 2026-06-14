@@ -5,13 +5,41 @@ import {
   BROWSER_AUTH_TOKEN_STORAGE_KEY,
   BrowserAuthTokenProvider,
   InMemoryAuthTokenProvider,
+  NativeAuthTokenProvider,
   normalizeAuthToken,
   resolveAuthToken,
   type AuthTokenProvider,
 } from './tokenProvider'
+import type { HomeSecAuthPlugin } from './homeSecAuthPlugin'
 
 type TestStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'> & {
   values: Map<string, string>
+}
+
+function createNativePluginMock(
+  initial: { token?: string | null; authDisabledReady?: boolean } = {},
+): HomeSecAuthPlugin {
+  let token = initial.token ?? null
+  let authDisabledReady = initial.authDisabledReady ?? false
+  return {
+    getServerBaseUrl: vi.fn(async () => ({ value: 'https://homesec.example.com' })),
+    setServerBaseUrl: vi.fn(async () => {}),
+    clearServerBaseUrl: vi.fn(async () => {}),
+    getApiToken: vi.fn(async () => ({ value: token })),
+    setApiToken: vi.fn(async ({ value }) => {
+      token = value
+    }),
+    clearApiToken: vi.fn(async () => {
+      token = null
+    }),
+    getAuthDisabledReady: vi.fn(async () => ({ value: authDisabledReady })),
+    setAuthDisabledReady: vi.fn(async ({ value }) => {
+      authDisabledReady = value
+    }),
+    clearAuthDisabledReady: vi.fn(async () => {
+      authDisabledReady = false
+    }),
+  }
 }
 
 function createStorage(): TestStorage {
@@ -105,21 +133,65 @@ describe('InMemoryAuthTokenProvider', () => {
   })
 })
 
+describe('NativeAuthTokenProvider', () => {
+  it('hydrates token and auth-disabled readiness from the native bridge', async () => {
+    // Given: A native bridge with stored token and auth-disabled state
+    const plugin = createNativePluginMock({
+      token: ' native-secret ',
+      authDisabledReady: true,
+    })
+    const provider = new NativeAuthTokenProvider(plugin)
+
+    // When: Hydrating the native provider
+    await provider.hydrate()
+
+    // Then: Token and readiness are cached for synchronous route guards
+    expect(provider.getTokenSync()).toBe('native-secret')
+    expect(provider.isAuthDisabledReadySync()).toBe(true)
+  })
+
+  it('sets and clears native token values through the bridge', async () => {
+    // Given: A native provider backed by a bridge plugin
+    const plugin = createNativePluginMock()
+    const provider = new NativeAuthTokenProvider(plugin)
+
+    // When: Persisting then clearing a native token
+    await provider.setToken(' native-secret ')
+    const stored = provider.getTokenSync()
+    await provider.clearToken()
+    const cleared = provider.getTokenSync()
+
+    // Then: Writes go through the native bridge and update the sync cache
+    expect(plugin.setApiToken).toHaveBeenCalledWith({ value: 'native-secret' })
+    expect(stored).toBe('native-secret')
+    expect(plugin.clearApiToken).toHaveBeenCalledTimes(1)
+    expect(cleared).toBeNull()
+  })
+})
+
 describe('runtime auth session readiness', () => {
   it('persists auth-disabled readiness without a token in native iOS mode', async () => {
-    // Given: The runtime is loaded in native iOS mode with browser session storage available
+    // Given: The runtime is loaded in native iOS mode with a native auth bridge
     vi.resetModules()
     const storage = installWindowSessionStorageMock()
+    const nativePlugin = createNativePluginMock()
+    vi.doMock('./homeSecAuthPlugin', () => ({
+      homeSecAuthPlugin: nativePlugin,
+    }))
     vi.doMock('../runtime/nativeRuntime', () => ({
       isIOSNativeApp: () => true,
     }))
     const tokenProvider = await import('./tokenProvider')
 
-    // When: Setup marks an auth-disabled server as ready
-    tokenProvider.markRuntimeAuthSessionReady({ persistAuthDisabled: true })
+    // When: Setup persists an auth-disabled server as ready
+    await tokenProvider.persistRuntimeAuthSessionReady({ persistAuthDisabled: true })
     const readyBeforeReload = tokenProvider.isRuntimeAuthSessionReady()
     vi.resetModules()
+    vi.doMock('./homeSecAuthPlugin', () => ({
+      homeSecAuthPlugin: nativePlugin,
+    }))
     const reloadedTokenProvider = await import('./tokenProvider')
+    await reloadedTokenProvider.nativeAuthTokenProvider.hydrate()
     const readyAfterReload = reloadedTokenProvider.isRuntimeAuthSessionReady()
 
     // Then: Readiness survives reload without persisting an API token
@@ -129,28 +201,36 @@ describe('runtime auth session readiness', () => {
     expect(reloadedTokenProvider.nativeAuthTokenProvider.getTokenSync()).toBeNull()
   })
 
-  it('does not persist protected native sessions after reload', async () => {
-    // Given: The runtime is loaded in native iOS mode with browser session storage available
+  it('hydrates protected native sessions after reload', async () => {
+    // Given: The runtime is loaded in native iOS mode with a native auth bridge
     vi.resetModules()
     const storage = installWindowSessionStorageMock()
+    const nativePlugin = createNativePluginMock()
+    vi.doMock('./homeSecAuthPlugin', () => ({
+      homeSecAuthPlugin: nativePlugin,
+    }))
     vi.doMock('../runtime/nativeRuntime', () => ({
       isIOSNativeApp: () => true,
     }))
     const tokenProvider = await import('./tokenProvider')
 
-    // When: Setup marks a protected server as ready with an in-memory token
+    // When: Setup persists a protected server token through native storage
     await tokenProvider.runtimeAuthTokenProvider.setToken('native-token')
-    tokenProvider.markRuntimeAuthSessionReady({ persistAuthDisabled: false })
+    await tokenProvider.persistRuntimeAuthSessionReady({ persistAuthDisabled: false })
     const readyBeforeReload = tokenProvider.isRuntimeAuthSessionReady()
     vi.resetModules()
+    vi.doMock('./homeSecAuthPlugin', () => ({
+      homeSecAuthPlugin: nativePlugin,
+    }))
     const reloadedTokenProvider = await import('./tokenProvider')
+    await reloadedTokenProvider.nativeAuthTokenProvider.hydrate()
     const readyAfterReload = reloadedTokenProvider.isRuntimeAuthSessionReady()
 
-    // Then: Token-backed readiness remains memory-only
+    // Then: Token-backed readiness survives reload through the native bridge
     expect(readyBeforeReload).toBe(true)
-    expect(readyAfterReload).toBe(false)
+    expect(readyAfterReload).toBe(true)
     expect(storage.values.has(BROWSER_AUTH_DISABLED_SESSION_READY_STORAGE_KEY)).toBe(false)
-    expect(reloadedTokenProvider.nativeAuthTokenProvider.getTokenSync()).toBeNull()
+    expect(reloadedTokenProvider.nativeAuthTokenProvider.getTokenSync()).toBe('native-token')
   })
 })
 

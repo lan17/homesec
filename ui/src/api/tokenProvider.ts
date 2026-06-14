@@ -1,6 +1,7 @@
 import type { ApiRequestOptions } from './generated/client'
 
 import { isIOSNativeApp } from '../runtime/nativeRuntime'
+import { homeSecAuthPlugin, type HomeSecAuthPlugin } from './homeSecAuthPlugin'
 
 export const BROWSER_AUTH_TOKEN_STORAGE_KEY = 'homesec.apiKey'
 export const BROWSER_AUTH_DISABLED_SESSION_READY_STORAGE_KEY =
@@ -123,8 +124,92 @@ export class InMemoryAuthTokenProvider implements SyncAuthTokenProvider {
   }
 }
 
+export class NativeAuthTokenProvider implements SyncAuthTokenProvider {
+  private authDisabledReady = false
+  private hydrated = false
+  private readonly plugin: HomeSecAuthPlugin
+  private token: string | null = null
+
+  constructor(plugin: HomeSecAuthPlugin = homeSecAuthPlugin) {
+    this.plugin = plugin
+  }
+
+  async hydrate(): Promise<void> {
+    const [tokenResult, authDisabledResult] = await Promise.all([
+      this.plugin.getApiToken(),
+      this.plugin.getAuthDisabledReady(),
+    ])
+    this.token = normalizeAuthToken(tokenResult.value)
+    this.authDisabledReady = authDisabledResult.value
+    this.hydrated = true
+  }
+
+  getTokenSync(): string | null {
+    return this.token
+  }
+
+  setTokenSync(token: string | null): void {
+    this.token = normalizeAuthToken(token)
+    this.hydrated = true
+  }
+
+  clearTokenSync(): void {
+    this.token = null
+    this.hydrated = true
+  }
+
+  async getToken(): Promise<string | null> {
+    if (!this.hydrated) {
+      await this.hydrate()
+    }
+
+    return this.getTokenSync()
+  }
+
+  async setToken(token: string | null): Promise<void> {
+    const normalized = normalizeAuthToken(token)
+    if (normalized) {
+      await this.plugin.setApiToken({ value: normalized })
+    } else {
+      await this.plugin.clearApiToken()
+    }
+
+    this.token = normalized
+    this.hydrated = true
+  }
+
+  async clearToken(): Promise<void> {
+    await this.plugin.clearApiToken()
+    this.clearTokenSync()
+  }
+
+  isAuthDisabledReadySync(): boolean {
+    return this.authDisabledReady
+  }
+
+  async setAuthDisabledReady(ready: boolean): Promise<void> {
+    if (ready) {
+      await this.plugin.setAuthDisabledReady({ value: true })
+    } else {
+      await this.plugin.clearAuthDisabledReady()
+    }
+
+    this.authDisabledReady = ready
+    this.hydrated = true
+  }
+
+  setAuthDisabledReadySync(ready: boolean): void {
+    this.authDisabledReady = ready
+    this.hydrated = true
+  }
+
+  clearAuthDisabledReadySync(): void {
+    this.setAuthDisabledReadySync(false)
+  }
+}
+
 export const browserAuthTokenProvider = new BrowserAuthTokenProvider()
-export const nativeAuthTokenProvider = new InMemoryAuthTokenProvider()
+export const nativeAuthTokenProvider = new NativeAuthTokenProvider()
 export const runtimeAuthTokenProvider: SyncAuthTokenProvider = isIOSNativeApp()
   ? nativeAuthTokenProvider
   : browserAuthTokenProvider
@@ -155,13 +240,39 @@ function persistAuthDisabledSessionReady(ready: boolean): void {
 export function markRuntimeAuthSessionReady(options: { persistAuthDisabled?: boolean } = {}): void {
   if (isIOSNativeApp()) {
     nativeAuthSessionReady = true
+    nativeAuthTokenProvider.setAuthDisabledReadySync(Boolean(options.persistAuthDisabled))
     persistAuthDisabledSessionReady(Boolean(options.persistAuthDisabled))
   }
+}
+
+export async function persistRuntimeAuthSessionReady(
+  options: { persistAuthDisabled?: boolean } = {},
+): Promise<void> {
+  if (isIOSNativeApp()) {
+    nativeAuthSessionReady = true
+    await nativeAuthTokenProvider.setAuthDisabledReady(Boolean(options.persistAuthDisabled))
+    persistAuthDisabledSessionReady(Boolean(options.persistAuthDisabled))
+    return
+  }
+
+  persistAuthDisabledSessionReady(Boolean(options.persistAuthDisabled))
+}
+
+export async function clearPersistedRuntimeAuthSessionReady(): Promise<void> {
+  if (isIOSNativeApp()) {
+    nativeAuthSessionReady = false
+    await nativeAuthTokenProvider.setAuthDisabledReady(false)
+    persistAuthDisabledSessionReady(false)
+    return
+  }
+
+  persistAuthDisabledSessionReady(false)
 }
 
 export function clearRuntimeAuthSessionReady(): void {
   if (isIOSNativeApp()) {
     nativeAuthSessionReady = false
+    nativeAuthTokenProvider.clearAuthDisabledReadySync()
     persistAuthDisabledSessionReady(false)
   }
 }
@@ -174,6 +285,7 @@ export function isRuntimeAuthSessionReady(): boolean {
   return (
     nativeAuthSessionReady ||
     hasAuthToken(runtimeAuthTokenProvider) ||
+    nativeAuthTokenProvider.isAuthDisabledReadySync() ||
     hasPersistedAuthDisabledSessionReady()
   )
 }

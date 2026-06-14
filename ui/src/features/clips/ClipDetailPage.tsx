@@ -123,14 +123,14 @@ export function ClipDetailPage() {
   }, [mediaQuery.mediaUrl])
 
   async function submitApiKey(apiKey: string): Promise<void> {
-    saveApiKey(apiKey)
+    await saveApiKey(apiKey)
     playbackRefreshAttempts.current = 0
     await clipQuery.refetch()
     await mediaQuery.refresh()
   }
 
   async function clearStoredApiKey(): Promise<void> {
-    clearApiKey()
+    await clearApiKey()
     await clipQuery.refetch()
   }
 

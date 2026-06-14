@@ -1,18 +1,18 @@
 import type { ApiRequestOptions } from './generated/client'
 import {
   BROWSER_AUTH_TOKEN_STORAGE_KEY,
-  clearRuntimeAuthSessionReady,
-  markRuntimeAuthSessionReady,
+  clearPersistedRuntimeAuthSessionReady,
   normalizeAuthToken,
+  persistRuntimeAuthSessionReady,
   runtimeAuthTokenProvider,
 } from './tokenProvider'
 
 export const API_KEY_STORAGE_KEY = BROWSER_AUTH_TOKEN_STORAGE_KEY
 
-export function saveApiKey(apiKey: string): void {
-  runtimeAuthTokenProvider.setTokenSync(apiKey)
+export async function saveApiKey(apiKey: string): Promise<void> {
+  await runtimeAuthTokenProvider.setToken(apiKey)
   if (getStoredApiKey()) {
-    markRuntimeAuthSessionReady()
+    await persistRuntimeAuthSessionReady()
   }
 }
 
@@ -24,9 +24,9 @@ export function hasStoredApiKey(): boolean {
   return getStoredApiKey() !== null
 }
 
-export function clearApiKey(): void {
-  runtimeAuthTokenProvider.clearTokenSync()
-  clearRuntimeAuthSessionReady()
+export async function clearApiKey(): Promise<void> {
+  await runtimeAuthTokenProvider.clearToken()
+  await clearPersistedRuntimeAuthSessionReady()
 }
 
 export function resolveApiKey(explicitApiKey: ApiRequestOptions['apiKey']): string | null {

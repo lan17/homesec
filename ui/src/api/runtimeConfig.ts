@@ -1,4 +1,4 @@
-import { browserServerBaseUrlProvider } from './client'
+import { hydrateRuntimeApiProviders, runtimeServerBaseUrlProvider } from './client'
 import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
 
 export interface ApiRuntimeConfig {
@@ -32,8 +32,9 @@ export interface InitializeApiRuntimeConfigOptions {
 
 export async function initializeApiRuntimeConfig({
   runtimeConfigSource = new WindowApiRuntimeConfigSource(),
-  serverBaseUrlProvider = browserServerBaseUrlProvider,
+  serverBaseUrlProvider = runtimeServerBaseUrlProvider,
 }: InitializeApiRuntimeConfigOptions = {}): Promise<void> {
+  await hydrateRuntimeApiProviders()
   const config = await runtimeConfigSource.loadRuntimeConfig()
   if (Object.prototype.hasOwnProperty.call(config, 'serverBaseUrl')) {
     await serverBaseUrlProvider.setBaseUrl(config.serverBaseUrl ?? null)

@@ -4,11 +4,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
   HomeSecApiClient,
-  browserServerBaseUrlProvider,
   isAPIError,
   isUnauthorizedAPIError,
-  markRuntimeAuthSessionReady,
+  persistRuntimeAuthSessionReady,
   runtimeAuthTokenProvider,
+  runtimeServerBaseUrlProvider,
 } from '../../api/client'
 import type { AuthTokenProvider, ClientServerBaseUrlProvider } from '../../api/client'
 import { Button } from '../../components/ui/Button'
@@ -71,7 +71,7 @@ function nativeSetupReturnTo(state: unknown): string {
 export function NativeSetupPage({
   authTokenProvider = runtimeAuthTokenProvider,
   createClient = (baseUrl: string) => new HomeSecApiClient(baseUrl),
-  serverBaseUrlProvider = browserServerBaseUrlProvider,
+  serverBaseUrlProvider = runtimeServerBaseUrlProvider,
 }: NativeSetupPageProps = {}) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -165,7 +165,7 @@ export function NativeSetupPage({
       }
       await serverBaseUrlProvider.setBaseUrl(validatedServerUrl)
       await authTokenProvider.setToken(authDisabled ? null : apiKey || null)
-      markRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })
+      await persistRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })
       queryClient.clear()
       navigate(nativeSetupReturnTo(location.state), { replace: true })
     } catch (error) {

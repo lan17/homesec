@@ -38,11 +38,14 @@ import type {
   StatsResponse,
 } from './generated/types'
 
+import { isIOSNativeApp } from '../runtime/nativeRuntime'
 import { JsonHttpClient } from './http'
 import { createBrowserServerBaseUrlProvider } from './serverBaseUrlProvider'
+import { NativeServerBaseUrlProvider } from './serverBaseUrlProvider'
 import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
 import {
   hasAuthToken,
+  nativeAuthTokenProvider,
   runtimeAuthTokenProvider,
 } from './tokenProvider'
 import type { AuthTokenProvider } from './tokenProvider'
@@ -620,14 +623,29 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
 export const browserServerBaseUrlProvider = createBrowserServerBaseUrlProvider(
   import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL,
 )
+export const nativeServerBaseUrlProvider = new NativeServerBaseUrlProvider()
+export const runtimeServerBaseUrlProvider: ClientServerBaseUrlProvider = isIOSNativeApp()
+  ? nativeServerBaseUrlProvider
+  : browserServerBaseUrlProvider
 
 export const apiClient = new HomeSecApiClient(
   DEFAULT_API_BASE_URL,
   {
     authTokenProvider: runtimeAuthTokenProvider,
-    serverBaseUrlProvider: browserServerBaseUrlProvider,
+    serverBaseUrlProvider: runtimeServerBaseUrlProvider,
   },
 )
+
+export async function hydrateRuntimeApiProviders(): Promise<void> {
+  if (!isIOSNativeApp()) {
+    return
+  }
+
+  await Promise.all([
+    nativeAuthTokenProvider.hydrate(),
+    nativeServerBaseUrlProvider.hydrate(),
+  ])
+}
 
 export function hasConfiguredApiToken(): boolean {
   return hasAuthToken(runtimeAuthTokenProvider)
@@ -639,6 +657,7 @@ export {
   BROWSER_SERVER_BASE_URL_STORAGE_KEY,
   BrowserServerBaseUrlProvider,
   createBrowserServerBaseUrlProvider,
+  NativeServerBaseUrlProvider,
   normalizeServerBaseUrl,
 } from './serverBaseUrlProvider'
 export {
@@ -651,8 +670,10 @@ export {
   InMemoryAuthTokenProvider,
   isRuntimeAuthSessionReady,
   markRuntimeAuthSessionReady,
+  NativeAuthTokenProvider,
   nativeAuthTokenProvider,
   normalizeAuthToken,
+  persistRuntimeAuthSessionReady,
   runtimeAuthTokenProvider,
 } from './tokenProvider'
 export type { AuthTokenProvider, SyncAuthTokenProvider } from './tokenProvider'

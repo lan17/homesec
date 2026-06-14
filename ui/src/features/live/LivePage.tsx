@@ -38,12 +38,12 @@ export function LivePage() {
   }
 
   async function submitApiKey(apiKey: string): Promise<void> {
-    saveApiKey(apiKey)
+    await saveApiKey(apiKey)
     await camerasQuery.refetch()
   }
 
   async function clearStoredApiKey(): Promise<void> {
-    clearApiKey()
+    await clearApiKey()
     await camerasQuery.refetch()
   }
 
