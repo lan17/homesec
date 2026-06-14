@@ -94,7 +94,10 @@ function mockIdlePushToTalk(overrides: Record<string, unknown> = {}) {
   })
 }
 
-function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
+function mockReadyPreviewSession(
+  playlistUrl: string = DEFAULT_PLAYLIST_URL,
+  overrides: Record<string, unknown> = {},
+) {
   useCameraPreviewMock.mockReturnValue({
     status: {
       camera_name: 'front',
@@ -126,6 +129,7 @@ function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
     start: vi.fn(),
     stop: vi.fn(),
     refreshStatus: vi.fn(),
+    ...overrides,
   })
 }
 
@@ -386,7 +390,9 @@ describe('CameraPreviewPanel', () => {
     // Given: The iOS native app has an active preview assigned through native HLS
     isIOSNativeAppMock.mockReturnValue(true)
     vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
-    mockReadyPreviewSession()
+    mockReadyPreviewSession(DEFAULT_PLAYLIST_URL, {
+      warning: 'Preview degraded: stale playlist warning',
+    })
     const removeDocumentListener = vi.spyOn(document, 'removeEventListener')
     const { container } = render(<CameraPreviewPanel cameraName="front" />)
     const video = await waitFor(() => {
@@ -403,6 +409,7 @@ describe('CameraPreviewPanel', () => {
       expect(screen.getByText(
         'Live preview could not play in the iOS app. Stop and start live view; if it keeps failing, check server or VPN reachability.',
       )).toBeTruthy()
+      expect(screen.queryByText('Preview degraded: stale playlist warning')).toBeNull()
       expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled()
       expect(HTMLMediaElement.prototype.load).toHaveBeenCalled()
       expect(video?.hasAttribute('src')).toBe(false)
@@ -415,7 +422,9 @@ describe('CameraPreviewPanel', () => {
     isIOSNativeAppMock.mockReturnValue(true)
     hlsIsSupportedMock.mockReturnValue(false)
     vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('')
-    mockReadyPreviewSession()
+    mockReadyPreviewSession(DEFAULT_PLAYLIST_URL, {
+      warning: 'Preview degraded: stale playlist warning',
+    })
 
     // When: Rendering the preview panel
     render(<CameraPreviewPanel cameraName="front" />)
@@ -425,6 +434,7 @@ describe('CameraPreviewPanel', () => {
       expect(screen.getByText(
         'This iOS app cannot play the live preview stream. Check the HomeSec preview configuration and try again.',
       )).toBeTruthy()
+      expect(screen.queryByText('Preview degraded: stale playlist warning')).toBeNull()
     })
   })
 

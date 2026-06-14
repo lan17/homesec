@@ -792,6 +792,76 @@ describe('useCameraPreview', () => {
     })
   })
 
+  it('clears a stale stop error after preview restarts successfully', async () => {
+    // Given: A stop failure has detached the local preview and left a user-visible error
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-2',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-2',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+    vi.spyOn(apiClient, 'stopCameraPreview').mockRejectedValue(new Error('stop failed'))
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+    })
+    await act(async () => {
+      await result.current.stop()
+    })
+    await waitFor(() => {
+      expect(result.current.error?.message).toBe('stop failed')
+      expect(result.current.session).toBeNull()
+    })
+
+    // When: A later preview start succeeds
+    await act(async () => {
+      await result.current.start()
+    })
+
+    // Then: The stale stop error is cleared once the new session is accepted
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-2')
+      expect(result.current.error).toBeNull()
+      expect(result.current.playlistUrl).toContain('preview-token-2')
+    })
+  })
+
   it('stops preview start that resolves after native background', async () => {
     // Given: Preview start is still in flight when native iOS backgrounds the app
     const previewStart = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()

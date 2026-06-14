@@ -52,6 +52,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const nativeLifecycleRef = useRef(nativeLifecycle)
   const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
+  const [stopError, setStopError] = useState<Error | null>(null)
   const sessionStateRef = useRef<StoredPreviewSession | null>(null)
   const statusRequestSeqRef = useRef(0)
   const sessionRequestSeqRef = useRef(0)
@@ -67,6 +68,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       receivedAtMs: Date.now(),
       statusRequestSeq: statusRequestSeqRef.current,
     }
+    setStopError(null)
     sessionStateRef.current = nextState
     setSessionState(nextState)
   }, [])
@@ -158,6 +160,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       ) {
         clearSession()
         setRefreshError(null)
+        setStopError(null)
       }
       return nextStatus
     },
@@ -173,6 +176,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
         return
       }
       setRefreshError(null)
+      setStopError(null)
       clearSession()
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
     },
@@ -187,9 +191,13 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const stop = useCallback(async () => {
     const requestSeq = beginStopRequest()
     clearSession()
+    setStopError(null)
     try {
       await stopPreview({ requestSeq })
-    } catch {
+    } catch (nextError) {
+      if (requestSeq === sessionRequestSeqRef.current) {
+        setStopError(nextError as Error)
+      }
       return
     }
   }, [beginStopRequest, clearSession, stopPreview])
@@ -273,7 +281,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
 
   const playlistUrl = session ? apiClient.resolvePath(session.playlist_url) : null
   const error = (startMutation.error
-    ?? stopMutation.error
+    ?? stopError
     ?? refreshError
     ?? statusQuery.error
     ?? null) as Error | null

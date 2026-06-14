@@ -417,11 +417,11 @@ export function CameraPreviewPanel({
   }
 
   const statusMessage = useMemo(() => {
-    if (warning) {
-      return warning
-    }
     if (playerError) {
       return playerError
+    }
+    if (warning) {
+      return warning
     }
     if (error) {
       if (isAPIError(error) && error.errorCode === 'PREVIEW_MEDIA_UNAVAILABLE') {
