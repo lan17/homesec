@@ -2,6 +2,21 @@ import { expect, test, type Page } from '@playwright/test'
 
 const MOBILE_VIEWPORT = { width: 320, height: 700 }
 const DESKTOP_VIEWPORT = { width: 1280, height: 800 }
+const SHELL_ROUTES = [
+  '/live',
+  '/events',
+  '/events/test-id',
+  '/settings',
+  '/settings/cameras',
+  '/system',
+] as const
+
+const SAFE_AREA_OVERRIDES = {
+  top: '8px',
+  right: '12px',
+  bottom: '34px',
+  left: '12px',
+} as const
 
 const camera = {
   name: 'front_door',
@@ -110,6 +125,18 @@ async function mockHomeSecApi(page: Page): Promise<void> {
       return
     }
 
+    if (path === '/api/v1/runtime/status') {
+      await fulfillJson({
+        state: 'idle',
+        generation: 3,
+        reload_in_progress: false,
+        active_config_version: 'cfg-v3',
+        last_reload_at: null,
+        last_reload_error: null,
+      })
+      return
+    }
+
     if (path === '/api/v1/preview/cameras/front_door') {
       await fulfillJson({
         camera_name: 'front_door',
@@ -174,6 +201,16 @@ async function openApp(page: Page, path: string): Promise<void> {
   await page.getByRole('main').waitFor()
 }
 
+async function applySafeAreaOverrides(page: Page): Promise<void> {
+  await page.evaluate((tokens) => {
+    const root = document.documentElement
+    root.style.setProperty('--safe-area-inset-top', tokens.top)
+    root.style.setProperty('--safe-area-inset-right', tokens.right)
+    root.style.setProperty('--safe-area-inset-bottom', tokens.bottom)
+    root.style.setProperty('--safe-area-inset-left', tokens.left)
+  }, SAFE_AREA_OVERRIDES)
+}
+
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const metrics = await page.evaluate(() => ({
     viewportWidth: window.innerWidth,
@@ -226,7 +263,7 @@ test.beforeEach(async ({ page }) => {
 test.describe('iOS M1 mobile layout hardening', () => {
   test.use({ viewport: MOBILE_VIEWPORT })
 
-  for (const route of ['/live', '/events', '/events/test-id', '/settings', '/system']) {
+  for (const route of SHELL_ROUTES) {
     test(`${route} has no horizontal overflow and keeps bottom nav clear`, async ({ page }) => {
       // Given: The HomeSec app is opened at iPhone width with API responses mocked
       await openApp(page, route)
@@ -239,6 +276,41 @@ test.describe('iOS M1 mobile layout hardening', () => {
       await expectMobileBottomNavClearance(page)
     })
   }
+
+  test('honors nonzero safe-area insets for mobile shell chrome', async ({ page }) => {
+    // Given: The shell renders with simulated iPhone notch and home-indicator insets
+    await openApp(page, '/live')
+    await applySafeAreaOverrides(page)
+
+    // When: The topbar, content, and fixed bottom nav are measured after re-layout
+    const metrics = await page.evaluate(() => {
+      const topbar = document.querySelector('.app-shell__topbar')
+      const content = document.querySelector('.app-shell__content')
+      const nav = document.querySelector('.mobile-bottom-nav')
+      const topbarStyles = topbar ? getComputedStyle(topbar) : null
+      const contentStyles = content ? getComputedStyle(content) : null
+      const navBox = nav?.getBoundingClientRect()
+
+      return {
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        topbarPaddingTop: topbarStyles ? Number.parseFloat(topbarStyles.paddingTop) : 0,
+        contentPaddingBottom: contentStyles ? Number.parseFloat(contentStyles.paddingBottom) : 0,
+        scrollPaddingBottom: Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingBottom),
+        navLeft: navBox?.left ?? -1,
+        navRight: navBox?.right ?? -1,
+        navBottom: navBox?.bottom ?? -1,
+      }
+    })
+
+    // Then: Safe-area tokens move chrome away from each unsafe viewport edge
+    expect(metrics.topbarPaddingTop).toBeGreaterThanOrEqual(20)
+    expect(metrics.contentPaddingBottom).toBeGreaterThanOrEqual(120)
+    expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(120)
+    expect(metrics.navLeft).toBeGreaterThanOrEqual(24)
+    expect(metrics.viewportWidth - metrics.navRight).toBeGreaterThanOrEqual(24)
+    expect(metrics.viewportHeight - metrics.navBottom).toBeGreaterThanOrEqual(46)
+  })
 
   test('keeps live preview controls above the bottom nav', async ({ page }) => {
     // Given: Live view renders a camera preview at iPhone width
@@ -274,8 +346,9 @@ test.describe('iOS M1 mobile layout hardening', () => {
   })
 
   test('keeps native setup inside safe-area-aware viewport padding', async ({ page }) => {
-    // Given: Native setup bypasses AppShell and renders its own mobile page
+    // Given: Native setup bypasses AppShell and renders with simulated iPhone safe-area insets
     await page.goto('/native-setup')
+    await applySafeAreaOverrides(page)
 
     // When: The setup page is measured at iPhone width
     await expect(page.getByRole('heading', { name: 'Connect to HomeSec' })).toBeVisible()
@@ -293,9 +366,9 @@ test.describe('iOS M1 mobile layout hardening', () => {
 
     // Then: Setup has dynamic viewport sizing and no mobile horizontal overflow
     expect(metrics.minHeight).toBe('700px')
-    expect(metrics.paddingTop).toBeGreaterThanOrEqual(16)
-    expect(metrics.paddingBottom).toBeGreaterThanOrEqual(16)
-    expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(16)
+    expect(metrics.paddingTop).toBeGreaterThanOrEqual(24)
+    expect(metrics.paddingBottom).toBeGreaterThanOrEqual(50)
+    expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(50)
     expect(metrics.htmlScrollWidth).toBeLessThanOrEqual(metrics.viewportWidth)
   })
 })
@@ -303,21 +376,23 @@ test.describe('iOS M1 mobile layout hardening', () => {
 test.describe('desktop layout regression guard', () => {
   test.use({ viewport: DESKTOP_VIEWPORT })
 
-  test('keeps desktop primary nav in the topbar instead of the mobile fixed nav', async ({ page }) => {
-    // Given: The app is opened at desktop width
-    await openApp(page, '/live')
+  for (const route of SHELL_ROUTES) {
+    test(`${route} keeps desktop nav in the topbar`, async ({ page }) => {
+      // Given: The app is opened at desktop width
+      await openApp(page, route)
 
-    // When: Navigation CSS is inspected in a real browser
-    const desktopNavDisplay = await page.locator('.app-shell__nav').evaluate((element) =>
-      getComputedStyle(element).display
-    )
-    const mobileNavDisplay = await page.locator('.mobile-bottom-nav').evaluate((element) =>
-      getComputedStyle(element).display
-    )
+      // When: Navigation CSS is inspected in a real browser
+      const desktopNavDisplay = await page.locator('.app-shell__nav').evaluate((element) =>
+        getComputedStyle(element).display
+      )
+      const mobileNavDisplay = await page.locator('.mobile-bottom-nav').evaluate((element) =>
+        getComputedStyle(element).display
+      )
 
-    // Then: Desktop keeps the topbar nav visible and the mobile nav hidden
-    expect(desktopNavDisplay).toBe('flex')
-    expect(mobileNavDisplay).toBe('none')
-    await expectNoHorizontalOverflow(page)
-  })
+      // Then: Desktop keeps the topbar nav visible and the mobile nav hidden
+      expect(desktopNavDisplay).toBe('flex')
+      expect(mobileNavDisplay).toBe('none')
+      await expectNoHorizontalOverflow(page)
+    })
+  }
 })
