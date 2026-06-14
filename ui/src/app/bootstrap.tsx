@@ -8,6 +8,7 @@ import App from '../App'
 import { initializeApiRuntimeConfig } from '../api/runtimeConfig'
 import { QueryProvider } from './providers/QueryProvider'
 import { ThemeProvider } from './providers/ThemeProvider'
+import { NativeDeepLinkRouter } from '../runtime/nativeDeepLinks'
 
 export type RenderHomeSecApp = (rootElement: HTMLElement, app: ReactNode) => void
 
@@ -27,6 +28,7 @@ export function createHomeSecAppElement(): ReactNode {
       <ThemeProvider>
         <QueryProvider>
           <BrowserRouter>
+            <NativeDeepLinkRouter />
             <App />
           </BrowserRouter>
         </QueryProvider>
