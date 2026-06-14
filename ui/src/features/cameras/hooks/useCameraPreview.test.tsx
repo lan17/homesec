@@ -529,6 +529,103 @@ describe('useCameraPreview', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('ignores stale token renewal failures after explicit stop', async () => {
+    // Given: A ready preview session with an in-flight token renewal
+    freezePreviewClock()
+    const realSetTimeout = window.setTimeout.bind(window)
+    const realClearTimeout = window.clearTimeout.bind(window)
+    let runScheduledRefresh: (() => void) | null = null
+    vi.spyOn(window, 'setTimeout').mockImplementation(((handler, timeout, ...args) => {
+      if (timeout === 5_000) {
+        runScheduledRefresh = () => {
+          if (typeof handler !== 'function') {
+            throw new Error('Expected refresh timer handler to be a function')
+          }
+          handler(...args)
+        }
+        return 99
+      }
+      return realSetTimeout(handler, timeout, ...args)
+    }) as typeof window.setTimeout)
+    vi.spyOn(window, 'clearTimeout').mockImplementation(((timeoutId) => {
+      if (timeoutId === 99) {
+        return
+      }
+      realClearTimeout(timeoutId)
+    }) as typeof window.clearTimeout)
+    const renewal = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    const ensurePreviewActive = vi
+      .spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      .mockReturnValueOnce(renewal.promise)
+    vi.spyOn(apiClient, 'stopCameraPreview').mockResolvedValue({
+      accepted: true,
+      state: 'stopping',
+      httpStatus: 202,
+    })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+      expect(runScheduledRefresh).not.toBeNull()
+    })
+    await act(async () => {
+      runScheduledRefresh?.()
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
+    })
+
+    // When: The user stops preview before the renewal request rejects
+    await act(async () => {
+      await result.current.stop()
+    })
+    await waitFor(() => {
+      expect(result.current.session).toBeNull()
+      expect(result.current.error).toBeNull()
+    })
+    await act(async () => {
+      renewal.reject(new Error('token refresh failed after stop'))
+      await Promise.resolve()
+    })
+
+    // Then: The stale renewal failure cannot repopulate preview errors
+    await waitFor(() => {
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+      expect(result.current.error).toBeNull()
+    })
+  })
+
   it('drops stale preview sessions after a newer terminal runtime status', async () => {
     // Given: A started preview session whose follow-up status says the runtime has already failed it
     freezePreviewClock()

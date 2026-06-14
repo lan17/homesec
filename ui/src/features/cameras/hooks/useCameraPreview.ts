@@ -220,14 +220,18 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     if (nativeLifecycle.isBackgrounded || stopInFlightSeqRef.current !== null) {
       return
     }
+    const activationSeq = beginSessionRequest()
+    const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
     try {
-      const activationSeq = beginSessionRequest()
-      const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
-      setRefreshError(null)
+      if (activationSeq === sessionRequestSeqRef.current) {
+        setRefreshError(null)
+      }
       await storeActivationIfCurrent({ activationSeq, pauseCountAtRequest, snapshot })
     } catch (nextError) {
-      setRefreshError(nextError as Error)
+      if (activationSeq === sessionRequestSeqRef.current && !nativeLifecycleRef.current.isBackgrounded) {
+        setRefreshError(nextError as Error)
+      }
     }
   }, [beginSessionRequest, cameraName, nativeLifecycle.isBackgrounded, storeActivationIfCurrent])
 
