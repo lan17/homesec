@@ -57,6 +57,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const statusRequestSeqRef = useRef(0)
   const sessionRequestSeqRef = useRef(0)
   const stopInFlightSeqRef = useRef<number | null>(null)
+  const latestStopRequestSeqRef = useRef(0)
 
   useLayoutEffect(() => {
     nativeLifecycleRef.current = nativeLifecycle
@@ -87,6 +88,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const beginStopRequest = useCallback(() => {
     const requestSeq = beginSessionRequest()
     stopInFlightSeqRef.current = requestSeq
+    latestStopRequestSeqRef.current = requestSeq
     return requestSeq
   }, [beginSessionRequest])
 
@@ -98,6 +100,10 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
 
   const storeActivationIfCurrent = useCallback(async (activation: PreviewActivation) => {
     const isLatestActivation = activation.activationSeq === sessionRequestSeqRef.current
+    const wasSupersededByLatestStop =
+      !isLatestActivation
+      && activation.activationSeq < latestStopRequestSeqRef.current
+      && sessionRequestSeqRef.current === latestStopRequestSeqRef.current
     const currentLifecycle = nativeLifecycleRef.current
 
     const stopLateActivation = async (): Promise<void> => {
@@ -105,6 +111,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       const stopRequestSeq = beginStopRequest()
       try {
         await apiClient.stopCameraPreview(cameraName)
+        setRefreshError(null)
+        setStopError(null)
+        await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
       } catch {
         return
       } finally {
@@ -125,6 +134,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     }
 
     if (!isLatestActivation) {
+      if (wasSupersededByLatestStop) {
+        await stopLateActivation()
+      }
       return
     }
 
