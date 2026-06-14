@@ -5,10 +5,43 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+type MockNativeLifecycleState = {
+  isActive: boolean
+  pauseCount: number
+  resumeCount: number
+}
+
+const nativeLifecycleMock = vi.hoisted(() => ({
+  state: {
+    isActive: true,
+    pauseCount: 0,
+    resumeCount: 0,
+  } as MockNativeLifecycleState,
+}))
+
+vi.mock('../../../runtime/nativeAppLifecycle', () => ({
+  useNativeAppLifecycleState: () => nativeLifecycleMock.state,
+}))
+
 import { apiClient } from '../../../api/client'
 import { useCameraPreview } from './useCameraPreview'
 
 const PREVIEW_TEST_NOW_MS = Date.parse('2026-04-23T12:00:00.000Z')
+
+function resetNativeLifecycleState() {
+  nativeLifecycleMock.state = {
+    isActive: true,
+    pauseCount: 0,
+    resumeCount: 0,
+  }
+}
+
+function setNativeLifecycleState(nextState: Partial<MockNativeLifecycleState>) {
+  nativeLifecycleMock.state = {
+    ...nativeLifecycleMock.state,
+    ...nextState,
+  }
+}
 
 function freezePreviewClock() {
   vi.spyOn(Date, 'now').mockReturnValue(PREVIEW_TEST_NOW_MS)
@@ -33,6 +66,7 @@ function createWrapper() {
 
 describe('useCameraPreview', () => {
   afterEach(() => {
+    resetNativeLifecycleState()
     vi.restoreAllMocks()
     vi.useRealTimers()
   })
@@ -614,5 +648,74 @@ describe('useCameraPreview', () => {
       expect(result.current.playlistUrl).toBeNull()
     })
     expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops active preview on native background and refreshes status on resume', async () => {
+    // Given: An active native app preview session
+    freezePreviewClock()
+    const getPreviewStatus = vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front',
+      state: 'ready',
+      viewer_count: 1,
+      token: 'preview-token-1',
+      token_expires_at: '2026-04-23T12:00:10.000Z',
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+      idle_timeout_s: 30,
+      warning: null,
+      httpStatus: 200,
+    })
+    const stopPreview = vi.spyOn(apiClient, 'stopCameraPreview').mockResolvedValue({
+      accepted: true,
+      state: 'stopping',
+      httpStatus: 202,
+    })
+
+    const { result, rerender } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+    })
+
+    // When: iOS backgrounds the app while preview is attached
+    setNativeLifecycleState({ isActive: false, pauseCount: 1 })
+    rerender()
+
+    // Then: The hook stops preview and suppresses background status requests
+    await waitFor(() => {
+      expect(stopPreview).toHaveBeenCalledWith('front')
+      expect(result.current.session).toBeNull()
+    })
+    const statusCallsAfterPause = getPreviewStatus.mock.calls.length
+    await act(async () => {
+      await expect(result.current.refreshStatus()).resolves.toBeNull()
+    })
+    expect(getPreviewStatus).toHaveBeenCalledTimes(statusCallsAfterPause)
+
+    // When: iOS resumes the app
+    setNativeLifecycleState({ isActive: true, resumeCount: 1 })
+    rerender()
+
+    // Then: The hook refreshes preview status without auto-attaching a new session
+    await waitFor(() => {
+      expect(getPreviewStatus.mock.calls.length).toBeGreaterThan(statusCallsAfterPause)
+    })
+    expect(result.current.session).toBeNull()
   })
 })
