@@ -39,6 +39,17 @@ public class HomeSecDevicePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func apnsEnvironment() -> String {
+        if let configured = bundleValue("HomeSecAPNSEnvironment")?.lowercased() {
+            switch configured {
+            case "development", "sandbox":
+                return "sandbox"
+            case "production":
+                return "production"
+            default:
+                break
+            }
+        }
+
         #if DEBUG
         return "sandbox"
         #else

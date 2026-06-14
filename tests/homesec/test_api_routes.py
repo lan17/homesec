@@ -2769,24 +2769,6 @@ def test_mobile_device_missing_returns_404(tmp_path) -> None:
     assert delete_response.json()["error_code"] == "MOBILE_DEVICE_NOT_FOUND"
 
 
-def test_mobile_notification_test_route_is_stubbed(tmp_path) -> None:
-    """POST /mobile/notifications/test should expose the current APNs stub."""
-    # Given: A configured app before APNs notifier implementation
-    manager = _write_config(tmp_path, cameras=[])
-    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
-    client = _client(app)
-
-    # When: Calling the mobile notification test route
-    response = client.post("/api/v1/mobile/notifications/test")
-
-    # Then: The route is available but reports that APNs delivery is not wired yet
-    assert response.status_code == 200
-    assert response.json() == {
-        "sent": False,
-        "reason": "APNs mobile notifier is not configured yet",
-    }
-
-
 def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Auth should be enforced for non-public endpoints."""
     # Given auth is enabled

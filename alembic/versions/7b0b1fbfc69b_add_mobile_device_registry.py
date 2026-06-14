@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "7b0b1fbfc69b"
@@ -24,11 +25,17 @@ def upgrade() -> None:
         sa.Column("id", sa.Text(), nullable=False),
         sa.Column("platform", sa.Text(), nullable=False),
         sa.Column("apns_token_hash", sa.Text(), nullable=False),
-        sa.Column("apns_token_encrypted", sa.Text(), nullable=False),
+        sa.Column("apns_token", sa.Text(), nullable=False),
         sa.Column("apns_environment", sa.Text(), nullable=False),
         sa.Column("bundle_id", sa.Text(), nullable=False),
         sa.Column("device_name", sa.Text(), nullable=True),
         sa.Column("app_version", sa.Text(), nullable=True),
+        sa.Column(
+            "capabilities",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
         sa.Column("enabled", sa.Boolean(), server_default=sa.text("true"), nullable=False),
         sa.Column(
             "created_at",

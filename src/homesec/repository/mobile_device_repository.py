@@ -51,9 +51,7 @@ class MobileDeviceRepository:
             id=_new_device_id(),
             platform=registration.platform,
             apns_token_hash=token_hash,
-            # No encryption utility exists yet. Keep the raw token confined to
-            # this internal column until the APNs sender ticket adds key management.
-            apns_token_encrypted=token,
+            apns_token=token,
             apns_environment=registration.apns_environment,
             bundle_id=registration.bundle_id,
             device_name=registration.device_name,
@@ -68,7 +66,7 @@ class MobileDeviceRepository:
             index_elements=[table.c.apns_token_hash],
             set_={
                 "platform": insert_stmt.excluded.platform,
-                "apns_token_encrypted": insert_stmt.excluded.apns_token_encrypted,
+                "apns_token": insert_stmt.excluded.apns_token,
                 "apns_environment": insert_stmt.excluded.apns_environment,
                 "bundle_id": insert_stmt.excluded.bundle_id,
                 "device_name": insert_stmt.excluded.device_name,
@@ -122,7 +120,7 @@ class MobileDeviceRepository:
         stmt = (
             select(
                 MobileDevice.id,
-                MobileDevice.apns_token_encrypted,
+                MobileDevice.apns_token,
                 MobileDevice.apns_environment,
                 MobileDevice.bundle_id,
             )
@@ -139,7 +137,7 @@ class MobileDeviceRepository:
         return [
             MobileDevicePushTarget(
                 id=str(row["id"]),
-                apns_token=str(row["apns_token_encrypted"]),
+                apns_token=str(row["apns_token"]),
                 apns_environment=row["apns_environment"],
                 bundle_id=str(row["bundle_id"]),
             )

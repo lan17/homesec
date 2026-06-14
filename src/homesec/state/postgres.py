@@ -158,7 +158,7 @@ class MobileDevice(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     platform: Mapped[str] = mapped_column(Text, nullable=False)
     apns_token_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    apns_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    apns_token: Mapped[str] = mapped_column(Text, nullable=False)
     apns_environment: Mapped[str] = mapped_column(Text, nullable=False)
     bundle_id: Mapped[str] = mapped_column(Text, nullable=False)
     device_name: Mapped[str | None] = mapped_column(Text, nullable=True)

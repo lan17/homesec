@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 _APNS_CATEGORY = "HOMESEC_EVENT"
 _APNS_PUSH_TYPE = "alert"
 _PROVIDER_TOKEN_REFRESH_S = 50 * 60
+_PERMANENT_TOKEN_REJECTION_REASONS = frozenset(
+    {
+        "BadDeviceToken",
+        "DeviceTokenNotForTopic",
+        "Unregistered",
+    }
+)
 
 
 class _MobileDevicePushRepository(Protocol):
@@ -48,6 +55,15 @@ class _MobileDevicePushRepository(Protocol):
         now: datetime | None = None,
     ) -> object | None:
         """Record the latest APNs send outcome for a device."""
+        ...
+
+    async def disable_device(
+        self,
+        device_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> object | None:
+        """Disable a permanently invalid APNs target."""
         ...
 
 
@@ -171,16 +187,19 @@ class APNsMobileNotifier(Notifier):
         )
 
         successes = 0
-        failures: list[str] = []
+        permanent_failures: list[str] = []
+        retryable_failures: list[str] = []
         for target, result in zip(targets, results, strict=True):
             match result:
-                case bool() as delivered:
-                    if delivered:
+                case _DeliveryResult() as delivery:
+                    if delivery.delivered:
                         successes += 1
+                    elif delivery.retryable:
+                        retryable_failures.append(target.id)
                     else:
-                        failures.append(target.id)
+                        permanent_failures.append(target.id)
                 case BaseException() as exc:
-                    failures.append(target.id)
+                    retryable_failures.append(target.id)
                     logger.error(
                         "APNs mobile send failed while recording device result: device_id=%s "
                         "error=%s",
@@ -189,19 +208,25 @@ class APNsMobileNotifier(Notifier):
                         exc_info=exc,
                     )
 
-        if failures:
+        failure_count = len(permanent_failures) + len(retryable_failures)
+        if failure_count:
             logger.warning(
                 "APNs mobile notifier had failed target deliveries: failed=%d succeeded=%d",
-                len(failures),
+                failure_count,
                 successes,
                 extra={
                     "event_type": "apns_mobile_delivery_partial_failure",
-                    "failed_count": len(failures),
+                    "failed_count": failure_count,
+                    "permanent_failed_count": len(permanent_failures),
+                    "retryable_failed_count": len(retryable_failures),
                     "succeeded_count": successes,
                 },
             )
-        if successes == 0 and failures:
-            raise RuntimeError(f"APNs delivery failed for {len(failures)} device(s)")
+        if retryable_failures or permanent_failures:
+            raise APNsDeliveryError(
+                f"APNs delivery failed for {failure_count} of {len(targets)} device(s)",
+                retryable=successes == 0 and bool(retryable_failures),
+            )
 
     async def ping(self) -> bool:
         """Health check for local APNs notifier configuration."""
@@ -223,7 +248,7 @@ class APNsMobileNotifier(Notifier):
         payload: dict[str, object],
         provider_token: str,
         sent_at: datetime,
-    ) -> bool:
+    ) -> _DeliveryResult:
         headers = {
             "authorization": f"bearer {provider_token}",
             "apns-topic": self._bundle_id,
@@ -244,22 +269,25 @@ class APNsMobileNotifier(Notifier):
                 target.id,
                 error,
             )
-            return False
+            return _DeliveryResult(delivered=False, retryable=True)
 
         if 200 <= response.status_code < 300:
             await self._repository.record_push_result(target.id, error=None, now=sent_at)
-            return True
+            return _DeliveryResult(delivered=True, retryable=False)
 
         reason = _apns_response_reason(response)
         error = f"HTTP {response.status_code}: {reason}"
         await self._repository.record_push_result(target.id, error=error, now=sent_at)
+        retryable = not _is_permanent_token_rejection(response.status_code, reason)
+        if not retryable:
+            await self._repository.disable_device(target.id, now=sent_at)
         logger.warning(
             "APNs mobile send rejected: device_id=%s status=%d reason=%s",
             target.id,
             response.status_code,
             reason,
         )
-        return False
+        return _DeliveryResult(delivered=False, retryable=retryable)
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -318,6 +346,23 @@ def _default_apns_base_url(environment: APNSEnvironment) -> str:
     if environment == "sandbox":
         return "https://api.sandbox.push.apple.com"
     return "https://api.push.apple.com"
+
+
+class _DeliveryResult(BaseModel):
+    delivered: bool
+    retryable: bool
+
+
+class APNsDeliveryError(RuntimeError):
+    """APNs fanout failed with retry guidance for the pipeline."""
+
+    def __init__(self, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+def _is_permanent_token_rejection(status_code: int, reason: str) -> bool:
+    return status_code == 410 or reason in _PERMANENT_TOKEN_REJECTION_REASONS
 
 
 def _require_mobile_repository(value: Any | None) -> _MobileDevicePushRepository:

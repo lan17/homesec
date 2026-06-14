@@ -67,11 +67,6 @@ class MobileDeviceResponse(BaseModel):
     last_push_error: str | None = None
 
 
-class MobileNotificationTestResponse(BaseModel):
-    sent: bool
-    reason: str
-
-
 def _device_response(record: MobileDeviceRecord) -> MobileDeviceResponse:
     return MobileDeviceResponse(
         id=record.id,
@@ -159,15 +154,3 @@ async def delete_mobile_device(
             error_code=APIErrorCode.MOBILE_DEVICE_NOT_FOUND,
         )
     return _device_response(record)
-
-
-@router.post(
-    "/api/v1/mobile/notifications/test",
-    response_model=MobileNotificationTestResponse,
-)
-async def test_mobile_notification() -> MobileNotificationTestResponse:
-    """Stub test notification endpoint until APNs notifier support lands."""
-    return MobileNotificationTestResponse(
-        sent=False,
-        reason="APNs mobile notifier is not configured yet",
-    )

@@ -50,10 +50,12 @@ describe('normalizeServerBaseUrl', () => {
     // Given: Candidate server base URL values
     const lanUrl = ' http://192.168.1.10:8081/// '
     const httpsUrl = 'https://homesec.example.com/'
+    const pathUrl = 'https://homesec.example.com/homesec///'
 
     // When / Then: URLs are trimmed and empty values stay unset
     expect(normalizeServerBaseUrl(lanUrl)).toBe('http://192.168.1.10:8081')
     expect(normalizeServerBaseUrl(httpsUrl)).toBe('https://homesec.example.com')
+    expect(normalizeServerBaseUrl(pathUrl)).toBe('https://homesec.example.com/homesec')
     expect(normalizeServerBaseUrl('   ')).toBeNull()
     expect(normalizeServerBaseUrl(null)).toBeNull()
   })

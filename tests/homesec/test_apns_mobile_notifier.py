@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from homesec.models.alert import Alert
 from homesec.models.mobile import MobileDevicePushTarget
 from homesec.plugins.notifiers.apns_mobile import (
+    APNsDeliveryError,
     APNsMobileConfig,
     APNsMobileNotifier,
     build_apns_payload,
@@ -22,6 +23,7 @@ from homesec.plugins.notifiers.apns_mobile import (
 class _FakeMobileDeviceRepository:
     def __init__(self, targets: list[MobileDevicePushTarget]) -> None:
         self.targets = targets
+        self.disabled_devices: list[tuple[str, datetime | None]] = []
         self.list_calls: list[tuple[str, str]] = []
         self.recorded_results: list[tuple[str, str | None, datetime | None]] = []
 
@@ -42,6 +44,14 @@ class _FakeMobileDeviceRepository:
         now: datetime | None = None,
     ) -> None:
         self.recorded_results.append((device_id, error, now))
+
+    async def disable_device(
+        self,
+        device_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        self.disabled_devices.append((device_id, now))
 
 
 class _FakeAPNsClient:
@@ -179,7 +189,7 @@ async def test_apns_notifier_sends_payload_to_registered_targets(
 async def test_apns_notifier_records_rejected_devices_and_raises_when_all_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: APNs rejects the only enabled target
+    # Given: APNs rejects the only enabled target with a retryable provider error
     monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
     monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
     monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
@@ -193,7 +203,7 @@ async def test_apns_notifier_records_rejected_devices_and_raises_when_all_fail(
             )
         ]
     )
-    fake_client = _FakeAPNsClient([httpx.Response(400, json={"reason": "BadDeviceToken"})])
+    fake_client = _FakeAPNsClient([httpx.Response(500, json={"reason": "InternalServerError"})])
     monkeypatch.setattr(
         "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient",
         lambda **_kwargs: fake_client,
@@ -201,12 +211,116 @@ async def test_apns_notifier_records_rejected_devices_and_raises_when_all_fail(
     notifier = APNsMobileNotifier(_config(repository))
 
     # When: Sending the alert
-    with pytest.raises(RuntimeError, match="APNs delivery failed"):
+    with pytest.raises(APNsDeliveryError, match="APNs delivery failed") as exc_info:
         await notifier.send(_sample_alert())
 
-    # Then: The rejection is recorded against the device without logging token material
+    # Then: The retryable rejection is recorded without disabling the device
+    assert exc_info.value.retryable is True
     assert len(repository.recorded_results) == 1
     device_id, error, recorded_at = repository.recorded_results[0]
     assert device_id == "dev_bad"
-    assert error == "HTTP 400: BadDeviceToken"
+    assert error == "HTTP 500: InternalServerError"
     assert recorded_at is not None
+    assert repository.disabled_devices == []
+
+
+@pytest.mark.asyncio
+async def test_apns_notifier_disables_permanent_failures_without_retrying_successes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: APNs accepts one registered target and rejects another target permanently
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_ok",
+                apns_token="good-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            ),
+            MobileDevicePushTarget(
+                id="dev_bad",
+                apns_token="bad-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            ),
+        ]
+    )
+    fake_client = _FakeAPNsClient(
+        [
+            httpx.Response(200),
+            httpx.Response(410, json={"reason": "Unregistered"}),
+        ]
+    )
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient",
+        lambda **_kwargs: fake_client,
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+
+    # When: Sending the alert
+    with pytest.raises(APNsDeliveryError, match="APNs delivery failed") as exc_info:
+        await notifier.send(_sample_alert())
+
+    # Then: Successful and failed device outcomes are both recorded without a whole-fanout retry
+    assert exc_info.value.retryable is False
+    assert [(device_id, error) for device_id, error, _ in repository.recorded_results] == [
+        ("dev_ok", None),
+        ("dev_bad", "HTTP 410: Unregistered"),
+    ]
+    disabled_device_id, disabled_at = repository.disabled_devices[0]
+    assert disabled_device_id == "dev_bad"
+    assert disabled_at == repository.recorded_results[1][2]
+
+
+@pytest.mark.asyncio
+async def test_apns_notifier_raises_on_partial_retryable_delivery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: APNs accepts one target but has a retryable provider failure for another
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_ok",
+                apns_token="good-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            ),
+            MobileDevicePushTarget(
+                id="dev_retry",
+                apns_token="retry-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            ),
+        ]
+    )
+    fake_client = _FakeAPNsClient(
+        [
+            httpx.Response(200),
+            httpx.Response(503, json={"reason": "ServiceUnavailable"}),
+        ]
+    )
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient",
+        lambda **_kwargs: fake_client,
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+
+    # When: Sending the alert
+    with pytest.raises(
+        APNsDeliveryError, match="APNs delivery failed for 1 of 2 device"
+    ) as exc_info:
+        await notifier.send(_sample_alert())
+
+    # Then: The partial retryable failure is recorded without retrying the already delivered target
+    assert exc_info.value.retryable is False
+    assert [(device_id, error) for device_id, error, _ in repository.recorded_results] == [
+        ("dev_ok", None),
+        ("dev_retry", "HTTP 503: ServiceUnavailable"),
+    ]
+    assert repository.disabled_devices == []

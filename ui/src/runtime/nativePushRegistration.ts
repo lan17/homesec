@@ -7,7 +7,7 @@ import type {
 } from '@capacitor/push-notifications'
 import type { PluginListenerHandle } from '@capacitor/core'
 
-import { HomeSecApiClient } from '../api/client'
+import { apiClient, type HomeSecApiClient } from '../api/client'
 import type { MobileDeviceRegisterRequest } from '../api/generated/types'
 import { homeSecDevicePlugin, type HomeSecDevicePlugin } from './homeSecDevicePlugin'
 import { isIOSNativeApp } from './nativeRuntime'
@@ -162,7 +162,7 @@ export async function registerNativePushDevice(
       devicePlugin.getRegistrationInfo(),
       requestAPNSToken(pushNotifications, options.timeoutMs ?? 30_000),
     ])
-    const client = options.client ?? new HomeSecApiClient()
+    const client = options.client ?? apiClient
     await client.registerMobileDevice(buildMobileDeviceRegistration(apnsToken, info))
     return { status: 'registered' }
   } catch (error) {
@@ -189,7 +189,7 @@ function registerOnceForKey(
 
   const registration = registerNativePushDevice(options).then((result) => {
     inFlightRegistrations.delete(registrationKey)
-    if (result.status !== 'failed') {
+    if (result.status === 'registered') {
       completedRegistrationKeys.add(registrationKey)
     }
     return result

@@ -47,10 +47,10 @@ public class HomeSecAuthPlugin: CAPPlugin, CAPBridgedPlugin {
         do {
             let value = try requiredString(call, key: "value")
             let normalized = try normalizedServerBaseUrl(value)
-            let previousOrigin = try currentServerOrigin()
-            if let previousOrigin, previousOrigin != normalized {
-                try keychain.delete(account: "\(tokenAccountPrefix)\(previousOrigin)")
-                try keychain.delete(account: "\(authDisabledReadyPrefix)\(previousOrigin)")
+            let previousBaseUrl = try currentServerBaseUrl()
+            if let previousBaseUrl, previousBaseUrl != normalized {
+                try keychain.delete(account: "\(tokenAccountPrefix)\(previousBaseUrl)")
+                try keychain.delete(account: "\(authDisabledReadyPrefix)\(previousBaseUrl)")
             }
             try keychain.set(normalized, account: serverBaseUrlAccount)
             call.resolve()
@@ -176,7 +176,11 @@ public class HomeSecAuthPlugin: CAPPlugin, CAPBridgedPlugin {
             throw HomeSecAuthPluginError.invalidServerBaseUrl(value)
         }
         components.scheme = scheme
-        components.path = ""
+        var path = components.percentEncodedPath
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        components.percentEncodedPath = path == "/" ? "" : path
         components.query = nil
         components.fragment = nil
         guard let normalized = components.string else {
@@ -185,7 +189,7 @@ public class HomeSecAuthPlugin: CAPPlugin, CAPBridgedPlugin {
         return normalized
     }
 
-    private func currentServerOrigin() throws -> String? {
+    private func currentServerBaseUrl() throws -> String? {
         guard let serverBaseUrl = try keychain.read(account: serverBaseUrlAccount) else {
             return nil
         }
@@ -193,10 +197,10 @@ public class HomeSecAuthPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func currentApiTokenAccount() throws -> String? {
-        guard let origin = try currentServerOrigin() else {
+        guard let serverBaseUrl = try currentServerBaseUrl() else {
             return nil
         }
-        return "\(tokenAccountPrefix)\(origin)"
+        return "\(tokenAccountPrefix)\(serverBaseUrl)"
     }
 
     private func requiredApiTokenAccount() throws -> String {
@@ -207,10 +211,10 @@ public class HomeSecAuthPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func currentAuthDisabledReadyAccount() throws -> String? {
-        guard let origin = try currentServerOrigin() else {
+        guard let serverBaseUrl = try currentServerBaseUrl() else {
             return nil
         }
-        return "\(authDisabledReadyPrefix)\(origin)"
+        return "\(authDisabledReadyPrefix)\(serverBaseUrl)"
     }
 
     private func requiredAuthDisabledReadyAccount() throws -> String {

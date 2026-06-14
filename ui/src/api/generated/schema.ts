@@ -291,26 +291,6 @@ export interface paths {
         patch: operations["update_mobile_device_api_v1_mobile_devices__device_id__patch"];
         trace?: never;
     };
-    "/api/v1/mobile/notifications/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Test Mobile Notification
-         * @description Stub test notification endpoint until APNs notifier support lands.
-         */
-        post: operations["test_mobile_notification_api_v1_mobile_notifications_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/onvif/discover": {
         parameters: {
             query?: never;
@@ -1124,13 +1104,6 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
-        };
-        /** MobileNotificationTestResponse */
-        MobileNotificationTestResponse: {
-            /** Reason */
-            reason: string;
-            /** Sent */
-            sent: boolean;
         };
         /**
          * NotifierConfig
@@ -2133,26 +2106,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    test_mobile_notification_api_v1_mobile_notifications_test_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MobileNotificationTestResponse"];
                 };
             };
         };

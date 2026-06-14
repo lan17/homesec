@@ -310,15 +310,20 @@ class _RuntimeWorkerService:
 
     def _create_notifier(self, config: Config) -> tuple[Notifier, list[NotifierEntry]]:
         entries: list[NotifierEntry] = []
-        runtime_context: dict[str, object] = {}
-        if isinstance(self._state_store, PostgresStateStore):
-            runtime_context["mobile_device_repository"] = MobileDeviceRepository(
-                self._state_store.engine
-            )
 
         for index, notifier_cfg in enumerate(config.notifiers):
             if not notifier_cfg.enabled:
                 continue
+            runtime_context: dict[str, object] = {}
+            if notifier_cfg.backend == "apns_mobile":
+                mobile_device_repository = self._create_mobile_device_repository()
+                if mobile_device_repository is None:
+                    logger.warning(
+                        "Skipping apns_mobile notifier because mobile device repository "
+                        "is unavailable"
+                    )
+                    continue
+                runtime_context["mobile_device_repository"] = mobile_device_repository
             notifier = load_notifier_plugin(
                 notifier_cfg.backend,
                 notifier_cfg.config,
@@ -334,6 +339,19 @@ class _RuntimeWorkerService:
         if len(entries) == 1:
             return entries[0].notifier, entries
         return MultiplexNotifier(entries), entries
+
+    def _create_mobile_device_repository(self) -> MobileDeviceRepository | None:
+        """Create the mobile repository only when Postgres initialized successfully."""
+        if not isinstance(self._state_store, PostgresStateStore):
+            return None
+        try:
+            return MobileDeviceRepository(self._state_store.engine)
+        except RuntimeError as exc:
+            logger.warning(
+                "Mobile device repository unavailable for runtime worker: %s",
+                exc,
+            )
+            return None
 
     async def _log_notifier_health(self, entries: list[NotifierEntry]) -> None:
         if not entries:

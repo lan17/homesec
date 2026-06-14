@@ -1284,24 +1284,6 @@
         "title": "MobileDeviceResponse",
         "type": "object"
       },
-      "MobileNotificationTestResponse": {
-        "properties": {
-          "reason": {
-            "title": "Reason",
-            "type": "string"
-          },
-          "sent": {
-            "title": "Sent",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "sent",
-          "reason"
-        ],
-        "title": "MobileNotificationTestResponse",
-        "type": "object"
-      },
       "NotifierConfig": {
         "description": "Notifier configuration entry.",
         "properties": {
@@ -3362,28 +3344,6 @@
           }
         },
         "summary": "Update Mobile Device",
-        "tags": [
-          "mobile"
-        ]
-      }
-    },
-    "/api/v1/mobile/notifications/test": {
-      "post": {
-        "description": "Stub test notification endpoint until APNs notifier support lands.",
-        "operationId": "test_mobile_notification_api_v1_mobile_notifications_test_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MobileNotificationTestResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Test Mobile Notification",
         "tags": [
           "mobile"
         ]

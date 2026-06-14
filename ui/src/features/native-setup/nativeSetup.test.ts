@@ -6,6 +6,7 @@ describe('validateNativeSetupServerUrl', () => {
   it('normalizes HTTPS and LAN URLs while rejecting unsupported input', () => {
     // Given: Server URL candidates from the native setup form
     const httpsUrl = ' https://homesec.example.com/// '
+    const pathUrl = 'https://homesec.example.com/homesec///'
     const lanUrl = 'http://192.168.1.10:8081/'
     const localHostUrl = 'http://homesec.local:8081/'
     const singleLabelUrl = 'http://homesec:8081/'
@@ -13,6 +14,7 @@ describe('validateNativeSetupServerUrl', () => {
 
     // When: Validating each value
     const httpsResult = validateNativeSetupServerUrl(httpsUrl)
+    const pathResult = validateNativeSetupServerUrl(pathUrl)
     const lanResult = validateNativeSetupServerUrl(lanUrl)
     const localHostResult = validateNativeSetupServerUrl(localHostUrl)
     const singleLabelResult = validateNativeSetupServerUrl(singleLabelUrl)
@@ -23,6 +25,13 @@ describe('validateNativeSetupServerUrl', () => {
       ok: true,
       value: {
         serverBaseUrl: 'https://homesec.example.com',
+        isPlainHttp: false,
+      },
+    })
+    expect(pathResult).toEqual({
+      ok: true,
+      value: {
+        serverBaseUrl: 'https://homesec.example.com/homesec',
         isPlainHttp: false,
       },
     })

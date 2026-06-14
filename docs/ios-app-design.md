@@ -1,10 +1,12 @@
 # HomeSec iOS and iPad App Design
 
-Last reviewed: 2026-05-10
+Last reviewed: 2026-06-14
 
-This document is the repo-level source of truth for the first HomeSec iOS and
-iPad app. The v1 direction is to package the existing React app in a Capacitor
-iOS shell and add narrow native bridges only where iOS capabilities are required.
+This document is the repo-level architecture baseline for the first HomeSec iOS
+and iPad app. The v1 direction is to package the existing React app in a
+Capacitor iOS shell and add narrow native bridges only where iOS capabilities
+are required. The build runbook remains the operational source for signing,
+device QA, APNs credentials, and App Store/TestFlight mechanics.
 
 ## Executive Decision
 
@@ -43,7 +45,7 @@ The existing React app remains the canonical UI for v1:
 | Notification route | Open `/events/:clipId?from=notification`. |
 | Alert review scope | `alerted == true` is enough. No alert-review or review-state work in this stream. |
 | Mobile device registry | Named iOS devices with enable/disable semantics. |
-| APNs config | Implement later as a notifier backend under `notifiers`, using `backend: apns_mobile`. |
+| APNs config | Implemented as a notifier backend under `notifiers`, using `backend: apns_mobile`. |
 | Push-to-talk | Keep React parity. Test the WebView path first; add native audio only if needed. |
 | Background behavior | Stop live preview and push-to-talk when the app backgrounds. |
 | iPad v1 | Same responsive app. No dedicated iPad split view in v1. |
@@ -193,18 +195,16 @@ Provider selection:
 | Environment | Token provider | Base URL provider |
 | --- | --- | --- |
 | Browser web app | Existing `sessionStorage` key `homesec.apiKey` | Build-time `VITE_API_BASE_URL`, then optional runtime storage |
-| iOS Capacitor app after native bridge lands | Native bridge to Keychain | Native bridge to stored server URL |
+| iOS Capacitor app | Native bridge to Keychain | Native bridge to stored server URL |
 | Tests | In-memory provider | In-memory provider |
 
 Future pairing/QR auth should be designed separately and should not be added to
-the M1 app shell.
+the v1 app shell.
 
-M1 introduces the provider contracts and runtime base URL setup path, but it must
-not create a new insecure native persistence path for the API token. Until the
-Keychain bridge lands in `iOS-06`/`iOS-07`, native-mode setup may validate the
-entered server URL and API token and keep them in app runtime state for the
-current WebView session, but durable native-mode token persistence belongs to the
-Keychain bridge milestone.
+The implemented native-mode setup path validates the entered server URL and API
+token, then persists the server URL, API token, and auth-disabled acknowledgement
+through the native Keychain bridge. Browser mode keeps the existing
+session-storage behavior.
 
 ## iOS Setup UX
 
@@ -215,10 +215,8 @@ Native-mode first launch should support:
 3. User enters HomeSec API token.
 4. App validates the token against an auth-protected endpoint such as
    `/api/v1/cameras`.
-5. App stores server URL and API token through the selected providers when the
-   selected provider has durable storage. Before the native Keychain provider
-   exists, native mode must avoid durable API-token storage and may retain the
-   token only for the current app session.
+5. App stores server URL and API token through the native Keychain-backed
+   providers.
 6. App routes to `/live`.
 
 The setup screen must show actionable errors for invalid URLs and invalid tokens.
@@ -227,8 +225,7 @@ appears disabled. Existing browser `/setup` behavior must remain intact.
 
 ## Push And Deep-Link Design
 
-Plain APNs comes after the M1 app shell. The eventual APNs payload should include
-an app route:
+Plain APNs notifications include an app route:
 
 ```json
 {
@@ -298,7 +295,7 @@ URL and API token support.
 1. `iOS-19` - iOS device QA pass.
 2. `iOS-20` - Personal release build notes.
 
-## M1 Validation Expectations
+## Validation Expectations
 
 Use focused validation while developing, then run the relevant repo gates before
 publishing or handing off:
@@ -315,16 +312,22 @@ M1 tickets that touch UI runtime code, run the UI gate at minimum:
 make ui-check
 ```
 
-For the Capacitor scaffold, also verify:
+For the Capacitor scaffold and native bridge changes, also verify:
 
 ```bash
-cd ui && pnpm ios:build
-cd ui && pnpm ios:sync
-cd ui && pnpm ios:run
+pnpm --dir ui ios:sync
+xcodebuild \
+  -project ui/ios/App/App.xcodeproj \
+  -scheme App \
+  -destination 'generic/platform=iOS Simulator' \
+  -configuration Debug \
+  CODE_SIGNING_ALLOWED=NO \
+  build
 ```
 
-Launching in the simulator is expected for `iOS-04` when local Xcode setup
-allows it. Real-device signing is not required for M1.
+Launching in the simulator is expected when local Xcode setup allows it.
+Real-device signing uses the personal Apple Development team for Debug and a
+distribution identity for Release/TestFlight.
 
 ## Deferred Follow-Ups
 

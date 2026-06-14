@@ -689,18 +689,6 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             expected_error_code="UNAUTHORIZED",
         ),
         _MatrixCase(
-            name="mobile_notification_test_requires_api_key_when_auth_enabled",
-            method="POST",
-            path="/api/v1/mobile/notifications/test",
-            auth_enabled=True,
-            db_ok=True,
-            pipeline_running=True,
-            auth_header=None,
-            include_clip=False,
-            expected_status=401,
-            expected_error_code="UNAUTHORIZED",
-        ),
-        _MatrixCase(
             name="mobile_device_list_requires_db_when_repository_unavailable",
             method="GET",
             path="/api/v1/mobile/devices",
