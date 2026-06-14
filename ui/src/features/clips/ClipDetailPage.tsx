@@ -4,6 +4,7 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 
 import {
   clearApiKey,
+  isAPIError,
   isUnauthorizedAPIError,
   saveApiKey,
   type ClipListSnapshot,
@@ -42,11 +43,43 @@ interface NeighborEvents {
 }
 
 function eventDetailPath(clipId: string, routeSearch: string): string {
-  return `/events/${encodeURIComponent(clipId)}${routeSearch}`
+  return `/events/${encodeURIComponent(clipId)}${eventNavigationSearch(routeSearch)}`
+}
+
+function eventNavigationSearch(routeSearch: string): string {
+  const params = new URLSearchParams(routeSearch)
+  params.delete('from')
+  const search = params.toString()
+  return search ? `?${search}` : ''
 }
 
 function eventListPath(routeSearch: string): string {
-  return `/events${routeSearch}`
+  return `/events${eventNavigationSearch(routeSearch)}`
+}
+
+function isNotificationOpen(searchParams: URLSearchParams): boolean {
+  return searchParams.get('from') === 'notification'
+}
+
+function isMissingEventError(error: unknown): boolean {
+  return isAPIError(error) && error.status === 404
+}
+
+function describeClipLoadError(error: unknown, openedFromNotification: boolean): string {
+  if (isMissingEventError(error)) {
+    return openedFromNotification
+      ? 'The event opened from this notification is no longer available. It may have been deleted or cleaned up.'
+      : 'This event is no longer available. It may have been deleted or cleaned up.'
+  }
+
+  return describeClipError(error)
+}
+
+function clipLoadErrorTitle(error: unknown, openedFromNotification: boolean): string {
+  if (isMissingEventError(error)) {
+    return 'Event no longer available'
+  }
+  return openedFromNotification ? 'Notification event could not load' : 'Event could not load'
 }
 
 function findClipWindow(
@@ -92,15 +125,19 @@ export function ClipDetailPage() {
   const location = useLocation()
   const queryClient = useQueryClient()
   const clipQuery = useClipQuery(clipId)
-  const mediaQuery = useClipMediaUrl(clipId)
+  const missingEvent = isMissingEventError(clipQuery.error)
+  const clip = missingEvent ? undefined : clipQuery.data
+  const mediaQuery = useClipMediaUrl(clip?.id)
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search])
+  const openedFromNotification = isNotificationOpen(searchParams)
   const unauthorized = isUnauthorizedAPIError(clipQuery.error)
-  const clip = clipQuery.data
   const externalLink = clip ? resolveClipExternalLink(clip) : null
   const viewUrlLink = clip ? resolveClipViewLink(clip) : null
   const externalStorageLink = externalLink && externalLink !== viewUrlLink ? externalLink : null
+  const backToEventsPath = eventListPath(location.search)
   const listQuery = useMemo(
-    () => parseClipsQuery(new URLSearchParams(location.search)),
-    [location.search],
+    () => parseClipsQuery(searchParams),
+    [searchParams],
   )
   const clipWindow = useMemo(
     () => findClipWindow(queryClient, clipId, listQuery),
@@ -159,9 +196,14 @@ export function ClipDetailPage() {
             {clip ? `${clip.camera} - ${formatTimestamp(clip.created_at)}` : 'Recorded security event'}
           </p>
         </div>
-        <Button variant="ghost" onClick={refreshClip} disabled={clipQuery.isFetching || !clipId}>
-          {clipQuery.isFetching ? 'Refreshing...' : 'Refresh'}
-        </Button>
+        <div className="clip-detail-header-actions">
+          <Link className="button button--ghost" to={backToEventsPath}>
+            Back to Events
+          </Link>
+          <Button variant="ghost" onClick={refreshClip} disabled={clipQuery.isFetching || !clipId}>
+            {clipQuery.isFetching ? 'Refreshing...' : 'Refresh'}
+          </Button>
+        </div>
       </header>
 
       {!clipId ? (
@@ -169,7 +211,7 @@ export function ClipDetailPage() {
           title="Invalid event request"
           description={(
             <>
-              Missing event ID. Return to <Link to={eventListPath(location.search)}>events</Link>.
+              Missing event ID. Return to <Link to={backToEventsPath}>events</Link>.
             </>
           )}
           tone="error"
@@ -196,8 +238,8 @@ export function ClipDetailPage() {
 
       {clipQuery.error && !unauthorized ? (
         <EmptyState
-          title="Event could not load"
-          description={describeClipError(clipQuery.error)}
+          title={clipLoadErrorTitle(clipQuery.error, openedFromNotification)}
+          description={describeClipLoadError(clipQuery.error, openedFromNotification)}
           tone="error"
         />
       ) : null}
@@ -252,9 +294,6 @@ export function ClipDetailPage() {
             </p>
 
             <div className="clip-detail-actions">
-              <Link className="button button--ghost" to={eventListPath(location.search)}>
-                Back to events
-              </Link>
               {neighbors.previous ? (
                 <Link
                   className="button button--ghost"

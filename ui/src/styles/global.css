@@ -882,6 +882,13 @@ a:hover {
   font-size: 1.25rem;
 }
 
+.clip-detail-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .clip-detail-summary__text {
   margin: 0;
   color: var(--text-primary);
@@ -1736,6 +1743,12 @@ a:hover {
 
   .advanced-filters__header {
     flex-direction: column;
+  }
+
+  .clip-detail-header-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 1fr;
   }
 
   .camera-form-grid {
