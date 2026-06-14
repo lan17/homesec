@@ -11,6 +11,13 @@ MobilePlatform = Literal["ios"]
 APNSEnvironment = Literal["sandbox", "production"]
 
 
+class MobileDeviceCapabilities(BaseModel):
+    """Feature flags reported by the current iOS app build."""
+
+    deep_links: bool = True
+    rich_notifications: bool = False
+
+
 class MobileDeviceRegistration(BaseModel):
     """Registration payload for an iOS APNs device."""
 
@@ -20,6 +27,7 @@ class MobileDeviceRegistration(BaseModel):
     bundle_id: str = Field(min_length=1)
     device_name: str | None = None
     app_version: str | None = None
+    capabilities: MobileDeviceCapabilities = Field(default_factory=MobileDeviceCapabilities)
 
     @field_validator("apns_token", "bundle_id")
     @classmethod
@@ -36,6 +44,7 @@ class MobileDeviceUpdate(BaseModel):
     device_name: str | None = None
     app_version: str | None = None
     enabled: bool | None = None
+    capabilities: MobileDeviceCapabilities | None = None
 
 
 class MobileDeviceRecord(BaseModel):
@@ -47,6 +56,7 @@ class MobileDeviceRecord(BaseModel):
     bundle_id: str
     device_name: str | None = None
     app_version: str | None = None
+    capabilities: MobileDeviceCapabilities = Field(default_factory=MobileDeviceCapabilities)
     enabled: bool
     token_fingerprint: str
     created_at: datetime

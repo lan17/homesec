@@ -12,7 +12,12 @@ from sqlalchemy import Table, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from homesec.models.mobile import MobileDeviceRecord, MobileDeviceRegistration, MobileDeviceUpdate
+from homesec.models.mobile import (
+    MobileDeviceCapabilities,
+    MobileDeviceRecord,
+    MobileDeviceRegistration,
+    MobileDeviceUpdate,
+)
 from homesec.state.postgres import MobileDevice
 
 
@@ -51,6 +56,7 @@ class MobileDeviceRepository:
             bundle_id=registration.bundle_id,
             device_name=registration.device_name,
             app_version=registration.app_version,
+            capabilities=registration.capabilities.model_dump(mode="json"),
             enabled=True,
             created_at=recorded_at,
             updated_at=recorded_at,
@@ -65,6 +71,7 @@ class MobileDeviceRepository:
                 "bundle_id": insert_stmt.excluded.bundle_id,
                 "device_name": insert_stmt.excluded.device_name,
                 "app_version": insert_stmt.excluded.app_version,
+                "capabilities": insert_stmt.excluded.capabilities,
                 "updated_at": recorded_at,
                 "last_seen_at": recorded_at,
             },
@@ -107,9 +114,11 @@ class MobileDeviceRepository:
         now: datetime | None = None,
     ) -> MobileDeviceRecord | None:
         """Update mutable device metadata and enabled state."""
-        changes = patch.model_dump(exclude_unset=True)
+        changes = patch.model_dump(exclude_unset=True, mode="json")
         if changes.get("enabled") is None:
             changes.pop("enabled", None)
+        if changes.get("capabilities") is None:
+            changes.pop("capabilities", None)
         if not changes:
             return await self.get_device(device_id)
 
@@ -151,6 +160,7 @@ def _device_record_columns() -> tuple[Any, ...]:
         MobileDevice.bundle_id,
         MobileDevice.device_name,
         MobileDevice.app_version,
+        MobileDevice.capabilities,
         MobileDevice.enabled,
         MobileDevice.created_at,
         MobileDevice.updated_at,
@@ -169,6 +179,7 @@ def _device_record_from_mapping(row: Mapping[str, Any]) -> MobileDeviceRecord:
         bundle_id=str(row["bundle_id"]),
         device_name=row["device_name"],
         app_version=row["app_version"],
+        capabilities=MobileDeviceCapabilities.model_validate(row["capabilities"] or {}),
         enabled=bool(row["enabled"]),
         token_fingerprint=token_hash[:12],
         created_at=row["created_at"],

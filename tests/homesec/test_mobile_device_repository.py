@@ -9,7 +9,11 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from homesec.models.mobile import MobileDeviceRegistration, MobileDeviceUpdate
+from homesec.models.mobile import (
+    MobileDeviceCapabilities,
+    MobileDeviceRegistration,
+    MobileDeviceUpdate,
+)
 from homesec.repository.mobile_device_repository import MobileDeviceRepository, hash_apns_token
 from homesec.state.postgres import MobileDevice, PostgresStateStore
 
@@ -64,6 +68,8 @@ async def test_register_device_creates_redacted_list_record(
     assert record.enabled is True
     assert record.apns_environment == "sandbox"
     assert record.bundle_id == "com.levneiman.homesec"
+    assert record.capabilities.deep_links is True
+    assert record.capabilities.rich_notifications is False
     assert records == [record]
     encoded = json.dumps(record.model_dump(mode="json"), sort_keys=True)
     assert registration.apns_token not in encoded
@@ -106,6 +112,7 @@ async def test_register_device_dedupes_by_token_hash(
     assert second.id == first.id
     assert second.device_name == "Kitchen iPad"
     assert second.app_version == "1.1.0"
+    assert second.capabilities.deep_links is True
     assert second.last_seen_at == datetime(2026, 6, 14, 8, 5, tzinfo=timezone.utc)
     assert records == [second]
 
@@ -178,13 +185,18 @@ async def test_update_device_can_reenable_disabled_device(
     # When: Updating the device enabled state explicitly
     updated = await repository.update_device(
         registered.id,
-        MobileDeviceUpdate(enabled=True, device_name="Front Door iPhone"),
+        MobileDeviceUpdate(
+            enabled=True,
+            device_name="Front Door iPhone",
+            capabilities=MobileDeviceCapabilities(rich_notifications=True),
+        ),
     )
 
     # Then: The device returns to default listings with updated metadata
     assert updated is not None
     assert updated.enabled is True
     assert updated.device_name == "Front Door iPhone"
+    assert updated.capabilities.rich_notifications is True
     assert await repository.list_devices() == [updated]
 
     await state_store.shutdown()

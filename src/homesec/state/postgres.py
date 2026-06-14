@@ -163,6 +163,11 @@ class MobileDevice(Base):
     bundle_id: Mapped[str] = mapped_column(Text, nullable=False)
     device_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     app_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capabilities: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        server_default=text("'{}'::jsonb"),
+        nullable=False,
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean,
         server_default=text("true"),

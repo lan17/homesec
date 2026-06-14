@@ -17,6 +17,7 @@ from homesec.api.routes import (
     health,
     maintenance,
     media,
+    mobile,
     onvif,
     preview,
     runtime,
@@ -69,6 +70,14 @@ def register_routes(app: FastAPI) -> None:
     )
     app.include_router(
         stats.router,
+        dependencies=[
+            Depends(verify_api_key),
+            Depends(require_normal_mode),
+            Depends(require_database),
+        ],
+    )
+    app.include_router(
+        mobile.router,
         dependencies=[
             Depends(verify_api_key),
             Depends(require_normal_mode),

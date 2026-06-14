@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from homesec.interfaces import EventStore, StateStore, StorageBackend
     from homesec.models.config import Config
     from homesec.repository import ClipRepository
+    from homesec.repository.mobile_device_repository import MobileDeviceRepository
 
 logger = logging.getLogger(__name__)
 RESTART_EXIT_CODE = 42
@@ -95,6 +96,7 @@ class Application:
         self._state_store: StateStore = NoopStateStore()
         self._event_store: EventStore = NoopEventStore()
         self._repository: ClipRepository | None = None
+        self._mobile_device_repository: MobileDeviceRepository | None = None
         self._postgres_backup_manager: PostgresBackupManager | None = None
         self._api_server: APIServer | None = None
         self._runtime_manager: RuntimeManager | None = None
@@ -529,6 +531,19 @@ class Application:
         if self._repository is None:
             raise RuntimeError("Repository not initialized")
         return self._repository
+
+    @property
+    def mobile_devices(self) -> MobileDeviceRepository:
+        if self._mobile_device_repository is not None:
+            return self._mobile_device_repository
+
+        from homesec.repository.mobile_device_repository import MobileDeviceRepository
+        from homesec.state.postgres import PostgresStateStore
+
+        if not isinstance(self._state_store, PostgresStateStore):
+            raise RuntimeError("Mobile device repository requires initialized Postgres state store")
+        self._mobile_device_repository = MobileDeviceRepository(self._state_store.engine)
+        return self._mobile_device_repository
 
     @property
     def storage(self) -> StorageBackend:

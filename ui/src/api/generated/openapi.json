@@ -1042,6 +1042,266 @@
         "title": "MediaProfileResponse",
         "type": "object"
       },
+      "MobileDeviceCapabilities": {
+        "description": "Feature flags reported by the current iOS app build.",
+        "properties": {
+          "deep_links": {
+            "default": true,
+            "title": "Deep Links",
+            "type": "boolean"
+          },
+          "rich_notifications": {
+            "default": false,
+            "title": "Rich Notifications",
+            "type": "boolean"
+          }
+        },
+        "title": "MobileDeviceCapabilities",
+        "type": "object"
+      },
+      "MobileDevicePatchRequest": {
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "capabilities": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobileDeviceCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "title": "MobileDevicePatchRequest",
+        "type": "object"
+      },
+      "MobileDeviceRegisterRequest": {
+        "properties": {
+          "apns_token": {
+            "minLength": 1,
+            "title": "Apns Token",
+            "type": "string"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "bundle_id": {
+            "minLength": 1,
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/MobileDeviceCapabilities"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "environment": {
+            "enum": [
+              "sandbox",
+              "production"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "platform": {
+            "const": "ios",
+            "default": "ios",
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "apns_token",
+          "environment",
+          "bundle_id"
+        ],
+        "title": "MobileDeviceRegisterRequest",
+        "type": "object"
+      },
+      "MobileDeviceResponse": {
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "bundle_id": {
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/MobileDeviceCapabilities"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "environment": {
+            "enum": [
+              "sandbox",
+              "production"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_push_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Push At"
+          },
+          "last_push_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Push Error"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "platform": {
+            "const": "ios",
+            "title": "Platform",
+            "type": "string"
+          },
+          "token_fingerprint": {
+            "title": "Token Fingerprint",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "environment",
+          "bundle_id",
+          "capabilities",
+          "enabled",
+          "token_fingerprint",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MobileDeviceResponse",
+        "type": "object"
+      },
+      "MobileNotificationTestResponse": {
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "sent": {
+            "title": "Sent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sent",
+          "reason"
+        ],
+        "title": "MobileNotificationTestResponse",
+        "type": "object"
+      },
       "NotifierConfig": {
         "description": "Notifier configuration entry.",
         "properties": {
@@ -2922,6 +3182,210 @@
         "summary": "Get Postgres Backup Status",
         "tags": [
           "maintenance"
+        ]
+      }
+    },
+    "/api/v1/mobile/devices": {
+      "get": {
+        "description": "List registered iOS devices without raw APNs material.",
+        "operationId": "list_mobile_devices_api_v1_mobile_devices_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_disabled",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Disabled",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MobileDeviceResponse"
+                  },
+                  "title": "Response List Mobile Devices Api V1 Mobile Devices Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mobile Devices",
+        "tags": [
+          "mobile"
+        ]
+      },
+      "post": {
+        "description": "Register or refresh an iOS APNs device.",
+        "operationId": "register_mobile_device_api_v1_mobile_devices_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileDeviceRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileDeviceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Mobile Device",
+        "tags": [
+          "mobile"
+        ]
+      }
+    },
+    "/api/v1/mobile/devices/{device_id}": {
+      "delete": {
+        "description": "Disable a mobile device without hard-deleting it.",
+        "operationId": "delete_mobile_device_api_v1_mobile_devices__device_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileDeviceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Mobile Device",
+        "tags": [
+          "mobile"
+        ]
+      },
+      "patch": {
+        "description": "Update mutable mobile device metadata or enabled state.",
+        "operationId": "update_mobile_device_api_v1_mobile_devices__device_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileDevicePatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileDeviceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Mobile Device",
+        "tags": [
+          "mobile"
+        ]
+      }
+    },
+    "/api/v1/mobile/notifications/test": {
+      "post": {
+        "description": "Stub test notification endpoint until APNs notifier support lands.",
+        "operationId": "test_mobile_notification_api_v1_mobile_notifications_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileNotificationTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Test Mobile Notification",
+        "tags": [
+          "mobile"
         ]
       }
     },
