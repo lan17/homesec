@@ -305,13 +305,21 @@ export function CameraPreviewPanel({
       }
     }
 
+    const releaseMediaElement = (): void => {
+      hls?.destroy()
+      hls = null
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+
     const handleVideoError = (): void => {
       setPlayerError(previewPlaybackFailureMessage(isIOSNative))
       keepPlaybackActive = false
       clearResumeTimeout()
       clearResumeInterval()
-      hls?.destroy()
-      hls = null
+      video.removeEventListener('error', handleVideoError)
+      releaseMediaElement()
     }
 
     const cleanupPlayback = (): void => {
@@ -328,10 +336,7 @@ export function CameraPreviewPanel({
       video.removeEventListener('waiting', requestPlayback)
       video.removeEventListener('error', handleVideoError)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      hls?.destroy()
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
+      releaseMediaElement()
     }
 
     video.addEventListener('pause', requestPlayback)
@@ -369,8 +374,7 @@ export function CameraPreviewPanel({
         keepPlaybackActive = false
         clearResumeTimeout()
         clearResumeInterval()
-        hls?.destroy()
-        hls = null
+        releaseMediaElement()
       })
 
       startPlaybackMonitor()

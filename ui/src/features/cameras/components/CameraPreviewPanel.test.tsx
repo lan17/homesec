@@ -370,6 +370,9 @@ describe('CameraPreviewPanel', () => {
       expect(screen.getByText(
         'Live preview could not play in the iOS app. Stop and start live view; if it keeps failing, check server or VPN reachability.',
       )).toBeTruthy()
+      expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled()
+      expect(HTMLMediaElement.prototype.load).toHaveBeenCalled()
+      expect(video?.hasAttribute('src')).toBe(false)
     })
   })
 
