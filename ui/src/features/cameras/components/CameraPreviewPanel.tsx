@@ -4,6 +4,7 @@ import Hls from 'hls.js'
 import { isAPIError } from '../../../api/client'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
+import { isIOSNativeApp } from '../../../runtime/nativeRuntime'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { useCameraPreview } from '../hooks/useCameraPreview'
 import { PushToTalkControl } from './PushToTalkControl'
@@ -12,6 +13,7 @@ const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
 const PLAYBACK_RETRY_DELAY_MS = 1000
 const PREVIEW_DISPLAY_STATUS_STATES = new Set(['starting', 'ready', 'degraded', 'stopping'])
+const HLS_MIME_TYPES = ['application/vnd.apple.mpegurl', 'application/x-mpegURL']
 
 type WebKitFullscreenDocument = Document & {
   webkitExitFullscreen?: () => Promise<void> | void
@@ -66,6 +68,22 @@ function previewLabel(state: string | undefined): string {
     default:
       return 'Idle'
   }
+}
+
+function canPlayNativeHls(video: HTMLVideoElement): boolean {
+  return HLS_MIME_TYPES.some((mimeType) => video.canPlayType(mimeType) !== '')
+}
+
+function previewPlaybackFailureMessage(isIOSNative: boolean): string {
+  return isIOSNative
+    ? 'Live preview could not play in the iOS app. Stop and start live view; if it keeps failing, check server or VPN reachability.'
+    : 'Preview playback failed. Stop and start live view.'
+}
+
+function previewUnsupportedMessage(isIOSNative: boolean): string {
+  return isIOSNative
+    ? 'This iOS app cannot play the live preview stream. Check the HomeSec preview configuration and try again.'
+    : 'This browser cannot play the live preview stream.'
 }
 
 function startLabel(statusState: string | undefined): string {
@@ -131,6 +149,7 @@ export function CameraPreviewPanel({
   const [playlistReady, setPlaylistReady] = useState(false)
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
+  const isIOSNative = isIOSNativeApp()
   const effectiveState =
     session && (!status || !PREVIEW_DISPLAY_STATUS_STATES.has(status.state))
       ? session.state
@@ -286,6 +305,15 @@ export function CameraPreviewPanel({
       }
     }
 
+    const handleVideoError = (): void => {
+      setPlayerError(previewPlaybackFailureMessage(isIOSNative))
+      keepPlaybackActive = false
+      clearResumeTimeout()
+      clearResumeInterval()
+      hls?.destroy()
+      hls = null
+    }
+
     const cleanupPlayback = (): void => {
       keepPlaybackActive = false
       clearResumeTimeout()
@@ -298,6 +326,7 @@ export function CameraPreviewPanel({
       video.removeEventListener('canplaythrough', requestPlayback)
       video.removeEventListener('stalled', requestPlayback)
       video.removeEventListener('waiting', requestPlayback)
+      video.removeEventListener('error', handleVideoError)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       hls?.destroy()
       video.pause()
@@ -313,7 +342,14 @@ export function CameraPreviewPanel({
     video.addEventListener('canplaythrough', requestPlayback)
     video.addEventListener('stalled', requestPlayback)
     video.addEventListener('waiting', requestPlayback)
+    video.addEventListener('error', handleVideoError)
     document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    if (isIOSNative && canPlayNativeHls(video)) {
+      video.src = playlistUrl
+      startPlaybackMonitor()
+      return cleanupPlayback
+    }
 
     if (Hls.isSupported()) {
       hls = new Hls({
@@ -329,7 +365,7 @@ export function CameraPreviewPanel({
         if (!data.fatal) {
           return
         }
-        setPlayerError('Preview playback failed. Restart preview.')
+        setPlayerError(previewPlaybackFailureMessage(isIOSNative))
         keepPlaybackActive = false
         clearResumeTimeout()
         clearResumeInterval()
@@ -342,16 +378,16 @@ export function CameraPreviewPanel({
       return cleanupPlayback
     }
 
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    if (canPlayNativeHls(video)) {
       video.src = playlistUrl
       startPlaybackMonitor()
       return cleanupPlayback
     }
 
-    setPlayerError('This browser cannot play the live preview stream.')
+    setPlayerError(previewUnsupportedMessage(isIOSNative))
 
     return cleanupPlayback
-  }, [playlistReady, playlistUrl])
+  }, [isIOSNative, playlistReady, playlistUrl])
 
   const toggleFullscreen = async (): Promise<void> => {
     const viewport = viewportRef.current
