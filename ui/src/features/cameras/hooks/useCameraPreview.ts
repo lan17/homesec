@@ -97,20 +97,27 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const storeActivationIfCurrent = useCallback(async (activation: PreviewActivation) => {
     const isLatestActivation = activation.activationSeq === sessionRequestSeqRef.current
     const currentLifecycle = nativeLifecycleRef.current
-    if (
-      currentLifecycle.isBackgrounded
-      || currentLifecycle.pauseCount !== activation.pauseCountAtRequest
-    ) {
+
+    const stopLateActivation = async (): Promise<void> => {
+      clearSession()
+      const stopRequestSeq = beginStopRequest()
+      try {
+        await apiClient.stopCameraPreview(cameraName)
+      } catch {
+        return
+      } finally {
+        finishStopRequest(stopRequestSeq)
+      }
+    }
+
+    if (currentLifecycle.isBackgrounded) {
+      await stopLateActivation()
+      return
+    }
+
+    if (currentLifecycle.pauseCount !== activation.pauseCountAtRequest) {
       if (isLatestActivation) {
-        clearSession()
-        const stopRequestSeq = beginStopRequest()
-        try {
-          await apiClient.stopCameraPreview(cameraName)
-        } catch {
-          return
-        } finally {
-          finishStopRequest(stopRequestSeq)
-        }
+        await stopLateActivation()
       }
       return
     }

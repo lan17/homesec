@@ -853,6 +853,90 @@ describe('useCameraPreview', () => {
     })
   })
 
+  it('stops stale activation that resolves after native background stop', async () => {
+    // Given: An active preview and a second activation request still in flight
+    const lateActivation = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-old',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-old',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      .mockReturnValueOnce(lateActivation.promise)
+    const stopPreview = vi.spyOn(apiClient, 'stopCameraPreview').mockResolvedValue({
+      accepted: true,
+      state: 'stopping',
+      httpStatus: 202,
+    })
+
+    const { result, rerender } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-old')
+    })
+
+    let lateActivationPromise!: Promise<void>
+    act(() => {
+      lateActivationPromise = result.current.start()
+    })
+    await waitFor(() => {
+      expect(apiClient.ensureCameraPreviewActive).toHaveBeenCalledTimes(2)
+    })
+
+    // When: iOS backgrounds, completes its normal stop, then the late activation resolves
+    setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
+    rerender()
+    await waitFor(() => {
+      expect(stopPreview).toHaveBeenCalledTimes(1)
+      expect(result.current.session).toBeNull()
+    })
+
+    await act(async () => {
+      lateActivation.resolve({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-late',
+        token_expires_at: null,
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-late',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      await lateActivationPromise
+    })
+
+    // Then: The late server activation is cleaned up while the app remains backgrounded
+    await waitFor(() => {
+      expect(stopPreview).toHaveBeenCalledTimes(2)
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+    })
+  })
+
   it('does not let a stale preview start stop a newer resumed preview', async () => {
     // Given: A preview start begins before background and a newer start succeeds after resume
     const staleStart = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
