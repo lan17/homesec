@@ -12,6 +12,10 @@ const ALLOWED_DEEP_LINK_ROUTE_PREFIXES = [
   '/home',
 ]
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 function routeIsAllowed(route: string): boolean {
   return ALLOWED_DEEP_LINK_ROUTE_PREFIXES.some((prefix) => {
     return route === prefix || route.startsWith(`${prefix}/`)
@@ -41,4 +45,28 @@ export function parseNativeDeepLinkRoute(rawUrl: string): string | null {
   }
 
   return `${pathname}${url.search}${url.hash}`
+}
+
+export function parseNativeNotificationRoute(data: unknown): string | null {
+  if (!isRecord(data) || typeof data.route !== 'string') {
+    return null
+  }
+
+  const route = data.route.trim()
+  if (!route.startsWith('/') || route.startsWith('//')) {
+    return null
+  }
+
+  let url: URL
+  try {
+    url = new URL(route, 'https://homesec.local')
+  } catch {
+    return null
+  }
+
+  if (!routeIsAllowed(url.pathname)) {
+    return DEFAULT_DEEP_LINK_ROUTE
+  }
+
+  return `${url.pathname}${url.search}${url.hash}`
 }

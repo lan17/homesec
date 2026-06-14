@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { App } from '@capacitor/app'
+import { PushNotifications } from '@capacitor/push-notifications'
 import type { PluginListenerHandle } from '@capacitor/core'
+import type { ActionPerformed } from '@capacitor/push-notifications'
 
-import { parseNativeDeepLinkRoute } from './nativeDeepLinkRoutes'
+import { parseNativeDeepLinkRoute, parseNativeNotificationRoute } from './nativeDeepLinkRoutes'
 import { isIOSNativeApp } from './nativeRuntime'
 
 interface NativeDeepLinkEvent {
@@ -18,7 +20,20 @@ interface NativeDeepLinkApp {
   ) => Promise<PluginListenerHandle>
 }
 
-export function NativeDeepLinkRouter({ app = App }: { app?: NativeDeepLinkApp }) {
+interface NativePushNotificationActions {
+  addListener: (
+    eventName: 'pushNotificationActionPerformed',
+    listenerFunc: (notification: ActionPerformed) => void,
+  ) => Promise<PluginListenerHandle>
+}
+
+export function NativeDeepLinkRouter({
+  app = App,
+  pushNotifications = PushNotifications,
+}: {
+  app?: NativeDeepLinkApp
+  pushNotifications?: NativePushNotificationActions
+}) {
   const navigate = useNavigate()
   const navigateRef = useRef(navigate)
   const isIOS = isIOSNativeApp()
@@ -41,13 +56,24 @@ export function NativeDeepLinkRouter({ app = App }: { app?: NativeDeepLinkApp })
     navigateRef.current(route, { replace: options.replace })
   }, [])
 
+  const navigateToNotificationRoute = useCallback((
+    action: ActionPerformed,
+    options: { replace: boolean },
+  ) => {
+    const route = parseNativeNotificationRoute(action.notification.data)
+    if (route === null) {
+      return
+    }
+    navigateRef.current(route, { replace: options.replace })
+  }, [])
+
   useEffect(() => {
     if (!isIOS) {
       return
     }
 
     let cancelled = false
-    let handle: PluginListenerHandle | null = null
+    const handles: PluginListenerHandle[] = []
 
     void app.getLaunchUrl()
       .then((event) => {
@@ -68,17 +94,32 @@ export function NativeDeepLinkRouter({ app = App }: { app?: NativeDeepLinkApp })
           void nextHandle.remove()
           return
         }
-        handle = nextHandle
+        handles.push(nextHandle)
+      })
+      .catch(() => {})
+
+    void pushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+      if (cancelled) {
+        return
+      }
+      navigateToNotificationRoute(action, { replace: false })
+    })
+      .then((nextHandle) => {
+        if (cancelled) {
+          void nextHandle.remove()
+          return
+        }
+        handles.push(nextHandle)
       })
       .catch(() => {})
 
     return () => {
       cancelled = true
-      if (handle !== null) {
+      for (const handle of handles) {
         void handle.remove()
       }
     }
-  }, [app, isIOS, navigateToDeepLink])
+  }, [app, isIOS, navigateToDeepLink, navigateToNotificationRoute, pushNotifications])
 
   return null
 }

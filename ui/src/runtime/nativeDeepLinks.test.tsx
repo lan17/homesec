@@ -3,6 +3,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import type { ActionPerformed } from '@capacitor/push-notifications'
 
 const nativeRuntimeMock = vi.hoisted(() => ({
   isIOSNativeApp: vi.fn<() => boolean>(() => false),
@@ -12,7 +13,7 @@ vi.mock('./nativeRuntime', () => ({
   isIOSNativeApp: () => nativeRuntimeMock.isIOSNativeApp(),
 }))
 
-import { parseNativeDeepLinkRoute } from './nativeDeepLinkRoutes'
+import { parseNativeDeepLinkRoute, parseNativeNotificationRoute } from './nativeDeepLinkRoutes'
 import { NativeDeepLinkRouter } from './nativeDeepLinks'
 
 type DeepLinkEvent = {
@@ -27,9 +28,45 @@ type TestNativeDeepLinkApp = {
   ) => Promise<{ remove: () => Promise<void> }>
 }
 
+type TestNativePushNotifications = {
+  addListener: (
+    eventName: 'pushNotificationActionPerformed',
+    listenerFunc: (event: ActionPerformed) => void,
+  ) => Promise<{ remove: () => Promise<void> }>
+}
+
 function LocationProbe() {
   const location = useLocation()
   return <p data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</p>
+}
+
+function createNativePushNotifications() {
+  let pushActionListener: ((event: ActionPerformed) => void) | null = null
+  const remove = vi.fn(async () => {})
+  const pushNotifications: TestNativePushNotifications = {
+    addListener: vi.fn(async (
+      eventName: 'pushNotificationActionPerformed',
+      listenerFunc: (event: ActionPerformed) => void,
+    ) => {
+      expect(eventName).toBe('pushNotificationActionPerformed')
+      pushActionListener = listenerFunc
+      return { remove }
+    }),
+  }
+
+  return {
+    pushNotifications,
+    emitAction(data: unknown) {
+      pushActionListener?.({
+        actionId: 'tap',
+        notification: {
+          id: 'notif_1',
+          data,
+        },
+      })
+    },
+    remove,
+  }
 }
 
 function createNativeDeepLinkApp(launchUrl?: string | null) {
@@ -90,10 +127,11 @@ function createDeferredNativeDeepLinkApp() {
 function renderNativeDeepLinkRouter(
   app: TestNativeDeepLinkApp,
   initialPath = '/live',
+  pushNotifications = createNativePushNotifications().pushNotifications,
 ) {
   render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <NativeDeepLinkRouter app={app} />
+      <NativeDeepLinkRouter app={app} pushNotifications={pushNotifications} />
       <Routes>
         <Route path="*" element={<LocationProbe />} />
       </Routes>
@@ -104,11 +142,14 @@ function renderNativeDeepLinkRouter(
 function renderToggleableNativeDeepLinkRouter(
   app: TestNativeDeepLinkApp,
   initialPath = '/live',
+  pushNotifications = createNativePushNotifications().pushNotifications,
 ) {
   function Harness({ enabled }: { enabled: boolean }) {
     return (
       <MemoryRouter initialEntries={[initialPath]}>
-        {enabled ? <NativeDeepLinkRouter app={app} /> : null}
+        {enabled ? (
+          <NativeDeepLinkRouter app={app} pushNotifications={pushNotifications} />
+        ) : null}
         <Routes>
           <Route path="*" element={<LocationProbe />} />
         </Routes>
@@ -175,6 +216,42 @@ describe('parseNativeDeepLinkRoute', () => {
   })
 })
 
+describe('parseNativeNotificationRoute', () => {
+  it('accepts APNs payload event routes', () => {
+    // Given: A plain APNs payload with the HomeSec event route
+    const route = parseNativeNotificationRoute({
+      route: '/events/clip-123?from=notification',
+    })
+
+    // Then: The app-relative route is safe to pass to React Router
+    expect(route).toBe('/events/clip-123?from=notification')
+  })
+
+  it('falls back safely for unsupported APNs payload routes', () => {
+    // Given: A notification payload attempts to open an unsupported app route
+    const route = parseNativeNotificationRoute({ route: '/admin/secrets' })
+
+    // Then: The native router falls back to the default safe route
+    expect(route).toBe('/live')
+  })
+
+  it('ignores missing or non-relative APNs payload routes', () => {
+    // Given: Notification payloads without a valid app-relative route
+    const missingRoute = parseNativeNotificationRoute({})
+    const externalRoute = parseNativeNotificationRoute({
+      route: 'https://homesec.example.com/events/clip-123',
+    })
+    const protocolRelativeRoute = parseNativeNotificationRoute({
+      route: '//homesec.example.com/events/clip-123',
+    })
+
+    // Then: The app ignores them rather than navigating to untrusted content
+    expect(missingRoute).toBeNull()
+    expect(externalRoute).toBeNull()
+    expect(protocolRelativeRoute).toBeNull()
+  })
+})
+
 describe('NativeDeepLinkRouter', () => {
   beforeEach(() => {
     nativeRuntimeMock.isIOSNativeApp.mockReturnValue(true)
@@ -221,6 +298,44 @@ describe('NativeDeepLinkRouter', () => {
     )
   })
 
+  it('routes notification tap actions into the React app', async () => {
+    // Given: The app has started and registered a push notification action listener
+    const nativeApp = createNativeDeepLinkApp()
+    const nativePush = createNativePushNotifications()
+    renderNativeDeepLinkRouter(nativeApp.app, '/live', nativePush.pushNotifications)
+    await waitFor(() => {
+      expect(nativePush.pushNotifications.addListener).toHaveBeenCalledTimes(1)
+    })
+
+    // When: iOS reports that the user tapped a HomeSec APNs notification
+    await act(async () => {
+      nativePush.emitAction({ route: '/events/push-clip?from=notification' })
+    })
+
+    // Then: React Router opens the event detail route from the payload
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/events/push-clip?from=notification',
+    )
+  })
+
+  it('falls back to Live for unsupported notification tap routes', async () => {
+    // Given: The app receives a notification action with an unsupported route
+    const nativeApp = createNativeDeepLinkApp()
+    const nativePush = createNativePushNotifications()
+    renderNativeDeepLinkRouter(nativeApp.app, '/events', nativePush.pushNotifications)
+    await waitFor(() => {
+      expect(nativePush.pushNotifications.addListener).toHaveBeenCalledTimes(1)
+    })
+
+    // When: The notification action is delivered
+    await act(async () => {
+      nativePush.emitAction({ route: '/admin/secrets' })
+    })
+
+    // Then: The app navigates to a safe default route
+    expect(screen.getByTestId('location').textContent).toBe('/live')
+  })
+
   it('falls back to Live for unsupported HomeSec appUrlOpen routes', async () => {
     // Given: The app receives an invalid route under the HomeSec scheme
     const nativeApp = createNativeDeepLinkApp()
@@ -255,9 +370,11 @@ describe('NativeDeepLinkRouter', () => {
   it('removes the appUrlOpen listener on unmount', async () => {
     // Given: The deep-link router registered a native listener
     const nativeApp = createNativeDeepLinkApp()
-    renderNativeDeepLinkRouter(nativeApp.app, '/live')
+    const nativePush = createNativePushNotifications()
+    renderNativeDeepLinkRouter(nativeApp.app, '/live', nativePush.pushNotifications)
     await waitFor(() => {
       expect(nativeApp.app.addListener).toHaveBeenCalledTimes(1)
+      expect(nativePush.pushNotifications.addListener).toHaveBeenCalledTimes(1)
     })
 
     // When: React unmounts the router
@@ -265,14 +382,21 @@ describe('NativeDeepLinkRouter', () => {
 
     // Then: The native listener is removed
     expect(nativeApp.remove).toHaveBeenCalledTimes(1)
+    expect(nativePush.remove).toHaveBeenCalledTimes(1)
   })
 
   it('ignores stale appUrlOpen events after cleanup', async () => {
     // Given: Native listener registration captured a callback but has not resolved yet
     const nativeApp = createDeferredNativeDeepLinkApp()
-    const view = renderToggleableNativeDeepLinkRouter(nativeApp.app, '/live')
+    const nativePush = createNativePushNotifications()
+    const view = renderToggleableNativeDeepLinkRouter(
+      nativeApp.app,
+      '/live',
+      nativePush.pushNotifications,
+    )
     await waitFor(() => {
       expect(nativeApp.app.addListener).toHaveBeenCalledTimes(1)
+      expect(nativePush.pushNotifications.addListener).toHaveBeenCalledTimes(1)
     })
 
     // When: React removes the deep-link router before the native listener resolves
@@ -285,5 +409,30 @@ describe('NativeDeepLinkRouter', () => {
     // Then: The stale native callback does not navigate after cleanup
     expect(screen.getByTestId('location').textContent).toBe('/live')
     expect(nativeApp.remove).toHaveBeenCalledTimes(1)
+    expect(nativePush.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores stale notification tap actions after cleanup', async () => {
+    // Given: Native notification action registration captured a callback
+    const nativeApp = createNativeDeepLinkApp()
+    const nativePush = createNativePushNotifications()
+    const view = renderToggleableNativeDeepLinkRouter(
+      nativeApp.app,
+      '/live',
+      nativePush.pushNotifications,
+    )
+    await waitFor(() => {
+      expect(nativePush.pushNotifications.addListener).toHaveBeenCalledTimes(1)
+    })
+
+    // When: React removes the router before a stale notification action arrives
+    view.disableRouter()
+    await act(async () => {
+      nativePush.emitAction({ route: '/events/stale-push?from=notification' })
+    })
+
+    // Then: The stale native callback does not navigate after cleanup
+    expect(screen.getByTestId('location').textContent).toBe('/live')
+    expect(nativePush.remove).toHaveBeenCalledTimes(1)
   })
 })
