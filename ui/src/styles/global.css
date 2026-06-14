@@ -1597,12 +1597,6 @@ a:hover {
 @media (max-width: 620px) {
   .app-shell {
     --app-shell-inline-padding: var(--space-4);
-    --mobile-content-bottom-inset: calc(
-      var(--mobile-bottom-nav-height)
-      + var(--mobile-bottom-nav-gap)
-      + var(--safe-area-inset-bottom)
-      + var(--space-5)
-    );
   }
 
   .app-shell__nav {
@@ -1662,6 +1656,17 @@ a:hover {
     transition:
       transform var(--duration-normal) ease,
       opacity var(--duration-fast) ease;
+  }
+
+  .app-shell--form-control-focused .mobile-bottom-nav {
+    display: none;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(calc(
+      100%
+      + var(--mobile-bottom-nav-gap)
+      + var(--safe-area-inset-bottom)
+    ));
   }
 
   .mobile-nav-link {

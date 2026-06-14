@@ -44,6 +44,17 @@
   --gradient-end: #f5f9ff;
 }
 
+@media (max-width: 620px) {
+  :root {
+    --mobile-content-bottom-inset: calc(
+      var(--mobile-bottom-nav-height)
+      + var(--mobile-bottom-nav-gap)
+      + var(--safe-area-inset-bottom)
+      + var(--space-5)
+    );
+  }
+}
+
 :root[data-theme='dark'] {
   --surface-0: #0c111a;
   --surface-1: #141c28;

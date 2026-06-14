@@ -90,6 +90,12 @@ jobs:
       - name: UI check
         run: pnpm --dir ui check
 
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+
+      - name: UI e2e
+        run: pnpm --dir ui test:e2e
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
