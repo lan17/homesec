@@ -42,6 +42,10 @@ interface PreviewActivation {
   snapshot: PreviewSessionSnapshot
 }
 
+interface PreviewStopRequest {
+  requestSeq: number
+}
+
 export function useCameraPreview(cameraName: string): CameraPreviewState {
   const queryClient = useQueryClient()
   const nativeLifecycle = useNativeAppLifecycleState()
@@ -50,7 +54,8 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const [refreshError, setRefreshError] = useState<Error | null>(null)
   const sessionStateRef = useRef<StoredPreviewSession | null>(null)
   const statusRequestSeqRef = useRef(0)
-  const activationRequestSeqRef = useRef(0)
+  const sessionRequestSeqRef = useRef(0)
+  const stopInFlightSeqRef = useRef<number | null>(null)
 
   useLayoutEffect(() => {
     nativeLifecycleRef.current = nativeLifecycle
@@ -71,8 +76,26 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     setSessionState(null)
   }, [])
 
+  const beginSessionRequest = useCallback(() => {
+    const requestSeq = sessionRequestSeqRef.current + 1
+    sessionRequestSeqRef.current = requestSeq
+    return requestSeq
+  }, [])
+
+  const beginStopRequest = useCallback(() => {
+    const requestSeq = beginSessionRequest()
+    stopInFlightSeqRef.current = requestSeq
+    return requestSeq
+  }, [beginSessionRequest])
+
+  const finishStopRequest = useCallback((requestSeq: number) => {
+    if (stopInFlightSeqRef.current === requestSeq) {
+      stopInFlightSeqRef.current = null
+    }
+  }, [])
+
   const storeActivationIfCurrent = useCallback(async (activation: PreviewActivation) => {
-    const isLatestActivation = activation.activationSeq === activationRequestSeqRef.current
+    const isLatestActivation = activation.activationSeq === sessionRequestSeqRef.current
     const currentLifecycle = nativeLifecycleRef.current
     if (
       currentLifecycle.isBackgrounded
@@ -80,7 +103,14 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     ) {
       if (isLatestActivation) {
         clearSession()
-        await apiClient.stopCameraPreview(cameraName).catch(() => {})
+        const stopRequestSeq = beginStopRequest()
+        try {
+          await apiClient.stopCameraPreview(cameraName)
+        } catch {
+          return
+        } finally {
+          finishStopRequest(stopRequestSeq)
+        }
       }
       return
     }
@@ -91,12 +121,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
 
     storeSession(activation.snapshot)
     await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
-  }, [cameraName, clearSession, queryClient, storeSession])
+  }, [beginStopRequest, cameraName, clearSession, finishStopRequest, queryClient, storeSession])
 
   const startMutation = useMutation<PreviewActivation, Error>({
     mutationFn: async () => {
-      const activationSeq = activationRequestSeqRef.current + 1
-      activationRequestSeqRef.current = activationSeq
+      const activationSeq = beginSessionRequest()
       const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
       return { activationSeq, pauseCountAtRequest, snapshot }
@@ -130,12 +159,18 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     refetchInterval: nativeLifecycle.isActive && sessionState ? PREVIEW_STATUS_REFRESH_MS : false,
   })
 
-  const stopMutation = useMutation<PreviewStopSnapshot, Error>({
+  const stopMutation = useMutation<PreviewStopSnapshot, Error, PreviewStopRequest>({
     mutationFn: () => apiClient.stopCameraPreview(cameraName),
-    onSuccess: async () => {
+    onSuccess: async (_snapshot, request) => {
+      if (request.requestSeq !== sessionRequestSeqRef.current) {
+        return
+      }
       setRefreshError(null)
       clearSession()
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
+    },
+    onSettled: (_snapshot, _error, request) => {
+      finishStopRequest(request.requestSeq)
     },
   })
   const refetchStatus = statusQuery.refetch
@@ -143,20 +178,20 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const session = sessionState?.snapshot ?? null
 
   const stop = useCallback(async () => {
+    const requestSeq = beginStopRequest()
     try {
-      await stopPreview()
+      await stopPreview({ requestSeq })
     } catch {
       return
     }
-  }, [stopPreview])
+  }, [beginStopRequest, stopPreview])
 
   const refreshSession = useCallback(async () => {
-    if (nativeLifecycle.isBackgrounded) {
+    if (nativeLifecycle.isBackgrounded || stopInFlightSeqRef.current !== null) {
       return
     }
     try {
-      const activationSeq = activationRequestSeqRef.current + 1
-      activationRequestSeqRef.current = activationSeq
+      const activationSeq = beginSessionRequest()
       const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
       setRefreshError(null)
@@ -164,7 +199,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     } catch (nextError) {
       setRefreshError(nextError as Error)
     }
-  }, [cameraName, nativeLifecycle.isBackgrounded, storeActivationIfCurrent])
+  }, [beginSessionRequest, cameraName, nativeLifecycle.isBackgrounded, storeActivationIfCurrent])
 
   useEffect(() => {
     if (!nativeLifecycle.isBackgrounded || sessionStateRef.current === null) {
@@ -248,7 +283,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     isStarting: startMutation.isPending,
     isStopping: stopMutation.isPending,
     start: async () => {
-      if (!nativeLifecycle.isActive || nativeLifecycle.isBackgrounded) {
+      if (
+        !nativeLifecycle.isActive
+        || nativeLifecycle.isBackgrounded
+        || stopInFlightSeqRef.current !== null
+      ) {
         return
       }
       try {
