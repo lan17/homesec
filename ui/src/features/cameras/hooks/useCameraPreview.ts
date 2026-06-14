@@ -99,6 +99,12 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     return requestSeq
   }, [beginSessionRequest])
 
+  const beginCleanupBoundary = useCallback(() => {
+    const requestSeq = beginSessionRequest()
+    latestStopRequestSeqRef.current = requestSeq
+    return requestSeq
+  }, [beginSessionRequest])
+
   const finishStopRequest = useCallback((requestSeq: number) => {
     if (stopInFlightSeqRef.current === requestSeq) {
       stopInFlightSeqRef.current = null
@@ -185,7 +191,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
         && (nextStatus.enabled === false
           || (!PREVIEW_SESSION_ACTIVE_STATES.has(nextStatus.state) && !startMutation.isPending))
       ) {
-        beginSessionRequest()
+        beginCleanupBoundary()
         clearSession()
         setStartError(null)
         setRefreshError(null)
