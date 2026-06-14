@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type MockNativeLifecycleState = {
   isActive: boolean
+  isBackgrounded: boolean
   pauseCount: number
   resumeCount: number
 }
@@ -12,6 +13,7 @@ type MockNativeLifecycleState = {
 const nativeLifecycleMock = vi.hoisted(() => ({
   state: {
     isActive: true,
+    isBackgrounded: false,
     pauseCount: 0,
     resumeCount: 0,
   } as MockNativeLifecycleState,
@@ -30,6 +32,7 @@ type TalkStatusSnapshot = TalkStatusResponse & { httpStatus: number }
 function resetNativeLifecycleState() {
   nativeLifecycleMock.state = {
     isActive: true,
+    isBackgrounded: false,
     pauseCount: 0,
     resumeCount: 0,
   }
@@ -806,7 +809,7 @@ describe('usePushToTalk', () => {
     await waitFor(() => expect(result.current.isStreaming).toBe(true))
 
     // When: iOS backgrounds the app during an active talk session
-    setNativeLifecycleState({ isActive: false, pauseCount: 1 })
+    setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
     rerender()
 
     // Then: The hook sends the stop frame, tears down media, and stops the backend session
@@ -826,7 +829,7 @@ describe('usePushToTalk', () => {
     expect(apiClient.getCameraTalkStatus).toHaveBeenCalledTimes(statusCallsAfterPause)
 
     // When: iOS resumes the app
-    setNativeLifecycleState({ isActive: true, resumeCount: 1 })
+    setNativeLifecycleState({ isActive: true, isBackgrounded: false, resumeCount: 1 })
     rerender()
 
     // Then: The hook refreshes talk status for the foregrounded route
@@ -835,5 +838,33 @@ describe('usePushToTalk', () => {
         statusCallsAfterPause,
       )
     })
+  })
+
+  it('does not stop active talk on transient native inactive transitions before background', async () => {
+    // Given: An active push-to-talk stream while iOS is active
+    const { stream, track } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result, rerender } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({ type: 'ready' }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // When: iOS becomes inactive without the pause/background event
+    setNativeLifecycleState({ isActive: false, isBackgrounded: false })
+    rerender()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // Then: The talk stream remains active until actual backgrounding
+    expect(apiClient.stopCameraTalkSession).not.toHaveBeenCalled()
+    expect(sockets[0].readyState).toBe(FakeWebSocket.OPEN)
+    expect(track.stop).not.toHaveBeenCalled()
+    expect(result.current.isStreaming).toBe(true)
   })
 })

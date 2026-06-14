@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 type MockNativeLifecycleState = {
   isActive: boolean
+  isBackgrounded: boolean
   pauseCount: number
   resumeCount: number
 }
@@ -14,6 +15,7 @@ type MockNativeLifecycleState = {
 const nativeLifecycleMock = vi.hoisted(() => ({
   state: {
     isActive: true,
+    isBackgrounded: false,
     pauseCount: 0,
     resumeCount: 0,
   } as MockNativeLifecycleState,
@@ -31,6 +33,7 @@ const PREVIEW_TEST_NOW_MS = Date.parse('2026-04-23T12:00:00.000Z')
 function resetNativeLifecycleState() {
   nativeLifecycleMock.state = {
     isActive: true,
+    isBackgrounded: false,
     pauseCount: 0,
     resumeCount: 0,
   }
@@ -45,6 +48,22 @@ function setNativeLifecycleState(nextState: Partial<MockNativeLifecycleState>) {
 
 function freezePreviewClock() {
   vi.spyOn(Date, 'now').mockReturnValue(PREVIEW_TEST_NOW_MS)
+}
+
+type Deferred<T> = {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (error: unknown) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
 }
 
 function createWrapper() {
@@ -694,7 +713,7 @@ describe('useCameraPreview', () => {
     })
 
     // When: iOS backgrounds the app while preview is attached
-    setNativeLifecycleState({ isActive: false, pauseCount: 1 })
+    setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
     rerender()
 
     // Then: The hook stops preview and suppresses background status requests
@@ -709,7 +728,7 @@ describe('useCameraPreview', () => {
     expect(getPreviewStatus).toHaveBeenCalledTimes(statusCallsAfterPause)
 
     // When: iOS resumes the app
-    setNativeLifecycleState({ isActive: true, resumeCount: 1 })
+    setNativeLifecycleState({ isActive: true, isBackgrounded: false, resumeCount: 1 })
     rerender()
 
     // Then: The hook refreshes preview status without auto-attaching a new session
@@ -717,5 +736,120 @@ describe('useCameraPreview', () => {
       expect(getPreviewStatus.mock.calls.length).toBeGreaterThan(statusCallsAfterPause)
     })
     expect(result.current.session).toBeNull()
+  })
+
+  it('stops preview start that resolves after native background', async () => {
+    // Given: Preview start is still in flight when native iOS backgrounds the app
+    const previewStart = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 0,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockReturnValue(previewStart.promise)
+    const stopPreview = vi.spyOn(apiClient, 'stopCameraPreview').mockResolvedValue({
+      accepted: true,
+      state: 'stopping',
+      httpStatus: 202,
+    })
+
+    const { result, rerender } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+
+    let startPromise!: Promise<void>
+    act(() => {
+      startPromise = result.current.start()
+    })
+    await waitFor(() => {
+      expect(apiClient.ensureCameraPreviewActive).toHaveBeenCalledWith('front')
+    })
+
+    // When: The app backgrounds before the preview start response resolves
+    setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
+    rerender()
+    await act(async () => {
+      previewStart.resolve({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      await startPromise
+    })
+
+    // Then: The late preview session is stopped instead of being stored while backgrounded
+    await waitFor(() => {
+      expect(stopPreview).toHaveBeenCalledWith('front')
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+    })
+  })
+
+  it('does not stop preview on transient native inactive transitions before background', async () => {
+    // Given: Preview is attached while iOS is active
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front',
+      state: 'ready',
+      viewer_count: 1,
+      token: 'preview-token-1',
+      token_expires_at: '2026-04-23T12:00:10.000Z',
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+      idle_timeout_s: 30,
+      warning: null,
+      httpStatus: 200,
+    })
+    const stopPreview = vi.spyOn(apiClient, 'stopCameraPreview').mockResolvedValue({
+      accepted: true,
+      state: 'stopping',
+      httpStatus: 202,
+    })
+
+    const { result, rerender } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+    })
+
+    // When: iOS becomes inactive without the pause/background event
+    setNativeLifecycleState({ isActive: false, isBackgrounded: false })
+    rerender()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // Then: Preview remains attached until a real background pause is observed
+    expect(stopPreview).not.toHaveBeenCalled()
+    expect(result.current.session?.token).toBe('preview-token-1')
   })
 })

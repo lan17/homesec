@@ -276,7 +276,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   }, [])
 
   const refreshStatus = useCallback(async () => {
-    if (!nativeLifecycleRef.current.isActive) {
+    if (nativeLifecycleRef.current.isBackgrounded) {
       return
     }
     const generation = statusRequestGenerationRef.current + 1
@@ -430,7 +430,13 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   )
 
   const start = useCallback(async () => {
-    if (!nativeLifecycleRef.current.isActive || startInFlightRef.current || isStreaming || isStopping) {
+    if (
+      !nativeLifecycleRef.current.isActive
+      || nativeLifecycleRef.current.isBackgrounded
+      || startInFlightRef.current
+      || isStreaming
+      || isStopping
+    ) {
       return
     }
     const generation = startGenerationRef.current + 1
@@ -604,7 +610,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
     setIsStreaming(false)
     setIsStarting(false)
     setIsStopping(false)
-    if (nativeLifecycleRef.current.isActive) {
+    if (!nativeLifecycleRef.current.isBackgrounded) {
       void refreshStatus()
     }
     return () => {
@@ -627,12 +633,12 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   }, [cameraName, cleanupSocketAndAudio, refreshStatus])
 
   useEffect(() => {
-    if (nativeLifecycle.isActive) {
+    if (!nativeLifecycle.isBackgrounded) {
       return
     }
 
     void stop()
-  }, [nativeLifecycle.isActive, stop])
+  }, [nativeLifecycle.isBackgrounded, stop])
 
   useEffect(() => {
     if (!nativeLifecycle.isActive || nativeLifecycle.resumeCount === 0) {
@@ -645,13 +651,23 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   const canStart = useMemo(
     () => (
       nativeLifecycle.isActive
+      && !nativeLifecycle.isBackgrounded
       && !isPending
       && !isStarting
       && !isStopping
       && !isStreaming
       && statusAllowsStart(status, cameraName)
     ),
-    [cameraName, isPending, isStarting, isStopping, isStreaming, nativeLifecycle.isActive, status],
+    [
+      cameraName,
+      isPending,
+      isStarting,
+      isStopping,
+      isStreaming,
+      nativeLifecycle.isActive,
+      nativeLifecycle.isBackgrounded,
+      status,
+    ],
   )
 
   return {

@@ -6,12 +6,14 @@ import { isIOSNativeApp } from './nativeRuntime'
 
 export interface NativeAppLifecycleState {
   isActive: boolean
+  isBackgrounded: boolean
   pauseCount: number
   resumeCount: number
 }
 
 const ACTIVE_BROWSER_LIFECYCLE_STATE: NativeAppLifecycleState = {
   isActive: true,
+  isBackgrounded: false,
   pauseCount: 0,
   resumeCount: 0,
 }
@@ -43,20 +45,29 @@ export function useNativeAppLifecycleState(): NativeAppLifecycleState {
     void App.getState()
       .then((appState) => {
         if (!cancelled) {
-          setState((previous) => ({ ...previous, isActive: appState.isActive }))
+          setState((previous) => ({
+            ...previous,
+            isActive: appState.isActive,
+            isBackgrounded: appState.isActive ? false : previous.isBackgrounded,
+          }))
         }
       })
       .catch(() => {})
 
     void trackHandle(
       App.addListener('appStateChange', (appState) => {
-        setState((previous) => ({ ...previous, isActive: appState.isActive }))
+        setState((previous) => ({
+          ...previous,
+          isActive: appState.isActive,
+          isBackgrounded: appState.isActive ? false : previous.isBackgrounded,
+        }))
       }),
     )
     void trackHandle(
       App.addListener('pause', () => {
         setState((previous) => ({
           ...previous,
+          isBackgrounded: true,
           isActive: false,
           pauseCount: previous.pauseCount + 1,
         }))
@@ -66,6 +77,7 @@ export function useNativeAppLifecycleState(): NativeAppLifecycleState {
       App.addListener('resume', () => {
         setState((previous) => ({
           ...previous,
+          isBackgrounded: false,
           isActive: true,
           resumeCount: previous.resumeCount + 1,
         }))
