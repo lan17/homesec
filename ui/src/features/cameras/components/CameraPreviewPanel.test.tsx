@@ -438,6 +438,39 @@ describe('CameraPreviewPanel', () => {
     })
   })
 
+  it('surfaces preview hook errors before stale warning text', () => {
+    // Given: The hook reports a stop failure while status still carries an older warning
+    useCameraPreviewMock.mockReturnValue({
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'degraded',
+        viewer_count: 0,
+        degraded_reason: 'Preview degraded: stale runtime warning',
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      },
+      session: null,
+      playlistUrl: null,
+      warning: 'Preview degraded: stale runtime warning',
+      error: new Error('stop failed'),
+      isPending: false,
+      isStarting: false,
+      isStopping: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refreshStatus: vi.fn(),
+    })
+
+    // When: Rendering the preview panel after local media has been cleared
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The actionable hook failure is shown instead of the stale degraded warning
+    expect(screen.getByText('stop failed')).toBeTruthy()
+    expect(screen.queryByText('Preview degraded: stale runtime warning')).toBeNull()
+  })
+
   it('renders attached previews with only a fullscreen playback control', async () => {
     // Given: A ready preview session with playable live media
     mockReadyPreviewSession()

@@ -420,14 +420,14 @@ export function CameraPreviewPanel({
     if (playerError) {
       return playerError
     }
-    if (warning) {
-      return warning
-    }
     if (error) {
       if (isAPIError(error) && error.errorCode === 'PREVIEW_MEDIA_UNAVAILABLE') {
         return 'Preview media is still starting.'
       }
       return describeUnknownError(error)
+    }
+    if (warning) {
+      return warning
     }
     if (playlistUrl && !playlistReady) {
       return 'Starting live view.'

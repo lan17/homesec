@@ -114,7 +114,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
         setRefreshError(null)
         setStopError(null)
         await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
-      } catch {
+      } catch (nextError) {
+        setStopError(nextError as Error)
+        await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
         return
       } finally {
         finishStopRequest(stopRequestSeq)
