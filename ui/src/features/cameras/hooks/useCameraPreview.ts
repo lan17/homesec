@@ -42,6 +42,11 @@ interface PreviewActivation {
   snapshot: PreviewSessionSnapshot
 }
 
+interface PreviewActivationRequest {
+  activationSeq: number
+  pauseCountAtRequest: number
+}
+
 interface PreviewStopRequest {
   requestSeq: number
 }
@@ -51,6 +56,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const nativeLifecycle = useNativeAppLifecycleState()
   const nativeLifecycleRef = useRef(nativeLifecycle)
   const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
+  const [startError, setStartError] = useState<Error | null>(null)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
   const [stopError, setStopError] = useState<Error | null>(null)
   const sessionStateRef = useRef<StoredPreviewSession | null>(null)
@@ -70,6 +76,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       statusRequestSeq: statusRequestSeqRef.current,
     }
     setStopError(null)
+    setStartError(null)
     sessionStateRef.current = nextState
     setSessionState(nextState)
   }, [])
@@ -146,16 +153,22 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameraPreview(cameraName) })
   }, [beginStopRequest, cameraName, clearSession, finishStopRequest, queryClient, storeSession])
 
-  const startMutation = useMutation<PreviewActivation, Error>({
-    mutationFn: async () => {
-      const activationSeq = beginSessionRequest()
-      const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
+  const startMutation = useMutation<PreviewActivation, Error, PreviewActivationRequest>({
+    mutationFn: async ({ activationSeq, pauseCountAtRequest }) => {
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
       return { activationSeq, pauseCountAtRequest, snapshot }
     },
     onSuccess: async (activation) => {
-      setRefreshError(null)
+      if (activation.activationSeq === sessionRequestSeqRef.current) {
+        setStartError(null)
+        setRefreshError(null)
+      }
       await storeActivationIfCurrent(activation)
+    },
+    onError: (nextError, activation) => {
+      if (activation.activationSeq === sessionRequestSeqRef.current && !nativeLifecycleRef.current.isBackgrounded) {
+        setStartError(nextError)
+      }
     },
   })
 
@@ -172,7 +185,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
         && (nextStatus.enabled === false
           || (!PREVIEW_SESSION_ACTIVE_STATES.has(nextStatus.state) && !startMutation.isPending))
       ) {
+        beginSessionRequest()
         clearSession()
+        setStartError(null)
         setRefreshError(null)
         setStopError(null)
       }
@@ -189,6 +204,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       if (request.requestSeq !== sessionRequestSeqRef.current) {
         return
       }
+      setStartError(null)
       setRefreshError(null)
       setStopError(null)
       clearSession()
@@ -205,6 +221,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const stop = useCallback(async () => {
     const requestSeq = beginStopRequest()
     clearSession()
+    setStartError(null)
     setStopError(null)
     try {
       await stopPreview({ requestSeq })
@@ -298,7 +315,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     ?? null
 
   const playlistUrl = session ? apiClient.resolvePath(session.playlist_url) : null
-  const error = (startMutation.error
+  const error = (startError
     ?? stopError
     ?? refreshError
     ?? statusQuery.error
@@ -324,8 +341,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       ) {
         return
       }
+      const activationSeq = beginSessionRequest()
+      const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
+      setStartError(null)
       try {
-        await startMutation.mutateAsync()
+        await startMutation.mutateAsync({ activationSeq, pauseCountAtRequest })
       } catch {
         return
       }

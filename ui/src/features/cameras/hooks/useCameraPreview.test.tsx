@@ -124,6 +124,62 @@ describe('useCameraPreview', () => {
     })
   })
 
+  it('ignores stale preview start failures after explicit stop', async () => {
+    // Given: A preview activation is still in flight
+    const previewStart = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 0,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockReturnValue(previewStart.promise)
+    vi.spyOn(apiClient, 'stopCameraPreview').mockResolvedValue({
+      accepted: true,
+      state: 'stopping',
+      httpStatus: 202,
+    })
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+
+    let startPromise!: Promise<void>
+    act(() => {
+      startPromise = result.current.start()
+    })
+    await waitFor(() => {
+      expect(apiClient.ensureCameraPreviewActive).toHaveBeenCalledWith('front')
+    })
+
+    // When: The user stops preview before the start request rejects
+    await act(async () => {
+      await result.current.stop()
+    })
+    await waitFor(() => {
+      expect(result.current.session).toBeNull()
+      expect(result.current.error).toBeNull()
+    })
+    await act(async () => {
+      previewStart.reject(new Error('preview failed after stop'))
+      await startPromise
+    })
+
+    // Then: The stale start failure cannot repopulate preview errors
+    await waitFor(() => {
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+      expect(result.current.error).toBeNull()
+    })
+  })
+
   it('keeps a fresh preview session when the follow-up status refetch fails', async () => {
     // Given: An idle camera whose preview start succeeds but the invalidated status refresh fails
     freezePreviewClock()
@@ -622,6 +678,121 @@ describe('useCameraPreview', () => {
     await waitFor(() => {
       expect(result.current.session).toBeNull()
       expect(result.current.playlistUrl).toBeNull()
+      expect(result.current.error).toBeNull()
+    })
+  })
+
+  it('ignores stale token renewal failures after terminal status detaches preview', async () => {
+    // Given: A ready preview session with an in-flight token renewal
+    freezePreviewClock()
+    const realSetTimeout = window.setTimeout.bind(window)
+    const realClearTimeout = window.clearTimeout.bind(window)
+    let runScheduledRefresh: (() => void) | null = null
+    vi.spyOn(window, 'setTimeout').mockImplementation(((handler, timeout, ...args) => {
+      if (timeout === 5_000) {
+        runScheduledRefresh = () => {
+          if (typeof handler !== 'function') {
+            throw new Error('Expected refresh timer handler to be a function')
+          }
+          handler(...args)
+        }
+        return 99
+      }
+      return realSetTimeout(handler, timeout, ...args)
+    }) as typeof window.setTimeout)
+    vi.spyOn(window, 'clearTimeout').mockImplementation(((timeoutId) => {
+      if (timeoutId === 99) {
+        return
+      }
+      realClearTimeout(timeoutId)
+    }) as typeof window.clearTimeout)
+    const renewal = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
+    vi.spyOn(apiClient, 'getCameraPreviewStatus')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'ready',
+        viewer_count: 1,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        enabled: true,
+        state: 'ready',
+        viewer_count: 1,
+        degraded_reason: null,
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+      .mockResolvedValue({
+        camera_name: 'front',
+        enabled: true,
+        state: 'error',
+        viewer_count: 0,
+        degraded_reason: null,
+        last_error: 'runtime worker exited with code 137',
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      })
+    const ensurePreviewActive = vi
+      .spyOn(apiClient, 'ensureCameraPreviewActive')
+      .mockResolvedValueOnce({
+        camera_name: 'front',
+        state: 'ready',
+        viewer_count: 1,
+        token: 'preview-token-1',
+        token_expires_at: '2026-04-23T12:00:10.000Z',
+        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+        idle_timeout_s: 30,
+        warning: null,
+        httpStatus: 200,
+      })
+      .mockReturnValueOnce(renewal.promise)
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.session?.token).toBe('preview-token-1')
+      expect(runScheduledRefresh).not.toBeNull()
+    })
+    await act(async () => {
+      runScheduledRefresh?.()
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
+    })
+
+    // When: A status refresh detaches the preview before renewal rejects
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('error')
+      expect(result.current.session).toBeNull()
+      expect(result.current.error).toBeNull()
+    })
+    await act(async () => {
+      renewal.reject(new Error('token refresh failed after terminal status'))
+      await Promise.resolve()
+    })
+
+    // Then: The stale renewal failure cannot hide the backend terminal status warning
+    await waitFor(() => {
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+      expect(result.current.warning).toBe('runtime worker exited with code 137')
       expect(result.current.error).toBeNull()
     })
   })
