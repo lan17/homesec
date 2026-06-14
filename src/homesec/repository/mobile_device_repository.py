@@ -13,7 +13,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from homesec.models.mobile import (
+    APNSEnvironment,
     MobileDeviceCapabilities,
+    MobileDevicePushTarget,
     MobileDeviceRecord,
     MobileDeviceRegistration,
     MobileDeviceUpdate,
@@ -106,6 +108,71 @@ class MobileDeviceRepository:
 
         return [_device_record_from_mapping(cast(Mapping[str, Any], row)) for row in rows]
 
+    async def list_enabled_apns_targets(
+        self,
+        *,
+        environment: APNSEnvironment,
+        bundle_id: str,
+    ) -> list[MobileDevicePushTarget]:
+        """List enabled APNs targets for one app bundle/environment.
+
+        The returned records include APNs token material and must stay inside
+        notifier delivery code. API routes should use list_devices() instead.
+        """
+        stmt = (
+            select(
+                MobileDevice.id,
+                MobileDevice.apns_token_encrypted,
+                MobileDevice.apns_environment,
+                MobileDevice.bundle_id,
+            )
+            .where(MobileDevice.enabled.is_(True))
+            .where(MobileDevice.platform == "ios")
+            .where(MobileDevice.apns_environment == environment)
+            .where(MobileDevice.bundle_id == bundle_id)
+            .order_by(MobileDevice.updated_at.desc(), MobileDevice.id.asc())
+        )
+
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+
+        return [
+            MobileDevicePushTarget(
+                id=str(row["id"]),
+                apns_token=str(row["apns_token_encrypted"]),
+                apns_environment=row["apns_environment"],
+                bundle_id=str(row["bundle_id"]),
+            )
+            for row in rows
+        ]
+
+    async def record_push_result(
+        self,
+        device_id: str,
+        *,
+        error: str | None,
+        now: datetime | None = None,
+    ) -> MobileDeviceRecord | None:
+        """Record the latest APNs send attempt for a mobile device."""
+        recorded_at = _utc_now() if now is None else now
+        stmt = (
+            update(MobileDevice)
+            .where(MobileDevice.id == device_id)
+            .values(
+                last_push_at=recorded_at,
+                last_push_error=_normalize_last_push_error(error),
+                updated_at=recorded_at,
+            )
+            .returning(*_device_record_columns())
+        )
+        async with self._engine.begin() as conn:
+            row = cast(
+                Mapping[str, Any] | None, (await conn.execute(stmt)).mappings().one_or_none()
+            )
+        if row is None:
+            return None
+        return _device_record_from_mapping(row)
+
     async def update_device(
         self,
         device_id: str,
@@ -192,6 +259,13 @@ def _device_record_from_mapping(row: Mapping[str, Any]) -> MobileDeviceRecord:
 
 def _normalize_apns_token(apns_token: str) -> str:
     return apns_token.strip()
+
+
+def _normalize_last_push_error(error: str | None) -> str | None:
+    normalized = error.strip() if error is not None else ""
+    if not normalized:
+        return None
+    return normalized[:500]
 
 
 def _new_device_id() -> str:

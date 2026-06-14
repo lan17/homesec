@@ -30,6 +30,7 @@ from homesec.plugins import discover_all_plugins
 from homesec.plugins.alert_policies import load_alert_policy
 from homesec.plugins.notifiers import load_notifier_plugin
 from homesec.plugins.sources import load_source_plugin
+from homesec.repository.mobile_device_repository import MobileDeviceRepository
 from homesec.runtime.assembly import RuntimeAssembler
 from homesec.runtime.bootstrap import (
     RuntimePersistenceStack,
@@ -61,6 +62,7 @@ from homesec.runtime.subprocess_protocol import (
     WorkerTalkStatusPayload,
     WorkerTalkStopPayload,
 )
+from homesec.state.postgres import PostgresStateStore
 
 if TYPE_CHECKING:
     from homesec.interfaces import (
@@ -308,10 +310,20 @@ class _RuntimeWorkerService:
 
     def _create_notifier(self, config: Config) -> tuple[Notifier, list[NotifierEntry]]:
         entries: list[NotifierEntry] = []
+        runtime_context: dict[str, object] = {}
+        if isinstance(self._state_store, PostgresStateStore):
+            runtime_context["mobile_device_repository"] = MobileDeviceRepository(
+                self._state_store.engine
+            )
+
         for index, notifier_cfg in enumerate(config.notifiers):
             if not notifier_cfg.enabled:
                 continue
-            notifier = load_notifier_plugin(notifier_cfg.backend, notifier_cfg.config)
+            notifier = load_notifier_plugin(
+                notifier_cfg.backend,
+                notifier_cfg.config,
+                **runtime_context,
+            )
             entries.append(
                 NotifierEntry(name=f"{notifier_cfg.backend}[{index}]", notifier=notifier)
             )

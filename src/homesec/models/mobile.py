@@ -64,3 +64,12 @@ class MobileDeviceRecord(BaseModel):
     last_seen_at: datetime | None = None
     last_push_at: datetime | None = None
     last_push_error: str | None = None
+
+
+class MobileDevicePushTarget(BaseModel):
+    """Internal APNs send target containing token material."""
+
+    id: str
+    apns_token: str = Field(min_length=1, repr=False)
+    apns_environment: APNSEnvironment
+    bundle_id: str

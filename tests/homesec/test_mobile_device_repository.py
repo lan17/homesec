@@ -20,14 +20,16 @@ from homesec.state.postgres import MobileDevice, PostgresStateStore
 
 def _registration(
     *,
+    apns_environment: str = "sandbox",
     apns_token: str = "raw-apns-token-123",
+    bundle_id: str = "com.levneiman.homesec",
     device_name: str = "Lev's iPhone",
     app_version: str = "1.0.0",
 ) -> MobileDeviceRegistration:
     return MobileDeviceRegistration(
         apns_token=apns_token,
-        apns_environment="sandbox",
-        bundle_id="com.levneiman.homesec",
+        apns_environment=apns_environment,
+        bundle_id=bundle_id,
         device_name=device_name,
         app_version=app_version,
     )
@@ -140,6 +142,85 @@ async def test_disable_device_hides_record_without_deleting_it(
     assert disabled.enabled is False
     assert visible_records == []
     assert all_records == [disabled]
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_list_enabled_apns_targets_filters_disabled_environment_and_bundle(
+    postgres_dsn: str,
+    clean_test_db: None,
+) -> None:
+    # Given: Mobile devices across enabled state, APNs environment, and bundle id
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    repository = MobileDeviceRepository(state_store.engine)
+    enabled_match = await repository.register_device(
+        _registration(apns_token="enabled-sandbox-token")
+    )
+    disabled_match = await repository.register_device(
+        _registration(apns_token="disabled-sandbox-token")
+    )
+    await repository.disable_device(disabled_match.id)
+    await repository.register_device(
+        _registration(apns_environment="production", apns_token="production-token")
+    )
+    await repository.register_device(
+        _registration(apns_token="other-bundle-token", bundle_id="com.example.other")
+    )
+
+    # When: Listing sandbox APNs push targets for the HomeSec bundle
+    targets = await repository.list_enabled_apns_targets(
+        environment="sandbox",
+        bundle_id="com.levneiman.homesec",
+    )
+
+    # Then: Only the enabled matching iOS target is returned with token material
+    assert len(targets) == 1
+    assert targets[0].id == enabled_match.id
+    assert targets[0].apns_token == "enabled-sandbox-token"
+    assert targets[0].apns_environment == "sandbox"
+    assert targets[0].bundle_id == "com.levneiman.homesec"
+
+    await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_record_push_result_updates_last_push_status(
+    postgres_dsn: str,
+    clean_test_db: None,
+) -> None:
+    # Given: A registered mobile device
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    repository = MobileDeviceRepository(state_store.engine)
+    registered = await repository.register_device(_registration())
+    failed_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+
+    # When: Recording a failed APNs delivery
+    failed = await repository.record_push_result(
+        registered.id,
+        error=" BadDeviceToken ",
+        now=failed_at,
+    )
+
+    # Then: The latest push attempt and normalized error are persisted
+    assert failed is not None
+    assert failed.last_push_at == failed_at
+    assert failed.last_push_error == "BadDeviceToken"
+
+    # When: Recording a later successful APNs delivery
+    succeeded_at = datetime(2026, 6, 14, 8, 15, tzinfo=timezone.utc)
+    succeeded = await repository.record_push_result(
+        registered.id,
+        error=None,
+        now=succeeded_at,
+    )
+
+    # Then: The latest push time is refreshed and the previous error is cleared
+    assert succeeded is not None
+    assert succeeded.last_push_at == succeeded_at
+    assert succeeded.last_push_error is None
 
     await state_store.shutdown()
 
