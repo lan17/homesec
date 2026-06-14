@@ -687,7 +687,7 @@ describe('useCameraPreview', () => {
       state: 'ready',
       viewer_count: 1,
       token: 'preview-token-1',
-      token_expires_at: '2026-04-23T12:00:10.000Z',
+      token_expires_at: null,
       playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
       idle_timeout_s: 30,
       warning: null,
@@ -736,6 +736,60 @@ describe('useCameraPreview', () => {
       expect(getPreviewStatus.mock.calls.length).toBeGreaterThan(statusCallsAfterPause)
     })
     expect(result.current.session).toBeNull()
+  })
+
+  it('clears local preview when a stop request rejects', async () => {
+    // Given: An active preview session whose server-side stop request will fail
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front',
+      enabled: true,
+      state: 'ready',
+      viewer_count: 1,
+      degraded_reason: null,
+      last_error: null,
+      idle_shutdown_at: null,
+      httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front',
+      state: 'ready',
+      viewer_count: 1,
+      token: 'preview-token-1',
+      token_expires_at: null,
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
+      idle_timeout_s: 30,
+      warning: null,
+      httpStatus: 200,
+    })
+    const stopPreview = vi
+      .spyOn(apiClient, 'stopCameraPreview')
+      .mockRejectedValue(new Error('stop failed'))
+
+    const { result } = renderHook(() => useCameraPreview('front'), {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(result.current.status?.state).toBe('ready')
+    })
+    await act(async () => {
+      await result.current.start()
+    })
+    await waitFor(() => {
+      expect(result.current.playlistUrl).toContain('preview-token-1')
+    })
+
+    // When: The user stops preview and the backend request rejects
+    await act(async () => {
+      await expect(result.current.stop()).resolves.toBeUndefined()
+    })
+
+    // Then: Local media is detached even though the server-side stop failed
+    await waitFor(() => {
+      expect(stopPreview).toHaveBeenCalledWith('front')
+      expect(result.current.session).toBeNull()
+      expect(result.current.playlistUrl).toBeNull()
+      expect(result.current.error?.message).toBe('stop failed')
+    })
   })
 
   it('stops preview start that resolves after native background', async () => {
@@ -819,7 +873,7 @@ describe('useCameraPreview', () => {
         state: 'ready',
         viewer_count: 1,
         token: 'preview-token-new',
-        token_expires_at: '2026-04-23T12:00:10.000Z',
+        token_expires_at: null,
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-new',
         idle_timeout_s: 30,
         warning: null,
@@ -864,7 +918,7 @@ describe('useCameraPreview', () => {
         state: 'ready',
         viewer_count: 1,
         token: 'preview-token-stale',
-        token_expires_at: '2026-04-23T12:00:10.000Z',
+        token_expires_at: null,
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-stale',
         idle_timeout_s: 30,
         warning: null,
@@ -948,7 +1002,7 @@ describe('useCameraPreview', () => {
 
     // Then: The hook waits for the stop to settle instead of racing a new attach against it
     expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
-    expect(result.current.session?.token).toBe('preview-token-old')
+    expect(result.current.session).toBeNull()
 
     await act(async () => {
       backgroundStop.resolve({
@@ -992,7 +1046,7 @@ describe('useCameraPreview', () => {
       state: 'ready',
       viewer_count: 1,
       token: 'preview-token-1',
-      token_expires_at: '2026-04-23T12:00:10.000Z',
+      token_expires_at: null,
       playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
       idle_timeout_s: 30,
       warning: null,

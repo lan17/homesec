@@ -179,12 +179,13 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
 
   const stop = useCallback(async () => {
     const requestSeq = beginStopRequest()
+    clearSession()
     try {
       await stopPreview({ requestSeq })
     } catch {
       return
     }
-  }, [beginStopRequest, stopPreview])
+  }, [beginStopRequest, clearSession, stopPreview])
 
   const refreshSession = useCallback(async () => {
     if (nativeLifecycle.isBackgrounded || stopInFlightSeqRef.current !== null) {

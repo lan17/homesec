@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { APIError } from '../../../api/client'
@@ -296,6 +296,38 @@ describe('CameraPreviewPanel', () => {
     })
   })
 
+  it('tears down playback listeners when hls.js reports a fatal error', async () => {
+    // Given: Browser HLS playback is active and hls.js has registered a fatal-error handler
+    let fatalErrorHandler: ((event: unknown, data: { fatal: boolean }) => void) | null = null
+    hlsOnMock.mockImplementation((event: string, handler: unknown) => {
+      if (event === 'error' && typeof handler === 'function') {
+        fatalErrorHandler = handler as (event: unknown, data: { fatal: boolean }) => void
+      }
+    })
+    const removeDocumentListener = vi.spyOn(document, 'removeEventListener')
+    mockReadyPreviewSession()
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    await waitFor(() => {
+      expect(hlsOnMock).toHaveBeenCalledWith('error', expect.any(Function))
+      expect(fatalErrorHandler).not.toBeNull()
+    })
+
+    // When: hls.js reports a fatal playback failure
+    act(() => {
+      fatalErrorHandler?.('error', { fatal: true })
+    })
+
+    // Then: The player shows recovery copy and tears down document/video resources immediately
+    await waitFor(() => {
+      expect(screen.getByText('Preview playback failed. Stop and start live view.')).toBeTruthy()
+      expect(removeDocumentListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+      expect(hlsDestroyMock).toHaveBeenCalled()
+      expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled()
+      expect(HTMLMediaElement.prototype.load).toHaveBeenCalled()
+    })
+  })
+
   it('uses hls.js before native HLS in browser mode when both playback paths are available', async () => {
     // Given: Browser mode has hls.js support and Safari-like native HLS support
     vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
@@ -355,6 +387,7 @@ describe('CameraPreviewPanel', () => {
     isIOSNativeAppMock.mockReturnValue(true)
     vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
     mockReadyPreviewSession()
+    const removeDocumentListener = vi.spyOn(document, 'removeEventListener')
     const { container } = render(<CameraPreviewPanel cameraName="front" />)
     const video = await waitFor(() => {
       const currentVideo = container.querySelector('video')
@@ -373,6 +406,7 @@ describe('CameraPreviewPanel', () => {
       expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled()
       expect(HTMLMediaElement.prototype.load).toHaveBeenCalled()
       expect(video?.hasAttribute('src')).toBe(false)
+      expect(removeDocumentListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
     })
   })
 
