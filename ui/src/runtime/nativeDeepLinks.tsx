@@ -58,6 +58,9 @@ export function NativeDeepLinkRouter({ app = App }: { app?: NativeDeepLinkApp })
       .catch(() => {})
 
     void app.addListener('appUrlOpen', (event) => {
+      if (cancelled) {
+        return
+      }
       navigateToDeepLink(event.url, { replace: false })
     })
       .then((nextHandle) => {

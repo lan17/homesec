@@ -19,6 +19,14 @@ type DeepLinkEvent = {
   url?: string | null
 }
 
+type TestNativeDeepLinkApp = {
+  getLaunchUrl: () => Promise<DeepLinkEvent | null | undefined>
+  addListener: (
+    eventName: 'appUrlOpen',
+    listenerFunc: (event: DeepLinkEvent) => void,
+  ) => Promise<{ remove: () => Promise<void> }>
+}
+
 function LocationProbe() {
   const location = useLocation()
   return <p data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</p>
@@ -26,7 +34,7 @@ function LocationProbe() {
 
 function createNativeDeepLinkApp(launchUrl?: string | null) {
   let appUrlOpenListener: ((event: DeepLinkEvent) => void) | null = null
-  const remove = vi.fn()
+  const remove = vi.fn(async () => {})
   const app = {
     getLaunchUrl: vi.fn(async () => (launchUrl === undefined ? null : { url: launchUrl })),
     addListener: vi.fn(async (
@@ -48,8 +56,39 @@ function createNativeDeepLinkApp(launchUrl?: string | null) {
   }
 }
 
+function createDeferredNativeDeepLinkApp() {
+  let appUrlOpenListener: ((event: DeepLinkEvent) => void) | null = null
+  let resolveListener: ((handle: { remove: () => Promise<void> }) => void) | null = null
+  const remove = vi.fn(async () => {})
+  const listenerPromise = new Promise<{ remove: () => Promise<void> }>((resolve) => {
+    resolveListener = resolve
+  })
+  const app = {
+    getLaunchUrl: vi.fn(async () => null),
+    addListener: vi.fn((
+      eventName: 'appUrlOpen',
+      listenerFunc: (event: DeepLinkEvent) => void,
+    ) => {
+      expect(eventName).toBe('appUrlOpen')
+      appUrlOpenListener = listenerFunc
+      return listenerPromise
+    }),
+  }
+
+  return {
+    app,
+    emitUrlOpen(rawUrl: string) {
+      appUrlOpenListener?.({ url: rawUrl })
+    },
+    resolveListener() {
+      resolveListener?.({ remove })
+    },
+    remove,
+  }
+}
+
 function renderNativeDeepLinkRouter(
-  app: ReturnType<typeof createNativeDeepLinkApp>['app'],
+  app: TestNativeDeepLinkApp,
   initialPath = '/live',
 ) {
   render(
@@ -60,6 +99,30 @@ function renderNativeDeepLinkRouter(
       </Routes>
     </MemoryRouter>,
   )
+}
+
+function renderToggleableNativeDeepLinkRouter(
+  app: TestNativeDeepLinkApp,
+  initialPath = '/live',
+) {
+  function Harness({ enabled }: { enabled: boolean }) {
+    return (
+      <MemoryRouter initialEntries={[initialPath]}>
+        {enabled ? <NativeDeepLinkRouter app={app} /> : null}
+        <Routes>
+          <Route path="*" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    )
+  }
+
+  const result = render(<Harness enabled />)
+  return {
+    ...result,
+    disableRouter() {
+      result.rerender(<Harness enabled={false} />)
+    },
+  }
 }
 
 describe('parseNativeDeepLinkRoute', () => {
@@ -77,6 +140,22 @@ describe('parseNativeDeepLinkRoute', () => {
 
     // Then: The parser keeps the route details needed by React Router
     expect(route).toBe('/events/clip-42?camera=front#summary')
+  })
+
+  it('preserves query strings on allowed top-level routes', () => {
+    // Given: A custom-scheme URL for a top-level route with query context
+    const route = parseNativeDeepLinkRoute('homesec://events?from=notification')
+
+    // Then: Route validation accepts the pathname before preserving the query
+    expect(route).toBe('/events?from=notification')
+  })
+
+  it('preserves hashes on allowed top-level routes', () => {
+    // Given: A custom-scheme URL for a top-level route with a hash target
+    const route = parseNativeDeepLinkRoute('homesec://live#camera-front')
+
+    // Then: Route validation accepts the pathname before preserving the hash
+    expect(route).toBe('/live#camera-front')
   })
 
   it('ignores non-HomeSec URLs', () => {
@@ -185,6 +264,26 @@ describe('NativeDeepLinkRouter', () => {
     cleanup()
 
     // Then: The native listener is removed
+    expect(nativeApp.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores stale appUrlOpen events after cleanup', async () => {
+    // Given: Native listener registration captured a callback but has not resolved yet
+    const nativeApp = createDeferredNativeDeepLinkApp()
+    const view = renderToggleableNativeDeepLinkRouter(nativeApp.app, '/live')
+    await waitFor(() => {
+      expect(nativeApp.app.addListener).toHaveBeenCalledTimes(1)
+    })
+
+    // When: React removes the deep-link router before the native listener resolves
+    view.disableRouter()
+    await act(async () => {
+      nativeApp.emitUrlOpen('homesec://events/stale')
+      nativeApp.resolveListener()
+    })
+
+    // Then: The stale native callback does not navigate after cleanup
+    expect(screen.getByTestId('location').textContent).toBe('/live')
     expect(nativeApp.remove).toHaveBeenCalledTimes(1)
   })
 })

@@ -18,10 +18,9 @@ function routeIsAllowed(route: string): boolean {
   })
 }
 
-function routeFromUrl(url: URL): string {
+function pathnameFromUrl(url: URL): string {
   const pathSegments = [url.hostname, url.pathname.replace(/^\/+/, '')].filter(Boolean)
-  const pathname = `/${pathSegments.join('/')}`.replace(/\/{2,}/g, '/')
-  return `${pathname}${url.search}${url.hash}`
+  return `/${pathSegments.join('/')}`.replace(/\/{2,}/g, '/')
 }
 
 export function parseNativeDeepLinkRoute(rawUrl: string): string | null {
@@ -36,10 +35,10 @@ export function parseNativeDeepLinkRoute(rawUrl: string): string | null {
     return null
   }
 
-  const route = routeFromUrl(url)
-  if (!routeIsAllowed(route)) {
+  const pathname = pathnameFromUrl(url)
+  if (!routeIsAllowed(pathname)) {
     return DEFAULT_DEEP_LINK_ROUTE
   }
 
-  return route
+  return `${pathname}${url.search}${url.hash}`
 }
