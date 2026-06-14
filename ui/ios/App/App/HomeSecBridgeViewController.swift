@@ -6,5 +6,6 @@ class HomeSecBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         bridge?.registerPluginInstance(HomeSecAuthPlugin())
+        bridge?.registerPluginInstance(HomeSecDevicePlugin())
     }
 }

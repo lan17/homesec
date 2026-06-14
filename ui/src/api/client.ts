@@ -36,6 +36,8 @@ import type {
   RuntimeStatusResponse,
   SetupStatusResponse,
   StatsResponse,
+  MobileDeviceRegisterRequest,
+  MobileDeviceResponse,
 } from './generated/types'
 
 import { isIOSNativeApp } from '../runtime/nativeRuntime'
@@ -71,6 +73,7 @@ import {
   parsePreflightResponse,
   parsePostgresBackupRunResponse,
   parsePostgresBackupStatusResponse,
+  parseMobileDeviceResponse,
   parseTestConnectionResponse,
   parseRuntimeReloadResponse,
   parseRuntimeStatusResponse,
@@ -108,6 +111,7 @@ export type FinalizeSnapshot = ApiSnapshot<FinalizeResponse>
 export type PreflightSnapshot = ApiSnapshot<PreflightResponse>
 export type TestConnectionSnapshot = ApiSnapshot<TestConnectionResponse>
 export type ClipMediaTokenSnapshot = ApiSnapshot<ClipMediaTokenResponsePayload>
+export type MobileDeviceSnapshot = ApiSnapshot<MobileDeviceResponse>
 
 export class HomeSecApiClient implements GeneratedHomeSecClient {
   private readonly httpClient: JsonHttpClient
@@ -612,6 +616,28 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
       return withHttpStatus(parseClipMediaTokenResponse(payload), status)
     } catch {
       throw new APIError('Invalid clip media token response payload', status, payload, null)
+    }
+  }
+
+  async registerMobileDevice(
+    payload: MobileDeviceRegisterRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<MobileDeviceSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/mobile/devices', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return withHttpStatus(parseMobileDeviceResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid mobile device response payload',
+        response.status,
+        response.payload,
+        null,
+      )
     }
   }
 

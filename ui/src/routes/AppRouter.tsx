@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-do
 import { isRuntimeAuthSessionReady, runtimeServerBaseUrlProvider } from '../api/client'
 import { AppShell } from '../app/layout/AppShell'
 import { isIOSNativeApp } from '../runtime/nativeRuntime'
+import { useNativePushRegistration } from '../runtime/nativePushRegistration'
 import { CamerasPage } from '../features/cameras/CamerasPage'
 import { ClipDetailPage } from '../features/clips/ClipDetailPage'
 import { ClipsPage } from '../features/clips/ClipsPage'
@@ -26,11 +27,15 @@ function RedirectClipDetailToEvent() {
 
 function NativeSetupGuard() {
   const location = useLocation()
+  const serverBaseUrl = runtimeServerBaseUrlProvider.getBaseUrlSync()
+  const nativeSetupRequired = isIOSNativeApp() && (!serverBaseUrl || !isRuntimeAuthSessionReady())
 
-  if (
-    isIOSNativeApp() &&
-    (!runtimeServerBaseUrlProvider.getBaseUrlSync() || !isRuntimeAuthSessionReady())
-  ) {
+  useNativePushRegistration({
+    enabled: isIOSNativeApp() && !nativeSetupRequired,
+    registrationKey: serverBaseUrl ?? 'ios-native',
+  })
+
+  if (nativeSetupRequired) {
     return (
       <Navigate
         to="/native-setup"

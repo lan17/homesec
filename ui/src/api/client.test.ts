@@ -41,6 +41,86 @@ describe('HomeSecApiClient.getCameras', () => {
   })
 })
 
+describe('HomeSecApiClient.registerMobileDevice', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('posts APNs registration payloads and parses redacted device records', async () => {
+    // Given: The mobile device endpoint returns a redacted registration record
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'dev_1',
+          platform: 'ios',
+          environment: 'sandbox',
+          bundle_id: 'com.levneiman.homesec',
+          device_name: "Lev's iPhone",
+          app_version: '1.0.0',
+          capabilities: { deep_links: true, rich_notifications: false },
+          enabled: true,
+          token_fingerprint: 'abcdef123456',
+          created_at: '2026-06-14T00:00:00Z',
+          updated_at: '2026-06-14T00:00:00Z',
+          last_seen_at: '2026-06-14T00:00:00Z',
+          last_push_at: null,
+          last_push_error: null,
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Registering a native iOS APNs device
+    const result = await client.registerMobileDevice({
+      platform: 'ios',
+      apns_token: 'raw-apns-token',
+      environment: 'sandbox',
+      bundle_id: 'com.levneiman.homesec',
+      device_name: "Lev's iPhone",
+      app_version: '1.0.0',
+      capabilities: { deep_links: true, rich_notifications: false },
+    })
+
+    // Then: The API client posts the raw token only to the registration endpoint
+    expect(result).toEqual({
+      id: 'dev_1',
+      platform: 'ios',
+      environment: 'sandbox',
+      bundle_id: 'com.levneiman.homesec',
+      device_name: "Lev's iPhone",
+      app_version: '1.0.0',
+      capabilities: { deep_links: true, rich_notifications: false },
+      enabled: true,
+      token_fingerprint: 'abcdef123456',
+      created_at: '2026-06-14T00:00:00Z',
+      updated_at: '2026-06-14T00:00:00Z',
+      last_seen_at: '2026-06-14T00:00:00Z',
+      last_push_at: null,
+      last_push_error: null,
+      httpStatus: 201,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8081/api/v1/mobile/devices',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          platform: 'ios',
+          apns_token: 'raw-apns-token',
+          environment: 'sandbox',
+          bundle_id: 'com.levneiman.homesec',
+          device_name: "Lev's iPhone",
+          app_version: '1.0.0',
+          capabilities: { deep_links: true, rich_notifications: false },
+        }),
+      }),
+    )
+  })
+})
+
 describe('HomeSecApiClient.getHealth', () => {
   afterEach(() => {
     vi.restoreAllMocks()

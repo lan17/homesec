@@ -17,6 +17,9 @@ importers:
       '@capacitor/ios':
         specifier: ^8.3.3
         version: 8.3.3(@capacitor/core@8.3.3)
+      '@capacitor/push-notifications':
+        specifier: 8.1.1
+        version: 8.1.1(@capacitor/core@8.3.3)
       '@tanstack/react-query':
         specifier: ^5.90.21
         version: 5.90.21(react@19.2.4)
@@ -218,6 +221,11 @@ packages:
     resolution: {integrity: sha512-BHlTOxarrvkaqDdlTxKwip+dQmfQSnfctizpheR7SWp/VIlR0HcPpYzWMTiVbHQLq3nLRUdeZO1wSPVGvxzAPA==}
     peerDependencies:
       '@capacitor/core': ^8.3.0
+
+  '@capacitor/push-notifications@8.1.1':
+    resolution: {integrity: sha512-WqzjPKIbYbARMN+GC0XMAJcxJpUUzqgzS/Ny8RODLrro38pQhm3GXYwX2Mwd+LZlLY39rGImkCkrKyQSNfuikA==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
 
   '@csstools/color-helpers@6.0.1':
     resolution: {integrity: sha512-NmXRccUJMk2AWA5A7e5a//3bCIMyOu2hAtdRYrhPPHjDxINuCwX1w6rnIZ4xjLcp0ayv6h8Pc3X0eJUGiAAXHQ==}
@@ -2122,6 +2130,10 @@ snapshots:
       tslib: 2.8.1
 
   '@capacitor/ios@8.3.3(@capacitor/core@8.3.3)':
+    dependencies:
+      '@capacitor/core': 8.3.3
+
+  '@capacitor/push-notifications@8.1.1(@capacitor/core@8.3.3)':
     dependencies:
       '@capacitor/core': 8.3.3
 
