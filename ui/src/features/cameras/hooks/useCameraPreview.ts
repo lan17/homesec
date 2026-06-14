@@ -37,6 +37,7 @@ interface StoredPreviewSession {
 }
 
 interface PreviewActivation {
+  activationSeq: number
   pauseCountAtRequest: number
   snapshot: PreviewSessionSnapshot
 }
@@ -49,6 +50,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const [refreshError, setRefreshError] = useState<Error | null>(null)
   const sessionStateRef = useRef<StoredPreviewSession | null>(null)
   const statusRequestSeqRef = useRef(0)
+  const activationRequestSeqRef = useRef(0)
 
   useLayoutEffect(() => {
     nativeLifecycleRef.current = nativeLifecycle
@@ -70,13 +72,20 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   }, [])
 
   const storeActivationIfCurrent = useCallback(async (activation: PreviewActivation) => {
+    const isLatestActivation = activation.activationSeq === activationRequestSeqRef.current
     const currentLifecycle = nativeLifecycleRef.current
     if (
       currentLifecycle.isBackgrounded
       || currentLifecycle.pauseCount !== activation.pauseCountAtRequest
     ) {
-      clearSession()
-      await apiClient.stopCameraPreview(cameraName).catch(() => {})
+      if (isLatestActivation) {
+        clearSession()
+        await apiClient.stopCameraPreview(cameraName).catch(() => {})
+      }
+      return
+    }
+
+    if (!isLatestActivation) {
       return
     }
 
@@ -86,9 +95,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
 
   const startMutation = useMutation<PreviewActivation, Error>({
     mutationFn: async () => {
+      const activationSeq = activationRequestSeqRef.current + 1
+      activationRequestSeqRef.current = activationSeq
       const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
-      return { pauseCountAtRequest, snapshot }
+      return { activationSeq, pauseCountAtRequest, snapshot }
     },
     onSuccess: async (activation) => {
       setRefreshError(null)
@@ -144,10 +155,12 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       return
     }
     try {
+      const activationSeq = activationRequestSeqRef.current + 1
+      activationRequestSeqRef.current = activationSeq
       const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
       setRefreshError(null)
-      await storeActivationIfCurrent({ pauseCountAtRequest, snapshot })
+      await storeActivationIfCurrent({ activationSeq, pauseCountAtRequest, snapshot })
     } catch (nextError) {
       setRefreshError(nextError as Error)
     }
