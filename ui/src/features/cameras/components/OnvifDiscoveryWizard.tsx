@@ -38,6 +38,15 @@ const DEFAULT_PROBE_CREDENTIALS: OnvifProbeCredentials = {
   port: ONVIF_DEFAULT_PORT,
 }
 
+function buildCameraIdentity(result: ProbeResponse): Record<string, unknown> {
+  return {
+    manufacturer: result.device.manufacturer,
+    model: result.device.model,
+    firmware: result.device.firmware_version,
+    profile_names: result.profiles.map((profile) => profile.name),
+  }
+}
+
 interface OnvifWizardState {
   step: WizardStep
   discoveredCameras: DiscoveredCameraResponse[]
@@ -292,7 +301,7 @@ export function OnvifDiscoveryWizard({
   }, [state.probeResult, state.selectedProfileToken])
 
   async function handleCreateCamera(): Promise<void> {
-    if (!selectedProfile?.stream_uri) {
+    if (!state.probeResult || !selectedProfile?.stream_uri) {
       dispatch({
         type: 'create_error_set',
         error: 'Select a stream profile with a valid RTSP URI.',
@@ -320,6 +329,7 @@ export function OnvifDiscoveryWizard({
       source_backend: 'rtsp',
       source_config: {
         rtsp_url: rtspUrl,
+        camera_identity: buildCameraIdentity(state.probeResult),
       },
     })
     if (createResult.ok) {

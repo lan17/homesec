@@ -1012,6 +1012,190 @@ async def test_talk_backchannel_inherits_source_rtsp_url_when_no_override_is_con
 
 
 @pytest.mark.asyncio
+async def test_manual_rtsp_auto_discovers_tapo_after_onvif_unsupported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual RTSP cameras should get passive Tapo auto discovery after ONVIF fails."""
+    calls: list[str] = []
+
+    class _UnsupportedONVIFBackchannelAdapter:
+        supported_codecs = ["PCMA/8000"]
+
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            calls.append("onvif:probe")
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.UNSUPPORTED,
+                refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                message="ONVIF backchannel unsupported",
+            )
+
+    async def _detect_tapo_endpoint(*_: object, **__: object) -> object:
+        calls.append("tapo:discover")
+        return None
+
+    async def _probe_tapo_endpoint(*_: object, **__: object) -> None:
+        calls.append("tapo:probe")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _UnsupportedONVIFBackchannelAdapter,
+    )
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.detect_tapo_local_endpoint",
+        _detect_tapo_endpoint,
+    )
+    monkeypatch.setattr(
+        "homesec.talk.tapo.backend.probe_tapo_local_endpoint",
+        _probe_tapo_endpoint,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://admin:secret@camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(backend="auto"),
+        },
+    )
+
+    # Given: A manually entered RTSP camera where ONVIF backchannel probing is unsupported
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing talk capability
+    status = await source.refresh_talk_status()
+
+    # Then: The source passively fingerprints Tapo and falls back to the Tapo backend
+    assert status.capability == TalkCapabilityState.SUPPORTED
+    assert status.backend == "tapo_local"
+    assert status.backend_reason == "Selected talk backend 'tapo_local' by safe camera detector"
+    assert calls == ["onvif:probe", "tapo:discover", "onvif:probe", "tapo:probe"]
+
+
+@pytest.mark.asyncio
+async def test_rtsp_source_uses_persisted_tapo_identity_after_onvif_unsupported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persisted ONVIF identity should be enough to safely consider Tapo fallback."""
+    calls: list[str] = []
+
+    class _UnsupportedONVIFBackchannelAdapter:
+        supported_codecs = ["PCMA/8000"]
+
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            calls.append("onvif:probe")
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.UNSUPPORTED,
+                refusal_reason=TalkRefusalReason.UNSUPPORTED_CAMERA,
+                message="ONVIF backchannel unsupported",
+            )
+
+    async def _unexpected_passive_discovery(*_: object, **__: object) -> object:
+        raise AssertionError("persisted Tapo identity should skip passive discovery")
+
+    async def _probe_tapo_endpoint(*_: object, **__: object) -> None:
+        calls.append("tapo:probe")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _UnsupportedONVIFBackchannelAdapter,
+    )
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.detect_tapo_local_endpoint",
+        _unexpected_passive_discovery,
+    )
+    monkeypatch.setattr(
+        "homesec.talk.tapo.backend.probe_tapo_local_endpoint",
+        _probe_tapo_endpoint,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://admin:secret@camera.local/live",
+        camera_identity={
+            "manufacturer": "TP-Link",
+            "model": "Tapo C120",
+            "firmware": "1.0.0",
+            "profile_names": ["Main stream"],
+        },
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(backend="auto"),
+        },
+    )
+
+    # Given: An ONVIF-created RTSP camera with persisted Tapo identity metadata
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing talk capability after ONVIF reports unsupported
+    status = await source.refresh_talk_status()
+
+    # Then: Tapo is selected from identity metadata without a separate passive scan
+    assert status.capability == TalkCapabilityState.SUPPORTED
+    assert status.backend == "tapo_local"
+    assert calls == ["onvif:probe", "tapo:probe"]
+
+
+@pytest.mark.asyncio
+async def test_manual_rtsp_auto_keeps_onvif_before_tapo_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual RTSP Tapo discovery should not run when ONVIF is already supported."""
+    calls: list[str] = []
+
+    class _SupportedONVIFBackchannelAdapter:
+        supported_codecs = ["PCMA/8000"]
+
+        def __init__(self, config: object, *, rtsp_url: str, camera_name: str) -> None:
+            _ = config, rtsp_url, camera_name
+
+        async def probe(self) -> TalkCapabilityProbeResult:
+            calls.append("onvif:probe")
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.SUPPORTED,
+                offered_codecs=["PCMA/8000"],
+                selected_codec="PCMA/8000",
+            )
+
+    async def _unexpected_tapo_discovery(*_: object, **__: object) -> object:
+        raise AssertionError("Tapo discovery should not run while ONVIF is supported")
+
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.talk.backend.ONVIFBackchannelAdapter",
+        _SupportedONVIFBackchannelAdapter,
+    )
+    monkeypatch.setattr(
+        "homesec.sources.rtsp.core.detect_tapo_local_endpoint",
+        _unexpected_tapo_discovery,
+    )
+    config = _make_config(
+        tmp_path,
+        rtsp_url="rtsp://admin:secret@camera.local/live",
+        **{
+            "__runtime_talk__": TalkConfig(enabled=True),
+            "__camera_talk__": CameraTalkConfig(backend="auto"),
+        },
+    )
+
+    # Given: A manually entered RTSP camera whose ONVIF backchannel probe succeeds
+    source = RTSPSource(config, camera_name="cam")
+
+    # When: Refreshing talk capability
+    status = await source.refresh_talk_status()
+
+    # Then: ONVIF remains selected and proprietary discovery is skipped
+    assert status.capability == TalkCapabilityState.SUPPORTED
+    assert status.backend == "onvif_rtsp_backchannel"
+    assert calls == ["onvif:probe"]
+
+
+@pytest.mark.asyncio
 async def test_talk_backchannel_missing_explicit_rtsp_url_env_reports_config_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

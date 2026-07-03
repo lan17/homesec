@@ -117,6 +117,12 @@ describe('OnvifDiscoveryWizard', () => {
       source_backend: 'rtsp',
       source_config: {
         rtsp_url: 'rtsp://admin:secret@camera.local/stream',
+        camera_identity: {
+          manufacturer: 'Acme',
+          model: 'CamPro',
+          firmware: '1.0.0',
+          profile_names: ['Main stream'],
+        },
       },
     })
     expect(onClose).toHaveBeenCalledTimes(1)
