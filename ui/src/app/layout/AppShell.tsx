@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 
 import { useCamerasQuery } from '../../api/hooks/useCamerasQuery'
@@ -19,8 +20,15 @@ const MOBILE_NAV_LINKS: readonly MobileBottomNavLink[] = [
   { to: '/settings', label: 'Settings' },
 ]
 
+const FORM_CONTROL_SELECTOR = 'input, textarea, select'
+
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'nav-link nav-link--active' : 'nav-link'
+}
+
+function documentHasFocusedFormControl(): boolean {
+  return document.activeElement instanceof HTMLElement &&
+    document.activeElement.matches(FORM_CONTROL_SELECTOR)
 }
 
 function systemStatusText(status: string | undefined, isError: boolean): string {
@@ -38,6 +46,7 @@ function systemStatusText(status: string | undefined, isError: boolean): string 
 
 export function AppShell() {
   const { theme, toggleTheme } = useTheme()
+  const [isFormControlFocused, setIsFormControlFocused] = useState(false)
   const healthQuery = useHealthQuery()
   const camerasQuery = useCamerasQuery()
   const cameraIssue = cameraIssueSummary(camerasQuery.data)
@@ -45,9 +54,42 @@ export function AppShell() {
   const systemStatusClassName = !cameraIssue && !healthQuery.isError && healthQuery.data?.status === 'healthy'
     ? 'app-shell__header-status app-shell__header-status--nominal'
     : 'app-shell__header-status'
+  const appShellClassName = isFormControlFocused
+    ? 'app-shell app-shell--form-control-focused'
+    : 'app-shell'
+
+  useEffect(() => {
+    let focusOutTimer: number | undefined
+
+    const syncFocusedControlState = () => {
+      setIsFormControlFocused(documentHasFocusedFormControl())
+    }
+
+    const queueFocusedControlStateSync = () => {
+      if (focusOutTimer !== undefined) {
+        window.clearTimeout(focusOutTimer)
+      }
+      focusOutTimer = window.setTimeout(() => {
+        focusOutTimer = undefined
+        syncFocusedControlState()
+      }, 0)
+    }
+
+    document.addEventListener('focusin', syncFocusedControlState)
+    document.addEventListener('focusout', queueFocusedControlStateSync)
+    syncFocusedControlState()
+
+    return () => {
+      if (focusOutTimer !== undefined) {
+        window.clearTimeout(focusOutTimer)
+      }
+      document.removeEventListener('focusin', syncFocusedControlState)
+      document.removeEventListener('focusout', queueFocusedControlStateSync)
+    }
+  }, [])
 
   return (
-    <div className="app-shell">
+    <div className={appShellClassName}>
       <div className="app-shell__background" />
       <header className="app-shell__topbar">
         <NavLink className="app-shell__brand-link" to="/live" aria-label="HomeSec Live">

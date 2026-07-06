@@ -42,12 +42,12 @@ export function CamerasPage() {
   }
 
   async function submitApiKey(apiKey: string): Promise<void> {
-    saveApiKey(apiKey)
+    await saveApiKey(apiKey)
     await refreshAll()
   }
 
   async function clearStoredApiKey(): Promise<void> {
-    clearApiKey()
+    await clearApiKey()
     await refreshAll()
   }
 

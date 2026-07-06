@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { APIError } from '../../../api/client'
@@ -19,6 +19,7 @@ const {
   hlsIsSupportedMock,
   hlsLoadSourceMock,
   hlsOnMock,
+  isIOSNativeAppMock,
 } = vi.hoisted(() => ({
   useCameraPreviewMock: vi.fn(),
   usePushToTalkMock: vi.fn(),
@@ -28,6 +29,7 @@ const {
   hlsOnMock: vi.fn(),
   hlsDestroyMock: vi.fn(),
   hlsIsSupportedMock: vi.fn(() => true),
+  isIOSNativeAppMock: vi.fn(() => false),
 }))
 
 vi.mock('../hooks/useCameraPreview', () => ({
@@ -36,6 +38,10 @@ vi.mock('../hooks/useCameraPreview', () => ({
 
 vi.mock('../hooks/usePushToTalk', () => ({
   usePushToTalk: (...args: unknown[]) => usePushToTalkMock(...args),
+}))
+
+vi.mock('../../../runtime/nativeRuntime', () => ({
+  isIOSNativeApp: () => isIOSNativeAppMock(),
 }))
 
 vi.mock('hls.js', () => {
@@ -88,7 +94,10 @@ function mockIdlePushToTalk(overrides: Record<string, unknown> = {}) {
   })
 }
 
-function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
+function mockReadyPreviewSession(
+  playlistUrl: string = DEFAULT_PLAYLIST_URL,
+  overrides: Record<string, unknown> = {},
+) {
   useCameraPreviewMock.mockReturnValue({
     status: {
       camera_name: 'front',
@@ -120,6 +129,7 @@ function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
     start: vi.fn(),
     stop: vi.fn(),
     refreshStatus: vi.fn(),
+    ...overrides,
   })
 }
 
@@ -134,6 +144,8 @@ describe('CameraPreviewPanel', () => {
     hlsDestroyMock.mockReset()
     hlsIsSupportedMock.mockReset()
     hlsIsSupportedMock.mockReturnValue(true)
+    isIOSNativeAppMock.mockReset()
+    isIOSNativeAppMock.mockReturnValue(false)
     mockIdlePushToTalk()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('#EXTM3U', {
@@ -288,19 +300,72 @@ describe('CameraPreviewPanel', () => {
     })
   })
 
-  it('uses hls.js before native HLS when both playback paths are available', async () => {
-    // Given: Safari-like native HLS support and hls.js support are both available
+  it('tears down playback listeners when hls.js reports a fatal error', async () => {
+    // Given: Browser HLS playback is active and hls.js has registered a fatal-error handler
+    let fatalErrorHandler: ((event: unknown, data: { fatal: boolean }) => void) | null = null
+    hlsOnMock.mockImplementation((event: string, handler: unknown) => {
+      if (event === 'error' && typeof handler === 'function') {
+        fatalErrorHandler = handler as (event: unknown, data: { fatal: boolean }) => void
+      }
+    })
+    const removeDocumentListener = vi.spyOn(document, 'removeEventListener')
+    mockReadyPreviewSession()
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    await waitFor(() => {
+      expect(hlsOnMock).toHaveBeenCalledWith('error', expect.any(Function))
+      expect(fatalErrorHandler).not.toBeNull()
+    })
+
+    // When: hls.js reports a fatal playback failure
+    act(() => {
+      fatalErrorHandler?.('error', { fatal: true })
+    })
+
+    // Then: The player shows recovery copy and tears down document/video resources immediately
+    await waitFor(() => {
+      expect(screen.getByText('Preview playback failed. Stop and start live view.')).toBeTruthy()
+      expect(removeDocumentListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+      expect(hlsDestroyMock).toHaveBeenCalled()
+      expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled()
+      expect(HTMLMediaElement.prototype.load).toHaveBeenCalled()
+    })
+  })
+
+  it('uses hls.js before native HLS in browser mode when both playback paths are available', async () => {
+    // Given: Browser mode has hls.js support and Safari-like native HLS support
     vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
     mockReadyPreviewSession()
 
     // When: Rendering the preview panel
     render(<CameraPreviewPanel cameraName="front" />)
 
-    // Then: The player takes the hls.js path instead of short-circuiting to native HLS
+    // Then: Browser mode takes the hls.js path instead of short-circuiting to native HLS
     await waitFor(() => {
       expect(hlsConstructMock).toHaveBeenCalledTimes(1)
       expect(hlsLoadSourceMock).toHaveBeenCalledWith(DEFAULT_PLAYLIST_URL)
       expect(HTMLMediaElement.prototype.canPlayType).not.toHaveBeenCalled()
+    })
+  })
+
+  it('uses native HLS before hls.js inside the iOS native app', async () => {
+    // Given: The Capacitor iOS app can play HLS natively and hls.js is also present
+    isIOSNativeAppMock.mockReturnValue(true)
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
+    mockReadyPreviewSession()
+
+    // When: Rendering the preview panel
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The player assigns the playlist directly to the inline video element
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video?.getAttribute('src')).toBe(DEFAULT_PLAYLIST_URL)
+      expect(hlsConstructMock).not.toHaveBeenCalled()
+      expect(video?.muted).toBe(true)
+      expect(video?.autoplay).toBe(true)
+      expect(video?.playsInline).toBe(true)
+      expect(video?.getAttribute('webkit-playsinline')).toBe('')
     })
   })
 
@@ -319,6 +384,91 @@ describe('CameraPreviewPanel', () => {
       expect(video?.getAttribute('src')).toBe(DEFAULT_PLAYLIST_URL)
       expect(hlsConstructMock).not.toHaveBeenCalled()
     })
+  })
+
+  it('shows an actionable iOS playback error when native HLS fails', async () => {
+    // Given: The iOS native app has an active preview assigned through native HLS
+    isIOSNativeAppMock.mockReturnValue(true)
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('maybe')
+    mockReadyPreviewSession(DEFAULT_PLAYLIST_URL, {
+      warning: 'Preview degraded: stale playlist warning',
+    })
+    const removeDocumentListener = vi.spyOn(document, 'removeEventListener')
+    const { container } = render(<CameraPreviewPanel cameraName="front" />)
+    const video = await waitFor(() => {
+      const currentVideo = container.querySelector('video')
+      expect(currentVideo?.getAttribute('src')).toBe(DEFAULT_PLAYLIST_URL)
+      return currentVideo
+    })
+
+    // When: WKWebView reports a native media playback error
+    video?.dispatchEvent(new Event('error'))
+
+    // Then: The live view replaces the blank player with homeowner-actionable recovery copy
+    await waitFor(() => {
+      expect(screen.getByText(
+        'Live preview could not play in the iOS app. Stop and start live view; if it keeps failing, check server or VPN reachability.',
+      )).toBeTruthy()
+      expect(screen.queryByText('Preview degraded: stale playlist warning')).toBeNull()
+      expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled()
+      expect(HTMLMediaElement.prototype.load).toHaveBeenCalled()
+      expect(video?.hasAttribute('src')).toBe(false)
+      expect(removeDocumentListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+    })
+  })
+
+  it('shows an actionable iOS unsupported-player error', async () => {
+    // Given: The iOS native app cannot use hls.js or native HLS
+    isIOSNativeAppMock.mockReturnValue(true)
+    hlsIsSupportedMock.mockReturnValue(false)
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('')
+    mockReadyPreviewSession(DEFAULT_PLAYLIST_URL, {
+      warning: 'Preview degraded: stale playlist warning',
+    })
+
+    // When: Rendering the preview panel
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The placeholder explains the iOS playback limitation instead of staying blank
+    await waitFor(() => {
+      expect(screen.getByText(
+        'This iOS app cannot play the live preview stream. Check the HomeSec preview configuration and try again.',
+      )).toBeTruthy()
+      expect(screen.queryByText('Preview degraded: stale playlist warning')).toBeNull()
+    })
+  })
+
+  it('surfaces preview hook errors before stale warning text', () => {
+    // Given: The hook reports a stop failure while status still carries an older warning
+    useCameraPreviewMock.mockReturnValue({
+      status: {
+        camera_name: 'front',
+        enabled: true,
+        state: 'degraded',
+        viewer_count: 0,
+        degraded_reason: 'Preview degraded: stale runtime warning',
+        last_error: null,
+        idle_shutdown_at: null,
+        httpStatus: 200,
+      },
+      session: null,
+      playlistUrl: null,
+      warning: 'Preview degraded: stale runtime warning',
+      error: new Error('stop failed'),
+      isPending: false,
+      isStarting: false,
+      isStopping: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refreshStatus: vi.fn(),
+    })
+
+    // When: Rendering the preview panel after local media has been cleared
+    render(<CameraPreviewPanel cameraName="front" />)
+
+    // Then: The actionable hook failure is shown instead of the stale degraded warning
+    expect(screen.getByText('stop failed')).toBeTruthy()
+    expect(screen.queryByText('Preview degraded: stale runtime warning')).toBeNull()
   })
 
   it('renders attached previews with only a fullscreen playback control', async () => {

@@ -36,9 +36,21 @@ import type {
   RuntimeStatusResponse,
   SetupStatusResponse,
   StatsResponse,
+  MobileDeviceRegisterRequest,
+  MobileDeviceResponse,
 } from './generated/types'
 
+import { isIOSNativeApp } from '../runtime/nativeRuntime'
 import { JsonHttpClient } from './http'
+import { createBrowserServerBaseUrlProvider } from './serverBaseUrlProvider'
+import { NativeServerBaseUrlProvider } from './serverBaseUrlProvider'
+import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import {
+  hasAuthToken,
+  nativeAuthTokenProvider,
+  runtimeAuthTokenProvider,
+} from './tokenProvider'
+import type { AuthTokenProvider } from './tokenProvider'
 import type { ApiSnapshot, ClipMediaTokenResponsePayload } from './parsing'
 import {
   parseCameraListResponse,
@@ -61,6 +73,7 @@ import {
   parsePreflightResponse,
   parsePostgresBackupRunResponse,
   parsePostgresBackupStatusResponse,
+  parseMobileDeviceResponse,
   parseTestConnectionResponse,
   parseRuntimeReloadResponse,
   parseRuntimeStatusResponse,
@@ -71,6 +84,11 @@ import {
 import { APIError } from './errors'
 
 const DEFAULT_API_BASE_URL = ''
+
+export interface HomeSecApiClientOptions {
+  authTokenProvider?: AuthTokenProvider
+  serverBaseUrlProvider?: ClientServerBaseUrlProvider
+}
 
 export type HealthSnapshot = ApiSnapshot<HealthResponse>
 export type StatsSnapshot = ApiSnapshot<StatsResponse>
@@ -93,12 +111,16 @@ export type FinalizeSnapshot = ApiSnapshot<FinalizeResponse>
 export type PreflightSnapshot = ApiSnapshot<PreflightResponse>
 export type TestConnectionSnapshot = ApiSnapshot<TestConnectionResponse>
 export type ClipMediaTokenSnapshot = ApiSnapshot<ClipMediaTokenResponsePayload>
+export type MobileDeviceSnapshot = ApiSnapshot<MobileDeviceResponse>
 
 export class HomeSecApiClient implements GeneratedHomeSecClient {
   private readonly httpClient: JsonHttpClient
 
-  constructor(baseUrl = DEFAULT_API_BASE_URL) {
-    this.httpClient = new JsonHttpClient(baseUrl)
+  constructor(baseUrl = DEFAULT_API_BASE_URL, options: HomeSecApiClientOptions = {}) {
+    this.httpClient = new JsonHttpClient(baseUrl, {
+      authTokenProvider: options.authTokenProvider,
+      serverBaseUrlProvider: options.serverBaseUrlProvider,
+    })
   }
 
   async getCameras(options: ApiRequestOptions = {}): Promise<CameraListResponse> {
@@ -597,12 +619,88 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
     }
   }
 
+  async registerMobileDevice(
+    payload: MobileDeviceRegisterRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<MobileDeviceSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/mobile/devices', {
+      ...options,
+      method: 'POST',
+      body: payload,
+    })
+
+    try {
+      return withHttpStatus(parseMobileDeviceResponse(response.payload), response.status)
+    } catch {
+      throw new APIError(
+        'Invalid mobile device response payload',
+        response.status,
+        response.payload,
+        null,
+      )
+    }
+  }
+
   resolvePath(path: string): string {
     return this.httpClient.resolvePath(path)
   }
 }
 
-export const apiClient = new HomeSecApiClient(import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL)
+export const browserServerBaseUrlProvider = createBrowserServerBaseUrlProvider(
+  import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL,
+)
+export const nativeServerBaseUrlProvider = new NativeServerBaseUrlProvider()
+export const runtimeServerBaseUrlProvider: ClientServerBaseUrlProvider = isIOSNativeApp()
+  ? nativeServerBaseUrlProvider
+  : browserServerBaseUrlProvider
+
+export const apiClient = new HomeSecApiClient(
+  DEFAULT_API_BASE_URL,
+  {
+    authTokenProvider: runtimeAuthTokenProvider,
+    serverBaseUrlProvider: runtimeServerBaseUrlProvider,
+  },
+)
+
+export async function hydrateRuntimeApiProviders(): Promise<void> {
+  if (!isIOSNativeApp()) {
+    return
+  }
+
+  await Promise.all([
+    nativeAuthTokenProvider.hydrate(),
+    nativeServerBaseUrlProvider.hydrate(),
+  ])
+}
+
+export function hasConfiguredApiToken(): boolean {
+  return hasAuthToken(runtimeAuthTokenProvider)
+}
 
 export { APIError, isAPIError, isUnauthorizedAPIError } from './errors'
 export { clearApiKey, getStoredApiKey, hasStoredApiKey, saveApiKey } from './apiKeyStorage'
+export {
+  BROWSER_SERVER_BASE_URL_STORAGE_KEY,
+  BrowserServerBaseUrlProvider,
+  createBrowserServerBaseUrlProvider,
+  NativeServerBaseUrlProvider,
+  normalizeServerBaseUrl,
+} from './serverBaseUrlProvider'
+export {
+  BROWSER_AUTH_DISABLED_SESSION_READY_STORAGE_KEY,
+  BROWSER_AUTH_TOKEN_STORAGE_KEY,
+  BrowserAuthTokenProvider,
+  browserAuthTokenProvider,
+  clearRuntimeAuthSessionReady,
+  hasAuthToken,
+  InMemoryAuthTokenProvider,
+  isRuntimeAuthSessionReady,
+  markRuntimeAuthSessionReady,
+  NativeAuthTokenProvider,
+  nativeAuthTokenProvider,
+  normalizeAuthToken,
+  persistRuntimeAuthSessionReady,
+  runtimeAuthTokenProvider,
+} from './tokenProvider'
+export type { AuthTokenProvider, SyncAuthTokenProvider } from './tokenProvider'
+export type { ClientServerBaseUrlProvider, ServerBaseUrlProvider } from './serverBaseUrlProvider'

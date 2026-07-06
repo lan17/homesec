@@ -487,12 +487,12 @@ export function ClipsPage() {
   }
 
   async function submitApiKey(apiKey: string): Promise<void> {
-    saveApiKey(apiKey)
+    await saveApiKey(apiKey)
     await Promise.all([clipsQuery.refetch(), camerasQuery.refetch()])
   }
 
   async function clearStoredApiKey(): Promise<void> {
-    clearApiKey()
+    await clearApiKey()
     await Promise.all([clipsQuery.refetch(), camerasQuery.refetch()])
   }
 

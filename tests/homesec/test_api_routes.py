@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -24,7 +25,13 @@ from homesec.models.clip import ClipListCursor, ClipListPage, ClipStateData
 from homesec.models.config import CameraConfig, CameraSourceConfig, FastAPIServerConfig
 from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.filter import FilterResult
+from homesec.models.mobile import (
+    MobileDeviceRecord,
+    MobileDeviceRegistration,
+    MobileDeviceUpdate,
+)
 from homesec.models.vlm import AnalysisResult
+from homesec.repository.mobile_device_repository import hash_apns_token
 from homesec.runtime.errors import RuntimeReloadConfigError
 from homesec.runtime.models import RuntimeReloadRequest
 from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
@@ -166,6 +173,77 @@ class _StubSource:
         return self._heartbeat
 
 
+class _StubMobileDevices:
+    def __init__(self) -> None:
+        self._records_by_hash: dict[str, MobileDeviceRecord] = {}
+        self._token_hash_by_id: dict[str, str] = {}
+        self.register_calls: list[MobileDeviceRegistration] = []
+        self.update_calls: list[tuple[str, MobileDeviceUpdate]] = []
+        self.disable_calls: list[str] = []
+
+    async def register_device(
+        self,
+        registration: MobileDeviceRegistration,
+    ) -> MobileDeviceRecord:
+        self.register_calls.append(registration)
+        token_hash = hash_apns_token(registration.apns_token)
+        existing = self._records_by_hash.get(token_hash)
+        now = dt.datetime(2026, 6, 14, tzinfo=dt.timezone.utc) + dt.timedelta(
+            minutes=len(self.register_calls)
+        )
+        record = MobileDeviceRecord(
+            id=existing.id if existing is not None else f"dev_{len(self._records_by_hash) + 1}",
+            platform=registration.platform,
+            apns_environment=registration.apns_environment,
+            bundle_id=registration.bundle_id,
+            device_name=registration.device_name,
+            app_version=registration.app_version,
+            capabilities=registration.capabilities,
+            enabled=existing.enabled if existing is not None else True,
+            token_fingerprint=token_hash[:12],
+            created_at=existing.created_at if existing is not None else now,
+            updated_at=now,
+            last_seen_at=now,
+            last_push_at=existing.last_push_at if existing is not None else None,
+            last_push_error=existing.last_push_error if existing is not None else None,
+        )
+        self._records_by_hash[token_hash] = record
+        self._token_hash_by_id[record.id] = token_hash
+        return record
+
+    async def list_devices(self, *, include_disabled: bool = False) -> list[MobileDeviceRecord]:
+        records = list(self._records_by_hash.values())
+        if not include_disabled:
+            records = [record for record in records if record.enabled]
+        return records
+
+    async def update_device(
+        self,
+        device_id: str,
+        patch: MobileDeviceUpdate,
+    ) -> MobileDeviceRecord | None:
+        self.update_calls.append((device_id, patch))
+        token_hash = self._token_hash_by_id.get(device_id)
+        if token_hash is None:
+            return None
+        existing = self._records_by_hash[token_hash]
+        changes = patch.model_dump(exclude_unset=True, mode="json")
+        data = existing.model_dump()
+        data.update(changes)
+        data["updated_at"] = _mobile_now()
+        record = MobileDeviceRecord.model_validate(data)
+        self._records_by_hash[token_hash] = record
+        return record
+
+    async def disable_device(self, device_id: str) -> MobileDeviceRecord | None:
+        self.disable_calls.append(device_id)
+        return await self.update_device(device_id, MobileDeviceUpdate(enabled=False))
+
+
+def _mobile_now() -> dt.datetime:
+    return dt.datetime(2026, 6, 14, 1, tzinfo=dt.timezone.utc)
+
+
 class _StubApp:
     def __init__(
         self,
@@ -179,6 +257,7 @@ class _StubApp:
         bootstrap_mode: bool = False,
         runtime_reload_request: RuntimeReloadRequest | None = None,
         runtime_reload_error: Exception | None = None,
+        mobile_devices: _StubMobileDevices | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.repository = repository
@@ -211,6 +290,7 @@ class _StubApp:
         self.restart_requested = False
         self.uptime_seconds = 0.0
         self._setup_test_connection_lock = asyncio.Lock()
+        self.mobile_devices = mobile_devices or _StubMobileDevices()
 
     @property
     def config(self):  # type: ignore[override]
@@ -2553,6 +2633,140 @@ def test_diagnostics_reports_unhealthy_when_pipeline_stopped(tmp_path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "unhealthy"
+
+
+def _mobile_device_payload(*, token: str = "raw-apns-token") -> dict[str, object]:
+    return {
+        "platform": "ios",
+        "apns_token": token,
+        "environment": "sandbox",
+        "bundle_id": "com.levneiman.homesec",
+        "device_name": "Lev's iPhone",
+        "app_version": "1.0.0",
+        "capabilities": {"deep_links": True, "rich_notifications": False},
+    }
+
+
+def test_register_mobile_device_creates_or_updates_redacted_record(tmp_path) -> None:
+    """POST /mobile/devices should upsert an iOS APNs registration."""
+    # Given: A configured app with mobile device persistence
+    manager = _write_config(tmp_path, cameras=[])
+    mobile_devices = _StubMobileDevices()
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        mobile_devices=mobile_devices,
+    )
+    client = _client(app)
+
+    # When: Registering a device with APNs material
+    response = client.post("/api/v1/mobile/devices", json=_mobile_device_payload())
+
+    # Then: The API returns redacted metadata and stores the registration
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["id"] == "dev_1"
+    assert payload["platform"] == "ios"
+    assert payload["environment"] == "sandbox"
+    assert payload["bundle_id"] == "com.levneiman.homesec"
+    assert payload["capabilities"] == {"deep_links": True, "rich_notifications": False}
+    assert "raw-apns-token" not in json.dumps(payload, sort_keys=True)
+    assert "apns_token" not in payload
+    assert len(mobile_devices.register_calls) == 1
+
+    # When: Registering the same APNs token with updated metadata
+    second_payload = _mobile_device_payload()
+    second_payload["device_name"] = "Kitchen iPad"
+    second = client.post("/api/v1/mobile/devices", json=second_payload)
+
+    # Then: The existing device record is updated instead of duplicated
+    assert second.status_code == 201
+    assert second.json()["id"] == "dev_1"
+    assert second.json()["device_name"] == "Kitchen iPad"
+    assert client.get("/api/v1/mobile/devices").json()[0]["device_name"] == "Kitchen iPad"
+
+
+def test_patch_mobile_device_updates_only_sent_fields(tmp_path) -> None:
+    """PATCH /mobile/devices/{id} should preserve omitted fields."""
+    # Given: A registered mobile device
+    manager = _write_config(tmp_path, cameras=[])
+    mobile_devices = _StubMobileDevices()
+    app = _StubApp(
+        config_manager=manager,
+        repository=_StubRepository(),
+        storage=_StubStorage(),
+        mobile_devices=mobile_devices,
+    )
+    client = _client(app)
+    created = client.post("/api/v1/mobile/devices", json=_mobile_device_payload()).json()
+
+    # When: Patching only enabled state
+    response = client.patch(f"/api/v1/mobile/devices/{created['id']}", json={"enabled": False})
+
+    # Then: Existing metadata is preserved and the record is disabled
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is False
+    assert payload["device_name"] == "Lev's iPhone"
+    assert payload["app_version"] == "1.0.0"
+    assert mobile_devices.update_calls[-1][1].model_fields_set == {"enabled"}
+
+    # When: Patching the iOS capability flags reported by the app
+    capabilities_response = client.patch(
+        f"/api/v1/mobile/devices/{created['id']}",
+        json={"capabilities": {"deep_links": True, "rich_notifications": True}},
+    )
+
+    # Then: The API preserves the nested capability patch
+    assert capabilities_response.status_code == 200
+    assert capabilities_response.json()["capabilities"] == {
+        "deep_links": True,
+        "rich_notifications": True,
+    }
+    assert mobile_devices.update_calls[-1][1].model_fields_set == {"capabilities"}
+
+
+def test_delete_mobile_device_disables_without_hard_delete(tmp_path) -> None:
+    """DELETE /mobile/devices/{id} should soft-disable the device."""
+    # Given: A registered mobile device
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+    created = client.post("/api/v1/mobile/devices", json=_mobile_device_payload()).json()
+
+    # When: Deleting the device
+    response = client.delete(f"/api/v1/mobile/devices/{created['id']}")
+
+    # Then: The device is disabled and hidden from default listings
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert client.get("/api/v1/mobile/devices").json() == []
+    all_devices = client.get("/api/v1/mobile/devices?include_disabled=true").json()
+    assert all_devices[0]["id"] == created["id"]
+    assert all_devices[0]["enabled"] is False
+
+
+def test_mobile_device_missing_returns_404(tmp_path) -> None:
+    """Mobile device mutation routes should report missing device ids."""
+    # Given: A configured app with no registered mobile devices
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+
+    # When: Updating a missing device
+    patch_response = client.patch("/api/v1/mobile/devices/dev_missing", json={"enabled": False})
+
+    # Then: The route returns a canonical not-found error
+    assert patch_response.status_code == 404
+    assert patch_response.json()["error_code"] == "MOBILE_DEVICE_NOT_FOUND"
+
+    # When: Deleting a missing device
+    delete_response = client.delete("/api/v1/mobile/devices/dev_missing")
+
+    # Then: The route returns the same canonical not-found error
+    assert delete_response.status_code == 404
+    assert delete_response.json()["error_code"] == "MOBILE_DEVICE_NOT_FOUND"
 
 
 def test_auth_required_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

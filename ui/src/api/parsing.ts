@@ -31,6 +31,7 @@ import type {
   RuntimeStatusResponse,
   SetupStatusResponse,
   StatsResponse,
+  MobileDeviceResponse,
 } from './generated/types'
 
 type JsonObject = Record<string, unknown>
@@ -697,6 +698,60 @@ export function parseClipMediaTokenResponse(payload: unknown): ClipMediaTokenRes
     media_url: expectString(payload.media_url, 'media_url'),
     tokenized: expectBoolean(payload.tokenized, 'tokenized'),
     expires_at: expectNullableString(payload.expires_at, 'expires_at'),
+  }
+}
+
+function parseMobileDeviceCapabilities(payload: unknown): MobileDeviceResponse['capabilities'] {
+  if (!isJsonObject(payload)) {
+    throw new Error('capabilities must be an object')
+  }
+
+  return {
+    deep_links: expectBoolean(payload.deep_links, 'capabilities.deep_links'),
+    rich_notifications: expectBoolean(
+      payload.rich_notifications,
+      'capabilities.rich_notifications',
+    ),
+  }
+}
+
+function parseMobilePlatform(value: unknown, fieldName: string): MobileDeviceResponse['platform'] {
+  if (value === 'ios') {
+    return value
+  }
+  throw new Error(`${fieldName} must be ios`)
+}
+
+function parseAPNSEnvironment(
+  value: unknown,
+  fieldName: string,
+): MobileDeviceResponse['environment'] {
+  if (value === 'sandbox' || value === 'production') {
+    return value
+  }
+  throw new Error(`${fieldName} must be sandbox or production`)
+}
+
+export function parseMobileDeviceResponse(payload: unknown): MobileDeviceResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Mobile device response is not a JSON object')
+  }
+
+  return {
+    id: expectString(payload.id, 'id'),
+    platform: parseMobilePlatform(payload.platform, 'platform'),
+    environment: parseAPNSEnvironment(payload.environment, 'environment'),
+    bundle_id: expectString(payload.bundle_id, 'bundle_id'),
+    device_name: expectNullableString(payload.device_name, 'device_name'),
+    app_version: expectNullableString(payload.app_version, 'app_version'),
+    capabilities: parseMobileDeviceCapabilities(payload.capabilities),
+    enabled: expectBoolean(payload.enabled, 'enabled'),
+    token_fingerprint: expectString(payload.token_fingerprint, 'token_fingerprint'),
+    created_at: expectString(payload.created_at, 'created_at'),
+    updated_at: expectString(payload.updated_at, 'updated_at'),
+    last_seen_at: expectNullableString(payload.last_seen_at, 'last_seen_at'),
+    last_push_at: expectNullableString(payload.last_push_at, 'last_push_at'),
+    last_push_error: expectNullableString(payload.last_push_error, 'last_push_error'),
   }
 }
 

@@ -36,6 +36,8 @@ import type {
   PostgresBackupStatusResponse,
   SetupStatusResponse,
   StatsResponse,
+  MobileDeviceRegisterRequest,
+  MobileDeviceResponse,
 } from './types'
 
 export interface ApiRequestOptions {
@@ -124,4 +126,8 @@ export interface GeneratedHomeSecClient {
     options?: ApiRequestOptions,
   ): Promise<ApiResponseWithStatus<ClipListResponse>>
   getClip(clipId: string, options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ClipResponse>>
+  registerMobileDevice(
+    payload: MobileDeviceRegisterRequest,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<MobileDeviceResponse>>
 }

@@ -46,6 +46,8 @@ dependencies = [
     "greenlet>=3.3.0",
     "pyftpdlib>=2.1.0",
     "websockets>=16.0",
+    "cryptography>=46.0.3",
+    "httpx[http2]>=0.28.1",
 ]
 
 [project.scripts]

@@ -47,4 +47,6 @@ export type ProbeRequest = components["schemas"]["ProbeRequest"]
 export type ProbeResponse = components["schemas"]["ProbeResponse"]
 export type MediaProfileResponse = components["schemas"]["MediaProfileResponse"]
 export type DeviceInfoResponse = components["schemas"]["DeviceInfoResponse"]
+export type MobileDeviceRegisterRequest = components["schemas"]["MobileDeviceRegisterRequest"]
+export type MobileDeviceResponse = components["schemas"]["MobileDeviceResponse"]
 export type ListClipsQuery = NonNullable<paths["/api/v1/clips"]["get"]["parameters"]["query"]>

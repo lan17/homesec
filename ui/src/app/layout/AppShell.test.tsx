@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 import type { CameraResponse } from '../../api/generated/types'
@@ -43,7 +43,15 @@ function renderShell(
           <Route element={<AppShell />}>
             <Route path="/live" element={<p>Live route</p>} />
             <Route path="/events" element={<p>Events route</p>} />
-            <Route path="/settings" element={<p>Settings route</p>} />
+            <Route
+              path="/settings"
+              element={(
+                <label>
+                  Server URL
+                  <input aria-label="Server URL" />
+                </label>
+              )}
+            />
             <Route path="/system" element={<p>System route</p>} />
           </Route>
         </Routes>
@@ -113,5 +121,20 @@ describe('AppShell navigation', () => {
     // Then: The non-nominal camera state stays visible instead of being hidden as nominal
     expect(systemStatus.getAttribute('href')).toBe('/system')
     expect(systemStatus.className).not.toContain('app-shell__header-status--nominal')
+  })
+
+  it('marks the shell while a form control is focused for mobile keyboard layout', async () => {
+    // Given: App shell is mounted on a route with a form field
+    renderShell('/settings')
+
+    // When: A form control receives focus
+    screen.getByRole('textbox', { name: 'Server URL' }).focus()
+
+    // Then: The shell exposes focus state for CSS that hides fixed mobile nav
+    await waitFor(() => {
+      expect(document.querySelector('.app-shell')?.className).toContain(
+        'app-shell--form-control-focused',
+      )
+    })
   })
 })

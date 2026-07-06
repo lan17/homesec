@@ -243,6 +243,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mobile/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mobile Devices
+         * @description List registered iOS devices without raw APNs material.
+         */
+        get: operations["list_mobile_devices_api_v1_mobile_devices_get"];
+        put?: never;
+        /**
+         * Register Mobile Device
+         * @description Register or refresh an iOS APNs device.
+         */
+        post: operations["register_mobile_device_api_v1_mobile_devices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mobile/devices/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Mobile Device
+         * @description Disable a mobile device without hard-deleting it.
+         */
+        delete: operations["delete_mobile_device_api_v1_mobile_devices__device_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Mobile Device
+         * @description Update mutable mobile device metadata or enabled state.
+         */
+        patch: operations["update_mobile_device_api_v1_mobile_devices__device_id__patch"];
+        trace?: never;
+    };
     "/api/v1/onvif/discover": {
         parameters: {
             query?: never;
@@ -965,6 +1013,97 @@ export interface components {
             video_encoding: string | null;
             /** Width */
             width: number | null;
+        };
+        /**
+         * MobileDeviceCapabilities
+         * @description Feature flags reported by the current iOS app build.
+         */
+        MobileDeviceCapabilities: {
+            /**
+             * Deep Links
+             * @default true
+             */
+            deep_links: boolean;
+            /**
+             * Rich Notifications
+             * @default false
+             */
+            rich_notifications: boolean;
+        };
+        /** MobileDevicePatchRequest */
+        MobileDevicePatchRequest: {
+            /** App Version */
+            app_version?: string | null;
+            capabilities?: components["schemas"]["MobileDeviceCapabilities"] | null;
+            /** Device Name */
+            device_name?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** MobileDeviceRegisterRequest */
+        MobileDeviceRegisterRequest: {
+            /** Apns Token */
+            apns_token: string;
+            /** App Version */
+            app_version?: string | null;
+            /** Bundle Id */
+            bundle_id: string;
+            capabilities?: components["schemas"]["MobileDeviceCapabilities"];
+            /** Device Name */
+            device_name?: string | null;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "sandbox" | "production";
+            /**
+             * Platform
+             * @default ios
+             * @constant
+             */
+            platform: "ios";
+        };
+        /** MobileDeviceResponse */
+        MobileDeviceResponse: {
+            /** App Version */
+            app_version?: string | null;
+            /** Bundle Id */
+            bundle_id: string;
+            capabilities: components["schemas"]["MobileDeviceCapabilities"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Device Name */
+            device_name?: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "sandbox" | "production";
+            /** Id */
+            id: string;
+            /** Last Push At */
+            last_push_at?: string | null;
+            /** Last Push Error */
+            last_push_error?: string | null;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /**
+             * Platform
+             * @constant
+             */
+            platform: "ios";
+            /** Token Fingerprint */
+            token_fingerprint: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /**
          * NotifierConfig
@@ -1837,6 +1976,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PostgresBackupStatusResponse"];
+                };
+            };
+        };
+    };
+    list_mobile_devices_api_v1_mobile_devices_get: {
+        parameters: {
+            query?: {
+                include_disabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileDeviceResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_mobile_device_api_v1_mobile_devices_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MobileDeviceRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileDeviceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_mobile_device_api_v1_mobile_devices__device_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileDeviceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_mobile_device_api_v1_mobile_devices__device_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MobileDevicePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileDeviceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
