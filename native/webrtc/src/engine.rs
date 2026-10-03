@@ -377,14 +377,33 @@ pub fn run(options: Options) -> Result<()> {
                                 };
                                 // MediaAdded is delayed until DTLS completes. Validate the
                                 // negotiated answer now; bind writers from that event later.
-                                let has_video = answer.media_lines.iter().any(|line| {
-                                    line.direction().is_sending()
-                                        && line.rtp_params().iter().any(|p| {
-                                            p.spec().codec == Codec::H264
-                                                && p.spec().format.packetization_mode == Some(1)
-                                        })
-                                });
-                                if peer.pump(&media, now).is_ok() && has_video && !peer.failed {
+                                let video_count = answer
+                                    .media_lines
+                                    .iter()
+                                    .filter(|line| {
+                                        line.direction().is_sending()
+                                            && line.rtp_params().iter().any(|p| {
+                                                p.spec().codec == Codec::H264
+                                                    && p.spec().format.packetization_mode == Some(1)
+                                            })
+                                    })
+                                    .count();
+                                let audio_count = answer
+                                    .media_lines
+                                    .iter()
+                                    .filter(|line| {
+                                        line.direction().is_sending()
+                                            && line
+                                                .rtp_params()
+                                                .iter()
+                                                .any(|p| p.spec().codec == Codec::Opus)
+                                    })
+                                    .count();
+                                if video_count == 1
+                                    && audio_count <= 1
+                                    && peer.pump(&media, now).is_ok()
+                                    && !peer.failed
+                                {
                                     reply.sdp = Some(answer.to_sdp_string());
                                     peers.insert(session_id, peer);
                                 } else {

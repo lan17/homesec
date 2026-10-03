@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
+import socket
 import sys
 import time
 from collections.abc import Callable
@@ -622,3 +625,71 @@ def test_late_offer_reply_cannot_survive_recording_preemption(
         assert preview.status().state == LivePublisherState.IDLE
     finally:
         preview.shutdown()
+
+
+def test_replacement_releases_child_of_abruptly_exited_helper(
+    helper: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # Given: A helper's media child holds a loopback socket independently of its parent.
+    children = tmp_path / "children.jsonl"
+    maintenance_started = tmp_path / "maintenance-started"
+    child_code = (
+        "import json,os,socket,time\n"
+        "server=socket.socket()\n"
+        "server.bind(('127.0.0.1',0))\n"
+        "server.listen()\n"
+        f"with open({str(children)!r},'a') as stream:\n"
+        "    stream.write(json.dumps({'helper':os.getppid(),'port':server.getsockname()[1]})+'\\n')\n"
+        "time.sleep(60)\n"
+    )
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace("import json,sys,time,os", "import json,sys,time,os,subprocess", 1)
+        .replace(
+            "    if command['command'] == 'offer':",
+            "    if command['command'] == 'start':\n"
+            f"        subprocess.Popen([sys.executable,'-c',{child_code!r}])\n"
+            f"    elif command['command'] == 'status' and os.path.exists({str(children)!r}):\n"
+            f"        open({str(maintenance_started)!r},'w').close()\n"
+            "        time.sleep(10)\n"
+            "    elif command['command'] == 'offer':",
+            1,
+        )
+    )
+    preview = publisher(helper)
+    try:
+        preview.ensure_active()
+        wait_until(lambda: children.exists() and children.stat().st_size > 0)
+        original = json.loads(children.read_text().splitlines()[0])
+        wait_until(maintenance_started.exists)
+
+        # When: The helper dies while maintenance awaits its reply, then activation replaces it.
+        os.kill(original["helper"], signal.SIGKILL)
+        os.waitpid(original["helper"], 0)
+        replacement = preview.ensure_active()
+
+        # Then: Replacement reclaims the old media socket and owns a usable new input.
+        assert not isinstance(replacement, LivePublisherStartRefusal)
+
+        def media_socket_released() -> bool:
+            try:
+                with socket.socket() as reclaimed:
+                    reclaimed.bind(("127.0.0.1", original["port"]))
+                return True
+            except OSError:
+                return False
+
+        wait_until(media_socket_released)
+        answer = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        assert isinstance(answer, PreviewAnswer)
+        preview.request_stop()
+        assert preview.status().state == LivePublisherState.IDLE
+    finally:
+        preview.shutdown()
+        if children.exists():
+            for raw in children.read_text().splitlines():
+                try:
+                    os.killpg(json.loads(raw)["helper"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass

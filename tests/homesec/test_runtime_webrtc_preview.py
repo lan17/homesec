@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -36,12 +37,58 @@ from homesec.runtime.subprocess_protocol import (
     WorkerCommandType,
 )
 from homesec.sources.rtsp.core import RTSPSource
+from homesec.sources.rtsp.live_publisher import (
+    LivePublisherRefusalReason,
+    LivePublisherStartRefusal,
+)
 from tests.homesec.rtsp import test_webrtc_publisher
 from tests.homesec.test_runtime_subprocess_controller import _make_config
 from tests.homesec.test_runtime_worker import _make_config as _worker_config
 from tests.homesec.test_runtime_worker import _make_service
 
 helper = test_webrtc_publisher.helper
+
+
+@pytest.fixture
+def camera_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Camera command boundaries with controllable discovery and a steady motion stream."""
+    directory = tmp_path / "camera-tools"
+    directory.mkdir()
+    probe_started = directory / "probe-started"
+    release_probe = directory / "release-probe"
+    ffprobe = directory / "ffprobe"
+    ffprobe.write_text(
+        f"#!{sys.executable}\n"
+        "import json,time\nfrom pathlib import Path\n"
+        f"Path({str(probe_started)!r}).touch()\n"
+        f"while not Path({str(release_probe)!r}).exists(): time.sleep(0.01)\n"
+        "print(json.dumps({'streams':["
+        "{'codec_type':'video','codec_name':'h264','width':640,'height':480,'avg_frame_rate':'25/1'},"
+        "{'codec_type':'audio','codec_name':'aac'}]}))\n"
+    )
+    ffprobe.chmod(0o700)
+    ffmpeg = directory / "ffmpeg"
+    ffmpeg.write_text(
+        f"#!{sys.executable}\n"
+        "import re,sys,time\nfrom pathlib import Path\n"
+        "if '-y' in sys.argv: Path(sys.argv[-1]).write_bytes(b'preflight-clip')\n"
+        "elif 'rawvideo' in sys.argv:\n"
+        "    width,height=map(int,re.search(r'scale=(\\d+):(\\d+)',sys.argv[sys.argv.index('-vf')+1]).groups())\n"
+        "    while True:\n"
+        "        sys.stdout.buffer.write(bytes(width*height))\n"
+        "        sys.stdout.buffer.flush()\n"
+        "        time.sleep(0.1)\n"
+    )
+    ffmpeg.chmod(0o700)
+    monkeypatch.setenv("PATH", str(directory) + os.pathsep + os.environ["PATH"])
+    return probe_started, release_probe
+
+
+async def _wait_for_source_ready(source: RTSPSource) -> None:
+    deadline = time.monotonic() + 5
+    while not source.is_healthy():
+        assert time.monotonic() < deadline, "Camera preflight did not complete"
+        await asyncio.sleep(0.01)
 
 
 def _load_preview_source(tmp_path: Path, preview: PreviewConfig) -> RTSPSource:
@@ -61,7 +108,9 @@ def _load_preview_source(tmp_path: Path, preview: PreviewConfig) -> RTSPSource:
 
 
 @pytest.fixture
-async def preview_source(helper: tuple[Path, Path], tmp_path: Path) -> AsyncIterator[RTSPSource]:
+async def preview_source(
+    helper: tuple[Path, Path], tmp_path: Path, camera_tools: tuple[Path, Path]
+) -> AsyncIterator[RTSPSource]:
     source = _load_preview_source(
         tmp_path,
         PreviewConfig(
@@ -71,8 +120,74 @@ async def preview_source(helper: tuple[Path, Path], tmp_path: Path) -> AsyncIter
         ),
     )
     try:
+        camera_tools[1].touch()
+        await source.start()
+        await _wait_for_source_ready(source)
         yield source
     finally:
+        await source.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_webrtc_waits_for_discovery_before_opening_audio_input(
+    helper: tuple[Path, Path], tmp_path: Path, camera_tools: tuple[Path, Path]
+) -> None:
+    # Given: Background source startup is waiting for a camera probe that will discover AAC audio.
+    source = _load_preview_source(
+        tmp_path,
+        PreviewConfig(
+            enabled=True,
+            backend="webrtc",
+            config=WebRTCPreviewConfig(helper_path=str(helper[0]), advertised_ip="127.0.0.1"),
+        ),
+    )
+    try:
+        await source.start()
+        deadline = time.monotonic() + 5
+        while not camera_tools[0].exists():
+            assert time.monotonic() < deadline, "Camera discovery did not start"
+            await asyncio.sleep(0.01)
+        assert not source.is_healthy()
+        async with _worker_commands(source) as send:
+            # When: Activation and negotiation arrive before the probe finishes.
+            activation = source.ensure_preview_active()
+            refused = await send(
+                _command(
+                    WorkerCommandType.PREVIEW_NEGOTIATE,
+                    preview_offer=PreviewOffer(sdp="v=0"),
+                    lease_expires_at=time.time() + 10,
+                )
+            )
+
+            # Then: Both return a temporary refusal without opening any helper or preview input.
+            assert isinstance(activation, LivePublisherStartRefusal)
+            assert activation.reason == LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+            assert refused.preview_session_refusal is not None
+            assert (
+                refused.preview_session_refusal.reason
+                == PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+            )
+            assert not helper[1].exists()
+
+            # When: Discovery finishes and the caller retries through the same command socket.
+            camera_tools[1].touch()
+            await _wait_for_source_ready(source)
+            accepted = await send(
+                _command(
+                    WorkerCommandType.PREVIEW_NEGOTIATE,
+                    preview_offer=PreviewOffer(sdp="v=0"),
+                    lease_expires_at=time.time() + 10,
+                )
+            )
+
+            # Then: Its first input already includes discovered audio, without a manual restart.
+            assert accepted.preview_answer is not None
+            commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+            starts = [command for command in commands if command["command"] == "start"]
+            assert len(starts) == 1
+            assert "libopus" in starts[0]["ffmpeg_args"]
+    finally:
+        camera_tools[1].touch()
         await source.shutdown()
 
 

@@ -546,6 +546,51 @@ fn authorization_expiry_closes_a_connected_peer_without_stopping_the_input() {
 }
 
 #[test]
+fn duplicate_sending_tracks_are_refused_without_consuming_a_viewer_slot() {
+    // Given: One viewer slot on an input supporting one H.264 video and one Opus audio track.
+    let (mut helper, ready) = Helper::start_with(1, 10.0, None);
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": ffmpeg_args(&ready)}));
+
+    // When: Offers request duplicate sending video or audio tracks in the answer.
+    for (video_tracks, audio_tracks) in [(2, 1), (1, 2)] {
+        let mut rtc = Rtc::builder()
+            .clear_codecs()
+            .enable_h264(true)
+            .enable_opus(true, false)
+            .build(Instant::now());
+        rtc.add_local_candidate(Candidate::host("127.0.0.1:9".parse().unwrap(), "udp").unwrap())
+            .unwrap();
+        let mut change = rtc.sdp_api();
+        for (kind, count) in [
+            (MediaKind::Video, video_tracks),
+            (MediaKind::Audio, audio_tracks),
+        ] {
+            for _ in 0..count {
+                change.add_media(kind, Direction::RecvOnly, None, None, None);
+            }
+        }
+        let offer = change.apply().unwrap().0.to_sdp_string();
+        let reply = helper.request(json!({
+            "command": "offer", "session_id": "duplicate", "sdp": offer,
+            "lease_seconds": 30.0,
+        }));
+
+        // Then: Unsupported track multiplicity has a stable refusal and consumes no slot.
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["error_code"], "invalid_offer");
+        let status = helper.successful_request(json!({"command": "status"}));
+        assert_eq!(status["active_session_count"], 0);
+    }
+    let mut viewer = Viewer::attach(&mut helper, "valid");
+    progress_until(&mut [&mut viewer], |viewers| viewers[0].has_media());
+    assert!(viewer.has_media());
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["viewer_count"], 1);
+    assert_eq!(status["active_session_count"], 1);
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+#[test]
 fn failed_ffmpeg_input_refuses_new_sessions() {
     // Given: FFmpeg starts but exits before producing any video.
     let (mut helper, _) = Helper::start();

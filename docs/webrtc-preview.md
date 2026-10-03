@@ -64,6 +64,9 @@ The default `stop_on_recording` policy yields preview resources to recording.
 `allow_during_recording` is best-effort and can consume another direct camera
 session. Existing camera preflight and concurrency refusal behavior still apply.
 A preview failure must not prevent recording or upload.
+WebRTC preview temporarily refuses activation until background camera discovery
+finishes, so discovered audio and camera session policy are applied before it
+opens a preview input.
 
 ## Codecs and playback
 

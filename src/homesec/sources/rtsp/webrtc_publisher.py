@@ -306,12 +306,24 @@ class RustWebRTCLivePublisher:
                     return self._unavailable()
                 if self._helper is not None and self._helper.process.poll() is None:
                     return self._status
+                expired_helper = self._helper
+                self._helper = None
                 self._status = LivePublisherStatus(
                     state=LivePublisherState.STARTING, viewer_count=0
                 )
                 self._media_start_at = time.monotonic()
             helper: _HelperClient | None = None
             try:
+                if expired_helper is not None:
+                    # An abrupt helper exit can leave FFmpeg alive in its process group.
+                    expired_helper.stop()
+                with self._lock:
+                    if generation != self._generation or self._shutdown.is_set():
+                        return (
+                            self._recording_refusal()
+                            if self._recording_blocks()
+                            else self._unavailable()
+                        )
                 helper = _HelperClient(
                     [
                         self._config.helper_path,

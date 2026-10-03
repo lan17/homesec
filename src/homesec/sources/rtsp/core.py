@@ -605,6 +605,11 @@ class RTSPSource(ThreadedClipSource):
 
     def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         """Ensure the preview publisher is active for this camera."""
+        if self._webrtc_preview_preflight_pending():
+            return LivePublisherStartRefusal(
+                reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="WebRTC preview is waiting for camera discovery",
+            )
         try:
             return self._live_publisher.ensure_active()
         except Exception as exc:
@@ -633,9 +638,20 @@ class RTSPSource(ThreadedClipSource):
     ) -> PreviewAnswer | PreviewSessionRefusal:
         """Negotiate with the source-owned media helper, never the recording reader."""
         publisher = self._live_publisher
+        if self._webrtc_preview_preflight_pending():
+            return PreviewSessionRefusal(
+                reason=PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="WebRTC preview is waiting for camera discovery",
+            )
         if isinstance(publisher, WebRTCPreviewPublisher):
             return publisher.negotiate(offer, lease_expires_at)
         return self._unsupported_preview_transport()
+
+    def _webrtc_preview_preflight_pending(self) -> bool:
+        return (
+            isinstance(self._live_publisher, RustWebRTCLivePublisher)
+            and self._preflight_outcome is None
+        )
 
     def renew_preview_session(
         self, session_id: str, lease_expires_at: float
@@ -913,7 +929,6 @@ class RTSPSource(ThreadedClipSource):
         )
 
     def _apply_preflight_outcome(self, outcome: CameraPreflightOutcome) -> None:
-        self._preflight_outcome = outcome
         self._motion_rtsp_url = outcome.motion_profile.input_url
 
         if isinstance(self._live_publisher, RustWebRTCLivePublisher):
@@ -956,6 +971,8 @@ class RTSPSource(ThreadedClipSource):
             self._detect_fallback_active = False
             self._detect_next_probe_at = None
 
+        # Publish readiness only after discovery-dependent media configuration is applied.
+        self._preflight_outcome = outcome
         logger.info(
             "RTSP preflight complete: camera=%s motion_url=%s recording_url=%s profile=%s session_mode=%s",
             self.camera_name,
