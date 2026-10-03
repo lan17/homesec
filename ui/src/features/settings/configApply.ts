@@ -25,6 +25,20 @@ function sleep(signal: AbortSignal): Promise<void> {
   })
 }
 
+async function targetRuntimeReady(response: ConfigApplySnapshot, signal: AbortSignal): Promise<boolean> {
+  const runtime = await apiClient.getRuntimeStatus({ signal })
+  if (signal.aborted) { throw abortError() }
+  if (!runtime.reload_in_progress && runtime.last_reload_error
+      && (runtime.state === 'failed' || runtime.active_config_version !== response.target_config_version
+        || (response.target_generation !== null && runtime.generation < response.target_generation))) {
+    throw new Error(`Runtime reload failed: ${runtime.last_reload_error}`)
+  }
+  return runtime.state === 'idle' && !runtime.reload_in_progress
+    && runtime.active_config_version === response.target_config_version
+    && (response.target_generation === null
+      ? response.action !== 'reload' : runtime.generation >= response.target_generation)
+}
+
 export async function waitForConfigApply(
   response: ConfigApplySnapshot,
   signal: AbortSignal,
@@ -34,27 +48,18 @@ export async function waitForConfigApply(
     if (signal.aborted) {
       throw abortError()
     }
-    let ready = response.action !== 'reload'
     try {
-      if (!ready) {
-        const runtime = await apiClient.getRuntimeStatus({ signal })
-        if (!runtime.reload_in_progress && runtime.last_reload_error
-            && (runtime.state === 'failed'
-              || runtime.active_config_version !== response.target_config_version)) {
-          throw new Error(`Runtime reload failed: ${runtime.last_reload_error}`)
-        }
-        ready = runtime.state === 'idle'
-          && !runtime.reload_in_progress
-          && runtime.active_config_version === response.target_config_version
-          && response.target_generation !== null
-          && runtime.generation >= response.target_generation
-      }
+      const ready = response.action !== 'reload' || await targetRuntimeReady(response, signal)
       if (ready) {
         const config = await apiClient.getConfig({ signal })
-        if (config.saved_config_version === response.target_config_version
-            && config.active_config_version === response.target_config_version
-            && config.apply_required === 'none') {
-          return config
+        if (signal.aborted) { throw abortError() }
+        if (config.active_config_version === response.target_config_version) {
+          if (config.saved_config_version === response.target_config_version) {
+            if (config.apply_required === 'none') { return config }
+          } else if (response.action === 'reload' || await targetRuntimeReady(response, signal)) {
+            // A later saved revision remains pending; the requested runtime is already active.
+            return config
+          }
         }
       }
     } catch (error) {

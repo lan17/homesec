@@ -66,9 +66,12 @@ export function useConfigSettings() {
       await queryClient.cancelQueries({ queryKey: QUERY_KEYS.config })
       if (controller.signal.aborted) { return }
       const observed = queryClient.getQueryData<ConfigSnapshot>(QUERY_KEYS.config)
-      const interveningSave = observed && observed.saved_config_version !== config.saved_config_version
+      const interveningSave = observed && observed.saved_config_version !== response.target_config_version
         && observed.saved_config_version !== activated.saved_config_version
-      if (interveningSave) {
+      const interveningActivation = observed?.saved_config_version === activated.saved_config_version
+        && (observed.active_config_version !== activated.active_config_version || observed.apply_required !== activated.apply_required)
+        && (observed.active_config_version !== config.active_config_version || observed.apply_required !== config.apply_required)
+      if (interveningSave || interveningActivation) {
         await queryClient.refetchQueries({ queryKey: QUERY_KEYS.config })
         if (controller.signal.aborted) { return }
       } else {
@@ -80,9 +83,12 @@ export function useConfigSettings() {
       ])
       if (!controller.signal.aborted) {
         const latest = queryClient.getQueryData<ConfigSnapshot>(QUERY_KEYS.config)
-        const targetIsActive = latest?.saved_config_version === activated.saved_config_version
-          && latest.active_config_version === activated.active_config_version && latest.apply_required === 'none'
-        setApplyMessage(targetIsActive ? 'Saved settings are active.'
+        const targetIsActive = latest?.saved_config_version === response.target_config_version
+          && latest.active_config_version === response.target_config_version && latest.apply_required === 'none'
+        const latestIsActive = latest?.apply_required === 'none'
+          && latest.active_config_version === latest.saved_config_version
+        setApplyMessage(targetIsActive ? 'Saved settings are active.' : latestIsActive
+          ? 'Activation was confirmed. Latest saved settings are active.'
           : 'Activation was confirmed, but saved settings changed. Apply the latest saved revision separately.')
       }
     } catch (error) {

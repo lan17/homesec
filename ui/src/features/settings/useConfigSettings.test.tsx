@@ -318,4 +318,97 @@ describe('useConfigSettings', () => {
     expect(result.current.applyMessage).toBe('Saved settings are active.')
   })
 
+
+  it('confirms A activation when B is saved before A becomes active and retains B as pending', async () => {
+    // Given: Target A starts a reload while another writer can save B before it completes
+    let latest = { ...saved, apply_required: 'reload' }
+    let ready = false
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, request) => {
+      if (request?.method === 'POST') {
+        return response({ accepted: true, action: 'reload', message: 'Reload started',
+          target_config_version: 'target', target_generation: 4 }, 202)
+      }
+      if (String(url).endsWith('/runtime/status')) {
+        return response({ state: ready ? 'idle' : 'reloading', generation: ready ? 4 : 3,
+          reload_in_progress: !ready, active_config_version: ready ? 'target' : 'old',
+          last_reload_at: null, last_reload_error: null })
+      }
+      return response(latest)
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result } = renderHook(useConfigSettings, { wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ) })
+    await waitFor(() => expect(result.current.configQuery.data).toBeTruthy())
+    vi.useFakeTimers()
+    let apply = Promise.resolve()
+    await act(async () => { apply = result.current.applyConfig() })
+    latest = { ...latest, saved_config_version: 'later' }
+    await act(async () => { await result.current.configQuery.refetch(); await vi.advanceTimersByTimeAsync(10) })
+    expect(result.current.configQuery.data?.saved_config_version).toBe('later')
+    expect(result.current.applyPending).toBe(true)
+
+    // When: A reaches its accepted healthy generation while B remains the latest saved revision
+    ready = true
+    latest = { ...latest, active_config_version: 'target' }
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); await apply })
+
+    // Then: The monitor confirms A without falsely applying B or reporting an activation timeout
+    expect(result.current.applyPending).toBe(false)
+    expect(result.current.applyError).toBeNull()
+    expect(result.current.configQuery.data?.saved_config_version).toBe('later')
+    expect(result.current.configQuery.data?.active_config_version).toBe('target')
+    expect(result.current.configQuery.data?.apply_required).toBe('reload')
+    expect(client.getQueryData(QUERY_KEYS.config)).toMatchObject({ saved_config_version: 'later', active_config_version: 'target' })
+    expect(result.current.applyMessage).toContain('Activation was confirmed, but saved settings changed')
+    expect(result.current.applyMessage).not.toBe('Saved settings are active.')
+    expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/runtime/status'))).toHaveLength(2)
+  })
+
+
+  it('reports the latest B as active when another actor applies it before A confirmation publishes', async () => {
+    // Given: A is confirmed healthy but its config response with pending B is delayed
+    let latest = { ...saved, apply_required: 'reload' }
+    let finishPoll: ((value: Response) => void) | undefined
+    let reads = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, request) => {
+      if (request?.method === 'POST') {
+        return response({ accepted: true, action: 'reload', message: 'Reload started',
+          target_config_version: 'target', target_generation: 4 }, 202)
+      }
+      if (String(url).endsWith('/runtime/status')) {
+        return response({ state: 'idle', generation: 4, reload_in_progress: false,
+          active_config_version: 'target', last_reload_at: null, last_reload_error: null })
+      }
+      if (++reads === 2) { return new Promise<Response>((resolve) => { finishPoll = resolve }) }
+      return response(latest)
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result } = renderHook(useConfigSettings, { wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ) })
+    await waitFor(() => expect(result.current.configQuery.data).toBeTruthy())
+    let apply = Promise.resolve()
+    await act(async () => { apply = result.current.applyConfig() })
+    await waitFor(() => expect(finishPoll).toBeTruthy())
+
+    // When: Another actor activates B before the earlier pending-B snapshot returns
+    latest = { ...latest, saved_config_version: 'later', active_config_version: 'later', apply_required: 'none' }
+    await act(async () => { await result.current.configQuery.refetch() })
+    await waitFor(() => expect(result.current.configQuery.data?.active_config_version).toBe('later'))
+    await act(async () => {
+      finishPoll?.(response({ ...latest, active_config_version: 'target', apply_required: 'reload' }))
+      await apply
+    })
+
+    // Then: Refetch preserves B's activation and the message does not tell the user to reapply it
+    expect(result.current.configQuery.data?.saved_config_version).toBe('later')
+    expect(result.current.configQuery.data?.active_config_version).toBe('later')
+    expect(result.current.configQuery.data?.apply_required).toBe('none')
+    expect(result.current.applyMessage).toBe('Activation was confirmed. Latest saved settings are active.')
+    expect(result.current.applyMessage).not.toContain('Apply the latest')
+    expect(result.current.applyError).toBeNull()
+    expect(reads).toBe(4)
+  })
+
 })
