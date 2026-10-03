@@ -17,6 +17,7 @@ from homesec.models.preview import (
     PreviewOffer,
     PreviewSessionAction,
     PreviewSessionRefusal,
+    PreviewSessionRefusalReason,
 )
 from homesec.sources.rtsp.capabilities import RTSPTimeoutCapabilities
 from homesec.sources.rtsp.live_publisher import (
@@ -305,6 +306,167 @@ def test_helper_disconnect_is_cleaned_up_without_breaking_source(helper: tuple[P
         # Then: Negotiation fails safely and a later explicit start recovers
         assert isinstance(result, PreviewSessionRefusal)
         assert not isinstance(preview.ensure_active(), LivePublisherStartRefusal)
+    finally:
+        preview.shutdown()
+
+
+@pytest.mark.parametrize("failure", ["missing_executable", "rejected_start"])
+def test_failed_helper_startup_is_redacted_and_later_activation_recovers(
+    helper: tuple[Path, Path], failure: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Given: The helper is missing or refuses media startup.
+    original = helper[0].read_text()
+    if failure == "missing_executable":
+        helper[0].unlink()
+    else:
+        helper[0].write_text(
+            original.replace(
+                "    if command['command'] == 'offer':",
+                "    if command['command'] == 'start':\n"
+                "        result.update(ok=False)\n"
+                "    elif command['command'] == 'offer':",
+                1,
+            )
+        )
+    preview = publisher(helper)
+    try:
+        # When: A viewer attempts to attach, then the executable is repaired.
+        failed = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        assert isinstance(failed, PreviewSessionRefusal)
+        assert failed.reason == PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+        assert preview.status().state == LivePublisherState.ERROR
+        helper[0].write_text(original)
+        helper[0].chmod(0o700)
+        recovered = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+
+        # Then: Failure stays local, credentials stay out of logs, and a new helper succeeds.
+        assert isinstance(recovered, PreviewAnswer)
+        assert "private-password" not in caplog.text
+        assert "rtsp://" not in caplog.text
+    finally:
+        preview.shutdown()
+
+
+def test_authorization_expiring_during_startup_never_creates_peer(
+    helper: tuple[Path, Path],
+) -> None:
+    # Given: Helper startup takes longer than the caller's remaining authorization.
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace("reply({'event':'ready'", "time.sleep(0.2)\nreply({'event':'ready'", 1)
+    )
+    preview = publisher(helper, idle=0.1)
+    try:
+        # When: A queued viewer reaches signaling after startup completes.
+        result = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 0.05)
+
+        # Then: Media startup emits no unauthorized offer and unused input is cleaned up.
+        assert isinstance(result, PreviewSessionRefusal)
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        operations = [command["command"] for command in commands]
+        assert operations.count("start") == 1
+        assert "offer" not in operations
+        wait_until(lambda: preview.status().state == LivePublisherState.IDLE)
+    finally:
+        preview.shutdown()
+
+
+def test_missing_answer_closes_peer_and_renewal_cannot_restore_expired_authorization(
+    helper: tuple[Path, Path],
+) -> None:
+    # Given: A helper accepts a peer but omits the required SDP answer.
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace("            result['sdp'] = 'v=0\\r\\ns=answer\\r\\n'", "            pass", 1)
+    )
+    preview = publisher(helper)
+    try:
+        # When: Negotiation fails, the closed peer renews, and expired authorization retries.
+        result = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        assert isinstance(result, PreviewSessionRefusal)
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        offer = next(command for command in commands if command["command"] == "offer")
+        closed = next(command for command in commands if command["command"] == "close")
+        assert closed["session_id"] == offer["session_id"]
+        unknown = preview.renew(offer["session_id"], time.time() + 10)
+        expired = preview.renew(offer["session_id"], time.time() - 1)
+        preview.request_stop()
+        first_close = preview.close(offer["session_id"])
+        repeated_close = preview.close(offer["session_id"])
+
+        # Then: Cleanup is idempotent and neither unknown peers nor expired leases revive media.
+        assert isinstance(unknown, PreviewSessionRefusal)
+        assert unknown.reason == PreviewSessionRefusalReason.SESSION_NOT_FOUND
+        assert isinstance(expired, PreviewSessionRefusal)
+        assert expired.reason == PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+        assert first_close == repeated_close == PreviewSessionAction(accepted=True)
+        assert preview.status().state == LivePublisherState.IDLE
+    finally:
+        preview.shutdown()
+
+
+@pytest.mark.parametrize("failure", ["media_inactive", "helper_exited"])
+def test_maintenance_releases_peers_when_media_or_helper_fails(
+    helper: tuple[Path, Path], failure: str
+) -> None:
+    # Given: A helper loses its input or exits while a viewer is attached.
+    action = (
+        "        result.update(media_active=False,state='error')"
+        if failure == "media_inactive"
+        else "        sys.exit(2)"
+    )
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace(
+            "    reply(result)",
+            "    if command['command'] == 'status':\n" + action + "\n    reply(result)",
+            1,
+        )
+    )
+    preview = publisher(helper)
+    try:
+        assert isinstance(
+            preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10), PreviewAnswer
+        )
+
+        # When: Maintenance observes the failed media boundary.
+        wait_until(lambda: preview.status().state == LivePublisherState.ERROR)
+
+        # Then: Peers are released within the bounded poll loop and errors remain stable.
+        assert preview.status().viewer_count == 0
+        assert preview.status().last_error in {
+            "WebRTC preview media is unavailable",
+            "WebRTC preview helper exited",
+        }
+    finally:
+        preview.shutdown()
+
+
+def test_concurrent_preview_downgrade_preempts_recording_viewers(helper: tuple[Path, Path]) -> None:
+    # Given: Concurrent preview is allowed and an active recording has a viewer.
+    preview = publisher(helper, concurrent=True)
+    try:
+        preview.sync_recording_active(True)
+        assert isinstance(
+            preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10), PreviewAnswer
+        )
+
+        # When: Camera session discovery downgrades concurrent preview support.
+        preview.downgrade_concurrent_preview("camera-session-limit")
+        refused = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+
+        # Then: Recording keeps priority and preview recovers in degraded mode after recording.
+        assert preview.status().state == LivePublisherState.IDLE
+        assert isinstance(refused, PreviewSessionRefusal)
+        assert refused.reason == PreviewSessionRefusalReason.RECORDING_PRIORITY
+        preview.sync_recording_active(False)
+        recovered = preview.ensure_active()
+        assert not isinstance(recovered, LivePublisherStartRefusal)
+        assert recovered.state == LivePublisherState.DEGRADED
+        assert recovered.degraded_reason == "camera-session-limit"
     finally:
         preview.shutdown()
 

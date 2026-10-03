@@ -94,12 +94,18 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       const requestSeq = statusRequestSeqRef.current
       const nextStatus = await apiClient.getCameraPreviewStatus(cameraName, { signal })
       const currentSession = sessionStateRef.current
+      // Background WebRTC peers detach deliberately. An idle publisher does
+      // not cancel the user's intent to refresh and reattach when visible.
+      const idleWhileBackgrounded = nextStatus.state === 'idle'
+        && document.visibilityState === 'hidden'
+        && currentSession?.snapshot.transport === 'webrtc'
       if (
         currentSession !== null
         && currentSession.snapshot.camera_name === cameraName
         && requestSeq > currentSession.statusRequestSeq
         && (nextStatus.enabled === false
           || (!PREVIEW_SESSION_ACTIVE_STATES.has(nextStatus.state)
+            && !idleWhileBackgrounded
             && !startMutation.isPending
             && refreshesInFlightRef.current === 0))
       ) {

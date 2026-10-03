@@ -3,15 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import cast
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
-from homesec.models.preview import PreviewAnswer, PreviewOffer, PreviewSessionAction
+from homesec.models.config import HLSPreviewConfig, PreviewConfig, WebRTCPreviewConfig
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusalReason,
+)
+from homesec.plugins import discover_all_plugins
+from homesec.plugins.sources import load_source_plugin
 from homesec.runtime.subprocess_controller import (
     SubprocessRuntimeController,
     SubprocessRuntimeHandle,
@@ -21,7 +35,257 @@ from homesec.runtime.subprocess_protocol import (
     WorkerCommandResult,
     WorkerCommandType,
 )
+from homesec.sources.rtsp.core import RTSPSource
+from tests.homesec.rtsp import test_webrtc_publisher
 from tests.homesec.test_runtime_subprocess_controller import _make_config
+from tests.homesec.test_runtime_worker import _make_config as _worker_config
+from tests.homesec.test_runtime_worker import _make_service
+
+helper = test_webrtc_publisher.helper
+
+
+def _load_preview_source(tmp_path: Path, preview: PreviewConfig) -> RTSPSource:
+    discover_all_plugins()
+    source = load_source_plugin(
+        "rtsp",
+        {
+            "rtsp_url": "rtsp://user:source-secret@camera/main",
+            "output_dir": str(tmp_path / "recordings"),
+            "stream": {"disable_hwaccel": True},
+        },
+        camera_name="front",
+        __runtime_preview__=preview,
+    )
+    assert isinstance(source, RTSPSource)
+    return source
+
+
+@pytest.fixture
+async def preview_source(helper: tuple[Path, Path], tmp_path: Path) -> AsyncIterator[RTSPSource]:
+    source = _load_preview_source(
+        tmp_path,
+        PreviewConfig(
+            enabled=True,
+            backend="webrtc",
+            config=WebRTCPreviewConfig(helper_path=str(helper[0]), advertised_ip="127.0.0.1"),
+        ),
+    )
+    try:
+        yield source
+    finally:
+        await source.shutdown()
+
+
+@asynccontextmanager
+async def _worker_commands(
+    source: object | None, *, enabled: bool = True
+) -> AsyncIterator[Callable[[WorkerCommand], Awaitable[WorkerCommandResult]]]:
+    config = _worker_config(notifiers=[], source_backend="rtsp", preview_enabled=enabled)
+    service = _make_service(config)
+    service._runtime_bundle = cast(
+        Any, SimpleNamespace(sources_by_camera={} if source is None else {"front": source})
+    )
+    with TemporaryDirectory(prefix="hs-preview-", dir="/tmp") as directory:
+        socket_path = Path(directory) / "worker.sock"
+        server = await asyncio.start_unix_server(
+            service._handle_command_connection, path=str(socket_path)
+        )
+
+        async def send(command: WorkerCommand) -> WorkerCommandResult:
+            reader, writer = await asyncio.open_unix_connection(str(socket_path))
+            try:
+                writer.write(command.model_dump_json().encode() + b"\n")
+                await writer.drain()
+                raw = await asyncio.wait_for(reader.readline(), timeout=3)
+                result = WorkerCommandResult.model_validate_json(raw)
+                assert result.command_id == command.command_id
+                assert result.generation == command.generation
+                assert result.correlation_id == command.correlation_id
+                return result
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        try:
+            yield send
+        finally:
+            server.close()
+            await server.wait_closed()
+
+
+def _command(command: WorkerCommandType, **fields: object) -> WorkerCommand:
+    return WorkerCommand.model_validate(
+        {
+            "command": command,
+            "command_id": str(uuid4()),
+            "generation": 1,
+            "correlation_id": "test-correlation-id",
+            "camera_name": "front",
+            **fields,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_socket_dispatches_source_owned_viewer_lifecycle(
+    preview_source: RTSPSource, helper: tuple[Path, Path]
+) -> None:
+    # Given: The real command server owns a registry-created RTSP source and helper.
+    deadline = time.time() + 20
+    async with _worker_commands(preview_source) as send:
+        # When: Two peers negotiate, the first leaves, and the survivor renews.
+        one = await send(
+            _command(
+                WorkerCommandType.PREVIEW_NEGOTIATE,
+                preview_offer=PreviewOffer(sdp="v=0\r\ns=first\r\n"),
+                lease_expires_at=deadline,
+            )
+        )
+        two = await send(
+            _command(
+                WorkerCommandType.PREVIEW_NEGOTIATE,
+                preview_offer=PreviewOffer(sdp="v=0\r\ns=second\r\n"),
+                lease_expires_at=deadline,
+            )
+        )
+        assert one.preview_answer is not None and two.preview_answer is not None
+        closed = await send(
+            _command(
+                WorkerCommandType.PREVIEW_CLOSE_SESSION, session_id=one.preview_answer.session_id
+            )
+        )
+        renewed = await send(
+            _command(
+                WorkerCommandType.PREVIEW_RENEW_SESSION,
+                session_id=two.preview_answer.session_id,
+                lease_expires_at=deadline,
+            )
+        )
+
+        # Then: Typed responses and helper calls preserve each peer and its absolute lease.
+        assert closed.preview_session_action == PreviewSessionAction(accepted=True)
+        assert renewed.preview_session_action == PreviewSessionAction(accepted=True)
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        assert [item["command"] for item in commands].count("start") == 1
+        offers = [item for item in commands if item["command"] == "offer"]
+        assert [item["sdp"] for item in offers] == ["v=0\r\ns=first\r\n", "v=0\r\ns=second\r\n"]
+        assert [item["session_id"] for item in offers] == [
+            one.preview_answer.session_id,
+            two.preview_answer.session_id,
+        ]
+        assert all(item["lease_expires_at"] == deadline for item in offers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,source_available", [(False, True), (True, False)])
+async def test_worker_refuses_disabled_or_unavailable_preview_source(
+    preview_source: RTSPSource,
+    helper: tuple[Path, Path],
+    enabled: bool,
+    source_available: bool,
+) -> None:
+    # Given: Preview is disabled or no compatible source is available.
+    async with _worker_commands(
+        preview_source if source_available else None, enabled=enabled
+    ) as send:
+        # When: An offer arrives at the real command socket.
+        result = await send(
+            _command(
+                WorkerCommandType.PREVIEW_NEGOTIATE,
+                preview_offer=PreviewOffer(sdp="v=0"),
+                lease_expires_at=time.time() + 10,
+            )
+        )
+        # Then: The worker refuses without opening a media input.
+        assert result.preview_session_refusal is not None
+        assert (
+            result.preview_session_refusal.reason
+            == PreviewSessionRefusalReason.UNSUPPORTED_TRANSPORT
+        )
+        assert not helper[1].exists()
+
+
+_SESSION_COMMANDS = [
+    WorkerCommandType.PREVIEW_NEGOTIATE,
+    WorkerCommandType.PREVIEW_RENEW_SESSION,
+    WorkerCommandType.PREVIEW_CLOSE_SESSION,
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", _SESSION_COMMANDS)
+async def test_worker_refuses_incomplete_session_command(
+    preview_source: RTSPSource, helper: tuple[Path, Path], command: WorkerCommandType
+) -> None:
+    # Given: A capable source with no active viewers.
+    async with _worker_commands(preview_source) as send:
+        # When: A typed command omits the fields required for its operation.
+        result = await send(_command(command))
+        # Then: The stable invalid-offer refusal crosses IPC without camera I/O.
+        assert result.preview_session_refusal is not None
+        assert result.preview_session_refusal.reason == PreviewSessionRefusalReason.INVALID_OFFER
+        assert not helper[1].exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", _SESSION_COMMANDS)
+async def test_hls_source_refuses_webrtc_session_commands(
+    tmp_path: Path, command: WorkerCommandType
+) -> None:
+    # Given: A registered RTSP source configured for HLS playback.
+    source = _load_preview_source(
+        tmp_path, PreviewConfig(enabled=True, config=HLSPreviewConfig(storage_dir=tmp_path / "hls"))
+    )
+    try:
+        async with _worker_commands(source) as send:
+            # When: WebRTC signaling targets its source interface.
+            result = await send(
+                _command(
+                    command,
+                    preview_offer=PreviewOffer(sdp="v=0"),
+                    session_id=str(uuid4()),
+                    lease_expires_at=time.time() + 10,
+                )
+            )
+            # Then: Every operation preserves the unsupported-transport refusal.
+            assert result.preview_session_refusal is not None
+            assert (
+                result.preview_session_refusal.reason
+                == PreviewSessionRefusalReason.UNSUPPORTED_TRANSPORT
+            )
+    finally:
+        await source.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_worker_source_exception_is_redacted_at_ipc_boundary(
+    preview_source: RTSPSource, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Given: A source boundary raises an exception containing camera credentials and SDP.
+    sensitive = "rtsp://user:private-password@camera SDP private-ice-secret"
+
+    def failed_offer(offer: PreviewOffer, lease_expires_at: float) -> PreviewAnswer:
+        raise RuntimeError(sensitive)
+
+    monkeypatch.setattr(preview_source, "negotiate_preview", failed_offer)
+    async with _worker_commands(preview_source) as send:
+        # When: The worker executes the failing source operation.
+        result = await send(
+            _command(
+                WorkerCommandType.PREVIEW_NEGOTIATE,
+                preview_offer=PreviewOffer(sdp="v=0"),
+                lease_expires_at=time.time() + 10,
+            )
+        )
+        # Then: Only a stable refusal is returned or logged.
+        assert result.preview_session_refusal is not None
+        assert (
+            result.preview_session_refusal.reason
+            == PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE
+        )
+        assert sensitive not in result.model_dump_json()
+        assert "private-password" not in caplog.text
+        assert "private-ice-secret" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -82,6 +346,7 @@ async def test_signaling_commands_preserve_camera_session_and_authorization_dead
             WorkerCommandType.PREVIEW_CLOSE_SESSION,
         ]
         assert all(command.camera_name == "front" for command in commands)
+        assert commands[0].preview_offer is not None
         assert commands[0].preview_offer.sdp == "v=0"
         assert commands[0].lease_expires_at == commands[1].lease_expires_at == deadline
         assert commands[2].session_id == session_id
