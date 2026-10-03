@@ -20,6 +20,7 @@ export function useConfigMutation() {
     try {
       // Keep write-only credentials out of React Query's mutation variables/cache.
       const config = await apiClient.patchConfig(patch)
+      await queryClient.cancelQueries({ queryKey: QUERY_KEYS.config })
       queryClient.setQueryData(QUERY_KEYS.config, config)
       return config
     } catch (saveError) {

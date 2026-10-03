@@ -882,14 +882,17 @@ def test_repository_and_storage_accessors_require_initialization() -> None:
 
 
 async def _start_settings_app(
-    tmp_path: Path, *, credentials: dict[str, SecretStr | None] | None = None
+    tmp_path: Path,
+    *,
+    credentials: dict[str, SecretStr | None] | None = None,
+    server: FastAPIServerConfig | None = None,
 ) -> Application:
     discover_all_plugins()
     config = _make_config([])
     for section in (config.storage, config.filter, config.vlm, config.cameras[0].source):
         if isinstance(section.config, BaseModel):
             section.config = section.config.model_dump(mode="json")
-    config.server = FastAPIServerConfig(enabled=False)
+    config.server = server or FastAPIServerConfig(enabled=False)
     app = Application(config_path=tmp_path / "config.yaml")
     await app.config_manager.replace_config(config)
     if credentials:
@@ -1305,5 +1308,32 @@ async def test_failed_worker_activation_keeps_saved_settings_pending(
         assert pending.apply_required == "reload"
         assert pending.active_config_version == active_version
         assert app.get_runtime_status().last_reload_error is not None
+    finally:
+        await app.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_startup_preserves_external_secret_prefix_api_key(
+    tmp_path: Path,
+    _mock_runtime_environment: _StubRuntimeController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: API authentication and a provider reference use ordinary host variables with the prefix
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    reference = "HOMESEC_SECRET_EXTERNAL_API_KEY"
+    monkeypatch.setenv(reference, "external-api-key")
+    monkeypatch.setenv("HOMESEC_SECRET_EXTERNAL_DB_DSN", "external-db-value")
+
+    # When: Starting the application alongside a generated managed credential
+    app = await _start_settings_app(
+        tmp_path,
+        credentials={"vlm.config.api_key_env": SecretStr("managed-ai-key")},
+        server=FastAPIServerConfig(enabled=False, auth_enabled=True, api_key_env=reference),
+    )
+    try:
+        # Then: External references stay installed and authentication retains its configured key
+        assert app.server_config.api_key_env == reference
+        assert os.getenv(reference) == "external-api-key"
+        assert os.getenv("HOMESEC_SECRET_EXTERNAL_DB_DSN") == "external-db-value"
     finally:
         await app.shutdown()

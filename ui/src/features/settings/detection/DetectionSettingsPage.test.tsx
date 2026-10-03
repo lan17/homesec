@@ -114,4 +114,25 @@ describe('detection settings page', () => {
     expect(screen.queryByRole('button', { name: 'Check AI readiness' })).toBeNull()
     expect(fetch.mock.calls.some(([url]) => String(url).includes('/setup/test-connection'))).toBe(false)
   })
+
+  it('rejects a raw Advanced API key reference even after analysis is disabled', async () => {
+    // Given: Enabled AI analysis exposes its Advanced reference input
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(snapshot()))
+    renderPage()
+    const user = userEvent.setup()
+    const input = await screen.findByLabelText('AI API key env var')
+
+    // When: An invalid reference is entered, then analysis is disabled before Save
+    await user.clear(input)
+    await user.type(input, 'raw-private-key/value')
+    await user.click(screen.getByLabelText('Enable AI scene analysis (VLM)'))
+    await user.click(screen.getByRole('button', { name: 'Save detection settings' }))
+
+    // Then: Disabling execution cannot bypass reference validation or cache the raw value
+    await screen.findByText('Credentials must reference environment variable names.')
+    expect(fetch.mock.calls.every(([, request]) => request?.method === 'GET')).toBe(true)
+    expect(clients[0].getMutationCache().getAll()).toHaveLength(0)
+    expect(JSON.stringify(clients[0].getQueryData(['config']))).not.toContain('raw-private-key/value')
+  })
+
 })

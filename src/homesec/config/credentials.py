@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tempfile
 from collections.abc import Iterator, Mapping
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Literal, get_args
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, SecretStr, ValidationError
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
 
 from homesec.config.errors import CredentialStoreError
 from homesec.models.config import Config
@@ -35,10 +36,34 @@ class _CredentialsDocument(BaseModel):
     version: Literal[1] = 1
     values: dict[str, SecretStr] = Field(default_factory=dict)
 
+    @field_validator("values")
+    @classmethod
+    def validate_values(cls, values: dict[str, SecretStr]) -> dict[str, SecretStr]:
+        if any(
+            not credential_value_is_environment_compatible(value.get_secret_value())
+            for value in values.values()
+        ):
+            raise ValueError("Credential values must be compatible with the process environment")
+        return values
+
 
 def is_managed_reference(reference: str | None) -> bool:
     """Whether an environment reference belongs to HomeSec's private namespace."""
-    return reference is not None and reference.startswith(_MANAGED_PREFIX)
+    return (
+        reference is not None
+        and re.fullmatch(r"HOMESEC_SECRET_[0-9a-f]{32}", reference) is not None
+    )
+
+
+def credential_value_is_environment_compatible(value: str) -> bool:
+    """Validate environment installation without reflecting a credential in an error."""
+    if "\0" in value:
+        return False
+    try:
+        os.fsencode(value)
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def new_managed_reference() -> str:
@@ -49,10 +74,12 @@ def new_managed_reference() -> str:
 def _nested_model(annotation: object) -> type[BaseModel] | None:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation
-    for member in get_args(annotation):
-        if isinstance(member, type) and issubclass(member, BaseModel):
-            return member
-    return None
+    models = [
+        member
+        for member in get_args(annotation)
+        if isinstance(member, type) and issubclass(member, BaseModel)
+    ]
+    return models[0] if len(models) == 1 else None
 
 
 def _credential_fields(
@@ -65,7 +92,9 @@ def _credential_fields(
         if isinstance(metadata, dict) and metadata.get("homesec_credential") is True:
             yield path, current if isinstance(current, str) else None
             continue
-        nested = _nested_model(field.annotation)
+        nested = (
+            type(current) if isinstance(current, BaseModel) else _nested_model(field.annotation)
+        )
         if nested is not None:
             yield from _credential_fields(
                 nested, current if isinstance(current, BaseModel) else None, path
@@ -174,6 +203,10 @@ def save_managed_credentials(config_path: Path, additions: Mapping[str, str]) ->
     Keep previous references so failed saves, the YAML backup, and an older active
     configuration remain usable. Credentials are never overwritten in place.
     """
+    if any(not credential_value_is_environment_compatible(value) for value in additions.values()):
+        raise CredentialStoreError(
+            "Credential values must be compatible with the process environment"
+        )
     values = _read_values(config_path)
     if any(not is_managed_reference(key) or key in values for key in additions):
         raise CredentialStoreError("Managed credential references must be fresh and owned")

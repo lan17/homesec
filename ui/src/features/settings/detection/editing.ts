@@ -1,10 +1,10 @@
 import type { ConfigPatch } from '../../../api/client'
+import { validateEnvReferences } from '../../shared/envReferences'
 import {
   diffConfig,
   expectConfigObject,
   expectConfigString,
   expectConfigStringList,
-  isEnvReference,
 } from '../configEditing'
 import type { FilterFormState, VlmFormState, VlmRunMode } from './types'
 
@@ -105,13 +105,13 @@ export function buildDetectionPatch(
       { config: originalVlm.config, run_mode: originalVlm.run_mode, trigger_classes: originalVlm.trigger_classes },
       { config: editedVlm.config, run_mode: editedVlm.run_mode, trigger_classes: editedVlm.trigger_classes },
     )
+    if (vlmPatch.config !== undefined) {
+      validateEnvReferences(expectConfigObject(vlmPatch.config, 'vlm patch.config'))
+    }
     if (Object.keys(vlmPatch).length > 0) {
       if (editedVlm.run_mode !== 'never') {
         if (!editedVlm.config.model.trim()) {
           throw new Error('An AI model is required.')
-        }
-        if (!isEnvReference(editedVlm.config.api_key_env)) {
-          throw new Error('AI credentials must reference an environment variable name.')
         }
         if (!editedVlm.config.base_url.trim()) {
           throw new Error('An AI API endpoint is required.')

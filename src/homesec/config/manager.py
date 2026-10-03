@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validat
 
 from homesec.config.credentials import (
     credential_references,
+    credential_value_is_environment_compatible,
     is_managed_reference,
     new_managed_reference,
     save_managed_credentials,
@@ -360,6 +361,12 @@ class ConfigManager:
                 if value is not None and not value.get_secret_value():
                     raise ConfigPatchInvalidError(
                         "Credential values must not be empty; use null to clear"
+                    )
+                if value is not None and not credential_value_is_environment_compatible(
+                    value.get_secret_value()
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Credential values must be compatible with the process environment"
                     )
                 if value is not None and self._contains_redacted_placeholder(
                     value.get_secret_value()

@@ -144,4 +144,30 @@ describe('notification settings page', () => {
       credentials: { 'notifiers.0.config.api_key_env': 'private-email-key' } })
     expect(fetch.mock.calls.some(([url]) => String(url).includes('/setup/test-connection'))).toBe(false)
   })
+
+  it.each(['mqtt', 'sendgrid_email'])('rejects a raw Advanced reference after the %s notifier is disabled', async (backend) => {
+    // Given: An enabled notifier exposes a credential environment-reference field
+    const saved = { ...snapshot(), config: { ...snapshot().config, notifiers: [{ backend, enabled: true,
+      config: backend === 'mqtt' ? { host: 'mqtt.local', auth: { password_env: 'MQTT_PASSWORD' } }
+        : { from_email: 'alerts@test.local', to_emails: ['owner@test.local'], api_key_env: 'SENDGRID_API_KEY' },
+    }] } }
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(saved))
+    renderPage()
+    const user = userEvent.setup()
+    const label = backend === 'mqtt' ? 'MQTT password env var' : 'SendGrid API key env var'
+    const input = await screen.findByLabelText(label)
+
+    // When: A raw reference is entered, then the notifier is disabled before saving
+    await user.clear(input)
+    await user.type(input, 'raw-private-key/value')
+    await user.click(screen.getByLabelText('Enable notifier 1'))
+    await user.click(screen.getByRole('button', { name: 'Save notification settings' }))
+
+    // Then: Disabled state cannot persist or cache the raw reference
+    await screen.findByText('Credentials must reference environment variable names.')
+    expect(fetch.mock.calls.every(([, request]) => request?.method === 'GET')).toBe(true)
+    expect(clients[0].getMutationCache().getAll()).toHaveLength(0)
+    expect(JSON.stringify(clients[0].getQueryData(['config']))).not.toContain('raw-private-key/value')
+  })
+
 })

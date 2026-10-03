@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
@@ -288,4 +288,112 @@ describe('StorageSettingsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Discard draft' }))
     expect((screen.getByLabelText('Replace Dropbox token') as HTMLInputElement).value).toBe('')
   })
+
+  it.each([
+    ['Dropbox app key', 'app_key_env'],
+    ['Dropbox app secret', 'app_secret_env'],
+    ['Dropbox refresh token', 'refresh_token_env'],
+  ])('rejects raw values in the Advanced %s environment-reference field', async (label, key) => {
+    // Given: Dropbox settings expose a writable Advanced credential reference
+    const initial = { ...config(), config: { storage: { backend: 'dropbox', config: {
+      root: '/saved', token_env: 'DROPBOX_TOKEN', [key]: 'EXTERNAL_KEY',
+    } } } }
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(initial))
+    const client = renderPage()
+    const user = userEvent.setup()
+    const input = await screen.findByLabelText(`${label} env var`)
+
+    // When: A user pastes a raw credential into Advanced and attempts both Check and Save
+    await user.clear(input)
+    await user.type(input, 'raw-private-secret/value')
+    await user.click(screen.getByRole('button', { name: 'Check storage connection' }))
+    await screen.findByText('Credentials must reference environment variable names.')
+    await user.click(screen.getByRole('button', { name: 'Save storage settings' }))
+
+    // Then: Validation is safe and no unredacted value reaches YAML or either query cache
+    await screen.findAllByText('Credentials must reference environment variable names.')
+    expect(fetch.mock.calls.every(([, request]) => request?.method === 'GET')).toBe(true)
+    expect(JSON.stringify(client.getQueryData(['config']))).not.toContain('raw-private-secret/value')
+    expect(client.getMutationCache().getAll()).toHaveLength(0)
+  })
+
+  it('preserves unchanged external reference settings when only the Dropbox root changes', async () => {
+    // Given: Existing deployment-specific env references need no rewrite or extra validation
+    const initial = { ...config(), config: { storage: { backend: 'dropbox', config: {
+      root: '/saved', token_env: 'EXTERNAL-TOKEN', app_key_env: 'EXTERNAL-APP',
+      app_secret_env: 'EXTERNAL-SECRET', refresh_token_env: 'EXTERNAL-REFRESH',
+    } } } }
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(initial))
+    renderPage()
+    const user = userEvent.setup()
+    const input = await screen.findByLabelText('Dropbox root path')
+
+    // When: Only the root changes
+    await user.clear(input)
+    await user.type(input, '/new-root')
+    await user.click(screen.getByRole('button', { name: 'Save storage settings' }))
+
+    // Then: Only that field is sent, preserving every existing external reference
+    await waitFor(() => expect(fetch.mock.calls.some(([, request]) => request?.method === 'PATCH')).toBe(true))
+    expect(JSON.parse(String(fetch.mock.calls.find(([, request]) => request?.method === 'PATCH')?.[1]?.body))).toEqual({
+      expected_config_version: 'v1', storage: { config: { root: '/new-root' } },
+    })
+  })
+
+  it.each(['success', 'error'])('discards a stale probe %s after editable inputs change and return', async (outcome) => {
+    // Given: A connection probe is pending while the storage form remains editable
+    let finish: ((value: Response) => void) | undefined
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, request) => {
+      if (request?.method === 'POST') { return new Promise<Response>((resolve) => { finish = resolve }) }
+      return response(config())
+    })
+    renderPage()
+    const user = userEvent.setup()
+    const input = await screen.findByLabelText('Storage root directory')
+    await user.click(screen.getByRole('button', { name: 'Check storage connection' }))
+    await waitFor(() => expect(finish).toBeTruthy())
+
+    // When: The inputs change A to B to A before the old request completes despite cancellation
+    expect((input as HTMLInputElement).disabled).toBe(false)
+    await user.clear(input)
+    await user.type(input, '/different')
+    await user.clear(input)
+    await user.type(input, '/saved')
+    await act(async () => {
+      finish?.(outcome === 'success' ? response({ success: true, message: 'Old probe success', latency_ms: 1 })
+        : response({ detail: 'Old probe error' }, 500))
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check storage connection' })).toBeTruthy())
+
+    // Then: The cancelled request cannot publish success or error for the untested draft
+    expect(fetch.mock.calls.find(([, request]) => request?.method === 'POST')?.[1]?.signal?.aborted).toBe(true)
+    expect(screen.queryByText('PASS')).toBeNull()
+    expect(screen.queryByText('Old probe success')).toBeNull()
+    expect(screen.queryByText('Old probe error')).toBeNull()
+  })
+
+  it('discards a pending probe when a credential draft hides the probe component', async () => {
+    // Given: An external Dropbox token permits a probe before a replacement draft is entered
+    const initial = { ...config(), credentials: { 'storage.config.token_env': { configured: true, source: 'environment' } },
+      config: { storage: { backend: 'dropbox', config: { root: '/saved', token_env: 'DROPBOX_TOKEN' } } } }
+    let finish: ((value: Response) => void) | undefined
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, request) => request?.method === 'POST'
+      ? new Promise<Response>((resolve) => { finish = resolve }) : response(initial))
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Check storage connection' }))
+    await waitFor(() => expect(finish).toBeTruthy())
+
+    // When: Entering a secret replacement unmounts the pending probe, then its old result arrives
+    await user.click(screen.getByRole('button', { name: 'Replace Dropbox token' }))
+    await user.type(screen.getByLabelText('Replace Dropbox token'), 'private-new-token')
+    await act(async () => { finish?.(response({ success: true, message: 'Old token works', latency_ms: 1 })) })
+    await user.click(screen.getByRole('button', { name: 'Keep saved Dropbox token' }))
+
+    // Then: Neither the old success nor a PASS badge is restored when the component remounts
+    expect(fetch.mock.calls.find(([, request]) => request?.method === 'POST')?.[1]?.signal?.aborted).toBe(true)
+    expect(screen.queryByText('PASS')).toBeNull()
+    expect(screen.queryByText('Old token works')).toBeNull()
+  })
+
 })

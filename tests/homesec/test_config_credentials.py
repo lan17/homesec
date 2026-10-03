@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
 
+import homesec.plugins.registry as plugin_registry
 from homesec.api.server import create_contract_app
 from homesec.config.credentials import (
     credential_references,
@@ -29,6 +33,7 @@ from homesec.config.errors import (
 from homesec.config.loader import config_signature, load_config
 from homesec.config.manager import ConfigManager, ConfigPatch
 from homesec.models.config import Config, FastAPIServerConfig
+from homesec.plugins.registry import PluginRegistry, PluginType
 
 _VALUE = "test-only-private-token-$()\n'\""
 
@@ -200,7 +205,7 @@ async def test_environment_reference_edit_restores_external_credentials(
             "credentials": {"vlm.config.api_key_env": _VALUE},
             "filter": {"config": {"min_confidence": 9}},
         },
-        {"vlm": {"config": {"api_key_env": "HOMESEC_SECRET_unowned"}}},
+        {"vlm": {"config": {"api_key_env": "HOMESEC_SECRET_" + "a" * 32}}},
     ],
 )
 async def test_unsupported_or_invalid_credentials_never_write(
@@ -417,3 +422,97 @@ async def test_unreadable_private_file_returns_safe_api_error(tmp_path: Path) ->
     with pytest.raises(CredentialStoreError) as exc:
         load_managed_credentials(manager.config_path, manager.get_config())
     assert "private-file-input" not in "".join(traceback.format_exception(exc.value))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["private-nul\0value", "private-surrogate-\ud800"])
+async def test_environment_incompatible_credentials_never_persist(
+    tmp_path: Path, value: str
+) -> None:
+    # Given: A credential draft that cannot be installed in a process environment
+    manager = _manager(tmp_path)
+    before = manager.config_path.read_bytes()
+
+    # When: Saving through the same manager boundary used by authenticated API writes
+    with pytest.raises(ConfigPatchInvalidError) as error:
+        await manager.patch_config(_patch(manager, credentials={"vlm.config.api_key_env": value}))
+
+    # Then: No YAML, backup, or private file is written and the error does not reflect the value
+    assert manager.config_path.read_bytes() == before
+    assert not Path(str(manager.config_path) + ".bak").exists()
+    assert not managed_credentials_path(manager.config_path).exists()
+    assert value not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["private-nul\0value", "private-surrogate-\ud800"])
+async def test_malformed_private_values_fail_safely_before_startup(
+    tmp_path: Path, value: str
+) -> None:
+    # Given: A valid saved reference whose private document was corrupted locally
+    manager = _manager(tmp_path)
+    saved = await manager.patch_config(
+        _patch(manager, credentials={"vlm.config.api_key_env": _VALUE})
+    )
+    reference = credential_references(saved)["vlm.config.api_key_env"]
+    managed_credentials_path(manager.config_path).write_text(
+        json.dumps({"version": 1, "values": {reference: value}}), encoding="utf-8"
+    )
+
+    # When: Loading the startup credential snapshot or reading API status
+    with pytest.raises(CredentialStoreError) as error:
+        load_managed_credentials(manager.config_path, saved)
+    response = _client(manager, auth_enabled=False).get("/api/v1/config")
+
+    # Then: Both paths report the safe credential-store error without exposing private content
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "CONFIG_CREDENTIALS_UNAVAILABLE"
+    assert value not in "".join(traceback.format_exception(error.value))
+    assert "private-nul" not in response.text
+    assert "private-surrogate" not in response.text
+
+
+class _FirstAuth(BaseModel):
+    kind: Literal["first"]
+    first_env: str = Field(default="FIRST_KEY", json_schema_extra={"homesec_credential": True})
+
+
+class _SecondAuth(BaseModel):
+    kind: Literal["second"]
+    second_env: str = Field(default="SECOND_KEY", json_schema_extra={"homesec_credential": True})
+
+
+class _UnionPluginConfig(BaseModel):
+    auth: _FirstAuth | _SecondAuth | None = None
+
+
+class _UnionPlugin:
+    config_cls = _UnionPluginConfig
+
+    @classmethod
+    def create(cls, config: _UnionPluginConfig) -> object:
+        raise AssertionError("Credential discovery must not construct a provider")
+
+
+@pytest.mark.parametrize("kind", ["first", "second", None])
+def test_external_plugin_credentials_follow_actual_union_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str | None
+) -> None:
+    # Given: An externally registered plugin with mutually exclusive nested credential schemas
+    registry = PluginRegistry[_UnionPluginConfig, object](PluginType.STORAGE)
+    registry.register("external-union", _UnionPlugin)
+    config = _manager(tmp_path).get_config()
+    monkeypatch.setitem(plugin_registry._REGISTRIES, PluginType.STORAGE, registry)
+    config.storage.backend = "external-union"
+    config.storage.config = {"auth": {"kind": kind}} if kind else {}
+
+    # When: Discovering credential slots through the registry's actual validated model
+    references = credential_references(config)
+    storage_references = {
+        path: ref for path, ref in references.items() if path.startswith("storage.")
+    }
+
+    # Then: Only the selected branch is traversed, and absent ambiguous auth invents no branch
+    assert storage_references == (
+        {f"storage.config.auth.{kind}_env": f"{kind.upper()}_KEY"} if kind else {}
+    )

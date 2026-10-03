@@ -64,7 +64,7 @@ async def test_saved_managed_credentials_cannot_be_probed_before_startup_snapsho
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: A saved access-token reference absent from the running credential snapshot
-    reference = "HOMESEC_SECRET_probe_test"
+    reference = "HOMESEC_SECRET_" + "b" * 32
     monkeypatch.delenv(reference, raising=False)
     provider = DropboxStorageConfig(root="/test", token_env=reference)
     plugin = _StubPingPlugin()

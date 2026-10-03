@@ -73,4 +73,23 @@ describe('existing notification configuration editing', () => {
     expect(() => buildNotificationPatch(original, change({ port: 1883.5 }))).toThrow('whole number')
     expect(() => buildNotificationPatch(original, change({ auth: { password_env: 'literal secret' } }))).toThrow('environment variable')
   })
+
+  it('allows optional MQTT references to clear without rewriting an unchanged external value', () => {
+    // Given: A saved external username reference uses an operator-specific name
+    const config = savedConfig()
+    config.notifiers[0].config.auth!.username_env = 'EXTERNAL-USER'
+    const original = readNotificationSettings(config)
+    const entry = original.notifiers[0]
+
+    // When: Only the optional password reference is cleared
+    const edited = { ...original, notifiers: [{ ...entry, config: { ...entry.config,
+      auth: { username_env: 'EXTERNAL-USER', password_env: '' },
+    } }, ...original.notifiers.slice(1)] }
+
+    // Then: Clearing stays supported while unchanged references are preserved
+    expect(buildNotificationPatch(original, edited)).toEqual({ notifiers: [{ index: 0,
+      config: { auth: { password_env: '' } },
+    }] })
+  })
+
 })

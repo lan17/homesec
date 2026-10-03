@@ -1,12 +1,11 @@
 import type { ConfigPatch } from '../../../api/client'
+import { validateEnvReferences } from '../../shared/envReferences'
 import {
   diffConfig,
   expectConfigBoolean,
   expectConfigObject,
   expectConfigString,
   expectConfigStringList,
-  isConfigObject,
-  isEnvReference,
 } from '../configEditing'
 import { NOTIFIER_BACKENDS } from './backends'
 import type { NotifierBackend, RiskLevel } from './types'
@@ -116,17 +115,6 @@ function validateNotifier(entry: ConfiguredNotifier): void {
     if (!Number.isInteger(entry.config.port)) {
       throw new Error('MQTT port must be a whole number.')
     }
-    const auth = entry.config.auth
-    if (isConfigObject(auth)) {
-      for (const field of ['username_env', 'password_env']) {
-        const value = auth[field]
-        if (value !== undefined && value !== null && value !== '' && (typeof value !== 'string' || !isEnvReference(value))) {
-          throw new Error('MQTT credentials must reference environment variable names.')
-        }
-      }
-    }
-  } else if (!isEnvReference(String(entry.config.api_key_env))) {
-    throw new Error('SendGrid credentials must reference an environment variable name.')
   }
 }
 
@@ -152,6 +140,7 @@ export function buildNotificationPatch(
     if (!isEditableNotifier(next.backend)) {
       throw new Error(`The ${next.backend} notifier is read-only.`)
     }
+    validateEnvReferences(configPatch)
     if (next.enabled) {
       validateNotifier(next)
     }

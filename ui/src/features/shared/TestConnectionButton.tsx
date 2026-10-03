@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type {
   TestConnectionRequest,
@@ -7,6 +7,7 @@ import type {
 import { useSetupTestConnectionMutation } from '../../api/hooks/useSetupTestConnectionMutation'
 import { Button } from '../../components/ui/Button'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { validateEnvReferences } from './envReferences'
 
 interface TestConnectionButtonProps {
   request: TestConnectionRequest
@@ -35,15 +36,27 @@ export function TestConnectionButton({
   description,
 }: TestConnectionButtonProps) {
   const mutation = useSetupTestConnectionMutation()
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [error, setError] = useState<{ requestKey: string; signal: AbortSignal; message: string } | null>(null)
+  const controllerRef = useRef<AbortController | null>(null)
+  const requestKey = JSON.stringify(request)
+  const errorMessage = error?.requestKey === requestKey && !error.signal.aborted ? error.message : null
+
+  useEffect(() => () => { controllerRef.current?.abort() }, [requestKey])
 
   async function runTest(): Promise<void> {
-    setErrorMessage(null)
+    controllerRef.current?.abort()
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setError(null)
     try {
-      const response = await mutation.mutateAsync(request)
-      onResult(response)
+      // Validate before mutation variables can retain a pasted raw credential.
+      validateEnvReferences(request.config)
+      const response = await mutation.mutateAsync({ request, signal: controller.signal })
+      if (!controller.signal.aborted) { onResult(response) }
     } catch (error) {
-      setErrorMessage(describeMutationError(error))
+      if (!controller.signal.aborted) {
+        setError({ requestKey, signal: controller.signal, message: describeMutationError(error) })
+      }
     }
   }
 

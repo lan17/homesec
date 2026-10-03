@@ -1,5 +1,6 @@
 import type { ConfigPatch, ConfigSnapshot } from '../../../api/client'
-import { expectConfigObject, expectConfigString, diffConfig, isEnvReference } from '../configEditing'
+import { validateEnvReferences } from '../../shared/envReferences'
+import { expectConfigObject, expectConfigString, diffConfig } from '../configEditing'
 import { STORAGE_BACKENDS } from './backends'
 import type { StorageFormState } from './types'
 
@@ -37,19 +38,14 @@ export function buildStorageSettingsPatch(draft: StorageSettingsDraft): ConfigPa
   if (validation) {
     throw new Error(validation)
   }
-  if (draft.value.backend === 'dropbox') {
-    const env = expectConfigString(draft.value.config.token_env, 'Dropbox token env var')
-    if (!isEnvReference(env)) {
-      throw new Error('Dropbox token must be an environment variable name.')
-    }
-  }
+  const config = diffConfig(draft.original.config, draft.value.config)
+  validateEnvReferences(config)
   const paths = diffConfig(draft.originalPaths, draft.paths)
   for (const value of Object.values(paths)) {
     if (typeof value !== 'string' || value.trim().length === 0) {
       throw new Error('Storage paths must be non-empty.')
     }
   }
-  const config = diffConfig(draft.original.config, draft.value.config)
   return {
     expected_config_version: draft.expectedVersion,
     storage: {

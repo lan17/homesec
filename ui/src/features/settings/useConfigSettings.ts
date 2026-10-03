@@ -61,6 +61,7 @@ export function useConfigSettings() {
         ? 'Settings saved. Waiting for HomeSec to restart and activate them…'
         : 'Settings saved. Waiting for runtime activation…')
       const activated = await waitForConfigApply(response, controller.signal)
+      await queryClient.cancelQueries({ queryKey: QUERY_KEYS.config })
       queryClient.setQueryData(QUERY_KEYS.config, activated)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.runtimeStatus }),
