@@ -1,12 +1,11 @@
 # HomeSec iOS Build And Runbook
 
-Last reviewed: 2026-06-14
+Last reviewed: 2026-10-03
 
 This runbook covers personal HomeSec iPhone and iPad builds from this repo.
 The current app is a Capacitor iOS shell around the React UI in `ui/`.
 
-HomeSec intentionally supports the latest iOS major only. The native project
-currently builds with the installed iOS 26.5 SDK and has
+The native project currently builds with the installed iOS 26.5 SDK and has
 `IPHONEOS_DEPLOYMENT_TARGET = 26.0`. Older iOS 17/18 simulator runtimes may be
 installed locally, but they are not supported targets for this app stream.
 
@@ -45,6 +44,8 @@ xcodebuild \
   -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' \
   -configuration Debug \
   -derivedDataPath /tmp/homesec-ios-qa \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- \
   build
 ```
 
@@ -65,6 +66,11 @@ xcrun simctl launch booted com.levneiman.homesec
 
 The expected first-launch screen is `Connect to HomeSec` with server URL and
 API token controls.
+
+Simulator launch requires ad hoc signing so native Keychain reads have an
+application identifier entitlement. `CODE_SIGNING_ALLOWED=NO` is suitable for
+CI compilation checks, but that artifact can open to a blank screen when
+runtime API configuration tries to read Keychain.
 
 ## Personal Device Build
 
@@ -199,6 +205,10 @@ TestFlight is not required for the first personal release. When it is needed:
 
 ## Troubleshooting
 
+- Blank first-launch screen with Keychain status `-34018`: rebuild the simulator
+  app with `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`, reinstall, and launch
+  again. The unsigned CI build does not provide the Keychain entitlements needed
+  at runtime.
 - `No devices found.` from `xcrun devicectl list devices`: unlock the device,
   trust the Mac, reconnect USB, or enable wireless debugging from Xcode.
 - `PackageDescription.SupportedPlatform.IOSVersion.v26 is unavailable`: rerun

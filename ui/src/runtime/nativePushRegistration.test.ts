@@ -9,6 +9,35 @@ import type {
 } from '@capacitor/push-notifications'
 import type { PluginListenerHandle } from '@capacitor/core'
 
+const nativeRuntimeMock = vi.hoisted(() => ({
+  isIOSNativeApp: vi.fn(() => false),
+}))
+
+const nativeAppMock = vi.hoisted(() => {
+  const listeners = new Map<string, Set<(event?: { isActive: boolean }) => void>>()
+  return {
+    listeners,
+    getState: vi.fn(async () => ({ isActive: true })),
+    addListener: vi.fn(async (
+      eventName: string,
+      listener: (event?: { isActive: boolean }) => void,
+    ) => {
+      const eventListeners = listeners.get(eventName) ?? new Set()
+      eventListeners.add(listener)
+      listeners.set(eventName, eventListeners)
+      return {
+        remove: vi.fn(async () => { eventListeners.delete(listener) }),
+      }
+    }),
+  }
+})
+
+vi.mock('./nativeRuntime', () => ({
+  isIOSNativeApp: () => nativeRuntimeMock.isIOSNativeApp(),
+}))
+
+vi.mock('@capacitor/app', () => ({ App: nativeAppMock }))
+
 import {
   BROWSER_AUTH_TOKEN_STORAGE_KEY,
   BROWSER_SERVER_BASE_URL_STORAGE_KEY,
@@ -145,9 +174,29 @@ function mobileDeviceResponse() {
   }
 }
 
+async function backgroundNativeApp(): Promise<void> {
+  await act(async () => {
+    nativeAppMock.listeners.get('appStateChange')?.forEach((listener) => {
+      listener({ isActive: false })
+    })
+    nativeAppMock.listeners.get('pause')?.forEach((listener) => { listener() })
+  })
+}
+
+async function resumeNativeApp(): Promise<void> {
+  await act(async () => {
+    nativeAppMock.listeners.get('appStateChange')?.forEach((listener) => {
+      listener({ isActive: true })
+    })
+    nativeAppMock.listeners.get('resume')?.forEach((listener) => { listener() })
+  })
+}
+
 describe('native push registration', () => {
   beforeEach(() => {
     resetNativePushRegistrationForTests()
+    nativeRuntimeMock.isIOSNativeApp.mockReturnValue(true)
+    nativeAppMock.listeners.clear()
   })
 
   afterEach(() => {
@@ -262,39 +311,133 @@ describe('native push registration', () => {
     expect(client.registerMobileDevice).not.toHaveBeenCalled()
   })
 
-  it('does not cache denied permission as a completed registration', async () => {
-    // Given: The first startup sees denied permission and a later startup has permission
-    const deniedPushNotifications = createPushAdapter({ initialPermission: 'denied' })
-    const grantedPushNotifications = createPushAdapter()
+  it('registers on native resume after notification permission is granted in Settings', async () => {
+    // Given: The running app has notification permission denied
+    const pushNotifications = createPushAdapter({ initialPermission: 'denied' })
     const devicePlugin = createDevicePlugin()
     const client = createRegistrationClient()
-
-    const { rerender } = renderHook(
-      ({ pushNotifications }) =>
-        useNativePushRegistration({
-          client,
-          devicePlugin,
-          enabled: true,
-          isIOSNative: () => true,
-          pushNotifications,
-          registrationKey: 'same-device',
-        }),
-      { initialProps: { pushNotifications: deniedPushNotifications } },
-    )
+    const options = {
+      client,
+      devicePlugin,
+      enabled: true,
+      pushNotifications,
+      registrationKey: 'same-device',
+    }
+    renderHook(() => useNativePushRegistration(options))
 
     await waitFor(() => {
-      expect(deniedPushNotifications.checkPermissions).toHaveBeenCalledTimes(1)
+      expect(pushNotifications.checkPermissions).toHaveBeenCalledTimes(1)
     })
+    expect(client.registerMobileDevice).not.toHaveBeenCalled()
 
-    // When: The hook runs again for the same device key after permission becomes available
-    await act(async () => {
-      rerender({ pushNotifications: grantedPushNotifications })
-    })
+    // When: The user grants permission in Settings and resumes the same app instance
+    await backgroundNativeApp()
+    vi.mocked(pushNotifications.checkPermissions).mockResolvedValue({ receive: 'granted' })
+    await resumeNativeApp()
 
-    // Then: The second attempt is allowed to register the device
+    // Then: The unchanged push and device plugins register without restarting the app
     await waitFor(() => {
       expect(client.registerMobileDevice).toHaveBeenCalledTimes(1)
     })
+    expect(pushNotifications.checkPermissions).toHaveBeenCalledTimes(2)
+    expect(pushNotifications.requestPermissions).not.toHaveBeenCalled()
+    expect(pushNotifications.register).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a failed backend registration on native resume', async () => {
+    // Given: Startup gets an APNs token but the HomeSec server is unreachable
+    const pushNotifications = createPushAdapter()
+    const devicePlugin = createDevicePlugin()
+    const client = createRegistrationClient()
+    client.registerMobileDevice.mockRejectedValueOnce(new Error('HomeSec server unreachable'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const options = {
+      client,
+      devicePlugin,
+      enabled: true,
+      pushNotifications,
+      registrationKey: 'same-device',
+    }
+    renderHook(() => useNativePushRegistration(options))
+
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledWith('iOS push registration failed: HomeSec server unreachable')
+    })
+
+    // When: The server becomes reachable and the same app backgrounds then resumes
+    await backgroundNativeApp()
+    expect(client.registerMobileDevice).toHaveBeenCalledTimes(1)
+    await resumeNativeApp()
+
+    // Then: Registration retries with the original adapters and succeeds
+    await waitFor(() => {
+      expect(client.registerMobileDevice).toHaveBeenCalledTimes(2)
+    })
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(pushNotifications.register).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not duplicate a successful registration on native resume', async () => {
+    // Given: The same app instance has successfully registered its device
+    const pushNotifications = createPushAdapter()
+    const devicePlugin = createDevicePlugin()
+    const client = createRegistrationClient()
+    const options = {
+      client,
+      devicePlugin,
+      enabled: true,
+      pushNotifications,
+      registrationKey: 'same-device',
+    }
+    renderHook(() => useNativePushRegistration(options))
+    await waitFor(() => {
+      expect(client.registerMobileDevice).toHaveBeenCalledTimes(1)
+    })
+
+    // When: iOS backgrounds and resumes the app twice
+    await backgroundNativeApp()
+    await resumeNativeApp()
+    await backgroundNativeApp()
+    await resumeNativeApp()
+
+    // Then: Permission and APNs/backend registration are not repeated after success
+    expect(pushNotifications.checkPermissions).toHaveBeenCalledTimes(1)
+    expect(pushNotifications.register).toHaveBeenCalledTimes(1)
+    expect(client.registerMobileDevice).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares an in-flight registration across native resumes', async () => {
+    // Given: The backend registration response is pending for the running app
+    const pushNotifications = createPushAdapter()
+    const devicePlugin = createDevicePlugin()
+    const client = createRegistrationClient()
+    let resolveRegistration: (() => void) | undefined
+    const registrationResponse = new Promise<Awaited<ReturnType<typeof client.registerMobileDevice>>>((resolve) => {
+      resolveRegistration = () => resolve({ ...mobileDeviceResponse(), httpStatus: 201 })
+    })
+    client.registerMobileDevice.mockReturnValueOnce(registrationResponse)
+    const options = {
+      client,
+      devicePlugin,
+      enabled: true,
+      pushNotifications,
+      registrationKey: 'same-device',
+    }
+    renderHook(() => useNativePushRegistration(options))
+    await waitFor(() => {
+      expect(client.registerMobileDevice).toHaveBeenCalledTimes(1)
+    })
+
+    // When: The app resumes before the first request completes
+    await backgroundNativeApp()
+    await resumeNativeApp()
+    await act(async () => { resolveRegistration?.() })
+
+    // Then: The original request is shared and later resumes use its successful result
+    await backgroundNativeApp()
+    await resumeNativeApp()
+    expect(pushNotifications.register).toHaveBeenCalledTimes(1)
+    expect(client.registerMobileDevice).toHaveBeenCalledTimes(1)
   })
 
   it('handles APNs registration errors without posting a device', async () => {

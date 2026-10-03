@@ -10,6 +10,7 @@ import type { PluginListenerHandle } from '@capacitor/core'
 import { apiClient, type HomeSecApiClient } from '../api/client'
 import type { MobileDeviceRegisterRequest } from '../api/generated/types'
 import { homeSecDevicePlugin, type HomeSecDevicePlugin } from './homeSecDevicePlugin'
+import { useNativeAppLifecycleState } from './nativeAppLifecycle'
 import { isIOSNativeApp } from './nativeRuntime'
 
 type MobileDeviceRegistrationClient = Pick<HomeSecApiClient, 'registerMobileDevice'>
@@ -212,8 +213,10 @@ export function useNativePushRegistration({
   registrationKey,
   timeoutMs,
 }: UseNativePushRegistrationOptions): void {
+  const nativeLifecycle = useNativeAppLifecycleState()
+
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !nativeLifecycle.isActive || nativeLifecycle.isBackgrounded) {
       return
     }
 
@@ -238,6 +241,9 @@ export function useNativePushRegistration({
     devicePlugin,
     enabled,
     isIOSNative,
+    nativeLifecycle.isActive,
+    nativeLifecycle.isBackgrounded,
+    nativeLifecycle.resumeCount,
     pushNotifications,
     registrationKey,
     timeoutMs,

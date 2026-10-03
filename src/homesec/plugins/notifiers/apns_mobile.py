@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _APNS_CATEGORY = "HOMESEC_EVENT"
 _APNS_PUSH_TYPE = "alert"
+_APNS_PAYLOAD_MAX_BYTES = 4096
 _PROVIDER_TOKEN_REFRESH_S = 50 * 60
 _PERMANENT_TOKEN_REJECTION_REASONS = frozenset(
     {
@@ -170,7 +171,7 @@ class APNsMobileNotifier(Notifier):
             )
             return
 
-        payload = build_apns_payload(alert)
+        payload = _encode_apns_payload(build_apns_payload(alert))
         provider_token = self._signer.token()
         sent_at = datetime.now(timezone.utc)
         results = await asyncio.gather(
@@ -187,11 +188,13 @@ class APNsMobileNotifier(Notifier):
         )
 
         successes = 0
+        payload_too_large = False
         permanent_failures: list[str] = []
         retryable_failures: list[str] = []
         for target, result in zip(targets, results, strict=True):
             match result:
                 case _DeliveryResult() as delivery:
+                    payload_too_large = payload_too_large or delivery.payload_too_large
                     if delivery.delivered:
                         successes += 1
                     elif delivery.retryable:
@@ -225,7 +228,7 @@ class APNsMobileNotifier(Notifier):
         if retryable_failures or permanent_failures:
             raise APNsDeliveryError(
                 f"APNs delivery failed for {failure_count} of {len(targets)} device(s)",
-                retryable=successes == 0 and bool(retryable_failures),
+                retryable=successes == 0 and bool(retryable_failures) and not payload_too_large,
             )
 
     async def ping(self) -> bool:
@@ -245,7 +248,7 @@ class APNsMobileNotifier(Notifier):
         self,
         target: MobileDevicePushTarget,
         *,
-        payload: dict[str, object],
+        payload: bytes,
         provider_token: str,
         sent_at: datetime,
     ) -> _DeliveryResult:
@@ -254,11 +257,12 @@ class APNsMobileNotifier(Notifier):
             "apns-topic": self._bundle_id,
             "apns-push-type": _APNS_PUSH_TYPE,
             "apns-priority": "10",
+            "content-type": "application/json",
         }
         try:
             response = await (await self._get_client()).post(
                 _target_url(self._base_url, target.apns_token),
-                json=payload,
+                content=payload,
                 headers=headers,
             )
         except httpx.HTTPError as exc:
@@ -278,8 +282,10 @@ class APNsMobileNotifier(Notifier):
         reason = _apns_response_reason(response)
         error = f"HTTP {response.status_code}: {reason}"
         await self._repository.record_push_result(target.id, error=error, now=sent_at)
-        retryable = not _is_permanent_token_rejection(response.status_code, reason)
-        if not retryable:
+        token_rejected = _is_permanent_token_rejection(response.status_code, reason)
+        payload_too_large = response.status_code == 413 or reason == "PayloadTooLarge"
+        retryable = not token_rejected and not payload_too_large
+        if token_rejected:
             await self._repository.disable_device(target.id, now=sent_at)
         logger.warning(
             "APNs mobile send rejected: device_id=%s status=%d reason=%s",
@@ -287,7 +293,11 @@ class APNsMobileNotifier(Notifier):
             response.status_code,
             reason,
         )
-        return _DeliveryResult(delivered=False, retryable=retryable)
+        return _DeliveryResult(
+            delivered=False,
+            retryable=retryable,
+            payload_too_large=payload_too_large,
+        )
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -306,12 +316,10 @@ def build_apns_payload(alert: Alert) -> dict[str, object]:
     body = _notification_body(alert, risk_level=risk_level)
     route = f"/events/{quote(alert.clip_id, safe='')}?from=notification"
 
-    return {
+    notification_alert = {"title": title, "body": body}
+    payload: dict[str, object] = {
         "aps": {
-            "alert": {
-                "title": title,
-                "body": body,
-            },
+            "alert": notification_alert,
             "sound": "default",
             "category": _APNS_CATEGORY,
         },
@@ -322,6 +330,36 @@ def build_apns_payload(alert: Alert) -> dict[str, object]:
         "activity_type": activity_type,
         "route": route,
     }
+    if len(_encode_apns_payload(payload)) <= _APNS_PAYLOAD_MAX_BYTES:
+        return payload
+
+    notification_alert["body"] = ""
+    if len(_encode_apns_payload(payload)) > _APNS_PAYLOAD_MAX_BYTES:
+        raise APNsDeliveryError(
+            "APNs payload exceeds 4096-byte limit even without notification body",
+            retryable=False,
+        )
+
+    # Each character occupies at least one encoded byte; preserve the longest
+    # body prefix that fits without altering routing or event identifiers.
+    lower = 0
+    upper = min(len(body), _APNS_PAYLOAD_MAX_BYTES)
+    while lower < upper:
+        middle = (lower + upper + 1) // 2
+        notification_alert["body"] = body[:middle]
+        if len(_encode_apns_payload(payload)) <= _APNS_PAYLOAD_MAX_BYTES:
+            lower = middle
+        else:
+            upper = middle - 1
+    notification_alert["body"] = body[:lower]
+    return payload
+
+
+def _encode_apns_payload(payload: dict[str, object]) -> bytes:
+    """Use the same compact UTF-8 bytes for payload budgeting and HTTP delivery."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
 
 
 def _notification_body(alert: Alert, *, risk_level: str) -> str:
@@ -351,6 +389,7 @@ def _default_apns_base_url(environment: APNSEnvironment) -> str:
 class _DeliveryResult(BaseModel):
     delivered: bool
     retryable: bool
+    payload_too_large: bool = False
 
 
 class APNsDeliveryError(RuntimeError):

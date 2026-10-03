@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -64,10 +65,18 @@ class _FakeAPNsClient:
         self,
         url: str,
         *,
-        json: dict[str, object],
+        content: bytes,
         headers: dict[str, str],
     ) -> httpx.Response:
-        self.requests.append({"headers": headers, "json": json, "url": url})
+        request = httpx.Request("POST", url, content=content, headers=headers)
+        self.requests.append(
+            {
+                "headers": dict(request.headers),
+                "json": json.loads(request.content),
+                "content": request.content,
+                "url": str(request.url),
+            }
+        )
         return self.responses.pop(0)
 
     async def aclose(self) -> None:
@@ -171,9 +180,11 @@ async def test_apns_notifier_sends_payload_to_registered_targets(
     request = fake_client.requests[0]
     assert request["url"] == "https://api.sandbox.push.apple.com/3/device/apns-token-1"
     assert request["json"]["route"] == "/events/clip_123?from=notification"
+    assert request["json"]["aps"]["alert"]["body"] == "Person near the front door."
     headers = request["headers"]
     assert headers["apns-topic"] == "com.levneiman.homesec"
     assert headers["apns-push-type"] == "alert"
+    assert headers["content-type"] == "application/json"
     assert headers["authorization"].startswith("bearer ")
 
     # And: Successful delivery clears the device push error
@@ -221,6 +232,152 @@ async def test_apns_notifier_records_rejected_devices_and_raises_when_all_fail(
     assert device_id == "dev_bad"
     assert error == "HTTP 500: InternalServerError"
     assert recorded_at is not None
+    assert repository.disabled_devices == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "summary",
+    ["A" * 6000, "人" * 1500, "🚪" * 1500, '"\n\\' * 1500],
+    ids=["ascii", "cjk", "emoji", "json-escaped"],
+)
+async def test_apns_notifier_bounds_encoded_payload_without_changing_event_route(
+    monkeypatch: pytest.MonkeyPatch,
+    summary: str,
+) -> None:
+    # Given: An alert whose summary exceeds the APNs byte limit after JSON encoding
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_1",
+                apns_token="apns-token-1",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            )
+        ]
+    )
+    requests: list[httpx.Request] = []
+
+    def receive_push(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(receive_push))
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient",
+        lambda **_kwargs: http_client,
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+    alert = _sample_alert(clip_id="clip 你好/1", summary=summary)
+
+    # When: Sending through the HTTP boundary
+    try:
+        await notifier.send(alert)
+    finally:
+        await notifier.shutdown()
+
+    # Then: The exact request bytes fit APNs and preserve complete routing/context
+    assert len(requests) == 1
+    request = requests[0]
+    assert len(request.content) <= 4096
+    assert request.headers["content-type"] == "application/json"
+    payload = json.loads(request.content.decode("utf-8"))
+    assert payload["event_id"] == alert.clip_id
+    assert payload["route"] == "/events/clip%20%E4%BD%A0%E5%A5%BD%2F1?from=notification"
+    assert payload["camera"] == alert.camera_name
+    assert payload["risk_level"] == "high"
+    assert payload["activity_type"] == "person"
+    body = payload["aps"]["alert"]["body"]
+    assert body
+    assert summary.startswith(body)
+    assert len(body) < len(summary)
+    assert repository.recorded_results[0][1] is None
+
+
+@pytest.mark.asyncio
+async def test_apns_notifier_rejects_oversized_event_metadata_without_sending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: Event identifiers and their route alone exceed the APNs payload budget
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_1",
+                apns_token="apns-token-1",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            )
+        ]
+    )
+    fake_client = _FakeAPNsClient([])
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient",
+        lambda **_kwargs: fake_client,
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+
+    # When: Trying to send an alert that cannot fit even with an empty display body
+    with pytest.raises(APNsDeliveryError, match="APNs payload exceeds 4096-byte limit") as exc_info:
+        await notifier.send(_sample_alert(clip_id="人" * 500))
+
+    # Then: The invalid payload fails permanently without corrupting the device registration
+    assert exc_info.value.retryable is False
+    assert fake_client.requests == []
+    assert repository.recorded_results == []
+    assert repository.disabled_devices == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_codes", [(413,), (413, 503)], ids=["alone", "mixed-fanout"])
+async def test_apns_notifier_does_not_retry_payload_too_large_or_disable_valid_devices(
+    monkeypatch: pytest.MonkeyPatch,
+    status_codes: tuple[int, ...],
+) -> None:
+    # Given: APNs rejects the payload, optionally alongside a transient target failure
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id=f"dev_{index}",
+                apns_token=f"apns-token-{index}",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            )
+            for index, _status in enumerate(status_codes)
+        ]
+    )
+    fake_client = _FakeAPNsClient(
+        [
+            httpx.Response(
+                status,
+                json={"reason": "PayloadTooLarge" if status == 413 else "ServiceUnavailable"},
+            )
+            for status in status_codes
+        ]
+    )
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient",
+        lambda **_kwargs: fake_client,
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+
+    # When: Sending an otherwise valid alert to the registered targets
+    with pytest.raises(APNsDeliveryError, match="APNs delivery failed") as exc_info:
+        await notifier.send(_sample_alert())
+
+    # Then: Retrying the same invalid payload is suppressed without disabling valid tokens
+    assert exc_info.value.retryable is False
+    assert len(fake_client.requests) == len(status_codes)
+    assert repository.recorded_results[0][1] == "HTTP 413: PayloadTooLarge"
+    assert len(repository.recorded_results) == len(status_codes)
     assert repository.disabled_devices == []
 
 
