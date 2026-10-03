@@ -5,6 +5,7 @@ Ported from motion_recorder.py to keep functionality within homesec.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -14,15 +15,17 @@ import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from homesec.models.clip import Clip
 from homesec.models.config import CameraTalkConfig, PreviewConfig, TalkConfig
 from homesec.models.talk import (
     CameraTalkStatus,
+    TalkCapabilityProbeResult,
     TalkCapabilityState,
     TalkRefusalReason,
     TalkSessionOpenRequest,
@@ -65,9 +68,21 @@ from homesec.sources.rtsp.utils import (
     _next_backoff,
     _redact_rtsp_url,
 )
-from homesec.talk.backends import TalkBackendContext, TalkBackendOpenError
+from homesec.talk.backends import (
+    CameraTalkFingerprint,
+    TalkBackendConfigError,
+    TalkBackendContext,
+    TalkBackendOpenError,
+)
 from homesec.talk.registry import build_default_talk_backend_registry
 from homesec.talk.selector import TalkBackendSelector
+from homesec.talk.tapo.backend import TAPO_LOCAL_BACKEND, TAPO_LOCAL_DISCOVERY_HINT
+from homesec.talk.tapo.client import (
+    TapoClientError,
+    TapoUnsupportedEndpointError,
+    detect_tapo_local_endpoint,
+)
+from homesec.talk.tapo.config import TapoLocalTalkConfig
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +204,50 @@ class RTSPRuntimeConfig(BaseModel):
     )
 
 
+class RTSPCameraIdentityConfig(BaseModel):
+    """Safe, non-secret camera identity discovered outside the RTSP source."""
+
+    model_config = {"extra": "forbid"}
+
+    manufacturer: str | None = Field(
+        default=None,
+        description="Camera manufacturer from discovery metadata.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Camera model from discovery metadata.",
+    )
+    firmware: str | None = Field(
+        default=None,
+        description="Camera firmware version from discovery metadata.",
+    )
+    profile_names: list[str] = Field(
+        default_factory=list,
+        description="Media profile names from discovery metadata.",
+    )
+    local_protocol_hints: list[str] = Field(
+        default_factory=list,
+        description="Safe local protocol fingerprints discovered by the source runtime.",
+    )
+
+    @field_validator("manufacturer", "model", "firmware", mode="before")
+    @classmethod
+    def _strip_optional_string(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("profile_names", "local_protocol_hints", mode="before")
+    @classmethod
+    def _normalize_string_list(cls, value: object) -> object:
+        if value is None:
+            return []
+        if isinstance(value, tuple):
+            return list(value)
+        return value
+
+
 class RTSPSourceConfig(BaseModel):
     """RTSP source configuration."""
 
@@ -239,6 +298,10 @@ class RTSPSourceConfig(BaseModel):
         default="./recordings",
         description="Directory to store recordings and logs.",
     )
+    camera_identity: RTSPCameraIdentityConfig = Field(
+        default_factory=RTSPCameraIdentityConfig,
+        description="Non-secret camera identity and local protocol hints for auto selection.",
+    )
 
     motion: RTSPMotionConfig = Field(default_factory=RTSPMotionConfig)
     recording: RTSPRecordingConfig = Field(default_factory=RTSPRecordingConfig)
@@ -270,12 +333,54 @@ class RTSPSourceConfig(BaseModel):
                 source_backend="rtsp",
                 runtime_talk=runtime_talk,
                 camera_talk=camera_talk,
+                source_host=_host_from_uri(self.rtsp_url),
                 source_uri=self.rtsp_url,
                 source_uri_env=self.rtsp_url_env,
                 resolved_source_uri=self.rtsp_url,
+                fingerprint=_fingerprint_from_camera_identity(
+                    self.camera_identity,
+                    source_host=_host_from_uri(self.rtsp_url),
+                ),
             )
         )
         return self
+
+
+def _host_from_uri(uri: str | None) -> str | None:
+    if not uri:
+        return None
+    return urlsplit(uri).hostname
+
+
+def _fingerprint_from_camera_identity(
+    identity: RTSPCameraIdentityConfig,
+    *,
+    source_host: str | None,
+    local_protocol_hints: set[str] | None = None,
+) -> CameraTalkFingerprint:
+    hints = set(_safe_string_tuple(identity.local_protocol_hints))
+    if local_protocol_hints is not None:
+        hints.update(local_protocol_hints)
+    return CameraTalkFingerprint(
+        manufacturer=identity.manufacturer,
+        model=identity.model,
+        firmware=identity.firmware,
+        profile_names=_safe_string_tuple(identity.profile_names),
+        rtsp_hosts=(source_host,) if source_host else (),
+        local_protocol_hints=tuple(sorted(hints)),
+    )
+
+
+def _safe_string_tuple(values: list[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        stripped = value.strip()
+        if not stripped or stripped in seen:
+            continue
+        seen.add(stripped)
+        result.append(stripped)
+    return tuple(result)
 
 
 class RTSPRunState(str, Enum):
@@ -411,6 +516,12 @@ class RTSPSource(ThreadedClipSource):
         )
         self._live_publisher_shutdown = False
         self._talk_backend_selector: TalkBackendSelector | None = None
+        self._talk_context_config = config
+        self._talk_context_camera_name = camera_name
+        self._talk_discovery_hints: set[str] = set(
+            _safe_string_tuple(config.camera_identity.local_protocol_hints)
+        )
+        self._talk_tapo_discovery_attempted = False
         self._talk_manager = self._build_talk_manager(config, camera_name=camera_name)
         self._talk_manager_shutdown = False
         self._owns_recorder = recorder is None
@@ -897,37 +1008,139 @@ class RTSPSource(ThreadedClipSource):
                 max_session_s=runtime_talk.max_session_s,
                 idle_timeout_s=runtime_talk.idle_timeout_s,
             )
-        context = TalkBackendContext(
-            camera_name=camera_name,
-            source_backend="rtsp",
-            runtime_talk=runtime_talk,
-            camera_talk=camera_talk,
-            source_uri=config.rtsp_url,
-            source_uri_env=config.rtsp_url_env,
-            resolved_source_uri=self.rtsp_url,
-            source_connect_timeout_s=self.rtsp_connect_timeout_s,
-            source_io_timeout_s=self.rtsp_io_timeout_s,
-            resolve_env=os.getenv,
-            redact=_redact_rtsp_url,
-        )
-        selector = TalkBackendSelector(
-            registry=build_default_talk_backend_registry(),
-            context=context,
-        )
-        self._talk_backend_selector = selector
+        selector = self._rebuild_talk_backend_selector()
         return TalkManager(
             camera_name=self.camera_name,
             enabled=True,
             policy_enabled=camera_talk.policy_enabled,
             supported_codecs=selector.supported_codecs,
-            supported_codecs_factory=lambda: selector.selected_supported_codecs,
+            supported_codecs_factory=self._selected_talk_supported_codecs,
             open_session_factory=self._open_selected_talk_session,
-            capability_probe_factory=selector.probe,
-            prepare_capability_probe_factory=selector.probe_for_session_open,
-            prepare_probe_cleanup=selector.clear_prepared_probe,
+            capability_probe_factory=self._probe_talk_capability,
+            prepare_capability_probe_factory=self._probe_talk_capability_for_session_open,
+            prepare_probe_cleanup=self._clear_talk_prepared_probe,
             max_session_s=runtime_talk.max_session_s,
             idle_timeout_s=runtime_talk.idle_timeout_s,
         )
+
+    def _rebuild_talk_backend_selector(self) -> TalkBackendSelector:
+        context = self._build_talk_backend_context()
+        selector = TalkBackendSelector(
+            registry=build_default_talk_backend_registry(),
+            context=context,
+        )
+        self._talk_backend_selector = selector
+        return selector
+
+    def _build_talk_backend_context(self) -> TalkBackendContext:
+        config = self._talk_context_config
+        runtime_talk = config.runtime_talk
+        camera_talk = config.camera_talk
+        if runtime_talk is None or camera_talk is None:
+            raise TalkManagerError(
+                "Talk backend selector is not configured",
+                reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+            )
+        source_host = _host_from_uri(self.rtsp_url)
+        return TalkBackendContext(
+            camera_name=self._talk_context_camera_name,
+            source_backend="rtsp",
+            runtime_talk=runtime_talk,
+            camera_talk=camera_talk,
+            source_host=source_host,
+            source_uri=config.rtsp_url,
+            source_uri_env=config.rtsp_url_env,
+            resolved_source_uri=self.rtsp_url,
+            source_connect_timeout_s=self.rtsp_connect_timeout_s,
+            source_io_timeout_s=self.rtsp_io_timeout_s,
+            fingerprint=_fingerprint_from_camera_identity(
+                config.camera_identity,
+                source_host=source_host,
+                local_protocol_hints=self._talk_discovery_hints,
+            ),
+            resolve_env=os.getenv,
+            redact=_redact_rtsp_url,
+        )
+
+    def _selected_talk_supported_codecs(self) -> list[str] | None:
+        selector = self._talk_backend_selector
+        if selector is None:
+            return None
+        return selector.selected_supported_codecs
+
+    async def _probe_talk_capability(self) -> TalkCapabilityProbeResult:
+        return await self._probe_talk_capability_with_auto_discovery(for_session_open=False)
+
+    async def _probe_talk_capability_for_session_open(self) -> TalkCapabilityProbeResult:
+        return await self._probe_talk_capability_with_auto_discovery(for_session_open=True)
+
+    async def _clear_talk_prepared_probe(self) -> None:
+        selector = self._talk_backend_selector
+        if selector is not None:
+            await selector.clear_prepared_probe()
+
+    async def _probe_talk_capability_with_auto_discovery(
+        self,
+        *,
+        for_session_open: bool,
+    ) -> TalkCapabilityProbeResult:
+        selector = self._talk_backend_selector
+        if selector is None:
+            return TalkCapabilityProbeResult(
+                capability=TalkCapabilityState.ERROR,
+                refusal_reason=TalkRefusalReason.SOURCE_NOT_TALK_CAPABLE,
+                message="Talk backend selector is not configured",
+            )
+
+        result = (
+            await selector.probe_for_session_open() if for_session_open else await selector.probe()
+        )
+        if result.capability == TalkCapabilityState.SUPPORTED:
+            return result
+
+        if not await self._discover_tapo_local_hint_after_standards_failure():
+            return result
+
+        await selector.clear_prepared_probe()
+        selector = self._rebuild_talk_backend_selector()
+        return (
+            await selector.probe_for_session_open() if for_session_open else await selector.probe()
+        )
+
+    async def _discover_tapo_local_hint_after_standards_failure(self) -> bool:
+        config = self._talk_context_config
+        camera_talk = config.camera_talk
+        if camera_talk is None or camera_talk.backend != "auto":
+            return False
+        if self._talk_tapo_discovery_attempted:
+            return False
+        if TAPO_LOCAL_DISCOVERY_HINT in self._talk_discovery_hints:
+            return False
+        if TAPO_LOCAL_BACKEND in camera_talk.backends:
+            return False
+
+        self._talk_tapo_discovery_attempted = True
+        try:
+            await detect_tapo_local_endpoint(
+                TapoLocalTalkConfig(),
+                self._build_talk_backend_context(),
+            )
+        except (TalkBackendConfigError, TapoUnsupportedEndpointError):
+            return False
+        except (TapoClientError, asyncio.TimeoutError, TimeoutError, EOFError, OSError):
+            logger.debug(
+                "Passive Tapo talk discovery failed",
+                extra={"camera_name": self.camera_name},
+                exc_info=True,
+            )
+            return False
+
+        self._talk_discovery_hints.add(TAPO_LOCAL_DISCOVERY_HINT)
+        logger.info(
+            "Passive Tapo talk discovery detected local endpoint",
+            extra={"camera_name": self.camera_name},
+        )
+        return True
 
     async def _open_selected_talk_session(self, request: TalkSessionOpenRequest) -> TalkSession:
         selector = self._talk_backend_selector

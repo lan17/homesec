@@ -12,9 +12,10 @@ per-firmware validation before a specific camera is marked compatible.
 
 Talk policy defaults to enabled/auto. HomeSec probes RTSP cameras for ONVIF
 backchannel support first. If that fails and a safe proprietary candidate such as
-`tapo_local` is explicitly configured, HomeSec probes that backend next. The UI
-is only enabled when a backend reports supported capability. Operators can opt
-out globally with `talk.enabled: false` or per camera with
+`tapo_local` is identified from camera identity metadata or a passive local
+endpoint fingerprint, HomeSec probes that backend next. The UI is only enabled
+when a backend reports supported capability. Operators can opt out globally with
+`talk.enabled: false` or per camera with
 `cameras[].talk.mode: disabled`.
 
 ## Supported MVP Contract
@@ -135,7 +136,9 @@ C120 hardware before marking a camera compatible. Enable
 `Tapo Lab -> Third-Party Compatibility` in the Tapo app before testing. Tapo
 local talk defaults to username `admin`; if the local talk password matches the
 RTSP URL password, HomeSec can derive the host and password hash material from
-the RTSP URL:
+the RTSP URL. ONVIF-created RTSP cameras persist safe manufacturer/model/profile
+metadata under `source.config.camera_identity`, and manually entered RTSP cameras
+also try passive Tapo endpoint discovery after ONVIF backchannel probing fails:
 
 ```yaml
 cameras:
@@ -147,8 +150,6 @@ cameras:
     talk:
       mode: auto
       backend: auto
-      backends:
-        tapo_local: {}
 ```
 
 Use `backend: tapo_local` when you want to force the Tapo path and skip ONVIF
@@ -237,10 +238,12 @@ The bundled registry currently includes `onvif_rtsp_backchannel` and
 Tapo or any other proprietary backend. Proprietary detectors must return
 `safe_to_probe: true` before HomeSec will probe them automatically. A safe
 detector should be based on explicit backend config, local camera identity, or
-another low-risk local signal. Current RTSP source construction does not populate
-Tapo camera fingerprints, so the practical `tapo_local` auto path requires
-`cameras[].talk.backends.tapo_local` config. It must not send credentials to an
-unknown local service as part of detection.
+another low-risk local signal. The RTSP source passes persisted
+`source.config.camera_identity` metadata to detectors and, for manual RTSP
+cameras, performs a passive Tapo local endpoint fingerprint only after the
+standards path fails. That passive discovery opens the local Tapo port just far
+enough to verify a Tapo-looking Digest challenge and must not send credentials to
+an unknown local service.
 
 Normal status/capability checks for `tapo_local` are intentionally passive:
 HomeSec opens the local `/stream` endpoint only far enough to verify a

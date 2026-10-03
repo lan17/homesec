@@ -40,6 +40,7 @@ from homesec.talk.tapo.config import (
 from homesec.talk.tapo.session import TAPO_LOCAL_CODEC, TapoLocalTalkSession
 
 TAPO_LOCAL_BACKEND = "tapo_local"
+TAPO_LOCAL_DISCOVERY_HINT = "tapo_local_digest_challenge"
 _PREPARED_TAPO_CLIENT_REUSE_TTL_S = 10.0
 _TAPO_UNSUPPORTED_ENDPOINT = "Tapo local endpoint not detected"
 _TAPO_PROTOCOL_FAILED = "Tapo local talk protocol failed"
@@ -220,6 +221,15 @@ def detect_tapo_local(context: TalkBackendContext) -> TalkBackendDetection:
             backend=TAPO_LOCAL_BACKEND,
             confidence="high",
             reason="Tapo camera fingerprint",
+            safe_to_probe=True,
+            requires_credentials=True,
+        )
+
+    if TAPO_LOCAL_DISCOVERY_HINT in context.fingerprint.local_protocol_hints:
+        return TalkBackendDetection(
+            backend=TAPO_LOCAL_BACKEND,
+            confidence="medium",
+            reason="Tapo local endpoint fingerprint",
             safe_to_probe=True,
             requires_credentials=True,
         )
