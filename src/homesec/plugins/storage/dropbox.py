@@ -18,7 +18,7 @@ else:
     dropbox = _dropbox
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homesec.interfaces import StorageBackend
 from homesec.models.storage import StorageUploadResult
@@ -33,10 +33,16 @@ class DropboxStorageConfig(BaseModel):
     """Dropbox storage configuration."""
 
     root: str
-    token_env: str = "DROPBOX_TOKEN"
-    app_key_env: str = "DROPBOX_APP_KEY"
-    app_secret_env: str = "DROPBOX_APP_SECRET"
-    refresh_token_env: str = "DROPBOX_REFRESH_TOKEN"
+    token_env: str = Field(default="DROPBOX_TOKEN", json_schema_extra={"homesec_credential": True})
+    app_key_env: str = Field(
+        default="DROPBOX_APP_KEY", json_schema_extra={"homesec_credential": True}
+    )
+    app_secret_env: str = Field(
+        default="DROPBOX_APP_SECRET", json_schema_extra={"homesec_credential": True}
+    )
+    refresh_token_env: str = Field(
+        default="DROPBOX_REFRESH_TOKEN", json_schema_extra={"homesec_credential": True}
+    )
     web_url_prefix: str = "https://www.dropbox.com/home"
 
 

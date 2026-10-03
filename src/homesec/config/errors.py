@@ -55,3 +55,7 @@ class ConfigSaveError(ConfigMutationError):
 
 class ConfigApplyInProgressError(ConfigMutationError):
     """A process restart has been accepted and configuration writes are frozen."""
+
+
+class CredentialStoreError(ConfigMutationError):
+    """The private managed credential file could not be safely read or written."""

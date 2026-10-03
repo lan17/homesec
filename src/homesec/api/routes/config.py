@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from homesec.api.dependencies import get_homesec_app
 from homesec.api.errors import APIError, APIErrorCode
 from homesec.api.redaction import is_sensitive_key, redact_config, redact_url_credentials
+from homesec.config.credentials import CredentialStatus, credential_status
 from homesec.config.errors import (
     ConfigApplyInProgressError,
     ConfigBackendChangeUnsupportedError,
@@ -18,6 +19,7 @@ from homesec.config.errors import (
     ConfigPatchInvalidError,
     ConfigSaveError,
     ConfigVersionConflictError,
+    CredentialStoreError,
 )
 from homesec.config.loader import ConfigError
 from homesec.config.manager import ConfigPatch
@@ -37,6 +39,8 @@ class ConfigResponse(BaseModel):
     saved_config_version: str
     active_config_version: str | None
     apply_required: Literal["none", "reload", "restart"]
+    credentials: dict[str, CredentialStatus]
+    credentials_editable: bool
 
 
 class ConfigApplyRequestPayload(BaseModel):
@@ -66,18 +70,26 @@ async def get_config(app: Application = Depends(get_homesec_app)) -> ConfigRespo
         config = await asyncio.to_thread(app.config_manager.get_config)
     except ConfigError as exc:
         raise _config_load_error(exc) from exc
-    return _config_response(app, config)
+    return await _config_response(app, config)
 
 
-def _config_response(app: Application, config: Config) -> ConfigResponse:
+async def _config_response(app: Application, config: Config) -> ConfigResponse:
     payload = config.model_dump(mode="json")
     redacted = _redact_config(payload)
     application_status = app.get_config_application_status(config)
+    try:
+        credentials = await asyncio.to_thread(
+            credential_status, app.config_manager.config_path, config
+        )
+    except CredentialStoreError as exc:
+        raise _config_mutation_error(exc) from exc
     return ConfigResponse(
         config=redacted if isinstance(redacted, dict) else {},
         saved_config_version=application_status.saved_config_version,
         active_config_version=application_status.active_config_version,
         apply_required=application_status.apply_required,
+        credentials=credentials,
+        credentials_editable=app.server_config.auth_enabled,
     )
 
 
@@ -91,6 +103,9 @@ def _config_load_error(exc: ConfigError) -> APIError:
 
 def _config_mutation_error(exc: ConfigMutationError) -> APIError:
     match exc:
+        case CredentialStoreError():
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            error_code = APIErrorCode.CONFIG_CREDENTIALS_UNAVAILABLE
         case ConfigApplyInProgressError():
             status_code = status.HTTP_409_CONFLICT
             error_code = APIErrorCode.CONFIG_APPLY_IN_PROGRESS
@@ -124,13 +139,19 @@ async def patch_config(
             status_code=status.HTTP_409_CONFLICT,
             error_code=APIErrorCode.CONFIG_APPLY_IN_PROGRESS,
         )
+    if payload.credentials and not app.server_config.auth_enabled:
+        raise APIError(
+            "Enable API authentication before managing credentials in the UI",
+            status_code=status.HTTP_403_FORBIDDEN,
+            error_code=APIErrorCode.CREDENTIALS_AUTH_REQUIRED,
+        )
     try:
         config = await app.config_manager.patch_config(payload)
     except ConfigMutationError as exc:
         raise _config_mutation_error(exc) from exc
     except ConfigError as exc:
         raise _config_load_error(exc) from exc
-    return _config_response(app, config)
+    return await _config_response(app, config)
 
 
 @router.post("/api/v1/config/apply", response_model=ConfigApplyResponse, status_code=202)

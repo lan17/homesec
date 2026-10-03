@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 
 import type { TestConnectionRequest } from '../../../api/generated/types'
+import type { CredentialFields } from '../CredentialField'
 
 export type NotifierBackend = 'mqtt' | 'sendgrid_email'
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
@@ -48,6 +49,7 @@ export interface NotifierBackendFormProps {
   config: Record<string, unknown>
   onChange: (config: Record<string, unknown>) => void
   idPrefix?: string
+  credentials?: CredentialFields
 }
 
 export interface NotifierBackendDef {

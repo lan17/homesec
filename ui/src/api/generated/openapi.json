@@ -676,6 +676,29 @@
               }
             ]
           },
+          "credentials": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "format": "password",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          },
           "expected_config_version": {
             "minLength": 1,
             "title": "Expected Config Version",
@@ -760,6 +783,17 @@
             "title": "Config",
             "type": "object"
           },
+          "credentials": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CredentialStatus"
+            },
+            "title": "Credentials",
+            "type": "object"
+          },
+          "credentials_editable": {
+            "title": "Credentials Editable",
+            "type": "boolean"
+          },
           "saved_config_version": {
             "title": "Saved Config Version",
             "type": "string"
@@ -769,9 +803,34 @@
           "config",
           "saved_config_version",
           "active_config_version",
-          "apply_required"
+          "apply_required",
+          "credentials",
+          "credentials_editable"
         ],
         "title": "ConfigResponse",
+        "type": "object"
+      },
+      "CredentialStatus": {
+        "description": "Credential availability without disclosing a stored value.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "source": {
+            "enum": [
+              "managed",
+              "environment"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "source"
+        ],
+        "title": "CredentialStatus",
         "type": "object"
       },
       "DeviceInfoResponse": {

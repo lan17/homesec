@@ -841,6 +841,10 @@ export interface components {
          */
         ConfigPatch: {
             alert_policy?: components["schemas"]["AlertPolicyConfigPatch"] | null;
+            /** Credentials */
+            credentials?: {
+                [key: string]: string | null;
+            } | null;
             /** Expected Config Version */
             expected_config_version: string;
             filter?: components["schemas"]["PluginConfigPatch"] | null;
@@ -865,8 +869,27 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** Credentials */
+            credentials: {
+                [key: string]: components["schemas"]["CredentialStatus"];
+            };
+            /** Credentials Editable */
+            credentials_editable: boolean;
             /** Saved Config Version */
             saved_config_version: string;
+        };
+        /**
+         * CredentialStatus
+         * @description Credential availability without disclosing a stored value.
+         */
+        CredentialStatus: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "managed" | "environment";
         };
         /** DeviceInfoResponse */
         DeviceInfoResponse: {

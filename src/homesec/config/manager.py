@@ -11,8 +11,14 @@ from pathlib import Path
 from typing import cast
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
 
+from homesec.config.credentials import (
+    credential_references,
+    is_managed_reference,
+    new_managed_reference,
+    save_managed_credentials,
+)
 from homesec.config.errors import (
     CameraAlreadyExistsError,
     CameraConfigInvalidError,
@@ -104,6 +110,7 @@ class ConfigPatch(_ConfigPatchModel):
     vlm: VLMConfigPatch | None = None
     alert_policy: AlertPolicyConfigPatch | None = None
     notifiers: list[NotifierConfigPatch] | None = None
+    credentials: dict[str, SecretStr | None] | None = None
 
 
 class ConfigManager:
@@ -309,7 +316,9 @@ class ConfigManager:
     async def patch_config(self, patch: ConfigPatch) -> Config:
         """Validate and persist a partial edit without applying it to the runtime."""
         async with self.config_snapshot(patch.expected_config_version) as config:
-            patch_payload = patch.model_dump(mode="json", exclude_unset=True)
+            patch_payload = patch.model_dump(
+                mode="json", exclude_unset=True, exclude={"credentials"}
+            )
             if self._contains_redacted_placeholder(patch_payload):
                 raise ConfigPatchInvalidError(
                     "Patch contains redacted placeholders; omit unchanged secret fields"
@@ -340,6 +349,30 @@ class ConfigManager:
                 entry_patch.pop("index")
                 payload["notifiers"][index] = self._merge_config(current_notifier, entry_patch)
 
+            current_references = credential_references(config)
+            additions: dict[str, str] = {}
+            generated_references: set[str] = set()
+            for path, value in (patch.credentials or {}).items():
+                if path not in current_references:
+                    raise ConfigPatchInvalidError(
+                        "Credential path is not supported by this configuration"
+                    )
+                if value is not None and not value.get_secret_value():
+                    raise ConfigPatchInvalidError(
+                        "Credential values must not be empty; use null to clear"
+                    )
+                if value is not None and self._contains_redacted_placeholder(
+                    value.get_secret_value()
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Credential values must not contain redacted placeholders"
+                    )
+                reference = new_managed_reference()
+                generated_references.add(reference)
+                if value is not None:
+                    additions[reference] = value.get_secret_value()
+                self._set_credential_reference(payload, path, reference)
+
             try:
                 validated = await asyncio.to_thread(load_config_from_dict, payload)
             except ConfigError as exc:
@@ -347,6 +380,21 @@ class ConfigManager:
                     "Configuration patch failed validation; check the submitted settings",
                     cause=exc,
                 ) from exc
+            for path, candidate_reference in credential_references(validated).items():
+                if (
+                    is_managed_reference(candidate_reference)
+                    and candidate_reference != current_references.get(path)
+                    and candidate_reference not in generated_references
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Managed credential references can only be changed through credential edits"
+                    )
+            if self._mutations_frozen:
+                raise ConfigApplyInProgressError(
+                    "HomeSec is restarting; retry saving after it restarts"
+                )
+            if patch.credentials:
+                await asyncio.to_thread(save_managed_credentials, self._config_path, additions)
             try:
                 await self._save_config(validated)
             except OSError as exc:
@@ -355,6 +403,28 @@ class ConfigManager:
                     cause=exc,
                 ) from exc
             return validated
+
+    @staticmethod
+    def _set_credential_reference(payload: dict[str, object], path: str, reference: str) -> None:
+        """Write an already-allowlisted dotted path, creating optional nested auth objects."""
+        parts = path.split(".")
+        current: object = payload
+        for part in parts[:-1]:
+            if isinstance(current, list):
+                current = current[int(part)]
+            elif isinstance(current, dict):
+                child = current.get(part)
+                if child is None:
+                    child = {}
+                    current[part] = child
+                current = child
+            else:
+                raise ConfigPatchInvalidError(
+                    "Credential path is not supported by this configuration"
+                )
+        if not isinstance(current, dict):
+            raise ConfigPatchInvalidError("Credential path is not supported by this configuration")
+        current[parts[-1]] = reference
 
     async def _validate_config(self, config: Config) -> Config:
         """Validate configuration via the standard loader path."""

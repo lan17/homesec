@@ -101,4 +101,47 @@ describe('notification settings page', () => {
     await user.click(screen.getByRole('button', { name: 'Discard unsaved changes' }))
     expect((screen.getAllByLabelText('MQTT host')[1] as HTMLInputElement).value).toBe('remote-change')
   })
+
+  it('targets credentials by notifier index and preserves unrelated duplicate destinations', async () => {
+    // Given: Two MQTT instances have separately configured passwords
+    const saved = { ...snapshot(), credentials_editable: true, credentials: {
+      'notifiers.0.config.auth.password_env': { configured: true, source: 'environment' },
+      'notifiers.1.config.auth.password_env': { configured: true, source: 'environment' },
+    } }
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(saved))
+    const user = userEvent.setup()
+    renderPage()
+    const replace = await screen.findAllByRole('button', { name: 'Replace MQTT password' })
+    // When: Replacing only the second instance's password
+    await user.click(replace[1])
+    await user.type(screen.getByLabelText('Replace MQTT password'), 'second-private-password')
+    expect(screen.getAllByRole('button', { name: 'Check connection' })).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'Save notification settings' }))
+    // Then: Only its credential slot is submitted and no notifier configuration or first password is rewritten
+    await waitFor(() => expect(fetch.mock.calls.some(([, request]) => request?.method === 'PATCH')).toBe(true))
+    const patch = fetch.mock.calls.find(([, request]) => request?.method === 'PATCH')?.[1]?.body
+    expect(JSON.parse(String(patch))).toEqual({ expected_config_version: 'version-one',
+      credentials: { 'notifiers.1.config.auth.password_env': 'second-private-password' } })
+  })
+
+  it('saves an email API key without testing or sending a sample notification', async () => {
+    // Given: A saved email integration has no configured API key
+    const saved = { ...snapshot(), credentials_editable: true,
+      credentials: { 'notifiers.0.config.api_key_env': { configured: false, source: 'environment' } },
+      config: { ...snapshot().config, notifiers: [{ backend: 'sendgrid_email', enabled: true,
+        config: { from_email: 'alerts@test.local', to_emails: ['owner@test.local'], api_key_env: 'SENDGRID_API_KEY' } }] } }
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(saved))
+    const user = userEvent.setup()
+    renderPage()
+    // When: Entering the email API key and saving
+    await user.type(await screen.findByLabelText('SendGrid API key'), 'private-email-key')
+    expect(screen.queryByRole('button', { name: 'Check connection' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Save notification settings' }))
+    // Then: The key is written only to the credential slot; connectivity and sending remain separate
+    await waitFor(() => expect(fetch.mock.calls.some(([, request]) => request?.method === 'PATCH')).toBe(true))
+    const patch = fetch.mock.calls.find(([, request]) => request?.method === 'PATCH')?.[1]?.body
+    expect(JSON.parse(String(patch))).toEqual({ expected_config_version: 'version-one',
+      credentials: { 'notifiers.0.config.api_key_env': 'private-email-key' } })
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/setup/test-connection'))).toBe(false)
+  })
 })

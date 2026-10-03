@@ -1,13 +1,15 @@
 import { STORAGE_BACKENDS, STORAGE_BACKEND_ORDER } from './backends'
 import type { StorageBackend, StorageFormState } from './types'
+import type { CredentialFields } from '../CredentialField'
 
 interface StorageConfigFormProps {
   value: StorageFormState
   onChange: (value: StorageFormState) => void
   allowBackendChange?: boolean
+  credentials?: CredentialFields
 }
 
-export function StorageConfigForm({ value, onChange, allowBackendChange = true }: StorageConfigFormProps) {
+export function StorageConfigForm({ value, onChange, allowBackendChange = true, credentials }: StorageConfigFormProps) {
   const backendDef = STORAGE_BACKENDS[value.backend]
   const BackendComponent = backendDef.component
 
@@ -56,6 +58,7 @@ export function StorageConfigForm({ value, onChange, allowBackendChange = true }
 
       <BackendComponent
         config={value.config}
+        credentials={credentials}
         onChange={(nextConfig) => {
           onChange({
             ...value,

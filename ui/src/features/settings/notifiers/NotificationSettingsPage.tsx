@@ -7,6 +7,8 @@ import { Card } from '../../../components/ui/Card'
 import { TestConnectionButton } from '../../shared/TestConnectionButton'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { ConfigApplyPanel } from '../ConfigApplyPanel'
+import type { CredentialDraft, CredentialFields } from '../CredentialField'
+import { credentialsBlockProbe, updateCredentialDraft } from '../credentialEditing'
 import { AlertPolicyForm } from '../alerts/AlertPolicyForm'
 import { useConfigSettings } from '../useConfigSettings'
 import { NOTIFIER_BACKENDS } from './backends'
@@ -28,6 +30,7 @@ interface NotificationDraft {
 export function NotificationSettingsPage() {
   const settings = useConfigSettings()
   const [draft, setDraft] = useState<NotificationDraft | null>(null)
+  const [credentialDraft, setCredentialDraft] = useState<CredentialDraft>({})
   const [formMessage, setFormMessage] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [connectionResults, setConnectionResults] = useState<Record<number, TestConnectionResponse | null>>({})
@@ -83,9 +86,10 @@ export function NotificationSettingsPage() {
       return
     }
     setFormError(null)
-    let patch: Pick<ConfigPatch, 'notifiers' | 'alert_policy'>
+    let patch: Pick<ConfigPatch, 'notifiers' | 'alert_policy' | 'credentials'>
     try {
       patch = buildNotificationPatch(draft.original, draft.edited)
+      if (Object.keys(credentialDraft).length > 0) { patch.credentials = credentialDraft }
     } catch (error) {
       setFormError(describeUnknownError(error))
       return
@@ -97,6 +101,7 @@ export function NotificationSettingsPage() {
     try {
       await settings.saveConfig({ ...patch, expected_config_version: draft.version })
       setDraft(null)
+      setCredentialDraft({})
       setConnectionResults({})
       setFormMessage('Notification settings saved.')
     } catch {
@@ -124,6 +129,16 @@ export function NotificationSettingsPage() {
           {value.notifiers.map((entry) => {
             const backend = isEditableNotifier(entry.backend) ? NOTIFIER_BACKENDS[entry.backend] : null
             const BackendForm = backend?.component
+            const snapshot = settings.configQuery.data
+            const credentials: CredentialFields = {
+              prefix: `notifiers.${entry.index}.config`, statuses: snapshot?.credentials ?? {}, editable: snapshot?.credentials_editable ?? false,
+              draft: credentialDraft,
+              onChange: (path, next) => {
+                updateValue(value)
+                setCredentialDraft((previous) => updateCredentialDraft(previous, path, next))
+                setConnectionResults((previous) => ({ ...previous, [entry.index]: null }))
+              },
+            }
             return (
               <Card key={entry.index} title={`${backend?.label ?? entry.backend} · notifier ${entry.index + 1}`}>
                 {BackendForm ? (
@@ -135,13 +150,15 @@ export function NotificationSettingsPage() {
                     </label>
                     {entry.enabled ? (
                       <>
-                        <BackendForm config={entry.config} idPrefix={`notifier-${entry.index}`}
+                        <BackendForm config={entry.config} idPrefix={`notifier-${entry.index}`} credentials={credentials}
                           onChange={(config) => { updateNotifier(entry.index, { config }) }} />
-                        <TestConnectionButton request={{ type: 'notifier', backend: entry.backend, config: entry.config }}
+                        {credentialsBlockProbe(credentials, snapshot?.apply_required ?? 'none')
+                          ? <p className="subtle">Save and apply credential changes before checking this connection.</p>
+                          : <TestConnectionButton request={{ type: 'notifier', backend: entry.backend, config: entry.config }}
                           result={connectionResults[entry.index] ?? null}
                           onResult={(result) => { setConnectionResults((previous) => ({ ...previous, [entry.index]: result })) }}
                           idleLabel="Check connection" retryLabel="Check connection again" pendingLabel="Checking connection…"
-                          description="Check connectivity using these settings. This does not send a sample alert." />
+                          description="Check connectivity using these settings. This does not send a sample alert." />}
                       </>
                     ) : null}
                   </fieldset>
@@ -165,6 +182,7 @@ export function NotificationSettingsPage() {
             {draft ? (
               <Button variant="ghost" disabled={busy} onClick={() => {
                 setDraft(null)
+                setCredentialDraft({})
                 setConnectionResults({})
                 setFormError(null)
                 setFormMessage(null)

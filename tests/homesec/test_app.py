@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from homesec.app import Application
+from homesec.config.credentials import credential_references
 from homesec.config.errors import ConfigVersionConflictError
 from homesec.config.loader import ConfigError, ConfigErrorCode, config_signature
 from homesec.config.manager import (
@@ -286,6 +288,7 @@ def _make_config(notifiers: list[object]) -> Config:
 def _mock_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> _StubRuntimeController:
     """Mock runtime environment and return controller stub."""
     # Given: Runtime dependencies mocked for deterministic tests
+    discover_all_plugins()
     controller = _StubRuntimeController()
     _StubPostgresBackupManager.instances.clear()
     _RecordingEventStore.instances.clear()
@@ -878,7 +881,9 @@ def test_repository_and_storage_accessors_require_initialization() -> None:
         _ = app.storage
 
 
-async def _start_settings_app(tmp_path: Path) -> Application:
+async def _start_settings_app(
+    tmp_path: Path, *, credentials: dict[str, SecretStr | None] | None = None
+) -> Application:
     discover_all_plugins()
     config = _make_config([])
     for section in (config.storage, config.filter, config.vlm, config.cameras[0].source):
@@ -887,9 +892,184 @@ async def _start_settings_app(tmp_path: Path) -> Application:
     config.server = FastAPIServerConfig(enabled=False)
     app = Application(config_path=tmp_path / "config.yaml")
     await app.config_manager.replace_config(config)
+    if credentials:
+        await app.config_manager.patch_config(
+            ConfigPatch(expected_config_version=config_signature(config), credentials=credentials)
+        )
     app._config = app.config_manager.get_config()
     await app._create_components()
     return app
+
+
+@pytest.mark.asyncio
+async def test_managed_ai_credential_rotation_waits_for_process_restart(
+    tmp_path: Path,
+    _mock_runtime_environment: _StubRuntimeController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: An active AI credential loaded into an isolated process environment
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    app = await _start_settings_app(
+        tmp_path, credentials={"vlm.config.api_key_env": SecretStr("old-test-key")}
+    )
+    active_reference = credential_references(app.config)["vlm.config.api_key_env"]
+    assert active_reference is not None
+    active_version = app.get_runtime_status().active_config_version
+    try:
+        # When: Saving a replacement key, then trying an ordinary camera/worker reload
+        saved = await app.config_manager.patch_config(
+            ConfigPatch(
+                expected_config_version=config_signature(app.config),
+                credentials={"vlm.config.api_key_env": SecretStr("new-test-key")},
+            )
+        )
+        saved_reference = credential_references(saved)["vlm.config.api_key_env"]
+        assert saved_reference is not None
+        with pytest.raises(RuntimeReloadConfigError) as error:
+            await app.request_runtime_reload()
+
+        # Then: Save keeps the active environment unchanged and refuses partial activation
+        pending = app.get_config_application_status(saved)
+        assert pending.apply_required == "restart"
+        assert error.value.error_code == "CONFIG_RESTART_REQUIRED"
+        assert os.getenv(active_reference) == "old-test-key"
+        assert os.getenv(saved_reference) is None
+        assert pending.active_config_version == active_version
+        assert app.get_runtime_status().generation == 1
+
+        # When: Applying the saved revision
+        request = await app.request_config_apply(pending.saved_config_version)
+
+        # Then: A full restart is requested before either provider can receive the new key
+        assert request.action == "restart"
+        assert app.restart_requested is True
+        assert os.getenv(saved_reference) is None
+    finally:
+        await app.shutdown()
+
+    # When: The supervisor creates a new process from the saved configuration
+    replacement = Application(config_path=tmp_path / "config.yaml")
+    replacement._config = replacement.config_manager.get_config()
+    await replacement._create_components()
+    try:
+        # Then: The new key is active and the old reserved reference is no longer installed
+        assert os.getenv(saved_reference) == "new-test-key"
+        assert os.getenv(active_reference) is None
+        assert (
+            replacement.get_config_application_status(replacement.config).apply_required == "none"
+        )
+        assert (
+            replacement.get_runtime_status().active_config_version == pending.saved_config_version
+        )
+    finally:
+        await replacement.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_startup_credentials_are_shared_by_parent_and_worker_without_host_env_changes(
+    tmp_path: Path,
+    _mock_runtime_environment: _StubRuntimeController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: Host credentials and provider boundaries that capture their startup environment
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    monkeypatch.setenv("OPENAI_API_KEY", "host-ai-key")
+    monkeypatch.setenv("DROPBOX_TOKEN", "host-dropbox-token")
+    observations: list[tuple[str, str | None, str | None]] = []
+
+    def observe_environment(stage: str, config: Config) -> None:
+        refs = credential_references(config)
+        storage_reference = refs["storage.config.token_env"]
+        ai_reference = refs["vlm.config.api_key_env"]
+        observations.append(
+            (
+                stage,
+                os.getenv(storage_reference) if storage_reference else None,
+                os.getenv(ai_reference) if ai_reference else None,
+            )
+        )
+
+    def storage_factory(config: object) -> _StubStorage:
+        validated = cast(StorageConfig, config)
+        provider = DropboxStorageConfig.model_validate(validated.config)
+        observations.append(("parent", os.getenv(provider.token_env or ""), None))
+        return _StubStorage(config)
+
+    start_runtime = _mock_runtime_environment.start_runtime
+
+    async def worker_start(runtime: SubprocessRuntimeHandle) -> None:
+        observe_environment("worker", runtime.config)
+        await start_runtime(runtime)
+
+    monkeypatch.setattr("homesec.runtime.bootstrap.load_storage_plugin", storage_factory)
+    monkeypatch.setattr(_mock_runtime_environment, "start_runtime", worker_start)
+
+    # When: Starting parent components and worker from saved UI-managed secrets
+    app = await _start_settings_app(
+        tmp_path,
+        credentials={
+            "storage.config.token_env": SecretStr("managed-dropbox-token"),
+            "vlm.config.api_key_env": SecretStr("managed-ai-key"),
+        },
+    )
+    try:
+        # Then: Both boundaries see the same snapshot and unrelated host values are preserved
+        assert observations == [
+            ("parent", "managed-dropbox-token", None),
+            ("worker", "managed-dropbox-token", "managed-ai-key"),
+        ]
+        assert os.getenv("OPENAI_API_KEY") == "host-ai-key"
+        assert os.getenv("DROPBOX_TOKEN") == "host-dropbox-token"
+    finally:
+        await app.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_managed_credential_clear_unsets_key_after_restart(
+    tmp_path: Path,
+    _mock_runtime_environment: _StubRuntimeController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: A managed key alongside a host key that must not become an implicit fallback
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    monkeypatch.setenv("OPENAI_API_KEY", "host-fallback-key")
+    app = await _start_settings_app(
+        tmp_path, credentials={"vlm.config.api_key_env": SecretStr("managed-test-key")}
+    )
+    original_reference = credential_references(app.config)["vlm.config.api_key_env"]
+    assert original_reference is not None
+    try:
+        # When: Saving an explicit clear and requesting Apply
+        saved = await app.config_manager.patch_config(
+            ConfigPatch(
+                expected_config_version=config_signature(app.config),
+                credentials={"vlm.config.api_key_env": None},
+            )
+        )
+        cleared_reference = credential_references(saved)["vlm.config.api_key_env"]
+        assert cleared_reference is not None
+        request = await app.request_config_apply(config_signature(saved))
+
+        # Then: The active key stays available until the requested process restart
+        assert request.action == "restart"
+        assert os.getenv(original_reference) == "managed-test-key"
+    finally:
+        await app.shutdown()
+
+    # When: The replacement process loads the cleared reference
+    replacement = Application(config_path=tmp_path / "config.yaml")
+    replacement._config = replacement.config_manager.get_config()
+    await replacement._create_components()
+    try:
+        # Then: Neither the old key nor the cleared key is installed, without host fallback
+        assert os.getenv(original_reference) is None
+        assert os.getenv(cleared_reference) == ""
+        assert os.getenv("OPENAI_API_KEY") == "host-fallback-key"
+        assert (
+            replacement.get_config_application_status(replacement.config).apply_required == "none"
+        )
+    finally:
+        await replacement.shutdown()
 
 
 @pytest.mark.asyncio

@@ -87,4 +87,31 @@ describe('detection settings page', () => {
     expect(slider.getAttribute('min')).toBe('0')
     expect(screen.queryByRole('option', { name: 'car' })).toBeNull()
   })
+
+  it('saves an AI key separately from model settings and blocks readiness checks until Apply', async () => {
+    // Given: The existing OpenAI-compatible analyzer has a configured environment credential
+    const saved = { ...snapshot(), credentials_editable: true,
+      credentials: { 'vlm.config.api_key_env': { configured: true, source: 'environment' } } }
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, request) => request?.method === 'PATCH'
+      ? response({ ...saved, saved_config_version: 'saved-two', apply_required: 'restart',
+        credentials: { 'vlm.config.api_key_env': { configured: true, source: 'managed' } } }) : response(saved))
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Replace AI API key' }))
+    // When: Entering a replacement API key, changing the model, and saving
+    await user.type(screen.getByLabelText('Replace AI API key'), 'private-ai-key')
+    const model = screen.getByLabelText('Model')
+    await user.clear(model)
+    await user.type(model, 'new-model')
+    expect(screen.queryByRole('button', { name: 'Check AI readiness' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Save detection settings' }))
+    // Then: The credential uses its write-only patch slot, advanced analyzer settings remain untouched, and restart is explicit
+    await screen.findByRole('button', { name: 'Apply and restart' })
+    const patch = fetch.mock.calls.find(([, request]) => request?.method === 'PATCH')?.[1]?.body
+    expect(JSON.parse(String(patch))).toEqual({ expected_config_version: 'saved-one',
+      vlm: { config: { model: 'new-model' } }, credentials: { 'vlm.config.api_key_env': 'private-ai-key' } })
+    expect((screen.getByLabelText('Replace AI API key') as HTMLInputElement).value).toBe('')
+    expect(screen.queryByRole('button', { name: 'Check AI readiness' })).toBeNull()
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/setup/test-connection'))).toBe(false)
+  })
 })

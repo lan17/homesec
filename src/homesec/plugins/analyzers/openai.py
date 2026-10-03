@@ -27,7 +27,7 @@ else:
     cv2 = _cv2
     Image = _Image
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homesec.interfaces import VLMAnalyzer
 from homesec.models.filter import FilterResult
@@ -59,7 +59,7 @@ class OpenAIConfig(BaseModel):
     """OpenAI-compatible LLM configuration."""
 
     model_config = {"extra": "forbid"}
-    api_key_env: str
+    api_key_env: str = Field(json_schema_extra={"homesec_credential": True})
     model: str
     base_url: str = "https://api.openai.com/v1"
     token_param: Literal["max_tokens", "max_completion_tokens"] = "max_completion_tokens"

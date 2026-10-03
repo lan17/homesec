@@ -17,7 +17,7 @@ except Exception:
 else:
     mqtt = _mqtt
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homesec.interfaces import Notifier
 from homesec.models.alert import Alert
@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 class MQTTAuthConfig(BaseModel):
     """MQTT auth configuration using env var names."""
 
-    username_env: str | None = None
-    password_env: str | None = None
+    username_env: str | None = Field(default=None, json_schema_extra={"homesec_credential": True})
+    password_env: str | None = Field(default=None, json_schema_extra={"homesec_credential": True})
 
 
 class MQTTConfig(BaseModel):

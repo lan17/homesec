@@ -5,6 +5,7 @@ import { APIError, HomeSecApiClient } from './client'
 const configPayload = {
   config: { storage: { backend: 'local', config: { root: './storage' } } },
   saved_config_version: 'saved', active_config_version: 'active', apply_required: 'restart',
+  credentials: {}, credentials_editable: true,
 }
 
 function response(payload: unknown, status = 200): Response {
@@ -77,6 +78,31 @@ describe('configuration client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/v1/config/apply', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ expected_config_version: 'saved' }),
     }))
+  })
+
+  it('parses credential presence without retaining extra credential response fields', async () => {
+    // Given: A response includes configured state and an unsupported value field
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response({ ...configPayload,
+      credentials: { 'vlm.config.api_key_env': { configured: true, source: 'managed', value: 'never-retain-this' } } }))
+    // When: Reading the saved configuration
+    const result = await new HomeSecApiClient().getConfig()
+    // Then: Only status metadata reaches the editor/query cache
+    expect(result.credentials).toEqual({ 'vlm.config.api_key_env': { configured: true, source: 'managed' } })
+    expect(JSON.stringify(result)).not.toContain('never-retain-this')
+  })
+
+  it.each([
+    { credentials: [] },
+    { credentials: { 'vlm.config.api_key_env': { configured: 'yes', source: 'managed' } } },
+    { credentials: { 'vlm.config.api_key_env': { configured: true, source: 'plaintext' } } },
+    { credentials_editable: 'yes' },
+  ])('rejects invalid credential response metadata %#', async (fields) => {
+    // Given: Credential metadata has an invalid shape
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response({ ...configPayload, ...fields }))
+    // When: Reading the settings response
+    const result = new HomeSecApiClient().getConfig()
+    // Then: Malformed metadata cannot enable secret controls or enter cache
+    await expect(result).rejects.toBeInstanceOf(APIError)
   })
 
   it.each([-1, 1.5, '2', undefined])('rejects invalid application generation %s', async (generation) => {

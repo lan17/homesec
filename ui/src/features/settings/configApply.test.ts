@@ -4,7 +4,7 @@ import { apiClient, type ConfigApplySnapshot, type ConfigSnapshot } from '../../
 import { waitForConfigApply } from './configApply'
 
 const saved: ConfigSnapshot = { config: {}, saved_config_version: 'target', active_config_version: 'target',
-  apply_required: 'none', httpStatus: 200 }
+  apply_required: 'none', credentials: {}, credentials_editable: true, httpStatus: 200 }
 const response: ConfigApplySnapshot = { accepted: true, action: 'restart', message: 'Accepted',
   target_config_version: 'target', target_generation: null, httpStatus: 202 }
 

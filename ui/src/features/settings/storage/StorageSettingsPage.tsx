@@ -7,6 +7,8 @@ import { Card } from '../../../components/ui/Card'
 import { TestConnectionButton } from '../../shared/TestConnectionButton'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { ConfigApplyPanel } from '../ConfigApplyPanel'
+import type { CredentialDraft, CredentialFields } from '../CredentialField'
+import { credentialsBlockProbe, updateCredentialDraft } from '../credentialEditing'
 import { useConfigSettings } from '../useConfigSettings'
 import { buildStorageSettingsPatch, storageSettingsDraft, type StorageSettingsDraft } from './editing'
 import { StorageConfigForm } from './StorageConfigForm'
@@ -21,6 +23,7 @@ const PATH_FIELDS = [
 export function StorageSettingsPage() {
   const settings = useConfigSettings()
   const [draft, setDraft] = useState<StorageSettingsDraft | null>(null)
+  const [credentialDraft, setCredentialDraft] = useState<CredentialDraft>({})
   const [validationError, setValidationError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null)
   const config = settings.configQuery.data
@@ -36,9 +39,21 @@ export function StorageSettingsPage() {
   const busy = settings.savePending || settings.applyPending
   const changed = current !== null
     && (JSON.stringify(current.value) !== JSON.stringify(current.original)
-      || JSON.stringify(current.paths) !== JSON.stringify(current.originalPaths))
+      || JSON.stringify(current.paths) !== JSON.stringify(current.originalPaths)
+      || Object.keys(credentialDraft).length > 0)
   const hasRedactedConfig = current !== null
     && JSON.stringify(current.value.config).includes('***redacted***')
+  const credentials: CredentialFields = {
+    prefix: 'storage.config', statuses: config?.credentials ?? {}, editable: config?.credentials_editable ?? false,
+    draft: credentialDraft,
+    onChange: (path, value) => {
+      if (current) { setDraft(current) }
+      setCredentialDraft((previous) => updateCredentialDraft(previous, path, value))
+      setTestResult(null)
+      setValidationError(null)
+    },
+  }
+  const credentialProbeBlocked = credentialsBlockProbe(credentials, config?.apply_required ?? 'none')
 
   async function save(): Promise<void> {
     if (!current) {
@@ -48,6 +63,8 @@ export function StorageSettingsPage() {
     let patch: ConfigPatch
     try {
       patch = buildStorageSettingsPatch(current)
+      if (patch.storage && Object.keys(patch.storage).length === 0) { delete patch.storage }
+      if (Object.keys(credentialDraft).length > 0) { patch.credentials = credentialDraft }
     } catch (error) {
       setValidationError(describeUnknownError(error))
       return
@@ -55,6 +72,7 @@ export function StorageSettingsPage() {
     try {
       await settings.saveConfig(patch)
       setDraft(null)
+      setCredentialDraft({})
       setTestResult(null)
     } catch {
       // The shared activation panel displays save errors; retain this draft.
@@ -79,7 +97,7 @@ export function StorageSettingsPage() {
       ) : null}
       {current ? <Card title="Storage configuration">
         <fieldset disabled={busy} className="inline-form">
-          <StorageConfigForm value={current.value} allowBackendChange={false}
+          <StorageConfigForm value={current.value} allowBackendChange={false} credentials={credentials}
             onChange={(value) => {
               if (current) { setDraft({ ...current, value }) }
               setTestResult(null)
@@ -99,7 +117,7 @@ export function StorageSettingsPage() {
               </label>
             ))}
           </details>
-          {hasRedactedConfig ? (
+          {credentialProbeBlocked ? <p className="subtle">Save and apply credential changes before checking the storage connection.</p> : hasRedactedConfig ? (
             <p className="subtle">Stored credentials are preserved when saving. Connectivity checks are unavailable while the configuration contains redacted values.</p>
           ) : <TestConnectionButton request={buildStorageTestRequest(current.value)}
             result={testResult} onResult={setTestResult} idleLabel="Check storage connection"
@@ -109,7 +127,7 @@ export function StorageSettingsPage() {
               {settings.savePending ? 'Saving…' : 'Save storage settings'}
             </Button>
             <Button variant="ghost" disabled={!draft || busy} onClick={() => {
-              setDraft(null); setValidationError(null); setTestResult(null)
+              setDraft(null); setCredentialDraft({}); setValidationError(null); setTestResult(null)
             }}>Discard draft</Button>
           </div>
         </fieldset>

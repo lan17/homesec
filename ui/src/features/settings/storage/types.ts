@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 
 import type { TestConnectionRequest } from '../../../api/generated/types'
+import type { CredentialFields } from '../CredentialField'
 
 export type StorageBackend = 'local' | 'dropbox'
 
@@ -12,6 +13,7 @@ export interface StorageFormState {
 export interface StorageBackendFormProps {
   config: Record<string, unknown>
   onChange: (config: Record<string, unknown>) => void
+  credentials?: CredentialFields
 }
 
 export interface StorageBackendDef {

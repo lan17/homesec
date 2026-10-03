@@ -5,7 +5,7 @@ import { buildStorageSettingsPatch, storageSettingsDraft } from './editing'
 
 function config(storage: Record<string, unknown>): ConfigSnapshot {
   return { config: { storage }, saved_config_version: 'original', active_config_version: 'original',
-    apply_required: 'none', httpStatus: 200 }
+    apply_required: 'none', credentials: {}, credentials_editable: true, httpStatus: 200 }
 }
 
 describe('storage settings patches', () => {

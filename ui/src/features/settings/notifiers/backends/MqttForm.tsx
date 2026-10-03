@@ -1,7 +1,8 @@
 import type { NotifierBackendFormProps } from '../types'
 import { readNumber, readString } from './configReaders'
+import { CredentialField } from '../../CredentialField'
 
-export function MqttForm({ config, onChange, idPrefix = 'setup-notifier-mqtt' }: NotifierBackendFormProps) {
+export function MqttForm({ config, onChange, idPrefix = 'setup-notifier-mqtt', credentials }: NotifierBackendFormProps) {
   const host = readString(config, 'host', 'localhost')
   const port = readNumber(config, 'port', 1883)
   const topicTemplate = readString(
@@ -77,7 +78,16 @@ export function MqttForm({ config, onChange, idPrefix = 'setup-notifier-mqtt' }:
         />
       </label>
 
-      <label className="field-label" htmlFor={`${idPrefix}-username-env`}>
+      {credentials ? (
+        <>
+          <CredentialField id={`${idPrefix}-username`} label="MQTT username" envKey="auth.username_env"
+            envValue={usernameEnv} credentials={credentials}
+            onEnvChange={(value) => { onChange({ ...config, auth: { ...auth, username_env: value } }) }} />
+          <CredentialField id={`${idPrefix}-password`} label="MQTT password" envKey="auth.password_env"
+            envValue={passwordEnv} credentials={credentials}
+            onEnvChange={(value) => { onChange({ ...config, auth: { ...auth, password_env: value } }) }} />
+        </>
+      ) : <><label className="field-label" htmlFor={`${idPrefix}-username-env`}>
         Username env var (optional)
         <input
           id={`${idPrefix}-username-env`}
@@ -114,6 +124,7 @@ export function MqttForm({ config, onChange, idPrefix = 'setup-notifier-mqtt' }:
           }}
         />
       </label>
+      </>}
     </div>
   )
 }

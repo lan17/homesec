@@ -229,11 +229,28 @@ export function parseConfigResponse(payload: unknown): ConfigResponse {
       || payload.active_config_version === undefined) {
     throw new Error('Configuration version fields are required')
   }
+  const credentials: ConfigResponse['credentials'] = {}
+  const rawCredentials = payload.credentials ?? {}
+  if (!isJsonObject(rawCredentials) || Array.isArray(rawCredentials)) {
+    throw new Error('credentials must be an object')
+  }
+  for (const [path, rawStatus] of Object.entries(rawCredentials)) {
+    if (!isJsonObject(rawStatus) || Array.isArray(rawStatus)
+        || (rawStatus.source !== 'managed' && rawStatus.source !== 'environment')) {
+      throw new Error('Invalid credential status')
+    }
+    credentials[path] = {
+      configured: expectBoolean(rawStatus.configured, 'credentials.configured'), source: rawStatus.source,
+    }
+  }
   return {
     config: payload.config,
     saved_config_version: expectString(payload.saved_config_version, 'saved_config_version'),
     active_config_version: expectNullableString(payload.active_config_version, 'active_config_version'),
     apply_required: parseConfigAction(payload.apply_required),
+    credentials,
+    credentials_editable: payload.credentials_editable === undefined ? false
+      : expectBoolean(payload.credentials_editable, 'credentials_editable'),
   }
 }
 

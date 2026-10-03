@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import time
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ from typing import TYPE_CHECKING, Literal
 
 from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
+from homesec.config.credentials import (
+    is_managed_reference,
+    load_managed_credentials,
+    managed_credential_references,
+)
 from homesec.config.loader import ConfigError, ConfigErrorCode, config_signature
 from homesec.config.manager import ConfigManager
 from homesec.maintenance.postgres_backup import PostgresBackupManager
@@ -204,6 +210,19 @@ class Application:
         # Validate config references and plugin names before instantiating components
         self._validate_config(config)
 
+        # Providers and subprocess workers share the same startup credential snapshot.
+        # Saves never change this environment; credential changes require a process restart.
+        credentials = load_managed_credentials(self._config_path, config)
+        for reference in list(os.environ):
+            if is_managed_reference(reference):
+                del os.environ[reference]
+        os.environ.update(
+            {
+                reference: credentials.get(reference, "")
+                for reference in managed_credential_references(config)
+            }
+        )
+
         # Build components locally first so partial failures do not leak mutable app state.
         persistence = await self._build_runtime_persistence_stack(config)
         runtime_manager = RuntimeManager(
@@ -373,9 +392,11 @@ class Application:
         return self._require_runtime_manager().request_reload(config)
 
     def _requires_process_restart(self, config: Config) -> bool:
-        """Parent-owned services are rebuilt only on a full process restart."""
+        """Parent-owned services and credentials change only on a process restart."""
         parent_config = self._parent_config
         if parent_config is None:
+            return True
+        if managed_credential_references(config) != managed_credential_references(parent_config):
             return True
         sections = {"storage", "state_store", "maintenance", "server"}
         return config.model_dump(mode="json", include=sections) != parent_config.model_dump(
@@ -385,7 +406,7 @@ class Application:
     def _require_worker_reload_compatible(self, config: Config) -> None:
         if self._requires_process_restart(config):
             raise RuntimeReloadConfigError(
-                "Saved storage, database, maintenance, or server settings require a process "
+                "Saved credentials, storage, database, maintenance, or server settings require a process "
                 "restart; apply them through configuration settings",
                 status_code=409,
                 error_code="CONFIG_RESTART_REQUIRED",
