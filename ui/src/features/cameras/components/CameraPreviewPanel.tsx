@@ -116,6 +116,7 @@ export function CameraPreviewPanel({
   className,
 }: CameraPreviewPanelProps) {
   const {
+    canStop,
     error,
     isPending,
     isStarting,
@@ -483,7 +484,7 @@ export function CameraPreviewPanel({
           onClick={() => {
             void stop()
           }}
-          disabled={isStopping || (!session && (effectiveState ?? 'idle') === 'idle')}
+          disabled={isStopping || !canStop}
         >
           {isStopping ? 'Stopping...' : 'Stop live view'}
         </Button>

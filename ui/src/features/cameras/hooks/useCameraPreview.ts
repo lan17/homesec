@@ -24,6 +24,7 @@ export interface CameraPreviewState {
   isPending: boolean
   isStarting: boolean
   isStopping: boolean
+  canStop: boolean
   start: () => Promise<void>
   stop: () => Promise<void>
   refreshStatus: () => Promise<PreviewStatusSnapshot | null>
@@ -38,6 +39,8 @@ interface StoredPreviewSession {
 export function useCameraPreview(cameraName: string): CameraPreviewState {
   const queryClient = useQueryClient()
   const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
+  const [knownTransport, setKnownTransport] = useState<Pick<PreviewSessionSnapshot, 'camera_name' | 'transport'> | null>(null)
+  const knownTransportRef = useRef(knownTransport)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
   const sessionStateRef = useRef<StoredPreviewSession | null>(null)
   const statusRequestSeqRef = useRef(0)
@@ -60,6 +63,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       statusRequestSeq: statusRequestSeqRef.current,
     }
     sessionStateRef.current = nextState
+    const nextTransport = { camera_name: nextSession.camera_name, transport: nextSession.transport }
+    knownTransportRef.current = nextTransport
+    setKnownTransport(nextTransport)
     setSessionState(nextState)
   }, [])
 
@@ -127,6 +133,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     },
   })
   const session = sessionState?.snapshot.camera_name === cameraName ? sessionState.snapshot : null
+  // The publisher transport stays known after this viewer detaches. Scope that
+  // identity to the camera so another camera retains its legacy stop behavior.
+  const isWebRTC = knownTransport?.camera_name === cameraName && knownTransport.transport === 'webrtc'
   const authorizationExpiresAt = session?.transport === 'webrtc'
     ? session.lease_expires_at ?? session.token_expires_at
     : session?.token_expires_at
@@ -235,6 +244,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       || stopMutation.isPending,
     isStarting: startMutation.isPending,
     isStopping: stopMutation.isPending,
+    canStop: session !== null || (!isWebRTC && (statusQuery.data?.state ?? 'idle') !== 'idle'),
     start: async () => {
       try {
         await startMutation.mutateAsync()
@@ -244,7 +254,8 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     },
     stop: async () => {
       sessionRevisionRef.current += 1
-      if (session?.transport === 'webrtc') {
+      const transport = knownTransportRef.current
+      if (transport?.camera_name === cameraName && transport.transport === 'webrtc') {
         // WebRTC player cleanup closes this viewer; other viewers keep watching.
         clearSession()
         setRefreshError(null)
