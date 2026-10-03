@@ -418,7 +418,7 @@ describe('StorageSettingsPage', () => {
     expect(screen.queryByText('Probe was for the old root')).toBeNull()
   })
 
-  it.each(['/absolute', '../escape', 'nested/../escape'])('rejects changed invalid storage destination %s before Save', async (destination) => {
+  it.each(['/absolute', '../escape', 'nested/../escape', 'nested\\clips', 'C:\\clips'])('rejects changed invalid storage destination %s before Save', async (destination) => {
     // Given: Storage destinations are provider-relative subdirectories rather than camera recording paths
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(config()))
     renderPage()
@@ -431,7 +431,7 @@ describe('StorageSettingsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Save storage settings' }))
 
     // Then: The UI describes the storage root relationship and refuses an unusable upload path
-    await screen.findByText("Storage destination directories must be relative without '..' segments.")
+    await screen.findByText("Storage destination directories must be relative without '..' segments or backslashes.")
     expect(screen.getByText(/relative to the configured storage root/)).toBeTruthy()
     expect(fetch.mock.calls.every(([, request]) => request?.method === 'GET')).toBe(true)
     expect(screen.queryByText('Local working paths')).toBeNull()

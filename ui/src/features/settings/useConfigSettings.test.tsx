@@ -281,4 +281,41 @@ describe('useConfigSettings', () => {
     }
   })
 
+
+  it('refetches observed activation of the same saved version instead of regressing it with a delayed PATCH', async () => {
+    // Given: A saved v2 PATCH response is delayed while another tab activates that same revision
+    const initial = { ...saved, saved_config_version: 'v1', active_config_version: 'v1', apply_required: 'none' }
+    const committed = { ...initial, saved_config_version: 'v2', apply_required: 'reload' }
+    const activated = { ...committed, active_config_version: 'v2', apply_required: 'none' }
+    let latest = initial
+    let finishSave: ((value: Response) => void) | undefined
+    let reads = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, request) => {
+      if (request?.method === 'PATCH') { return new Promise<Response>((resolve) => { finishSave = resolve }) }
+      ++reads
+      return response(latest)
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result } = renderHook(useConfigSettings, { wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ) })
+    await waitFor(() => expect(result.current.configQuery.data?.saved_config_version).toBe('v1'))
+    let save: Promise<unknown> | undefined
+    await act(async () => { save = result.current.saveConfig({ expected_config_version: 'v1' }) })
+    await waitFor(() => expect(finishSave).toBeTruthy())
+    latest = activated
+    await act(async () => { await result.current.configQuery.refetch() })
+    await waitFor(() => expect(result.current.configQuery.data?.apply_required).toBe('none'))
+
+    // When: The old response arrives with the same saved version and an earlier activation status
+    await act(async () => { finishSave?.(response(committed)); await save })
+
+    // Then: Another authoritative read resolves the ambiguity and preserves observed activation
+    expect(reads).toBe(3)
+    expect(result.current.configQuery.data?.saved_config_version).toBe('v2')
+    expect(result.current.configQuery.data?.active_config_version).toBe('v2')
+    expect(result.current.configQuery.data?.apply_required).toBe('none')
+    expect(result.current.applyMessage).toBe('Saved settings are active.')
+  })
+
 })

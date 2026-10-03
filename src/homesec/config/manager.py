@@ -79,11 +79,12 @@ class StoragePathsPatch(_ConfigPatchModel):
         if value is not None and (
             not value.strip()
             or "\0" in value
+            or "\\" in value
             or PurePosixPath(value).is_absolute()
             or ".." in PurePosixPath(value).parts
         ):
             raise ValueError(
-                "Storage destination directories must be relative without '..' segments"
+                "Storage destination directories must be relative without '..' segments or backslashes"
             )
         return value
 

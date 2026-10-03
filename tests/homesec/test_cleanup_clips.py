@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 
 import pytest
 import yaml
 
+from homesec.cli import HomeSec
+from homesec.config.credentials import credential_references
+from homesec.config.loader import config_signature
+from homesec.config.manager import ConfigManager, ConfigPatch
 from homesec.interfaces import ObjectFilter
 from homesec.maintenance.cleanup_clips import CleanupOptions, run_cleanup
 from homesec.models.clip import ClipStateData
+from homesec.models.config import Config, StorageConfig
 from homesec.models.filter import FilterOverrides, FilterResult
 from homesec.plugins.storage.local import LocalStorage, LocalStorageConfig
 from homesec.state.postgres import (
@@ -409,3 +416,83 @@ async def test_cleanup_marks_false_negatives(
 
     await storage.shutdown()
     await state_store.shutdown()
+
+
+@pytest.mark.parametrize("clear", [False, True])
+def test_cleanup_cli_installs_current_managed_credentials_before_provider_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clear: bool
+) -> None:
+    # Given: A fresh CLI environment and saved Dropbox credentials created through the real manager
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    config_path = tmp_path / "config.yaml"
+    _write_cleanup_config(
+        config_path, dsn="postgresql://unused/guarded", storage_root=tmp_path / "storage"
+    )
+    payload = yaml.safe_load(config_path.read_text())
+    payload["storage"] = {"backend": "dropbox", "config": {"root": "/clips"}}
+    config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    manager = ConfigManager(config_path)
+
+    async def save_credentials() -> tuple[Config, Config]:
+        first = await manager.patch_config(
+            ConfigPatch.model_validate(
+                {
+                    "expected_config_version": config_signature(manager.get_config()),
+                    "credentials": {"storage.config.token_env": "private-cli-token"},
+                }
+            )
+        )
+        current = (
+            await manager.patch_config(
+                ConfigPatch.model_validate(
+                    {
+                        "expected_config_version": config_signature(first),
+                        "credentials": {"storage.config.token_env": None},
+                    }
+                )
+            )
+            if clear
+            else first
+        )
+        return first, current
+
+    first, current = asyncio.run(save_credentials())
+    previous_ref = credential_references(first)["storage.config.token_env"]
+    current_ref = credential_references(current)["storage.config.token_env"]
+    assert previous_ref is not None and current_ref is not None
+    monkeypatch.setenv(previous_ref, "stale-host-token")
+    monkeypatch.setenv(current_ref, "must-not-fall-back")
+    stale_ref = "HOMESEC_SECRET_" + "f" * 32
+    monkeypatch.setenv(stale_ref, "stale-unreferenced-token")
+    monkeypatch.setenv("DROPBOX_TOKEN", "external-token")
+    monkeypatch.setenv("HOMESEC_SECRET_EXTERNAL_API_KEY", "external-api-key")
+    calls: list[str] = []
+    provider_inputs: list[tuple[str | None, str | None]] = []
+    storage = _CleanupStorage(calls)
+    state_store = _CleanupStateStore(calls, initialize_ok=False)
+
+    def load_storage(config: StorageConfig) -> _CleanupStorage:
+        assert isinstance(config.config, dict)
+        reference = config.config["token_env"]
+        assert isinstance(reference, str)
+        provider_inputs.append((reference, os.getenv(reference)))
+        return storage
+
+    # Provider and database boundaries are guarded; no external connection or database write is made.
+    monkeypatch.setattr("homesec.maintenance.cleanup_clips.load_storage_plugin", load_storage)
+    monkeypatch.setattr(
+        "homesec.maintenance.cleanup_clips.PostgresStateStore", lambda _dsn: state_store
+    )
+
+    # When: The actual homesec cleanup entrypoint starts its independent process workflow
+    with pytest.raises(RuntimeError, match="Failed to initialize Postgres state store"):
+        HomeSec().cleanup(config=str(config_path), dry_run=True)
+
+    # Then: The provider sees only the saved snapshot or explicit clear, and external host values survive
+    assert provider_inputs == [(current_ref, "" if clear else "private-cli-token")]
+    assert os.getenv(stale_ref) is None
+    if clear:
+        assert os.getenv(previous_ref) is None
+    assert os.getenv("DROPBOX_TOKEN") == "external-token"
+    assert os.getenv("HOMESEC_SECRET_EXTERNAL_API_KEY") == "external-api-key"
+    assert calls == ["storage", "state"]

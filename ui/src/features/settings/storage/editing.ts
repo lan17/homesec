@@ -43,8 +43,8 @@ export function buildStorageSettingsPatch(draft: StorageSettingsDraft): ConfigPa
   const paths = diffConfig(draft.originalPaths, draft.paths)
   for (const value of Object.values(paths)) {
     if (typeof value !== 'string' || value.trim().length === 0 || value.includes('\0')
-      || value.startsWith('/') || value.split('/').includes('..')) {
-      throw new Error("Storage destination directories must be relative without '..' segments.")
+      || value.includes('\\') || value.startsWith('/') || value.split('/').includes('..')) {
+      throw new Error("Storage destination directories must be relative without '..' segments or backslashes.")
     }
   }
   return {

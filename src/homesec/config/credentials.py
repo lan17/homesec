@@ -188,6 +188,20 @@ def load_managed_credentials(config_path: Path, config: Config) -> dict[str, str
     return {reference: values[reference] for reference in references if reference in values}
 
 
+def install_managed_credentials(config_path: Path, config: Config) -> None:
+    """Install the current snapshot at a provider-owning process entrypoint.
+
+    Saves and configuration reads never call this. Referenced explicit clears
+    install an empty value so providers cannot fall back to stale host values.
+    """
+    credentials = load_managed_credentials(config_path, config)
+    references = managed_credential_references(config)
+    for reference in list(os.environ):
+        if is_managed_reference(reference):
+            del os.environ[reference]
+    os.environ.update({reference: credentials.get(reference, "") for reference in references})
+
+
 def credential_status(config_path: Path, config: Config) -> dict[str, CredentialStatus]:
     """Report saved credential presence; managed values never come from host env."""
     references = credential_references(config)

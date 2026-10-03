@@ -22,7 +22,8 @@ export function useConfigSettings() {
     setApplyMessage(null)
     setApplyError(null)
     const config = await saveMutation.mutateAsync(patch)
-    setApplyMessage('Settings saved. Apply the saved changes to activate them.')
+    setApplyMessage(config.apply_required === 'none' ? 'Saved settings are active.'
+      : 'Settings saved. Apply the saved changes to activate them.')
     return config
   }
 

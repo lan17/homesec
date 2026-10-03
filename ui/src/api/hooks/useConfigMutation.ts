@@ -29,9 +29,12 @@ export function useConfigMutation() {
       await queryClient.cancelQueries({ queryKey: QUERY_KEYS.config })
       if (controller.signal.aborted) { throw new DOMException('Settings save cancelled', 'AbortError') }
       const observed = queryClient.getQueryData<ConfigSnapshot>(QUERY_KEYS.config)
-      if (observed && observed.saved_config_version !== patch.expected_config_version
-          && observed.saved_config_version !== config.saved_config_version) {
-        // Another writer's revision was observed while this response was in flight.
+      const interveningRevision = observed && observed.saved_config_version !== patch.expected_config_version
+        && observed.saved_config_version !== config.saved_config_version
+      const interveningActivation = observed?.saved_config_version === config.saved_config_version
+        && (observed.active_config_version !== config.active_config_version || observed.apply_required !== config.apply_required)
+      if (interveningRevision || interveningActivation) {
+        // Another saved or active snapshot was observed while this response was in flight.
         await queryClient.refetchQueries({ queryKey: QUERY_KEYS.config })
         if (controller.signal.aborted) { throw new DOMException('Settings save cancelled', 'AbortError') }
         return queryClient.getQueryData<ConfigSnapshot>(QUERY_KEYS.config) ?? config

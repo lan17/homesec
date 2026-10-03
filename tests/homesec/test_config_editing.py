@@ -575,7 +575,9 @@ def test_config_api_read_only_save_has_actionable_error(
 
 
 @pytest.mark.parametrize("field", ["clips_dir", "backups_dir", "artifacts_dir"])
-@pytest.mark.parametrize("destination", ["/absolute", "../escape", "nested/../escape", ""])
+@pytest.mark.parametrize(
+    "destination", ["/absolute", "../escape", "nested/../escape", r"nested\clips", r"C:\clips", ""]
+)
 def test_config_api_rejects_invalid_submitted_storage_destination_paths(
     tmp_path: Path, field: str, destination: str
 ) -> None:
@@ -624,13 +626,15 @@ async def test_storage_destination_edits_support_provider_root_and_relative_subd
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_path", ["/legacy/clips", r"legacy\clips"])
 async def test_unrelated_edits_preserve_unchanged_legacy_storage_destination_paths(
     tmp_path: Path,
+    legacy_path: str,
 ) -> None:
-    # Given: Preexisting YAML has an absolute legacy destination outside the new edit validator
+    # Given: Preexisting YAML has a legacy destination outside the new edit validator
     manager = _manager(tmp_path)
     payload = yaml.safe_load(manager.config_path.read_text())
-    payload["storage"]["paths"]["clips_dir"] = "/legacy/clips"
+    payload["storage"]["paths"]["clips_dir"] = legacy_path
     manager.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
     # When: Saving an unrelated provider root change
@@ -644,7 +648,7 @@ async def test_unrelated_edits_preserve_unchanged_legacy_storage_destination_pat
     )
 
     # Then: YAML startup compatibility is preserved and the unchanged legacy path is not rewritten
-    assert saved.storage.paths.clips_dir == "/legacy/clips"
+    assert saved.storage.paths.clips_dir == legacy_path
     assert saved.storage.config["root"] == "/new-root"
 
 
