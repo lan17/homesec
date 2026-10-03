@@ -1,4 +1,4 @@
-"""Typed config-manager mutation errors for camera CRUD flows."""
+"""Typed errors for configuration mutations."""
 
 from __future__ import annotations
 
@@ -26,3 +26,36 @@ class CameraConfigInvalidError(CameraMutationError):
 
 class CameraConfigRedactedPlaceholderError(CameraConfigInvalidError):
     """Raised when a source_config mutation attempts to persist redacted placeholders."""
+
+
+class ConfigMutationError(RuntimeError):
+    """Base error for saved configuration changes."""
+
+    def __init__(self, message: str, *, cause: Exception | None = None) -> None:
+        super().__init__(message)
+        if cause is not None:
+            self.__cause__ = cause
+
+
+class ConfigVersionConflictError(ConfigMutationError):
+    """The saved configuration changed since the editor read it."""
+
+
+class ConfigBackendChangeUnsupportedError(ConfigMutationError):
+    """An edit attempts to replace the currently configured backend."""
+
+
+class ConfigPatchInvalidError(ConfigMutationError):
+    """The patch cannot produce a valid configuration."""
+
+
+class ConfigSaveError(ConfigMutationError):
+    """The validated configuration could not be persisted."""
+
+
+class ConfigApplyInProgressError(ConfigMutationError):
+    """A process restart has been accepted and configuration writes are frozen."""
+
+
+class CredentialStoreError(ConfigMutationError):
+    """The private managed credential file could not be safely read or written."""

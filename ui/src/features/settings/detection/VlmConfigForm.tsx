@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import type { TestConnectionResponse } from '../../../api/generated/types'
 import { TestConnectionButton } from '../../shared/TestConnectionButton'
 import { buildAnalyzerTestRequest, type VlmFormState } from './types'
+import { CredentialField, type CredentialFields } from '../CredentialField'
 
 interface VlmConfigFormProps {
   enabled: boolean
@@ -10,6 +11,8 @@ interface VlmConfigFormProps {
   filterClasses: readonly string[]
   onToggle: (enabled: boolean) => void
   onChange: (value: VlmFormState) => void
+  credentials?: CredentialFields
+  credentialProbeBlocked?: boolean
 }
 
 export function VlmConfigForm({
@@ -18,6 +21,8 @@ export function VlmConfigForm({
   filterClasses,
   onToggle,
   onChange,
+  credentials,
+  credentialProbeBlocked = false,
 }: VlmConfigFormProps) {
   const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null)
   const triggerClassOptions = useMemo(() => {
@@ -103,7 +108,10 @@ export function VlmConfigForm({
             />
           </label>
 
-          <label className="field-label" htmlFor="detection-vlm-api-key-env">
+          {credentials ? <CredentialField id="detection-vlm-api-key" label="AI API key" envKey="api_key_env"
+            envValue={value.config.api_key_env} credentials={credentials}
+            onEnvChange={(api_key_env) => { updateValue({ ...value, config: { ...value.config, api_key_env } }) }} />
+            : <label className="field-label" htmlFor="detection-vlm-api-key-env">
             API key env var
             <input
               id="detection-vlm-api-key-env"
@@ -120,7 +128,7 @@ export function VlmConfigForm({
                 })
               }}
             />
-          </label>
+          </label>}
 
           <label className="field-label" htmlFor="detection-vlm-run-mode">
             Run mode
@@ -173,15 +181,15 @@ export function VlmConfigForm({
             </div>
           </fieldset>
 
-          <TestConnectionButton
+          {credentialProbeBlocked ? <p className="subtle">Save and apply credential changes before checking AI readiness.</p> : <TestConnectionButton
             request={testRequest}
             result={testResult}
             onResult={setTestResult}
-            idleLabel="Test analysis"
-            retryLabel="Retry analysis test"
-            pendingLabel="Testing analysis..."
-            description="Validate analyzer connectivity before continuing."
-          />
+            idleLabel="Check AI readiness"
+            retryLabel="Check AI readiness again"
+            pendingLabel="Checking AI readiness..."
+            description="Validate analyzer settings and local readiness. This does not verify API reachability or analyze a sample clip."
+          />}
         </div>
       ) : null}
     </section>

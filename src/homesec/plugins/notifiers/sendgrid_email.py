@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 class SendGridEmailConfig(BaseModel):
     """SendGrid email notifier configuration."""
 
-    api_key_env: str = "SENDGRID_API_KEY"
+    api_key_env: str = Field(
+        default="SENDGRID_API_KEY", json_schema_extra={"homesec_credential": True}
+    )
     from_email: str
     from_name: str | None = None
     to_emails: list[str] = Field(min_length=1)

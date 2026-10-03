@@ -143,7 +143,25 @@ If you are contributing or running from source:
 
 ## Configuration
 
-Configuration is YAML-based and strictly validated. Secrets (API keys, passwords) should always be loaded from environment variables (`_env` suffix).
+Configuration is YAML-based and strictly validated. Secret references use environment
+variables (`_env` suffix). Authenticated settings pages also accept write-only
+secret values, stored in a separate private file beside the YAML.
+
+### Editing settings
+
+The web Settings pages edit the saved YAML configuration for storage, configured
+notification destinations, and detection/AI. Save preserves unspecified options;
+Apply activates the saved revision. Detection and notification changes reload the
+worker. Credential and storage changes restart the entire HomeSec process so uploads, playback,
+and backups use the same settings. Recording pauses during application.
+
+Docker Compose restarts HomeSec automatically. For a manually launched process,
+start HomeSec again after applying changes that require a process restart. The
+included Compose profile mounts the configuration directory writable; an
+individual file mount cannot support atomic configuration replacement.
+
+See [configuration editing](docs/configuration-editing.md) for the API contract,
+deployment requirements, and current editor scope.
 
 ### Configuration Examples
 

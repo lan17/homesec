@@ -8,11 +8,15 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from homesec.api import APIServer, create_app
 from homesec.config import load_config, resolve_env_var, validate_config, validate_plugin_names
-from homesec.config.loader import ConfigError, ConfigErrorCode
+from homesec.config.credentials import (
+    install_managed_credentials,
+    managed_credential_references,
+)
+from homesec.config.loader import ConfigError, ConfigErrorCode, config_signature
 from homesec.config.manager import ConfigManager
 from homesec.maintenance.postgres_backup import PostgresBackupManager
 from homesec.models.config import FastAPIServerConfig
@@ -32,6 +36,8 @@ from homesec.runtime.models import (
     CameraTalkSessionPrepared,
     CameraTalkStartRefusal,
     CameraTalkStopResult,
+    ConfigApplicationStatus,
+    ConfigApplyRequest,
     ManagedRuntime,
     RuntimeCameraStatus,
     RuntimeReloadRequest,
@@ -89,6 +95,7 @@ class Application:
         """
         self._config_path = config_path
         self._config: Config | None = None
+        self._parent_config: Config | None = None
 
         # Components (created in _create_components)
         self._storage: StorageBackend | None = None
@@ -201,6 +208,10 @@ class Application:
         # Validate config references and plugin names before instantiating components
         self._validate_config(config)
 
+        # Providers and subprocess workers share the same startup credential snapshot.
+        # Saves never change this environment; credential changes require a process restart.
+        install_managed_credentials(self._config_path, config)
+
         # Build components locally first so partial failures do not leak mutable app state.
         persistence = await self._build_runtime_persistence_stack(config)
         runtime_manager = RuntimeManager(
@@ -245,6 +256,7 @@ class Application:
         self._postgres_backup_manager = postgres_backup_manager
         self._runtime_manager = runtime_manager
         self._api_server = api_server
+        self._parent_config = config.model_copy(deep=True)
 
         logger.info("All components created")
 
@@ -359,7 +371,103 @@ class Application:
                 status_code=status_code,
                 error_code=error_code,
             ) from exc
+        self._require_worker_reload_compatible(config)
+        if self._shutdown_started:
+            raise RuntimeReloadConfigError(
+                "HomeSec is shutting down; retry after it restarts",
+                status_code=409,
+                error_code="CONFIG_APPLY_IN_PROGRESS",
+            )
         return self._require_runtime_manager().request_reload(config)
+
+    def _requires_process_restart(self, config: Config) -> bool:
+        """Parent-owned services and credentials change only on a process restart."""
+        parent_config = self._parent_config
+        if parent_config is None:
+            return True
+        if managed_credential_references(config) != managed_credential_references(parent_config):
+            return True
+        sections = {"storage", "state_store", "maintenance", "server"}
+        return config.model_dump(mode="json", include=sections) != parent_config.model_dump(
+            mode="json", include=sections
+        )
+
+    def _require_worker_reload_compatible(self, config: Config) -> None:
+        if self._requires_process_restart(config):
+            raise RuntimeReloadConfigError(
+                "Saved credentials, storage, database, maintenance, or server settings require a process "
+                "restart; apply them through configuration settings",
+                status_code=409,
+                error_code="CONFIG_RESTART_REQUIRED",
+            )
+
+    def get_config_application_status(self, config: Config) -> ConfigApplicationStatus:
+        """Report saved-versus-active state using server-owned configuration versions."""
+        saved_version = config_signature(config)
+        runtime_status = self.get_runtime_status()
+        active_version = runtime_status.active_config_version
+        action: Literal["none", "reload", "restart"]
+        if self._requires_process_restart(config):
+            action = "restart"
+        elif saved_version == active_version and runtime_status.state != RuntimeState.FAILED:
+            action = "none"
+        else:
+            action = "reload"
+        return ConfigApplicationStatus(
+            saved_config_version=saved_version,
+            active_config_version=active_version,
+            apply_required=action,
+        )
+
+    async def request_config_apply(self, expected_config_version: str) -> ConfigApplyRequest:
+        """Apply exactly the saved revision the operator reviewed."""
+        async with self._config_manager.config_snapshot(expected_config_version) as config:
+            if self._shutdown_started:
+                raise RuntimeReloadConfigError(
+                    "HomeSec is shutting down; retry after it restarts",
+                    status_code=409,
+                    error_code="CONFIG_APPLY_IN_PROGRESS",
+                )
+            status = self.get_runtime_status()
+            if status.reload_in_progress:
+                raise RuntimeReloadConfigError(
+                    "A runtime reload is already in progress",
+                    status_code=409,
+                    error_code="RELOAD_IN_PROGRESS",
+                )
+            application = self.get_config_application_status(config)
+            if application.apply_required == "restart":
+                self.request_restart()
+                return ConfigApplyRequest(
+                    accepted=True,
+                    message="Process restart requested; recording will pause briefly. "
+                    "An external supervisor must restart HomeSec.",
+                    action="restart",
+                    target_config_version=application.saved_config_version,
+                    target_generation=None,
+                )
+            if application.apply_required == "none":
+                return ConfigApplyRequest(
+                    accepted=True,
+                    message="Saved configuration is already active",
+                    action="none",
+                    target_config_version=application.saved_config_version,
+                    target_generation=status.generation,
+                )
+            request = self._require_runtime_manager().request_reload(config)
+            if not request.accepted:
+                raise RuntimeReloadConfigError(
+                    request.message,
+                    status_code=409,
+                    error_code="RELOAD_IN_PROGRESS",
+                )
+            return ConfigApplyRequest(
+                accepted=True,
+                message=request.message,
+                action="reload",
+                target_config_version=application.saved_config_version,
+                target_generation=request.target_generation,
+            )
 
     async def wait_for_runtime_reload(self) -> RuntimeReloadResult | None:
         """Wait for the in-flight runtime reload (if any)."""
@@ -476,7 +584,8 @@ class Application:
             return
         if self._restart_requested:
             return
-        logger.info("Restart requested by setup finalize endpoint")
+        logger.info("Process restart requested")
+        self._config_manager.freeze_mutations()
         self._restart_requested = True
         self._shutdown_started = True
         self._shutdown_event.set()

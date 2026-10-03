@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from homesec.models.talk import (
     TalkInputFormat,
@@ -38,6 +36,26 @@ class RuntimeState(StrEnum):
     IDLE = "idle"
     RELOADING = "reloading"
     FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigApplicationStatus:
+    """Compare the saved document with the components currently using it."""
+
+    saved_config_version: str
+    active_config_version: str | None
+    apply_required: Literal["none", "reload", "restart"]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigApplyRequest:
+    """Acceptance of an explicit saved-configuration application request."""
+
+    accepted: bool
+    message: str
+    action: Literal["none", "reload", "restart"]
+    target_config_version: str
+    target_generation: int | None
 
 
 class PreviewState(StrEnum):
@@ -195,13 +213,6 @@ class RuntimeReloadResult:
     success: bool
     generation: int
     error: str | None = None
-
-
-def config_signature(config: Config) -> str:
-    """Return a short, stable signature for a config payload."""
-    payload = config.model_dump(mode="json")
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()[:12]
 
 
 def preview_error_status(

@@ -4,6 +4,8 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  ConfigResponse,
+  ConfigApplyResponse,
   PreviewSessionResponse,
   PreviewState,
   PreviewStatusResponse,
@@ -211,6 +213,68 @@ export function parseOnvifProbeResponse(payload: unknown): ProbeResponse {
   }
 }
 
+function parseConfigAction(value: unknown): ConfigResponse['apply_required'] {
+  if (value === 'none' || value === 'reload' || value === 'restart') {
+    return value
+  }
+  throw new Error('Invalid configuration apply action')
+}
+
+export function parseConfigResponse(payload: unknown): ConfigResponse {
+  if (!isJsonObject(payload) || Array.isArray(payload)
+      || !isJsonObject(payload.config) || Array.isArray(payload.config)) {
+    throw new Error('Configuration response must contain a config object')
+  }
+  if (typeof payload.saved_config_version !== 'string' || !payload.saved_config_version
+      || payload.active_config_version === undefined) {
+    throw new Error('Configuration version fields are required')
+  }
+  const credentials: ConfigResponse['credentials'] = {}
+  const rawCredentials = payload.credentials ?? {}
+  if (!isJsonObject(rawCredentials) || Array.isArray(rawCredentials)) {
+    throw new Error('credentials must be an object')
+  }
+  for (const [path, rawStatus] of Object.entries(rawCredentials)) {
+    if (!isJsonObject(rawStatus) || Array.isArray(rawStatus)
+        || (rawStatus.source !== 'managed' && rawStatus.source !== 'environment')) {
+      throw new Error('Invalid credential status')
+    }
+    credentials[path] = {
+      configured: expectBoolean(rawStatus.configured, 'credentials.configured'), source: rawStatus.source,
+    }
+  }
+  return {
+    config: payload.config,
+    saved_config_version: expectString(payload.saved_config_version, 'saved_config_version'),
+    active_config_version: expectNullableString(payload.active_config_version, 'active_config_version'),
+    apply_required: parseConfigAction(payload.apply_required),
+    credentials,
+    credentials_editable: payload.credentials_editable === undefined ? false
+      : expectBoolean(payload.credentials_editable, 'credentials_editable'),
+  }
+}
+
+export function parseConfigApplyResponse(payload: unknown): ConfigApplyResponse {
+  if (!isJsonObject(payload) || Array.isArray(payload)) {
+    throw new Error('Configuration apply response must be an object')
+  }
+  if (typeof payload.target_config_version !== 'string' || !payload.target_config_version
+      || payload.target_generation === undefined) {
+    throw new Error('Configuration apply target fields are required')
+  }
+  const generation = expectNullableNumber(payload.target_generation, 'target_generation')
+  if (generation !== null && (!Number.isInteger(generation) || generation < 0)) {
+    throw new Error('target_generation must be a non-negative integer')
+  }
+  return {
+    accepted: expectBoolean(payload.accepted, 'accepted'),
+    message: expectString(payload.message, 'message'),
+    action: parseConfigAction(payload.action),
+    target_config_version: expectString(payload.target_config_version, 'target_config_version'),
+    target_generation: generation,
+  }
+}
+
 export function parseConfigChangeResponse(payload: unknown): ConfigChangeResponse {
   if (!isJsonObject(payload)) {
     throw new Error('Config change response is not a JSON object')
@@ -218,6 +282,17 @@ export function parseConfigChangeResponse(payload: unknown): ConfigChangeRespons
 
   const camera = payload.camera
   const runtimeReload = payload.runtime_reload
+  const rawApplyError = payload.apply_error
+  let applyError: ConfigChangeResponse['apply_error'] = null
+  if (rawApplyError !== null && rawApplyError !== undefined) {
+    if (!isJsonObject(rawApplyError) || Array.isArray(rawApplyError)) {
+      throw new Error('apply_error must be an object when provided')
+    }
+    applyError = {
+      detail: expectString(rawApplyError.detail, 'apply_error.detail'),
+      error_code: expectString(rawApplyError.error_code, 'apply_error.error_code'),
+    }
+  }
   return {
     restart_required: expectBoolean(payload.restart_required, 'restart_required'),
     camera: camera === null || camera === undefined ? null : parseCameraResponse(payload.camera),
@@ -225,6 +300,7 @@ export function parseConfigChangeResponse(payload: unknown): ConfigChangeRespons
       runtimeReload === null || runtimeReload === undefined
         ? null
         : parseRuntimeReloadResponse(runtimeReload),
+    apply_error: applyError,
   }
 }
 

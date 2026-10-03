@@ -19,6 +19,7 @@ import homesec.sources.local_folder_setup_probe as local_folder_setup_probe
 import homesec.sources.rtsp.setup_probe as rtsp_setup_probe
 from homesec.models.setup import TestConnectionRequest as SetupTestConnectionRequest
 from homesec.onvif.service import OnvifProbeError, OnvifProbeOptions, OnvifProbeTimeoutError
+from homesec.plugins.storage.dropbox import DropboxStorageConfig
 from homesec.plugins.storage.local import LocalStorageConfig
 from homesec.services import setup as setup_service
 from homesec.sources.ftp import FtpSourceConfig
@@ -56,6 +57,44 @@ class _StubPingPlugin:
     async def shutdown(self, timeout: float | None = None) -> None:
         _ = timeout
         self.shutdown_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_saved_managed_credentials_cannot_be_probed_before_startup_snapshot_loads_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: A saved access-token reference absent from the running credential snapshot
+    reference = "HOMESEC_SECRET_" + "b" * 32
+    monkeypatch.delenv(reference, raising=False)
+    provider = DropboxStorageConfig(root="/test", token_env=reference)
+    plugin = _StubPingPlugin()
+    api_calls: list[str] = []
+
+    def load_plugin(*_args: object, **_kwargs: object) -> _StubPingPlugin:
+        api_calls.append("load")
+        return plugin
+
+    monkeypatch.setattr(setup_service, "get_plugin_names", lambda *_args: ["dropbox"])
+    monkeypatch.setattr(setup_service, "validate_plugin", lambda *_args: provider)
+    monkeypatch.setattr(setup_service, "load_plugin", load_plugin)
+    request = SetupTestConnectionRequest(type="storage", backend="dropbox", config={})
+
+    # When: A caller bypasses the UI and directly checks the saved credential
+    pending = await setup_service.test_connection(request, _StubApp())
+
+    # Then: No provider is constructed and the response explains activation is pending
+    assert pending.success is False
+    assert "Apply credential changes" in pending.message
+    assert api_calls == []
+
+    # When: Startup loads the reference as an explicit clear to allow refresh-token auth
+    monkeypatch.setenv(reference, "")
+    active = await setup_service.test_connection(request, _StubApp())
+
+    # Then: The provider decides whether its remaining authentication configuration works
+    assert active.success is True
+    assert api_calls == ["load"]
+    assert plugin.shutdown_calls == 1
 
 
 @pytest.mark.asyncio

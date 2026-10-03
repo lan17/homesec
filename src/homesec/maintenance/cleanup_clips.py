@@ -17,6 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from homesec.config import load_config, resolve_env_var
+from homesec.config.credentials import install_managed_credentials
 from homesec.interfaces import EventStore, ObjectFilter, Shutdownable, StorageBackend
 from homesec.models.clip import ClipStateData
 from homesec.models.filter import FilterConfig
@@ -176,6 +177,7 @@ async def run_cleanup(opts: CleanupOptions) -> None:
 
     # Discover all plugins (built-in and external)
     discover_all_plugins()
+    install_managed_credentials(opts.config_path, cfg)
 
     state_cfg = cfg.state_store
     dsn = state_cfg.dsn

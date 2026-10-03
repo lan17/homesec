@@ -5,20 +5,35 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-from pathlib import Path
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
 
+from homesec.config.credentials import (
+    credential_references,
+    credential_value_is_environment_compatible,
+    is_managed_reference,
+    new_managed_reference,
+    save_managed_credentials,
+)
 from homesec.config.errors import (
     CameraAlreadyExistsError,
     CameraConfigInvalidError,
     CameraConfigRedactedPlaceholderError,
     CameraNotFoundError,
+    ConfigApplyInProgressError,
+    ConfigBackendChangeUnsupportedError,
+    ConfigPatchInvalidError,
+    ConfigSaveError,
+    ConfigVersionConflictError,
 )
-from homesec.config.loader import ConfigError, load_config, load_config_from_dict
+from homesec.config.loader import ConfigError, config_signature, load_config, load_config_from_dict
 from homesec.models.config import CameraConfig, CameraSourceConfig, Config
+from homesec.models.enums import VLMRunMode
 
 _SENSITIVE_CONFIG_FILE_MODE = 0o600
 _REDACTED_PLACEHOLDER = "***redacted***"
@@ -30,6 +45,90 @@ class ConfigUpdateResult(BaseModel):
     restart_required: bool = True
 
 
+class _ConfigPatchModel(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _reject_explicit_null(self) -> _ConfigPatchModel:
+        for field in self.model_fields_set:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} must not be null; omit unchanged fields")
+        return self
+
+
+class PluginConfigPatch(_ConfigPatchModel):
+    """Edit the existing backend's opaque configuration without replacing it."""
+
+    backend: str | None = None
+    config: dict[str, object] | None = None
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: object) -> object:
+        return value.lower() if isinstance(value, str) else value
+
+
+class StoragePathsPatch(_ConfigPatchModel):
+    clips_dir: str | None = None
+    backups_dir: str | None = None
+    artifacts_dir: str | None = None
+
+    @field_validator("clips_dir", "backups_dir", "artifacts_dir")
+    @classmethod
+    def _validate_destination_directory(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip()
+            or "\0" in value
+            or "\\" in value
+            or PurePosixPath(value).is_absolute()
+            or ".." in PurePosixPath(value).parts
+        ):
+            raise ValueError(
+                "Storage destination directories must be relative without '..' segments or backslashes"
+            )
+        return value
+
+
+class StorageConfigPatch(PluginConfigPatch):
+    paths: StoragePathsPatch | None = None
+
+
+class VLMPreprocessPatch(_ConfigPatchModel):
+    max_frames: int | None = None
+    max_size: int | None = None
+    quality: int | None = None
+
+
+class VLMConfigPatch(PluginConfigPatch):
+    run_mode: VLMRunMode | None = None
+    trigger_classes: list[str] | None = None
+    preprocessing: VLMPreprocessPatch | None = None
+
+
+class AlertPolicyConfigPatch(PluginConfigPatch):
+    enabled: bool | None = None
+
+
+class NotifierConfigPatch(_ConfigPatchModel):
+    """Patch an existing ordered notifier entry, preserving all other entries."""
+
+    index: int = Field(ge=0)
+    enabled: bool | None = None
+    config: dict[str, object] | None = None
+
+
+class ConfigPatch(_ConfigPatchModel):
+    """The supported save-only edits to the canonical configuration document."""
+
+    expected_config_version: str = Field(min_length=1)
+    storage: StorageConfigPatch | None = None
+    filter: PluginConfigPatch | None = None
+    vlm: VLMConfigPatch | None = None
+    alert_policy: AlertPolicyConfigPatch | None = None
+    notifiers: list[NotifierConfigPatch] | None = None
+    credentials: dict[str, SecretStr | None] | None = None
+
+
 class ConfigManager:
     """Manages configuration persistence (single file, last-write-wins).
 
@@ -39,6 +138,11 @@ class ConfigManager:
     def __init__(self, config_path: Path) -> None:
         self._config_path = config_path
         self._lock: asyncio.Lock | None = None
+        self._mutations_frozen = False
+
+    def freeze_mutations(self) -> None:
+        """Stop future writes after accepting a restart of this process."""
+        self._mutations_frozen = True
 
     def _mutation_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -79,12 +183,12 @@ class ConfigManager:
         return False
 
     @classmethod
-    def _merge_source_config(
+    def _merge_config(
         cls,
         existing: dict[str, object],
         patch: dict[str, object],
     ) -> dict[str, object]:
-        """Apply partial update semantics to source config.
+        """Apply partial update semantics to configuration payloads.
 
         - omitted key => unchanged
         - value is null => clear key
@@ -98,7 +202,7 @@ class ConfigManager:
                 merged.pop(key, None)
                 continue
             if isinstance(current_value, dict) and isinstance(patch_value, dict):
-                merged[key] = cls._merge_source_config(
+                merged[key] = cls._merge_config(
                     cast(dict[str, object], current_value),
                     cast(dict[str, object], patch_value),
                 )
@@ -168,7 +272,7 @@ class ConfigManager:
                     else current_source_config
                 )
                 next_source_config = (
-                    self._merge_source_config(base_source_config, source_config)
+                    self._merge_config(base_source_config, source_config)
                     if source_config is not None
                     else base_source_config
                 )
@@ -214,6 +318,144 @@ class ConfigManager:
             await self._save_config(validated)
             return ConfigUpdateResult()
 
+    @asynccontextmanager
+    async def config_snapshot(self, expected_config_version: str) -> AsyncIterator[Config]:
+        """Hold a version-checked saved snapshot through a mutation or apply acceptance."""
+        async with self._mutation_lock():
+            config = await asyncio.to_thread(self.get_config)
+            if config_signature(config) != expected_config_version:
+                raise ConfigVersionConflictError(
+                    "Configuration changed since it was loaded; refresh before saving"
+                )
+            yield config
+
+    async def patch_config(self, patch: ConfigPatch) -> Config:
+        """Validate and persist a partial edit without applying it to the runtime."""
+        async with self.config_snapshot(patch.expected_config_version) as config:
+            patch_payload = patch.model_dump(
+                mode="json", exclude_unset=True, exclude={"credentials"}
+            )
+            if self._contains_redacted_placeholder(patch_payload):
+                raise ConfigPatchInvalidError(
+                    "Patch contains redacted placeholders; omit unchanged secret fields"
+                )
+
+            payload = config.model_dump(mode="json")
+            for section in ("storage", "filter", "vlm", "alert_policy"):
+                section_patch = patch_payload.get(section)
+                if not isinstance(section_patch, dict):
+                    continue
+                current = cast(dict[str, object], payload[section])
+                if "backend" in section_patch and section_patch["backend"] != current["backend"]:
+                    raise ConfigBackendChangeUnsupportedError(
+                        f"Changing the {section} backend is not supported by settings edits"
+                    )
+                payload[section] = self._merge_config(current, section_patch)
+
+            seen_indexes: set[int] = set()
+            for notifier_patch in patch.notifiers or []:
+                index = notifier_patch.index
+                if index in seen_indexes or index >= len(config.notifiers):
+                    raise ConfigPatchInvalidError(
+                        "Notifier indexes must be unique and reference existing entries"
+                    )
+                seen_indexes.add(index)
+                current_notifier = payload["notifiers"][index]
+                entry_patch = notifier_patch.model_dump(mode="json", exclude_unset=True)
+                entry_patch.pop("index")
+                payload["notifiers"][index] = self._merge_config(current_notifier, entry_patch)
+
+            current_references = credential_references(config)
+            additions: dict[str, str] = {}
+            generated_references: set[str] = set()
+            for path, value in (patch.credentials or {}).items():
+                if path not in current_references:
+                    raise ConfigPatchInvalidError(
+                        "Credential path is not supported by this configuration"
+                    )
+                if value is not None and not value.get_secret_value():
+                    raise ConfigPatchInvalidError(
+                        "Credential values must not be empty; use null to clear"
+                    )
+                if value is not None and not credential_value_is_environment_compatible(
+                    value.get_secret_value()
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Credential values must be compatible with the process environment"
+                    )
+                if value is not None and self._contains_redacted_placeholder(
+                    value.get_secret_value()
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Credential values must not contain redacted placeholders"
+                    )
+                reference = new_managed_reference()
+                generated_references.add(reference)
+                if value is not None:
+                    additions[reference] = value.get_secret_value()
+                self._set_credential_reference(payload, path, reference)
+
+            try:
+                validated = await asyncio.to_thread(load_config_from_dict, payload)
+            except ConfigError as exc:
+                raise ConfigPatchInvalidError(
+                    "Configuration patch failed validation; check the submitted settings",
+                    cause=exc,
+                ) from exc
+            for path, candidate_reference in credential_references(validated).items():
+                if (
+                    candidate_reference != current_references.get(path)
+                    and candidate_reference is not None
+                    and not credential_value_is_environment_compatible(candidate_reference)
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Credential environment references must be compatible with the process environment"
+                    )
+                if (
+                    is_managed_reference(candidate_reference)
+                    and candidate_reference != current_references.get(path)
+                    and candidate_reference not in generated_references
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Managed credential references can only be changed through credential edits"
+                    )
+            if self._mutations_frozen:
+                raise ConfigApplyInProgressError(
+                    "HomeSec is restarting; retry saving after it restarts"
+                )
+            if patch.credentials:
+                await asyncio.to_thread(save_managed_credentials, self._config_path, additions)
+            try:
+                await self._save_config(validated)
+            except OSError as exc:
+                raise ConfigSaveError(
+                    "Unable to save configuration; check that its directory is writable",
+                    cause=exc,
+                ) from exc
+            return validated
+
+    @staticmethod
+    def _set_credential_reference(payload: dict[str, object], path: str, reference: str) -> None:
+        """Write an already-allowlisted dotted path, creating optional nested auth objects."""
+        parts = path.split(".")
+        current: object = payload
+        for part in parts[:-1]:
+            if isinstance(current, list):
+                current = current[int(part)]
+            elif isinstance(current, dict):
+                child = current.get(part)
+                if child is None:
+                    child = {}
+                    current[part] = child
+                current = child
+            else:
+                raise ConfigPatchInvalidError(
+                    "Credential path is not supported by this configuration"
+                )
+        if not isinstance(current, dict):
+            raise ConfigPatchInvalidError("Credential path is not supported by this configuration")
+        current[parts[-1]] = reference
+
     async def _validate_config(self, config: Config) -> Config:
         """Validate configuration via the standard loader path."""
         payload = config.model_dump(mode="json")
@@ -224,6 +466,10 @@ class ConfigManager:
 
     async def _save_config(self, config: Config) -> None:
         """Save config to disk with backup."""
+        if self._mutations_frozen:
+            raise ConfigApplyInProgressError(
+                "HomeSec is restarting; retry saving after it restarts"
+            )
 
         def _write() -> None:
             backup_path = Path(str(self._config_path) + ".bak")

@@ -92,7 +92,12 @@ export function useCameraActions({
     successMessage: string
   }): boolean {
     if (response.restart_required) {
-      markPendingReload(restartMessage)
+      if (response.apply_error) {
+        markPendingReload(`${successMessage} Saved changes have not been applied.`)
+        setActionFeedback(`${successMessage} Changes were saved but not applied: ${response.apply_error.detail}`)
+      } else {
+        markPendingReload(restartMessage)
+      }
       return false
     }
     clearPendingReload()

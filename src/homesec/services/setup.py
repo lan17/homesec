@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from pydantic import ValidationError
 
+from homesec.config.credentials import managed_credential_references
 from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.maintenance.postgres_backup import run_pg_dump_available, run_pg_dump_version
 from homesec.models.config import (
@@ -238,6 +239,15 @@ async def _test_plugin_ping_connection(
         return build_test_connection_response(
             success=False,
             message=format_validation_error(exc),
+            start=start,
+        )
+
+    if any(
+        reference not in os.environ for reference in managed_credential_references(validated_config)
+    ):
+        return build_test_connection_response(
+            success=False,
+            message="Saved credentials are not active. Apply credential changes before checking this integration.",
             start=start,
         )
 

@@ -39,6 +39,9 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Detection' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Update notifications' }).getAttribute('href')).toBe('/settings/notifications')
+    expect(screen.getByRole('link', { name: 'Update detection' }).getAttribute('href')).toBe('/settings/detection')
+    expect(screen.getByRole('link', { name: 'Update storage' }).getAttribute('href')).toBe('/settings/storage')
     expect(
       advancedCard
         ? within(advancedCard as HTMLElement).getByRole('link', { name: 'Open System' }).getAttribute('href')

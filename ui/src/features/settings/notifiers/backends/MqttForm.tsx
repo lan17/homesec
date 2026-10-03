@@ -1,7 +1,8 @@
 import type { NotifierBackendFormProps } from '../types'
 import { readNumber, readString } from './configReaders'
+import { CredentialField } from '../../CredentialField'
 
-export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
+export function MqttForm({ config, onChange, idPrefix = 'setup-notifier-mqtt', credentials }: NotifierBackendFormProps) {
   const host = readString(config, 'host', 'localhost')
   const port = readNumber(config, 'port', 1883)
   const topicTemplate = readString(
@@ -18,10 +19,10 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
 
   return (
     <div className="inline-form">
-      <label className="field-label" htmlFor="setup-notifier-mqtt-host">
+      <label className="field-label" htmlFor={`${idPrefix}-host`}>
         MQTT host
         <input
-          id="setup-notifier-mqtt-host"
+          id={`${idPrefix}-host`}
           className="input"
           type="text"
           value={host}
@@ -34,10 +35,10 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
         />
       </label>
 
-      <label className="field-label" htmlFor="setup-notifier-mqtt-port">
+      <label className="field-label" htmlFor={`${idPrefix}-port`}>
         MQTT port
         <input
-          id="setup-notifier-mqtt-port"
+          id={`${idPrefix}-port`}
           className="input"
           type="number"
           min={1}
@@ -52,7 +53,7 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
               })
               return
             }
-            const parsed = Number.parseInt(raw, 10)
+            const parsed = Number(raw)
             onChange({
               ...config,
               port: Number.isFinite(parsed) ? parsed : port,
@@ -61,10 +62,10 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
         />
       </label>
 
-      <label className="field-label" htmlFor="setup-notifier-mqtt-topic-template">
+      <label className="field-label" htmlFor={`${idPrefix}-topic-template`}>
         Topic template
         <input
-          id="setup-notifier-mqtt-topic-template"
+          id={`${idPrefix}-topic-template`}
           className="input"
           type="text"
           value={topicTemplate}
@@ -77,10 +78,19 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
         />
       </label>
 
-      <label className="field-label" htmlFor="setup-notifier-mqtt-username-env">
+      {credentials ? (
+        <>
+          <CredentialField id={`${idPrefix}-username`} label="MQTT username" envKey="auth.username_env"
+            envValue={usernameEnv} credentials={credentials}
+            onEnvChange={(value) => { onChange({ ...config, auth: { ...auth, username_env: value } }) }} />
+          <CredentialField id={`${idPrefix}-password`} label="MQTT password" envKey="auth.password_env"
+            envValue={passwordEnv} credentials={credentials}
+            onEnvChange={(value) => { onChange({ ...config, auth: { ...auth, password_env: value } }) }} />
+        </>
+      ) : <><label className="field-label" htmlFor={`${idPrefix}-username-env`}>
         Username env var (optional)
         <input
-          id="setup-notifier-mqtt-username-env"
+          id={`${idPrefix}-username-env`}
           className="input"
           type="text"
           value={usernameEnv}
@@ -96,10 +106,10 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
         />
       </label>
 
-      <label className="field-label" htmlFor="setup-notifier-mqtt-password-env">
+      <label className="field-label" htmlFor={`${idPrefix}-password-env`}>
         Password env var (optional)
         <input
-          id="setup-notifier-mqtt-password-env"
+          id={`${idPrefix}-password-env`}
           className="input"
           type="text"
           value={passwordEnv}
@@ -114,6 +124,7 @@ export function MqttForm({ config, onChange }: NotifierBackendFormProps) {
           }}
         />
       </label>
+      </>}
     </div>
   )
 }

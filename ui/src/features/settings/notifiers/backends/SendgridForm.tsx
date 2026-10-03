@@ -1,5 +1,6 @@
 import type { NotifierBackendFormProps } from '../types'
 import { readString } from './configReaders'
+import { CredentialField } from '../../CredentialField'
 
 function joinEmails(value: unknown): string {
   if (!Array.isArray(value)) {
@@ -17,17 +18,17 @@ function parseEmails(value: string): string[] {
     .filter((item) => item.length > 0)
 }
 
-export function SendgridForm({ config, onChange }: NotifierBackendFormProps) {
+export function SendgridForm({ config, onChange, idPrefix = 'setup-notifier-sendgrid', credentials }: NotifierBackendFormProps) {
   const fromEmail = readString(config, 'from_email', 'homesec@localhost')
   const toEmails = joinEmails(config.to_emails)
   const apiKeyEnv = readString(config, 'api_key_env', 'SENDGRID_API_KEY')
 
   return (
     <div className="inline-form">
-      <label className="field-label" htmlFor="setup-notifier-sendgrid-from-email">
+      <label className="field-label" htmlFor={`${idPrefix}-from-email`}>
         From email
         <input
-          id="setup-notifier-sendgrid-from-email"
+          id={`${idPrefix}-from-email`}
           className="input"
           type="email"
           value={fromEmail}
@@ -40,10 +41,10 @@ export function SendgridForm({ config, onChange }: NotifierBackendFormProps) {
         />
       </label>
 
-      <label className="field-label" htmlFor="setup-notifier-sendgrid-to-emails">
+      <label className="field-label" htmlFor={`${idPrefix}-to-emails`}>
         Recipient emails (comma separated)
         <input
-          id="setup-notifier-sendgrid-to-emails"
+          id={`${idPrefix}-to-emails`}
           className="input"
           type="text"
           value={toEmails}
@@ -56,10 +57,13 @@ export function SendgridForm({ config, onChange }: NotifierBackendFormProps) {
         />
       </label>
 
-      <label className="field-label" htmlFor="setup-notifier-sendgrid-api-key-env">
+      {credentials ? <CredentialField id={`${idPrefix}-api-key`} label="SendGrid API key"
+        envKey="api_key_env" envValue={apiKeyEnv} credentials={credentials}
+        onEnvChange={(value) => { onChange({ ...config, api_key_env: value }) }} />
+        : <><label className="field-label" htmlFor={`${idPrefix}-api-key-env`}>
         SendGrid API key env var
         <input
-          id="setup-notifier-sendgrid-api-key-env"
+          id={`${idPrefix}-api-key-env`}
           className="input"
           type="text"
           value={apiKeyEnv}
@@ -74,6 +78,7 @@ export function SendgridForm({ config, onChange }: NotifierBackendFormProps) {
       <p className="subtle">
         Set this environment variable on the host before launch.
       </p>
+      </>}
     </div>
   )
 }

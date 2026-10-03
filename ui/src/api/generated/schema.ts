@@ -152,11 +152,35 @@ export interface paths {
         };
         /**
          * Get Config
-         * @description Return full configuration.
+         * @description Return the saved configuration and the application action it requires.
          */
         get: operations["get_config_api_v1_config_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Config
+         * @description Save supported settings edits; applying them is a separate operation.
+         */
+        patch: operations["patch_config_api_v1_config_patch"];
+        trace?: never;
+    };
+    "/api/v1/config/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Config
+         * @description Accept application of the saved revision the operator reviewed.
+         */
+        post: operations["apply_config_api_v1_config_apply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -556,6 +580,16 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * APIErrorResponse
+         * @description Canonical error envelope returned by API routes.
+         */
+        APIErrorResponse: {
+            /** Detail */
+            detail: string;
+            /** Error Code */
+            error_code: string;
+        };
+        /**
          * AlertPolicyConfig
          * @description Alert policy plugin configuration.
          */
@@ -574,6 +608,17 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+        };
+        /** AlertPolicyConfigPatch */
+        AlertPolicyConfigPatch: {
+            /** Backend */
+            backend?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enabled */
+            enabled?: boolean | null;
         };
         /** BaseModel */
         BaseModel: Record<string, never>;
@@ -758,8 +803,30 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** ConfigApplyRequestPayload */
+        ConfigApplyRequestPayload: {
+            /** Expected Config Version */
+            expected_config_version: string;
+        };
+        /** ConfigApplyResponse */
+        ConfigApplyResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "none" | "reload" | "restart";
+            /** Message */
+            message: string;
+            /** Target Config Version */
+            target_config_version: string;
+            /** Target Generation */
+            target_generation: number | null;
+        };
         /** ConfigChangeResponse */
         ConfigChangeResponse: {
+            apply_error?: components["schemas"]["APIErrorResponse"] | null;
             camera?: components["schemas"]["CameraResponse"] | null;
             /**
              * Restart Required
@@ -769,14 +836,60 @@ export interface components {
             runtime_reload?: components["schemas"]["RuntimeReloadResponse"] | null;
         };
         /**
+         * ConfigPatch
+         * @description The supported save-only edits to the canonical configuration document.
+         */
+        ConfigPatch: {
+            alert_policy?: components["schemas"]["AlertPolicyConfigPatch"] | null;
+            /** Credentials */
+            credentials?: {
+                [key: string]: string | null;
+            } | null;
+            /** Expected Config Version */
+            expected_config_version: string;
+            filter?: components["schemas"]["PluginConfigPatch"] | null;
+            /** Notifiers */
+            notifiers?: components["schemas"]["NotifierConfigPatch"][] | null;
+            storage?: components["schemas"]["StorageConfigPatch"] | null;
+            vlm?: components["schemas"]["VLMConfigPatch"] | null;
+        };
+        /**
          * ConfigResponse
          * @description Returns the full config (secrets shown as env var names, not values).
          */
         ConfigResponse: {
+            /** Active Config Version */
+            active_config_version: string | null;
+            /**
+             * Apply Required
+             * @enum {string}
+             */
+            apply_required: "none" | "reload" | "restart";
             /** Config */
             config: {
                 [key: string]: unknown;
             };
+            /** Credentials */
+            credentials: {
+                [key: string]: components["schemas"]["CredentialStatus"];
+            };
+            /** Credentials Editable */
+            credentials_editable: boolean;
+            /** Saved Config Version */
+            saved_config_version: string;
+        };
+        /**
+         * CredentialStatus
+         * @description Credential availability without disclosing a stored value.
+         */
+        CredentialStatus: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "managed" | "environment";
         };
         /** DeviceInfoResponse */
         DeviceInfoResponse: {
@@ -982,6 +1095,32 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+        };
+        /**
+         * NotifierConfigPatch
+         * @description Patch an existing ordered notifier entry, preserving all other entries.
+         */
+        NotifierConfigPatch: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Index */
+            index: number;
+        };
+        /**
+         * PluginConfigPatch
+         * @description Edit the existing backend's opaque configuration without replacing it.
+         */
+        PluginConfigPatch: {
+            /** Backend */
+            backend?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** PostgresBackupRunResponse */
         PostgresBackupRunResponse: {
@@ -1195,6 +1334,16 @@ export interface components {
             } | components["schemas"]["BaseModel"];
             paths?: components["schemas"]["StoragePathsConfig"];
         };
+        /** StorageConfigPatch */
+        StorageConfigPatch: {
+            /** Backend */
+            backend?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            paths?: components["schemas"]["StoragePathsPatch"] | null;
+        };
         /**
          * StoragePathsConfig
          * @description Logical storage paths for different artifact types.
@@ -1215,6 +1364,15 @@ export interface components {
              * @default clips
              */
             clips_dir: string;
+        };
+        /** StoragePathsPatch */
+        StoragePathsPatch: {
+            /** Artifacts Dir */
+            artifacts_dir?: string | null;
+            /** Backups Dir */
+            backups_dir?: string | null;
+            /** Clips Dir */
+            clips_dir?: string | null;
         };
         /**
          * TalkCapabilityState
@@ -1370,6 +1528,19 @@ export interface components {
             /** Trigger Classes */
             trigger_classes?: string[];
         };
+        /** VLMConfigPatch */
+        VLMConfigPatch: {
+            /** Backend */
+            backend?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            preprocessing?: components["schemas"]["VLMPreprocessPatch"] | null;
+            run_mode?: components["schemas"]["VLMRunMode"] | null;
+            /** Trigger Classes */
+            trigger_classes?: string[] | null;
+        };
         /**
          * VLMPreprocessConfig
          * @description Preprocessing configuration for VLM frame extraction.
@@ -1390,6 +1561,15 @@ export interface components {
              * @default 85
              */
             quality: number;
+        };
+        /** VLMPreprocessPatch */
+        VLMPreprocessPatch: {
+            /** Max Frames */
+            max_frames?: number | null;
+            /** Max Size */
+            max_size?: number | null;
+            /** Quality */
+            quality?: number | null;
         };
         /**
          * VLMRunMode
@@ -1757,6 +1937,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+        };
+    };
+    patch_config_api_v1_config_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_config_api_v1_config_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigApplyRequestPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

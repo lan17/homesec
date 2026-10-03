@@ -3,8 +3,8 @@
 #
 # Build: docker build -t homesec .
 # Run:   docker run \
-#          -v ./config.yaml:/config/config.yaml \
-#          -v ./.env:/config/.env \
+#          -v ./config:/config \
+#          -v ./.env:/config/.env:ro \
 #          -v ./recordings:/data/recordings \
 #          -v ./storage:/data/storage \
 #          -v ./yolo_cache:/app/yolo_cache \

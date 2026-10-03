@@ -1,6 +1,7 @@
 video_cache/
 *.pt
 .env
+.homesec/
 __pycache__/
 dist
 .idea

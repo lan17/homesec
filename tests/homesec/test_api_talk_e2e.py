@@ -23,6 +23,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import homesec.runtime.worker as worker_module
 from homesec.api.server import create_app
+from homesec.config.loader import config_signature
 from homesec.interfaces import AlertPolicy, ClipSource, Notifier, ObjectFilter, VLMAnalyzer
 from homesec.models.config import (
     AlertPolicyConfig,
@@ -58,7 +59,6 @@ from homesec.runtime.models import (
     ManagedRuntime,
     RuntimeBundle,
     RuntimeTalkStream,
-    config_signature,
 )
 from homesec.runtime.subprocess_protocol import (
     WorkerCommand,

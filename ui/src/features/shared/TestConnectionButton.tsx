@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type {
   TestConnectionRequest,
@@ -7,6 +7,7 @@ import type {
 import { useSetupTestConnectionMutation } from '../../api/hooks/useSetupTestConnectionMutation'
 import { Button } from '../../components/ui/Button'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { validateEnvReferences } from './envReferences'
 
 interface TestConnectionButtonProps {
   request: TestConnectionRequest
@@ -35,15 +36,35 @@ export function TestConnectionButton({
   description,
 }: TestConnectionButtonProps) {
   const mutation = useSetupTestConnectionMutation()
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [error, setError] = useState<{ requestKey: string; signal: AbortSignal; message: string } | null>(null)
+  const [completed, setCompleted] = useState<{
+    requestKey: string; signal: AbortSignal; response: TestConnectionResponse
+  } | null>(null)
+  const controllerRef = useRef<AbortController | null>(null)
+  const requestKey = JSON.stringify(request)
+  const errorMessage = error?.requestKey === requestKey && !error.signal.aborted ? error.message : null
+  const currentResult = completed?.requestKey === requestKey && !completed.signal.aborted
+    && completed.response === result ? result : null
+
+  useEffect(() => () => { controllerRef.current?.abort() }, [requestKey])
 
   async function runTest(): Promise<void> {
-    setErrorMessage(null)
+    controllerRef.current?.abort()
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setError(null)
     try {
-      const response = await mutation.mutateAsync(request)
-      onResult(response)
+      // Validate before mutation variables can retain a pasted raw credential.
+      validateEnvReferences(request.config)
+      const response = await mutation.mutateAsync({ request, signal: controller.signal })
+      if (!controller.signal.aborted) {
+        setCompleted({ requestKey, signal: controller.signal, response })
+        onResult(response)
+      }
     } catch (error) {
-      setErrorMessage(describeMutationError(error))
+      if (!controller.signal.aborted) {
+        setError({ requestKey, signal: controller.signal, message: describeMutationError(error) })
+      }
     }
   }
 
@@ -58,20 +79,20 @@ export function TestConnectionButton({
           }}
           disabled={mutation.isPending}
         >
-          {mutation.isPending ? pendingLabel : result ? retryLabel : idleLabel}
+          {mutation.isPending ? pendingLabel : currentResult ? retryLabel : idleLabel}
         </Button>
       </div>
 
       {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
 
-      {result ? (
+      {currentResult ? (
         <div className="test-connection__result">
-          <StatusBadge tone={result.success ? 'healthy' : 'unhealthy'}>
-            {result.success ? 'PASS' : 'FAIL'}
+          <StatusBadge tone={currentResult.success ? 'healthy' : 'unhealthy'}>
+            {currentResult.success ? 'PASS' : 'FAIL'}
           </StatusBadge>
-          <p className={result.success ? 'subtle' : 'error-text'}>{result.message}</p>
-          {typeof result.latency_ms === 'number' ? (
-            <p className="subtle">Latency: {result.latency_ms.toFixed(1)} ms</p>
+          <p className={currentResult.success ? 'subtle' : 'error-text'}>{currentResult.message}</p>
+          {typeof currentResult.latency_ms === 'number' ? (
+            <p className="subtle">Latency: {currentResult.latency_ms.toFixed(1)} ms</p>
           ) : null}
         </div>
       ) : null}
