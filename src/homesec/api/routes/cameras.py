@@ -9,13 +9,14 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
 from homesec.api.dependencies import get_homesec_app
-from homesec.api.errors import APIError, APIErrorCode
+from homesec.api.errors import APIError, APIErrorCode, APIErrorResponse
 from homesec.api.redaction import redact_config
 from homesec.config.errors import (
     CameraAlreadyExistsError,
     CameraConfigInvalidError,
     CameraMutationError,
     CameraNotFoundError,
+    ConfigApplyInProgressError,
 )
 from homesec.models.config import CameraConfig
 from homesec.runtime.errors import RuntimeReloadConfigError
@@ -58,6 +59,7 @@ class ConfigChangeResponse(BaseModel):
     restart_required: bool = True
     camera: CameraResponse | None = None
     runtime_reload: RuntimeReloadResponse | None = None
+    apply_error: APIErrorResponse | None = None
 
 
 def _source_config_to_dict(camera: CameraConfig) -> dict[str, object]:
@@ -90,7 +92,13 @@ def _camera_response(app: Application, camera: CameraConfig) -> CameraResponse:
     )
 
 
-def _map_camera_config_error(exc: CameraMutationError) -> APIError:
+def _map_camera_config_error(exc: CameraMutationError | ConfigApplyInProgressError) -> APIError:
+    if isinstance(exc, ConfigApplyInProgressError):
+        return APIError(
+            str(exc),
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.CONFIG_APPLY_IN_PROGRESS,
+        )
     if isinstance(exc, CameraNotFoundError):
         return APIError(
             str(exc),
@@ -120,25 +128,22 @@ async def _reload_runtime_if_requested(
     *,
     apply_changes: bool,
     app: Application,
-) -> RuntimeReloadResponse | None:
+) -> RuntimeReloadResponse | APIErrorResponse | None:
     if not apply_changes:
         return None
 
     try:
         request = await app.request_runtime_reload()
     except RuntimeReloadConfigError as exc:
-        raise APIError(
-            str(exc),
-            status_code=exc.status_code,
+        return APIErrorResponse(
+            detail=str(exc),
             error_code=exc.error_code,
-        ) from exc
+        )
 
     if not request.accepted:
-        raise APIError(
-            request.message,
-            status_code=status.HTTP_409_CONFLICT,
+        return APIErrorResponse(
+            detail=request.message,
             error_code=APIErrorCode.RELOAD_IN_PROGRESS,
-            extra={"target_generation": request.target_generation},
         )
 
     return RuntimeReloadResponse(
@@ -183,16 +188,18 @@ async def create_camera(
             source_backend=payload.source_backend,
             source_config=payload.source_config,
         )
-    except CameraMutationError as exc:
+    except (CameraMutationError, ConfigApplyInProgressError) as exc:
         raise _map_camera_config_error(exc) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
     camera = next((cam for cam in config.cameras if cam.name == payload.name), None)
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    apply_result = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = apply_result if isinstance(apply_result, RuntimeReloadResponse) else None
     return ConfigChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         camera=_camera_response(app, camera) if camera else None,
         runtime_reload=runtime_reload,
+        apply_error=apply_result if isinstance(apply_result, APIErrorResponse) else None,
     )
 
 
@@ -211,7 +218,7 @@ async def update_camera(
             source_backend=payload.source_backend,
             source_config=payload.source_config,
         )
-    except CameraMutationError as exc:
+    except (CameraMutationError, ConfigApplyInProgressError) as exc:
         raise _map_camera_config_error(exc) from exc
 
     config = await asyncio.to_thread(app.config_manager.get_config)
@@ -223,11 +230,13 @@ async def update_camera(
             error_code=APIErrorCode.CAMERA_NOT_FOUND,
         )
 
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    apply_result = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = apply_result if isinstance(apply_result, RuntimeReloadResponse) else None
     return ConfigChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         camera=_camera_response(app, camera),
         runtime_reload=runtime_reload,
+        apply_error=apply_result if isinstance(apply_result, APIErrorResponse) else None,
     )
 
 
@@ -240,12 +249,14 @@ async def delete_camera(
     """Delete a camera."""
     try:
         result = await app.config_manager.remove_camera(camera_name=name)
-    except CameraMutationError as exc:
+    except (CameraMutationError, ConfigApplyInProgressError) as exc:
         raise _map_camera_config_error(exc) from exc
 
-    runtime_reload = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    apply_result = await _reload_runtime_if_requested(apply_changes=apply_changes, app=app)
+    runtime_reload = apply_result if isinstance(apply_result, RuntimeReloadResponse) else None
     return ConfigChangeResponse(
         restart_required=False if runtime_reload is not None else result.restart_required,
         camera=None,
         runtime_reload=runtime_reload,
+        apply_error=apply_result if isinstance(apply_result, APIErrorResponse) else None,
     )

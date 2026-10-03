@@ -11,6 +11,10 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  ConfigResponse,
+  ConfigPatch,
+  ConfigApplyRequest,
+  ConfigApplyResponse,
   PreviewSessionResponse,
   PreviewStatusResponse,
   PreviewStopResponse,
@@ -47,6 +51,8 @@ import {
   parseClipMediaTokenResponse,
   parseClipResponse,
   parseConfigChangeResponse,
+  parseConfigResponse,
+  parseConfigApplyResponse,
   parsePreviewSessionResponse,
   parsePreviewStatusResponse,
   parsePreviewStopResponse,
@@ -77,6 +83,10 @@ export type StatsSnapshot = ApiSnapshot<StatsResponse>
 export type DiagnosticsSnapshot = ApiSnapshot<DiagnosticsResponse>
 export type ClipListSnapshot = ApiSnapshot<ClipListResponse>
 export type ClipSnapshot = ApiSnapshot<ClipResponse>
+export type ConfigSnapshot = ApiSnapshot<ConfigResponse>
+export type ConfigApplySnapshot = ApiSnapshot<ConfigApplyResponse>
+export type { ConfigPatch } from './generated/types'
+
 export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
 export type PreviewSessionSnapshot = ApiSnapshot<PreviewSessionResponse>
 export type PreviewStatusSnapshot = ApiSnapshot<PreviewStatusResponse>
@@ -99,6 +109,40 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
 
   constructor(baseUrl = DEFAULT_API_BASE_URL) {
     this.httpClient = new JsonHttpClient(baseUrl)
+  }
+
+  async getConfig(options: ApiRequestOptions = {}): Promise<ConfigSnapshot> {
+    const { status, payload } = await this.httpClient.requestJson('/api/v1/config', options)
+    try {
+      return withHttpStatus(parseConfigResponse(payload), status)
+    } catch {
+      throw new APIError('Invalid configuration response payload', status, payload, null)
+    }
+  }
+
+  async patchConfig(payload: ConfigPatch, options: ApiRequestOptions = {}): Promise<ConfigSnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/config', {
+      ...options, method: 'PATCH', body: payload,
+    })
+    try {
+      return withHttpStatus(parseConfigResponse(response.payload), response.status)
+    } catch {
+      throw new APIError('Invalid configuration response payload', response.status, response.payload, null)
+    }
+  }
+
+  async applyConfig(
+    payload: ConfigApplyRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<ConfigApplySnapshot> {
+    const response = await this.httpClient.requestJson('/api/v1/config/apply', {
+      ...options, method: 'POST', body: payload,
+    })
+    try {
+      return withHttpStatus(parseConfigApplyResponse(response.payload), response.status)
+    } catch {
+      throw new APIError('Invalid configuration apply response payload', response.status, response.payload, null)
+    }
   }
 
   async getCameras(options: ApiRequestOptions = {}): Promise<CameraListResponse> {

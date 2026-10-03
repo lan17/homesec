@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from homesec.config.loader import config_signature
 from homesec.models.config import (
     AlertPolicyConfig,
     CameraConfig,
@@ -35,7 +36,6 @@ from homesec.runtime.models import (
     PreviewState,
     RuntimeBundle,
     RuntimeState,
-    config_signature,
 )
 from homesec.sources.local_folder import LocalFolderSourceConfig
 

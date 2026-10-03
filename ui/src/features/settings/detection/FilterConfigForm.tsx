@@ -6,18 +6,21 @@ import type { FilterFormState } from './types'
 interface FilterConfigFormProps {
   value: FilterFormState
   onChange: (value: FilterFormState) => void
+  supportedClasses?: readonly string[]
+  confidenceMin?: number
 }
 
 function normalizeClassName(value: string): string {
   return value.trim().toLowerCase()
 }
 
-export function FilterConfigForm({ value, onChange }: FilterConfigFormProps) {
+export function FilterConfigForm({ value, onChange, supportedClasses, confidenceMin = 0.1 }: FilterConfigFormProps) {
   const [newClassName, setNewClassName] = useState('')
 
   function addClass(): void {
     const nextClass = normalizeClassName(newClassName)
-    if (nextClass.length === 0 || value.config.classes.includes(nextClass)) {
+    if (nextClass.length === 0 || value.config.classes.includes(nextClass)
+      || (supportedClasses && !supportedClasses.includes(nextClass))) {
       return
     }
     onChange({
@@ -62,7 +65,13 @@ export function FilterConfigForm({ value, onChange }: FilterConfigFormProps) {
           ))}
         </div>
         <div className="detection-classes__input-row">
-          <input
+          {supportedClasses ? (
+            <select className="input" aria-label="Detection class to add" value={newClassName}
+              onChange={(event) => { setNewClassName(event.target.value) }}>
+              <option value="">Choose a supported class</option>
+              {supportedClasses.filter((name) => !value.config.classes.includes(name)).map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          ) : <input
             id="detection-class-input"
             className="input"
             type="text"
@@ -78,7 +87,7 @@ export function FilterConfigForm({ value, onChange }: FilterConfigFormProps) {
                 addClass()
               }
             }}
-          />
+          />}
           <Button type="button" variant="ghost" onClick={addClass}>
             Add class
           </Button>
@@ -91,9 +100,9 @@ export function FilterConfigForm({ value, onChange }: FilterConfigFormProps) {
           id="detection-min-confidence"
           className="detection-step__range"
           type="range"
-          min={0.1}
+          min={confidenceMin}
           max={1.0}
-          step={0.05}
+          step={0.01}
           value={value.config.min_confidence}
           onChange={(event) => {
             onChange({

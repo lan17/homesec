@@ -18,15 +18,16 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from homesec.api.server import create_app
+from homesec.config.loader import config_signature
 from homesec.config.manager import ConfigManager
 from homesec.models.alert import AlertDecision
 from homesec.models.clip import ClipListCursor, ClipListPage, ClipStateData
-from homesec.models.config import CameraConfig, CameraSourceConfig, FastAPIServerConfig
+from homesec.models.config import CameraConfig, CameraSourceConfig, Config, FastAPIServerConfig
 from homesec.models.enums import ClipStatus, RiskLevel
 from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult
 from homesec.runtime.errors import RuntimeReloadConfigError
-from homesec.runtime.models import RuntimeReloadRequest
+from homesec.runtime.models import ConfigApplicationStatus, RuntimeReloadRequest
 from tests.homesec.ui_dist_stub import ensure_stub_ui_dist
 
 
@@ -241,6 +242,14 @@ class _StubApp:
 
     def request_restart(self) -> None:
         self.restart_requested = True
+
+    def get_config_application_status(self, config: Config) -> ConfigApplicationStatus:
+        version = config_signature(config)
+        return ConfigApplicationStatus(
+            saved_config_version=version,
+            active_config_version=version,
+            apply_required="none",
+        )
 
     async def activate_setup_config(self, config) -> None:
         self._config = config
@@ -856,8 +865,8 @@ def test_update_camera_supports_source_backend_switch(tmp_path) -> None:
     )
 
 
-def test_update_camera_apply_changes_conflict_returns_409(tmp_path) -> None:
-    """PATCH /cameras should surface runtime-reload conflict when apply_changes is requested."""
+def test_update_camera_apply_changes_conflict_acknowledges_saved_camera(tmp_path) -> None:
+    """A refused immediate reload must still acknowledge the saved camera mutation."""
     # Given an existing camera and a runtime manager already reloading
     manager = _write_config(
         tmp_path,
@@ -887,11 +896,17 @@ def test_update_camera_apply_changes_conflict_returns_409(tmp_path) -> None:
         json={"source_config": {"watch_dir": "/tmp/front-updated"}},
     )
 
-    # Then route returns canonical reload-in-progress conflict details
-    assert response.status_code == 409
+    # Then the successful save is acknowledged with canonical apply refusal details
+    assert response.status_code == 200
     payload = response.json()
-    assert payload["error_code"] == "RELOAD_IN_PROGRESS"
-    assert payload["target_generation"] == 11
+    assert payload["restart_required"] is True
+    assert payload["runtime_reload"] is None
+    assert payload["apply_error"] == {
+        "detail": "Runtime reload already in progress",
+        "error_code": "RELOAD_IN_PROGRESS",
+    }
+    assert payload["camera"]["source_config"]["watch_dir"] == "/tmp/front-updated"
+    assert manager.get_config().cameras[0].source.config["watch_dir"] == "/tmp/front-updated"
     assert app.runtime_reload_calls == 1
 
 
@@ -933,8 +948,8 @@ def test_update_camera_null_patch_value_clears_optional_source_field(tmp_path) -
     )
 
 
-def test_update_camera_apply_changes_propagates_runtime_config_error(tmp_path) -> None:
-    """PATCH /cameras should map runtime config errors when apply_changes reload fails."""
+def test_update_camera_apply_changes_config_error_acknowledges_saved_camera(tmp_path) -> None:
+    """A runtime config refusal must not disguise a successful camera save."""
     # Given an existing camera and runtime reload path that raises config error
     manager = _write_config(
         tmp_path,
@@ -964,11 +979,17 @@ def test_update_camera_apply_changes_propagates_runtime_config_error(tmp_path) -
         json={"source_config": {"watch_dir": "/tmp/front-updated"}},
     )
 
-    # Then route preserves status and canonical error code from runtime config error
-    assert response.status_code == 422
+    # Then the saved camera and canonical apply error are returned together
+    assert response.status_code == 200
     payload = response.json()
-    assert payload["error_code"] == "CONFIG_VALIDATION_FAILED"
-    assert payload["detail"] == "Reload config invalid"
+    assert payload["restart_required"] is True
+    assert payload["runtime_reload"] is None
+    assert payload["apply_error"] == {
+        "detail": "Reload config invalid",
+        "error_code": "CONFIG_VALIDATION_FAILED",
+    }
+    assert payload["camera"]["source_config"]["watch_dir"] == "/tmp/front-updated"
+    assert manager.get_config().cameras[0].source.config["watch_dir"] == "/tmp/front-updated"
     assert app.runtime_reload_calls == 1
 
 
@@ -1079,7 +1100,11 @@ def test_get_config_returns_empty_mapping_when_redaction_result_is_not_mapping(
 
     # Then route returns a safe empty config mapping
     assert response.status_code == 200
-    assert response.json() == {"config": {}}
+    payload = response.json()
+    assert payload["config"] == {}
+    assert payload["saved_config_version"] == config_signature(manager.get_config())
+    assert payload["active_config_version"] == payload["saved_config_version"]
+    assert payload["apply_required"] == "none"
 
 
 def test_cors_disables_credentials_for_wildcard_origins(tmp_path) -> None:

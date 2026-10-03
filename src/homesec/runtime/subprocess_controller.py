@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from homesec.config.loader import config_signature
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import (
@@ -39,7 +40,6 @@ from homesec.runtime.models import (
     PreviewState,
     RuntimeCameraStatus,
     RuntimeTalkStream,
-    config_signature,
     preview_error_status,
 )
 from homesec.runtime.subprocess_protocol import (

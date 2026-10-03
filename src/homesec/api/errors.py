@@ -29,6 +29,11 @@ class APIErrorCode(StrEnum):
     CAMERA_NOT_FOUND = "CAMERA_NOT_FOUND"
     CAMERA_ALREADY_EXISTS = "CAMERA_ALREADY_EXISTS"
     CAMERA_CONFIG_INVALID = "CAMERA_CONFIG_INVALID"
+    CONFIG_PATCH_INVALID = "CONFIG_PATCH_INVALID"
+    CONFIG_VERSION_CONFLICT = "CONFIG_VERSION_CONFLICT"
+    CONFIG_BACKEND_CHANGE_UNSUPPORTED = "CONFIG_BACKEND_CHANGE_UNSUPPORTED"
+    CONFIG_SAVE_FAILED = "CONFIG_SAVE_FAILED"
+    CONFIG_APPLY_IN_PROGRESS = "CONFIG_APPLY_IN_PROGRESS"
     CLIP_NOT_FOUND = "CLIP_NOT_FOUND"
     CLIP_MEDIA_UNAVAILABLE = "CLIP_MEDIA_UNAVAILABLE"
     CLIP_MEDIA_FETCH_FAILED = "CLIP_MEDIA_FETCH_FAILED"
@@ -189,7 +194,12 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_error_payload(
                 detail="Request validation failed",
                 error_code=APIErrorCode.REQUEST_VALIDATION_FAILED.value,
-                extra={"validation_errors": exc.errors()},
+                extra={
+                    "validation_errors": [
+                        {"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+                        for error in exc.errors()
+                    ]
+                },
             ),
         )
 

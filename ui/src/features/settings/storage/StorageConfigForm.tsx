@@ -4,13 +4,17 @@ import type { StorageBackend, StorageFormState } from './types'
 interface StorageConfigFormProps {
   value: StorageFormState
   onChange: (value: StorageFormState) => void
+  allowBackendChange?: boolean
 }
 
-export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
+export function StorageConfigForm({ value, onChange, allowBackendChange = true }: StorageConfigFormProps) {
   const backendDef = STORAGE_BACKENDS[value.backend]
   const BackendComponent = backendDef.component
 
   function handleSelectBackend(backend: StorageBackend): void {
+    if (backend === value.backend) {
+      return
+    }
     const selected = STORAGE_BACKENDS[backend]
     onChange({
       backend,
@@ -21,9 +25,11 @@ export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
   return (
     <section className="inline-form">
       <h3 className="backend-picker__title">Configure storage backend</h3>
-      <p className="subtle">Choose where event media is stored after capture.</p>
+      <p className="subtle">{allowBackendChange
+        ? 'Choose where event media is stored after capture.'
+        : `Configured backend: ${backendDef.label}. Backend changes require a storage migration.`}</p>
 
-      <div className="backend-picker__grid">
+      {allowBackendChange ? <div className="backend-picker__grid">
         {STORAGE_BACKEND_ORDER.map((backendId) => {
           const backend = STORAGE_BACKENDS[backendId]
           const selected = backendId === value.backend
@@ -46,7 +52,7 @@ export function StorageConfigForm({ value, onChange }: StorageConfigFormProps) {
             </button>
           )
         })}
-      </div>
+      </div> : null}
 
       <BackendComponent
         config={value.config}

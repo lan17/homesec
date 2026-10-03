@@ -177,10 +177,10 @@ export function VlmConfigForm({
             request={testRequest}
             result={testResult}
             onResult={setTestResult}
-            idleLabel="Test analysis"
-            retryLabel="Retry analysis test"
-            pendingLabel="Testing analysis..."
-            description="Validate analyzer connectivity before continuing."
+            idleLabel="Check AI readiness"
+            retryLabel="Check AI readiness again"
+            pendingLabel="Checking AI readiness..."
+            description="Validate analyzer settings and local readiness. This does not verify API reachability or analyze a sample clip."
           />
         </div>
       ) : null}

@@ -921,6 +921,39 @@ describe('HomeSecApiClient camera mutation methods', () => {
     expect(result.restart_required).toBe(true)
     expect(result.camera?.name).toBe('front_door')
     expect(result.httpStatus).toBe(201)
+    expect(result.apply_error).toBeNull()
+  })
+
+  it('preserves a camera save when its requested application is refused', async () => {
+    // Given: Camera YAML was saved, but a process restart is required before activation
+    const applyError = { detail: 'Apply saved settings with a process restart', error_code: 'CONFIG_RESTART_REQUIRED' }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      restart_required: true, camera: null, runtime_reload: null, apply_error: applyError,
+    }), { status: 201, headers: { 'content-type': 'application/json' } }))
+    // When: Creating a camera with immediate application requested
+    const result = await new HomeSecApiClient().createCamera({
+      name: 'front', enabled: true, source_backend: 'local_folder', source_config: { path: '/clips' },
+    }, { applyChanges: true })
+    // Then: Saved success and the typed activation error are both retained
+    expect(result.httpStatus).toBe(201)
+    expect(result.restart_required).toBe(true)
+    expect(result.runtime_reload).toBeNull()
+    expect(result.apply_error).toEqual(applyError)
+  })
+
+  it.each([
+    [], 'busy', { detail: 1, error_code: 'RELOAD_IN_PROGRESS' }, { detail: 'Busy' },
+  ])('rejects malformed camera application errors %#', async (applyError) => {
+    // Given: An untrusted camera endpoint sends malformed application error metadata
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      restart_required: true, camera: null, runtime_reload: null, apply_error: applyError,
+    }), { status: 201, headers: { 'content-type': 'application/json' } }))
+    // When: Parsing the camera mutation response
+    const result = new HomeSecApiClient().createCamera({
+      name: 'front', enabled: true, source_backend: 'local_folder', source_config: { path: '/clips' },
+    })
+    // Then: Malformed error values cannot enter feature state
+    await expect(result).rejects.toBeInstanceOf(APIError)
   })
 
   it('passes apply_changes query parameter for create camera when requested', async () => {

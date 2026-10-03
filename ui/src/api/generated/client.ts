@@ -11,6 +11,10 @@ import type {
   ClipListResponse,
   ClipResponse,
   ConfigChangeResponse,
+  ConfigResponse,
+  ConfigPatch,
+  ConfigApplyRequest,
+  ConfigApplyResponse,
   PreviewSessionResponse,
   PreviewStatusResponse,
   PreviewStopResponse,
@@ -50,6 +54,9 @@ export interface CameraMutationOptions extends ApiRequestOptions {
 export type ApiResponseWithStatus<TPayload extends object> = TPayload & { httpStatus: number }
 
 export interface GeneratedHomeSecClient {
+  getConfig(options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ConfigResponse>>
+  patchConfig(payload: ConfigPatch, options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ConfigResponse>>
+  applyConfig(payload: ConfigApplyRequest, options?: ApiRequestOptions): Promise<ApiResponseWithStatus<ConfigApplyResponse>>
   getCameras(options?: ApiRequestOptions): Promise<CameraListResponse>
   getCamera(name: string, options?: ApiRequestOptions): Promise<CameraResponse>
   createCamera(

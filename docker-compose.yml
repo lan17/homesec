@@ -13,7 +13,7 @@ services:
     tmpfs:
       - /tmp/homesec-preview:size=${HOMESEC_PREVIEW_TMPFS_SIZE:-256m}
     volumes:
-      - ./config/config.yaml:/config/config.yaml:ro
+      - ./config:/config
       - ./.env:/config/.env:ro
       - ./recordings:/data/recordings
       - ./storage:/data/storage

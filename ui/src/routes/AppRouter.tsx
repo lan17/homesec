@@ -7,6 +7,9 @@ import { ClipsPage } from '../features/clips/ClipsPage'
 import { LivePage } from '../features/live/LivePage'
 import { NotFoundPage } from '../features/not-found/NotFoundPage'
 import { SettingsPage } from '../features/settings/SettingsPage'
+import { StorageSettingsPage } from '../features/settings/storage/StorageSettingsPage'
+import { NotificationSettingsPage } from '../features/settings/notifiers/NotificationSettingsPage'
+import { DetectionSettingsPage } from '../features/settings/detection/DetectionSettingsPage'
 import { SetupPage } from '../features/setup/SetupPage'
 import { SystemPage } from '../features/system/SystemPage'
 
@@ -31,6 +34,9 @@ export function AppRouter() {
         <Route path="/events" element={<ClipsPage />} />
         <Route path="/events/:clipId" element={<ClipDetailPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/storage" element={<StorageSettingsPage />} />
+        <Route path="/settings/notifications" element={<NotificationSettingsPage />} />
+        <Route path="/settings/detection" element={<DetectionSettingsPage />} />
         <Route path="/settings/cameras" element={<CamerasPage />} />
         <Route path="/system" element={<SystemPage />} />
         <Route path="/cameras" element={<RedirectWithSearch to="/settings/cameras" />} />

@@ -38,6 +38,18 @@ vi.mock('../features/settings/SettingsPage', () => ({
   SettingsPage: () => <p>Settings Page</p>,
 }))
 
+vi.mock('../features/settings/storage/StorageSettingsPage', () => ({
+  StorageSettingsPage: () => <p>Storage Settings Page</p>,
+}))
+
+vi.mock('../features/settings/notifiers/NotificationSettingsPage', () => ({
+  NotificationSettingsPage: () => <p>Notification Settings Page</p>,
+}))
+
+vi.mock('../features/settings/detection/DetectionSettingsPage', () => ({
+  DetectionSettingsPage: () => <p>Detection Settings Page</p>,
+}))
+
 vi.mock('../features/system/SystemPage', () => ({
   SystemPage: () => <p>System Page</p>,
 }))
@@ -76,6 +88,20 @@ describe('AppRouter route cleanup', () => {
     cleanup()
     useHealthQueryMock.mockReset()
     useCamerasQueryMock.mockReset()
+  })
+
+  it.each([
+    ['/settings/storage', 'Storage Settings Page'],
+    ['/settings/notifications', 'Notification Settings Page'],
+    ['/settings/detection', 'Detection Settings Page'],
+  ])('opens saved configuration editor at %s', (path, page) => {
+    // Given: User opens a Settings editor directly
+    renderRouter(path)
+    // When: The matching route renders
+    const editor = screen.getByText(page)
+    // Then: Settings editing remains separate from first-time setup
+    expect(editor).toBeTruthy()
+    expect(screen.getByTestId('location').textContent).toBe(path)
   })
 
   it('redirects the root route to Live', async () => {

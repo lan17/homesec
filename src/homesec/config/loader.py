@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import stat
@@ -48,6 +50,13 @@ class ConfigError(Exception):
         self.code = code
         self.path = path
         self.__cause__ = cause
+
+
+def config_signature(config: Config) -> str:
+    """Return the saved configuration's stable version, before redaction."""
+    payload = config.model_dump(mode="json")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:12]
 
 
 def load_config(path: Path) -> Config:

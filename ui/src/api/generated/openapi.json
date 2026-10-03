@@ -1,6 +1,25 @@
 {
   "components": {
     "schemas": {
+      "APIErrorResponse": {
+        "description": "Canonical error envelope returned by API routes.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "error_code": {
+            "title": "Error Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "error_code"
+        ],
+        "title": "APIErrorResponse",
+        "type": "object"
+      },
       "AlertPolicyConfig": {
         "description": "Alert policy plugin configuration.",
         "properties": {
@@ -28,6 +47,47 @@
           }
         },
         "title": "AlertPolicyConfig",
+        "type": "object"
+      },
+      "AlertPolicyConfigPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "title": "AlertPolicyConfigPatch",
         "type": "object"
       },
       "BaseModel": {
@@ -501,8 +561,78 @@
         "title": "ComponentStatus",
         "type": "object"
       },
+      "ConfigApplyRequestPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_config_version": {
+            "minLength": 1,
+            "title": "Expected Config Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_config_version"
+        ],
+        "title": "ConfigApplyRequestPayload",
+        "type": "object"
+      },
+      "ConfigApplyResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "action": {
+            "enum": [
+              "none",
+              "reload",
+              "restart"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "target_config_version": {
+            "title": "Target Config Version",
+            "type": "string"
+          },
+          "target_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Generation"
+          }
+        },
+        "required": [
+          "accepted",
+          "message",
+          "action",
+          "target_config_version",
+          "target_generation"
+        ],
+        "title": "ConfigApplyResponse",
+        "type": "object"
+      },
       "ConfigChangeResponse": {
         "properties": {
+          "apply_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/APIErrorResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "camera": {
             "anyOf": [
               {
@@ -532,17 +662,114 @@
         "title": "ConfigChangeResponse",
         "type": "object"
       },
+      "ConfigPatch": {
+        "additionalProperties": false,
+        "description": "The supported save-only edits to the canonical configuration document.",
+        "properties": {
+          "alert_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlertPolicyConfigPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_config_version": {
+            "minLength": 1,
+            "title": "Expected Config Version",
+            "type": "string"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PluginConfigPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notifiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NotifierConfigPatch"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notifiers"
+          },
+          "storage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StorageConfigPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vlm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VLMConfigPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expected_config_version"
+        ],
+        "title": "ConfigPatch",
+        "type": "object"
+      },
       "ConfigResponse": {
         "description": "Returns the full config (secrets shown as env var names, not values).",
         "properties": {
+          "active_config_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Config Version"
+          },
+          "apply_required": {
+            "enum": [
+              "none",
+              "reload",
+              "restart"
+            ],
+            "title": "Apply Required",
+            "type": "string"
+          },
           "config": {
             "additionalProperties": true,
             "title": "Config",
             "type": "object"
+          },
+          "saved_config_version": {
+            "title": "Saved Config Version",
+            "type": "string"
           }
         },
         "required": [
-          "config"
+          "config",
+          "saved_config_version",
+          "active_config_version",
+          "apply_required"
         ],
         "title": "ConfigResponse",
         "type": "object"
@@ -1071,6 +1298,76 @@
           "backend"
         ],
         "title": "NotifierConfig",
+        "type": "object"
+      },
+      "NotifierConfigPatch": {
+        "additionalProperties": false,
+        "description": "Patch an existing ordered notifier entry, preserving all other entries.",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "index": {
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "title": "NotifierConfigPatch",
+        "type": "object"
+      },
+      "PluginConfigPatch": {
+        "additionalProperties": false,
+        "description": "Edit the existing backend's opaque configuration without replacing it.",
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          }
+        },
+        "title": "PluginConfigPatch",
         "type": "object"
       },
       "PostgresBackupRunResponse": {
@@ -1707,6 +2004,46 @@
         "title": "StorageConfig",
         "type": "object"
       },
+      "StorageConfigPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoragePathsPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "StorageConfigPatch",
+        "type": "object"
+      },
       "StoragePathsConfig": {
         "description": "Logical storage paths for different artifact types.",
         "properties": {
@@ -1727,6 +2064,46 @@
           }
         },
         "title": "StoragePathsConfig",
+        "type": "object"
+      },
+      "StoragePathsPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifacts Dir"
+          },
+          "backups_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backups Dir"
+          },
+          "clips_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clips Dir"
+          }
+        },
+        "title": "StoragePathsPatch",
         "type": "object"
       },
       "TalkCapabilityState": {
@@ -2125,6 +2502,70 @@
         "title": "VLMConfig",
         "type": "object"
       },
+      "VLMConfigPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "preprocessing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VLMPreprocessPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VLMRunMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trigger_classes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Classes"
+          }
+        },
+        "title": "VLMConfigPatch",
+        "type": "object"
+      },
       "VLMPreprocessConfig": {
         "additionalProperties": false,
         "description": "Preprocessing configuration for VLM frame extraction.",
@@ -2146,6 +2587,46 @@
           }
         },
         "title": "VLMPreprocessConfig",
+        "type": "object"
+      },
+      "VLMPreprocessPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "max_frames": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Frames"
+          },
+          "max_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Size"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality"
+          }
+        },
+        "title": "VLMPreprocessPatch",
         "type": "object"
       },
       "VLMRunMode": {
@@ -2817,7 +3298,7 @@
     },
     "/api/v1/config": {
       "get": {
-        "description": "Return full configuration.",
+        "description": "Return the saved configuration and the application action it requires.",
         "operationId": "get_config_api_v1_config_get",
         "responses": {
           "200": {
@@ -2832,6 +3313,88 @@
           }
         },
         "summary": "Get Config",
+        "tags": [
+          "config"
+        ]
+      },
+      "patch": {
+        "description": "Save supported settings edits; applying them is a separate operation.",
+        "operationId": "patch_config_api_v1_config_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Config",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/apply": {
+      "post": {
+        "description": "Accept application of the saved revision the operator reviewed.",
+        "operationId": "apply_config_api_v1_config_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigApplyRequestPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigApplyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Config",
         "tags": [
           "config"
         ]

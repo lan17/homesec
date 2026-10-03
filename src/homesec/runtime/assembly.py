@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
 
+from homesec.config.loader import config_signature
 from homesec.models.enums import VLMRunMode
 from homesec.notifiers.multiplex import NotifierEntry
 from homesec.pipeline import ClipPipeline
@@ -15,7 +16,7 @@ from homesec.plugins.filters import load_filter
 from homesec.repository import ClipRepository
 from homesec.retention import build_local_retention_pruner
 from homesec.runtime.disabled_vlm import DisabledVLMAnalyzer
-from homesec.runtime.models import RuntimeBundle, config_signature
+from homesec.runtime.models import RuntimeBundle
 
 if TYPE_CHECKING:
     from homesec.interfaces import (

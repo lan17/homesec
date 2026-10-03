@@ -47,6 +47,7 @@ export interface NotificationStepData {
 export interface NotifierBackendFormProps {
   config: Record<string, unknown>
   onChange: (config: Record<string, unknown>) => void
+  idPrefix?: string
 }
 
 export interface NotifierBackendDef {
