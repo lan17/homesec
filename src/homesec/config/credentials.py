@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Literal, get_args
 from uuid import uuid4
@@ -132,6 +132,16 @@ def managed_credential_references(config: BaseModel) -> frozenset[str]:
     )
 
 
+def _require_environment_compatible_references(references: Iterable[str | None]) -> None:
+    if any(
+        reference is not None and not credential_value_is_environment_compatible(reference)
+        for reference in references
+    ):
+        raise CredentialStoreError(
+            "Credential environment references could not be read; check the configured references"
+        )
+
+
 def managed_credentials_path(config_path: Path) -> Path:
     """Keep private data under its own restrictive directory beside the YAML."""
     return config_path.parent / ".homesec" / "credentials.json"
@@ -181,6 +191,7 @@ def load_managed_credentials(config_path: Path, config: Config) -> dict[str, str
 def credential_status(config_path: Path, config: Config) -> dict[str, CredentialStatus]:
     """Report saved credential presence; managed values never come from host env."""
     references = credential_references(config)
+    _require_environment_compatible_references(references.values())
     values = (
         _read_values(config_path) if any(map(is_managed_reference, references.values())) else {}
     )

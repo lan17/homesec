@@ -42,8 +42,9 @@ export function buildStorageSettingsPatch(draft: StorageSettingsDraft): ConfigPa
   validateEnvReferences(config)
   const paths = diffConfig(draft.originalPaths, draft.paths)
   for (const value of Object.values(paths)) {
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new Error('Storage paths must be non-empty.')
+    if (typeof value !== 'string' || value.trim().length === 0 || value.includes('\0')
+      || value.startsWith('/') || value.split('/').includes('..')) {
+      throw new Error("Storage destination directories must be relative without '..' segments.")
     }
   }
   return {

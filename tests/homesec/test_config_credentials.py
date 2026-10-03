@@ -516,3 +516,77 @@ def test_external_plugin_credentials_follow_actual_union_branch(
     assert storage_references == (
         {f"storage.config.auth.{kind}_env": f"{kind.upper()}_KEY"} if kind else {}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["private-ref\0bad", "private-ref\ud800"])
+@pytest.mark.parametrize("section", ["storage", "vlm", "mqtt"])
+async def test_incompatible_changed_environment_references_never_write(
+    tmp_path: Path, reference: str, section: str
+) -> None:
+    # Given: A valid config and an edited plugin credential reference incompatible with getenv
+    manager = _manager(tmp_path)
+    original = manager.config_path.read_bytes()
+    edits: dict[str, object]
+    if section == "storage":
+        edits = {"storage": {"config": {"refresh_token_env": reference}}}
+    elif section == "vlm":
+        edits = {"vlm": {"config": {"api_key_env": reference}}}
+    else:
+        edits = {"notifiers": [{"index": 0, "config": {"auth": {"password_env": reference}}}]}
+
+    # When: Saving a direct config reference rather than a write-only credential
+    with pytest.raises(ConfigPatchInvalidError) as error:
+        await manager.patch_config(_patch(manager, **edits))
+
+    # Then: The error is safe and all persistence targets remain unchanged
+    assert manager.config_path.read_bytes() == original
+    assert not Path(str(manager.config_path) + ".bak").exists()
+    assert not managed_credentials_path(manager.config_path).exists()
+    assert "private-ref" not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize("reference", ["private-ref\0bad", "private-ref\ud800"])
+def test_incompatible_legacy_environment_references_have_safe_read_errors(
+    tmp_path: Path, reference: str
+) -> None:
+    # Given: Malformed preexisting YAML contains a plugin-owned environment reference
+    manager = _manager(tmp_path)
+    payload = yaml.safe_load(manager.config_path.read_text())
+    payload["vlm"]["config"]["api_key_env"] = reference
+    manager.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    config = manager.get_config()
+
+    # When: Reading availability for the malformed reference
+    response = _client(manager, auth_enabled=False).get("/api/v1/config")
+    with pytest.raises(CredentialStoreError) as error:
+        credential_status(manager.config_path, config)
+
+    # Then: Status returns a typed, value-free failure without making managed-only startup fail
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "CONFIG_CREDENTIALS_UNAVAILABLE"
+    assert "private-ref" not in response.text
+    assert "private-ref" not in "".join(traceback.format_exception(error.value))
+    assert error.value.__cause__ is None
+    assert load_managed_credentials(manager.config_path, config) == {}
+
+
+@pytest.mark.asyncio
+async def test_unrelated_edits_preserve_legacy_hyphenated_environment_references(
+    tmp_path: Path,
+) -> None:
+    # Given: A valid deployment uses a host env name outside the guided UI identifier syntax
+    manager = _manager(tmp_path)
+    payload = yaml.safe_load(manager.config_path.read_text())
+    payload["storage"]["config"]["token_env"] = "DEPLOYMENT-TOKEN"
+    manager.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    # When: Saving a storage root change without editing that credential reference
+    saved = await manager.patch_config(_patch(manager, storage={"config": {"root": "/new-root"}}))
+
+    # Then: The external reference is preserved and status can be read safely
+    assert credential_references(saved)["storage.config.token_env"] == "DEPLOYMENT-TOKEN"
+    assert (
+        credential_status(manager.config_path, saved)["storage.config.token_env"].source
+        == "environment"
+    )

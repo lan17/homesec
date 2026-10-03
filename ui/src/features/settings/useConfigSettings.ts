@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { apiClient, isAPIError, type ConfigPatch } from '../../api/client'
+import { apiClient, isAPIError, type ConfigPatch, type ConfigSnapshot } from '../../api/client'
 import { useConfigMutation } from '../../api/hooks/useConfigMutation'
 import { useConfigQuery } from '../../api/hooks/useConfigQuery'
 import { QUERY_KEYS } from '../../api/hooks/queryKeys'
@@ -61,14 +61,28 @@ export function useConfigSettings() {
         ? 'Settings saved. Waiting for HomeSec to restart and activate them…'
         : 'Settings saved. Waiting for runtime activation…')
       const activated = await waitForConfigApply(response, controller.signal)
+      if (controller.signal.aborted) { return }
       await queryClient.cancelQueries({ queryKey: QUERY_KEYS.config })
-      queryClient.setQueryData(QUERY_KEYS.config, activated)
+      if (controller.signal.aborted) { return }
+      const observed = queryClient.getQueryData<ConfigSnapshot>(QUERY_KEYS.config)
+      const interveningSave = observed && observed.saved_config_version !== config.saved_config_version
+        && observed.saved_config_version !== activated.saved_config_version
+      if (interveningSave) {
+        await queryClient.refetchQueries({ queryKey: QUERY_KEYS.config })
+        if (controller.signal.aborted) { return }
+      } else {
+        queryClient.setQueryData(QUERY_KEYS.config, activated)
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.runtimeStatus }),
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cameras }),
       ])
       if (!controller.signal.aborted) {
-        setApplyMessage('Saved settings are active.')
+        const latest = queryClient.getQueryData<ConfigSnapshot>(QUERY_KEYS.config)
+        const targetIsActive = latest?.saved_config_version === activated.saved_config_version
+          && latest.active_config_version === activated.active_config_version && latest.apply_required === 'none'
+        setApplyMessage(targetIsActive ? 'Saved settings are active.'
+          : 'Activation was confirmed, but saved settings changed. Apply the latest saved revision separately.')
       }
     } catch (error) {
       if (timedOut) {

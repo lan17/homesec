@@ -7,7 +7,7 @@ import os
 import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 import yaml
@@ -72,6 +72,20 @@ class StoragePathsPatch(_ConfigPatchModel):
     clips_dir: str | None = None
     backups_dir: str | None = None
     artifacts_dir: str | None = None
+
+    @field_validator("clips_dir", "backups_dir", "artifacts_dir")
+    @classmethod
+    def _validate_destination_directory(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip()
+            or "\0" in value
+            or PurePosixPath(value).is_absolute()
+            or ".." in PurePosixPath(value).parts
+        ):
+            raise ValueError(
+                "Storage destination directories must be relative without '..' segments"
+            )
+        return value
 
 
 class StorageConfigPatch(PluginConfigPatch):
@@ -388,6 +402,14 @@ class ConfigManager:
                     cause=exc,
                 ) from exc
             for path, candidate_reference in credential_references(validated).items():
+                if (
+                    candidate_reference != current_references.get(path)
+                    and candidate_reference is not None
+                    and not credential_value_is_environment_compatible(candidate_reference)
+                ):
+                    raise ConfigPatchInvalidError(
+                        "Credential environment references must be compatible with the process environment"
+                    )
                 if (
                     is_managed_reference(candidate_reference)
                     and candidate_reference != current_references.get(path)

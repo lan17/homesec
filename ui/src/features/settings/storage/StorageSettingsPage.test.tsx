@@ -396,4 +396,45 @@ describe('StorageSettingsPage', () => {
     expect(screen.queryByText('Old token works')).toBeNull()
   })
 
+
+  it.each([true, false])('invalidates a completed connection result when Refresh replaces tested settings (success=%s)', async (success) => {
+    // Given: A completed provider test belongs to the current saved storage root
+    let latest = config()
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, request) =>
+      response(request?.method === 'POST' ? { success, message: 'Probe was for the old root', latency_ms: 1 } : latest))
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Check storage connection' }))
+    await screen.findByText(success ? 'PASS' : 'FAIL')
+
+    // When: Refresh loads a concurrent writer's new saved configuration without an unsaved draft
+    latest = config('/new-root', 'v2')
+    await user.click(screen.getByRole('button', { name: 'Refresh saved settings' }))
+    await waitFor(() => expect((screen.getByLabelText('Storage root directory') as HTMLInputElement).value).toBe('/new-root'))
+
+    // Then: The old completed success/failure is not attributed to the new provider inputs
+    expect(screen.queryByText('PASS')).toBeNull()
+    expect(screen.queryByText('FAIL')).toBeNull()
+    expect(screen.queryByText('Probe was for the old root')).toBeNull()
+  })
+
+  it.each(['/absolute', '../escape', 'nested/../escape'])('rejects changed invalid storage destination %s before Save', async (destination) => {
+    // Given: Storage destinations are provider-relative subdirectories rather than camera recording paths
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response(config()))
+    renderPage()
+    const user = userEvent.setup()
+    const input = await screen.findByLabelText('Clip destination directory')
+
+    // When: Editing a destination to an absolute or parent-traversing path
+    await user.clear(input)
+    await user.type(input, destination)
+    await user.click(screen.getByRole('button', { name: 'Save storage settings' }))
+
+    // Then: The UI describes the storage root relationship and refuses an unusable upload path
+    await screen.findByText("Storage destination directories must be relative without '..' segments.")
+    expect(screen.getByText(/relative to the configured storage root/)).toBeTruthy()
+    expect(fetch.mock.calls.every(([, request]) => request?.method === 'GET')).toBe(true)
+    expect(screen.queryByText('Local working paths')).toBeNull()
+  })
+
 })

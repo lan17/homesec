@@ -27,6 +27,7 @@ from homesec.config.manager import ConfigManager, ConfigPatch
 from homesec.models.config import Config, FastAPIServerConfig
 from homesec.runtime.manager import RuntimeManager
 from homesec.runtime.models import RuntimeReloadRequest, RuntimeState, RuntimeStatusSnapshot
+from homesec.storage_paths import build_backup_path
 
 
 def _manager(tmp_path: Path) -> ConfigManager:
@@ -571,3 +572,103 @@ def test_config_api_read_only_save_has_actionable_error(
     assert "writable" in response.json()["detail"]
     assert "private-path" not in response.text
     assert manager.config_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("field", ["clips_dir", "backups_dir", "artifacts_dir"])
+@pytest.mark.parametrize("destination", ["/absolute", "../escape", "nested/../escape", ""])
+def test_config_api_rejects_invalid_submitted_storage_destination_paths(
+    tmp_path: Path, field: str, destination: str
+) -> None:
+    # Given: A saved config with a relative storage destination and no pending changes
+    manager = _manager(tmp_path)
+    original = manager.config_path.read_bytes()
+    client, _ = _client(manager)
+
+    # When: A PATCH submits an absolute, parent-traversing, or empty destination directory
+    response = client.patch(
+        "/api/v1/config",
+        json={
+            "expected_config_version": config_signature(manager.get_config()),
+            "storage": {"paths": {field: destination}},
+        },
+    )
+
+    # Then: Validation fails before persistence and existing upload destinations remain intact
+    assert response.status_code == 422
+    assert manager.config_path.read_bytes() == original
+    assert not Path(str(manager.config_path) + ".bak").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destination", [".", "nested/backups", "nested/./backups"])
+async def test_storage_destination_edits_support_provider_root_and_relative_subdirectories(
+    tmp_path: Path, destination: str
+) -> None:
+    # Given: Storage destination directories are relative to the configured provider root
+    manager = _manager(tmp_path)
+
+    # When: Saving a runtime-legal destination directory for backup files
+    saved = await manager.patch_config(
+        ConfigPatch.model_validate(
+            {
+                "expected_config_version": config_signature(manager.get_config()),
+                "storage": {"paths": {"backups_dir": destination}},
+            }
+        )
+    )
+
+    # Then: The persisted path produces a legal upload destination without provider I/O
+    assert saved.storage.paths.backups_dir == destination
+    expected = "backup.sql.gz" if destination == "." else "nested/backups/backup.sql.gz"
+    assert build_backup_path("backup.sql.gz", saved.storage.paths) == expected
+
+
+@pytest.mark.asyncio
+async def test_unrelated_edits_preserve_unchanged_legacy_storage_destination_paths(
+    tmp_path: Path,
+) -> None:
+    # Given: Preexisting YAML has an absolute legacy destination outside the new edit validator
+    manager = _manager(tmp_path)
+    payload = yaml.safe_load(manager.config_path.read_text())
+    payload["storage"]["paths"]["clips_dir"] = "/legacy/clips"
+    manager.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    # When: Saving an unrelated provider root change
+    saved = await manager.patch_config(
+        ConfigPatch.model_validate(
+            {
+                "expected_config_version": config_signature(manager.get_config()),
+                "storage": {"config": {"root": "/new-root"}},
+            }
+        )
+    )
+
+    # Then: YAML startup compatibility is preserved and the unchanged legacy path is not rewritten
+    assert saved.storage.paths.clips_dir == "/legacy/clips"
+    assert saved.storage.config["root"] == "/new-root"
+
+
+@pytest.mark.parametrize("reference", ["private-ref\0bad", "private-ref\ud800"])
+def test_actual_application_status_preserves_safe_legacy_reference_read_failure(
+    tmp_path: Path, reference: str
+) -> None:
+    # Given: An active real Application's saved YAML is subsequently corrupted by an env reference
+    manager = _manager(tmp_path)
+    active_config = manager.get_config()
+    app = Application(manager.config_path)
+    app._config = active_config
+    app._parent_config = active_config.model_copy(deep=True)
+    app._runtime_manager = cast(RuntimeManager, _ActiveSettingsRuntime(active_config))
+    payload = yaml.safe_load(manager.config_path.read_text())
+    payload["vlm"]["config"]["api_key_env"] = reference
+    manager.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    api = create_contract_app()
+    api.state.homesec = app
+
+    # When: GET computes saved/active status through the actual Application before credential metadata
+    response = TestClient(api).get("/api/v1/config")
+
+    # Then: Pure managed membership does not throw before the route's safe store-error handler
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "CONFIG_CREDENTIALS_UNAVAILABLE"
+    assert "private-ref" not in response.text

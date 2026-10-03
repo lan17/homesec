@@ -15,9 +15,9 @@ import { StorageConfigForm } from './StorageConfigForm'
 import { buildStorageTestRequest } from './types'
 
 const PATH_FIELDS = [
-  ['clips_dir', 'Clip working directory'],
-  ['backups_dir', 'Backup directory'],
-  ['artifacts_dir', 'Analysis artifact directory'],
+  ['clips_dir', 'Clip destination directory'],
+  ['backups_dir', 'Backup destination directory'],
+  ['artifacts_dir', 'Analysis artifact destination directory'],
 ] as const
 
 export function StorageSettingsPage() {
@@ -104,7 +104,8 @@ export function StorageSettingsPage() {
               setValidationError(null)
             }} />
           <details>
-            <summary>Local working paths</summary>
+            <summary>Storage destination paths</summary>
+            <p className="subtle">Directories are relative to the configured storage root, including remote Dropbox storage.</p>
             {PATH_FIELDS.map(([key, label]) => (
               <label key={key} htmlFor={`storage-${key}`} className="field-label">
                 {label}

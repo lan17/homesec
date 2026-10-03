@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useState } from 'react'
+
+import type { TestConnectionResponse } from '../../api/generated/types'
 
 import { TestConnectionButton } from './TestConnectionButton'
 
@@ -89,4 +92,32 @@ describe('TestConnectionButton', () => {
     // Then: The earlier attempt stays invalidated after the intervening edit
     expect(screen.queryByText('Earlier inputs failed')).toBeNull()
   })
+
+  it('shows the accepted current result across equivalent inputs and invalidates it after an intervening edit', async () => {
+    // Given: A caller stores a successful response from the actual shared connection test
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response({ success: true, message: 'Current result', latency_ms: 1 }))
+    const client = new QueryClient()
+    function Harness({ root }: { root: string }) {
+      const [result, setResult] = useState<TestConnectionResponse | null>(null)
+      return <QueryClientProvider client={client}>
+        <TestConnectionButton request={{ type: 'storage', backend: 'local', config: { root } }}
+          result={result} onResult={setResult} />
+      </QueryClientProvider>
+    }
+    const { rerender } = render(<Harness root="/a" />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Run connection test' }))
+    await screen.findByText('PASS')
+
+    // When: Equivalent inputs rerender, then inputs change A to B to A
+    rerender(<Harness root="/a" />)
+    expect(screen.getByText('PASS')).toBeTruthy()
+    rerender(<Harness root="/b" />)
+    rerender(<Harness root="/a" />)
+
+    // Then: Current valid checks remain visible, but a result invalidated by editing cannot return
+    expect(screen.queryByText('PASS')).toBeNull()
+    expect(screen.queryByText('Current result')).toBeNull()
+  })
+
 })

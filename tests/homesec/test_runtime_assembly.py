@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+from homesec.config.credentials import load_managed_credentials
 from homesec.models.config import (
     AlertPolicyConfig,
     CameraConfig,
@@ -20,6 +21,7 @@ from homesec.models.config import (
 from homesec.models.filter import FilterConfig, FilterResult
 from homesec.models.vlm import AnalysisResult, VLMConfig
 from homesec.notifiers.multiplex import NotifierEntry
+from homesec.plugins import discover_all_plugins
 from homesec.plugins.analyzers.openai import OpenAIConfig
 from homesec.plugins.filters.yolo import YoloFilterConfig
 from homesec.plugins.storage.dropbox import DropboxStorageConfig
@@ -245,15 +247,20 @@ async def test_runtime_assembly_cleans_filter_and_notifier_when_analyzer_build_f
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["OPENAI_API_KEY", "unused-ref\0bad", "unused-ref\ud800"])
 async def test_runtime_assembly_skips_analyzer_load_when_run_mode_never(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    reference: str,
 ) -> None:
     """run_mode=never should avoid analyzer plugin instantiation at startup."""
-    # Given: Runtime assembly with VLM disabled and filter creation stubbed
+    # Given: Disabled analysis may retain an unused incompatible external env reference
+    discover_all_plugins()
     notifier = _StubNotifier()
     filter_plugin = _StubFilter()
     assembler = _make_assembler(notifier)
     config = _make_config(run_mode="never")
+    config.vlm.config = {"api_key_env": reference, "model": "gpt-4o"}
 
     monkeypatch.setattr("homesec.runtime.assembly.load_filter", lambda _cfg: filter_plugin)
 
@@ -262,11 +269,13 @@ async def test_runtime_assembly_skips_analyzer_load_when_run_mode_never(
 
     monkeypatch.setattr("homesec.runtime.assembly.load_analyzer", _fail_if_called)
 
-    # When: Building a runtime bundle
+    # When: Loading the managed startup snapshot and assembling the recording runtime
+    credentials = load_managed_credentials(tmp_path / "config.yaml", config)
     runtime = await assembler.build_bundle(config, generation=1)
 
     # Then: Runtime uses disabled analyzer semantics and bundle remains healthy
     try:
+        assert credentials == {}
         assert await runtime.vlm_plugin.ping() is True
         analysis = await runtime.vlm_plugin.analyze(
             video_path=Path("/tmp/disabled-vlm-test.mp4"),
