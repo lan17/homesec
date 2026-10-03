@@ -59,6 +59,7 @@ class _HelperMessage(BaseModel):
     error_code: str | None = None
     sdp: str | None = Field(default=None, max_length=48_000)
     viewer_count: int = Field(default=0, ge=0, le=32)
+    active_session_count: int = Field(default=0, ge=0, le=32)
     media_active: bool = True
     state: Literal["starting", "ready", "error"] | None = None
     video_port: int | None = Field(default=None, ge=1, le=65535)
@@ -349,7 +350,7 @@ class RustWebRTCLivePublisher:
                             else self._unavailable()
                         )
                     self._last_viewer_at = time.monotonic()
-                    self._status = self._running_status(response.viewer_count)
+                    self._status = self._running_status(response)
                     return self._status
             except (OSError, _HelperError) as exc:
                 if helper is not None:
@@ -459,6 +460,8 @@ class RustWebRTCLivePublisher:
                 return self._session_recording_refusal()
             if command != "close" and (self._helper is not helper or self._shutdown.is_set()):
                 return self._session_unavailable()
+            if command == "offer" and response is not None and response.ok:
+                self._last_viewer_at = time.monotonic()
         if response is None:
             return self._session_unavailable()
         if not response.ok:
@@ -493,10 +496,19 @@ class RustWebRTCLivePublisher:
         self._stop_owned_helper()
 
     def _stop_owned_helper(
-        self, *, expected: _HelperClient | None = None, error: str | None = None
+        self,
+        *,
+        expected: _HelperClient | None = None,
+        error: str | None = None,
+        idle_since: float | None = None,
     ) -> None:
         with self._lock:
             if expected is not None and self._helper is not expected:
+                return
+            if idle_since is not None and (
+                self._last_viewer_at != idle_since
+                or time.monotonic() - idle_since < self._idle_timeout_s
+            ):
                 return
             self._generation += 1
             generation = self._generation
@@ -524,6 +536,7 @@ class RustWebRTCLivePublisher:
         while not self._shutdown.wait(0.5):
             with self._lock:
                 helper = self._helper
+                observed_activity_at = self._last_viewer_at
                 ready = self._status.state in (
                     LivePublisherState.STARTING,
                     LivePublisherState.READY,
@@ -555,24 +568,32 @@ class RustWebRTCLivePublisher:
             with self._lock:
                 if self._helper is not helper:
                     continue
-                if response.viewer_count:
+                if response.active_session_count:
                     self._last_viewer_at = time.monotonic()
+                elif self._last_viewer_at != observed_activity_at:
+                    # An accepted offer made this no-session observation stale.
+                    continue
                 idle = (
-                    not response.viewer_count
+                    not response.active_session_count
                     and time.monotonic() - self._last_viewer_at >= self._idle_timeout_s
                 )
-                self._status = self._running_status(response.viewer_count)
+                idle_since = self._last_viewer_at
+                self._status = self._running_status(response)
             if idle:
-                self._stop_owned_helper(expected=helper)
+                self._stop_owned_helper(expected=helper, idle_since=idle_since)
 
-    def _running_status(self, viewers: int) -> LivePublisherStatus:
+    def _running_status(self, response: _HelperMessage) -> LivePublisherStatus:
         return LivePublisherStatus(
             state=LivePublisherState.DEGRADED
             if self._degraded_reason
             else LivePublisherState.READY,
-            viewer_count=viewers,
+            viewer_count=response.viewer_count,
             degraded_reason=self._degraded_reason,
-            idle_shutdown_at=(self._last_viewer_at + self._idle_timeout_s if not viewers else None),
+            idle_shutdown_at=(
+                self._last_viewer_at + self._idle_timeout_s
+                if not response.active_session_count
+                else None
+            ),
         )
 
     def _recording_blocks(self) -> bool:

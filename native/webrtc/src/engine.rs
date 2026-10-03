@@ -75,9 +75,11 @@ impl Peer {
                             MediaKind::Video => Codec::H264,
                             MediaKind::Audio => Codec::Opus,
                         };
-                        if let Some(params) =
-                            writer.payload_params().find(|p| p.spec().codec == codec)
-                        {
+                        if let Some(params) = writer.payload_params().find(|p| {
+                            p.spec().codec == codec
+                                && (codec != Codec::H264
+                                    || p.spec().format.packetization_mode == Some(1))
+                        }) {
                             match media.kind {
                                 MediaKind::Video => self.video = Some((media.mid, params.pt())),
                                 MediaKind::Audio => self.audio = Some((media.mid, params.pt())),
@@ -332,14 +334,27 @@ pub fn run(options: Options) -> Result<()> {
                     {
                         reply = Reply::error(request.request_id, "invalid_offer");
                     } else {
-                        let mut rtc = RtcConfig::new()
+                        let mut config = RtcConfig::new()
                             .clear_codecs()
-                            .enable_h264(true)
                             .enable_opus(true, false)
                             .set_ice_lite(true)
                             .set_send_buffer_video(2048)
-                            .set_send_buffer_audio(64)
-                            .build(now);
+                            .set_send_buffer_audio(64);
+                        // str0m packetizes H.264 with STAP-A/FU-A, which requires mode 1.
+                        for (pt, resend, profile) in [
+                            (127_u8, 121_u8, 0x42001f),
+                            (108, 109, 0x42e01f),
+                            (123, 119, 0x4d001f),
+                            (114, 115, 0x64001f),
+                        ] {
+                            config.codec_config().add_h264(
+                                pt.into(),
+                                Some(resend.into()),
+                                true,
+                                profile,
+                            );
+                        }
+                        let mut rtc = config.build(now);
                         let candidate = Candidate::host(candidate_addr, "udp")?;
                         rtc.add_local_candidate(candidate)
                             .ok_or("invalid_candidate")?;
@@ -364,10 +379,10 @@ pub fn run(options: Options) -> Result<()> {
                                 // negotiated answer now; bind writers from that event later.
                                 let has_video = answer.media_lines.iter().any(|line| {
                                     line.direction().is_sending()
-                                        && line
-                                            .rtp_params()
-                                            .iter()
-                                            .any(|p| p.spec().codec == Codec::H264)
+                                        && line.rtp_params().iter().any(|p| {
+                                            p.spec().codec == Codec::H264
+                                                && p.spec().format.packetization_mode == Some(1)
+                                        })
                                 });
                                 if peer.pump(&media, now).is_ok() && has_video && !peer.failed {
                                     reply.sdp = Some(answer.to_sdp_string());
@@ -414,6 +429,8 @@ pub fn run(options: Options) -> Result<()> {
                             .filter(|p| p.connected && !p.expired(now))
                             .count(),
                     );
+                    reply.active_session_count =
+                        Some(peers.values().filter(|p| !p.expired(now)).count());
                     reply.media_active = Some(child.is_some() && last_video.is_some());
                 }
                 Operation::Stop => stop = true,

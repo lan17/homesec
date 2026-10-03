@@ -12,7 +12,12 @@ from pathlib import Path
 import pytest
 
 from homesec.models.config import WebRTCPreviewConfig
-from homesec.models.preview import PreviewAnswer, PreviewOffer, PreviewSessionRefusal
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+)
 from homesec.sources.rtsp.capabilities import RTSPTimeoutCapabilities
 from homesec.sources.rtsp.live_publisher import (
     LivePublisherRefusalReason,
@@ -62,6 +67,7 @@ for raw in sys.stdin:
     elif command['command'] == 'close':
         peers.pop(command['session_id'],None)
     result['viewer_count'] = len(peers)
+    result['active_session_count'] = len(peers)
     reply(result)
 """
     )
@@ -70,13 +76,19 @@ for raw in sys.stdin:
 
 
 def publisher(
-    helper: tuple[Path, Path], *, idle: float = 5.0, concurrent: bool = False
+    helper: tuple[Path, Path],
+    *,
+    idle: float = 5.0,
+    concurrent: bool = False,
+    negotiation_timeout_s: float = 0.2,
 ) -> RustWebRTCLivePublisher:
     return RustWebRTCLivePublisher(
         camera_name="front",
         rtsp_url="rtsp://user:private-password@camera/main",
         config=WebRTCPreviewConfig(
-            helper_path=str(helper[0]), advertised_ip="127.0.0.1", negotiation_timeout_s=0.2
+            helper_path=str(helper[0]),
+            advertised_ip="127.0.0.1",
+            negotiation_timeout_s=negotiation_timeout_s,
         ),
         idle_timeout_s=idle,
         recording_policy="allow_during_recording" if concurrent else "stop_on_recording",
@@ -107,7 +119,8 @@ def test_viewers_share_one_media_reader_and_detach_independently(helper: tuple[P
 
         # Then: One input serves both peers, with the second peer still renewable
         assert [command["command"] for command in commands].count("start") == 1
-        assert preview.renew(two.session_id, time.time() + 10).accepted
+        renewed = preview.renew(two.session_id, time.time() + 10)
+        assert isinstance(renewed, PreviewSessionAction) and renewed.accepted
         assert preview.status().state == LivePublisherState.READY
         args = next(command["ffmpeg_args"] for command in commands if command["command"] == "start")
         assert args[args.index("-profile:v") + 1] == "baseline"
@@ -173,6 +186,92 @@ def test_http_activity_cannot_keep_lease_or_media_alive(helper: tuple[Path, Path
 
         # Then: The camera reader stops without any API polling dependence
         assert preview.status().viewer_count == 0
+    finally:
+        preview.shutdown()
+
+
+def test_pending_negotiation_survives_idle_timeout_then_expiry_releases_input(
+    helper: tuple[Path, Path],
+) -> None:
+    # Given: A helper distinguishes negotiating sessions from connected viewers.
+    script = (
+        helper[0]
+        .read_text()
+        .replace(
+            "peers = {}",
+            "peers = {}\n"
+            "negotiation_timeout = float(sys.argv[sys.argv.index('--negotiation-timeout-s')+1])",
+            1,
+        )
+        .replace(
+            "now + command['lease_seconds']",
+            "now + min(command['lease_seconds'], negotiation_timeout)",
+        )
+    )
+    script = script.replace("result['viewer_count'] = len(peers)", "result['viewer_count'] = 0")
+    helper[0].write_text(script)
+    preview = publisher(helper, idle=0.1, negotiation_timeout_s=1.8)
+    try:
+        answer = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        assert isinstance(answer, PreviewAnswer)
+
+        # When: Multiple maintenance polls observe a pending peer after the idle deadline.
+        def status_polls() -> int:
+            return sum(
+                json.loads(raw)["command"] == "status" for raw in helper[1].read_text().splitlines()
+            )
+
+        wait_until(lambda: status_polls() >= 2)
+
+        # Then: Negotiation keeps the input alive without counting as a connected viewer.
+        assert preview.status().state == LivePublisherState.READY
+        assert preview.status().viewer_count == 0
+        assert preview.status().idle_shutdown_at is None
+        wait_until(lambda: preview.status().state == LivePublisherState.IDLE)
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        assert [command["command"] for command in commands].count("start") == 1
+    finally:
+        preview.shutdown()
+
+
+def test_accepted_offer_outlives_stale_zero_session_status(helper: tuple[Path, Path]) -> None:
+    # Given: A helper delays its no-session status until a new offer has been accepted.
+    script = helper[0].read_text().replace("peers = {}", "peers = {}\ndeferred_status = None", 1)
+    script = script.replace(
+        "    reply(result)",
+        "    if command['command'] == 'status' and not peers and deferred_status is None:\n"
+        "        deferred_status = result\n"
+        "        continue\n"
+        "    reply(result)\n"
+        "    if command['command'] == 'offer' and deferred_status is not None:\n"
+        "        time.sleep(0.3)\n"
+        "        reply(deferred_status)\n"
+        "        deferred_status = None",
+        1,
+    )
+    helper[0].write_text(script)
+    preview = publisher(helper, idle=0.1)
+    try:
+        preview.ensure_active()
+
+        def status_polls() -> int:
+            return sum(
+                json.loads(raw)["command"] == "status" for raw in helper[1].read_text().splitlines()
+            )
+
+        wait_until(lambda: status_polls() == 1)
+
+        # When: An offer succeeds, then the older zero-session status arrives after the idle delay.
+        answer = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        assert isinstance(answer, PreviewAnswer)
+        wait_until(lambda: status_polls() >= 2)
+
+        # Then: The new viewer and original shared input survive the stale idle observation.
+        assert preview.status().state == LivePublisherState.READY
+        renewed = preview.renew(answer.session_id, time.time() + 10)
+        assert isinstance(renewed, PreviewSessionAction) and renewed.accepted
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        assert [command["command"] for command in commands].count("start") == 1
     finally:
         preview.shutdown()
 

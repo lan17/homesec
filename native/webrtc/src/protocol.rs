@@ -47,6 +47,8 @@ pub struct Reply {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewer_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_session_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub media_active: Option<bool>,
 }
 

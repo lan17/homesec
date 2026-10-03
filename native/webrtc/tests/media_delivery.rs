@@ -351,11 +351,12 @@ fn wait_until(mut complete: impl FnMut() -> bool) {
     }
 }
 
-fn unconnected_offer() -> String {
-    let mut rtc = Rtc::builder()
-        .clear_codecs()
-        .enable_h264(true)
-        .build(Instant::now());
+fn unconnected_offer(packetization_mode: bool) -> String {
+    let mut config = Rtc::builder().clear_codecs();
+    config
+        .codec_config()
+        .add_h264(96.into(), None, packetization_mode, 0x42e01f);
+    let mut rtc = config.build(Instant::now());
     rtc.add_local_candidate(Candidate::host("127.0.0.1:9".parse().unwrap(), "udp").unwrap())
         .unwrap();
     let mut change = rtc.sdp_api();
@@ -395,6 +396,7 @@ fn encrypted_media_reaches_two_viewers_and_survives_one_closing() {
     second.assert_video_decodes();
     let status = helper.successful_request(json!({"command": "status"}));
     assert_eq!(status["viewer_count"], 2);
+    assert_eq!(status["active_session_count"], 2);
     assert_eq!(status["media_active"], true);
 
     // When: One viewer closes, and the surviving viewer renews its authorization.
@@ -413,10 +415,12 @@ fn encrypted_media_reaches_two_viewers_and_survives_one_closing() {
     // Then: The camera input and surviving peer remain live; stop releases them.
     let status = helper.successful_request(json!({"command": "status"}));
     assert_eq!(status["viewer_count"], 1);
+    assert_eq!(status["active_session_count"], 1);
     assert_eq!(status["media_active"], true);
     helper.successful_request(json!({"command": "close", "session_id": "second"}));
     let status = helper.successful_request(json!({"command": "status"}));
     assert_eq!(status["viewer_count"], 0);
+    assert_eq!(status["active_session_count"], 0);
     helper.successful_request(json!({"command": "stop"}));
 }
 
@@ -430,7 +434,7 @@ fn malformed_offers_and_negotiation_timeout_release_admission_capacity() {
     for (sdp, lease_seconds) in [
         ("not SDP".to_owned(), 30.0),
         ("x".repeat(128 * 1024 + 1), 30.0),
-        (unconnected_offer(), 0.0),
+        (unconnected_offer(true), 0.0),
     ] {
         let reply = helper.request(json!({
             "command": "offer", "session_id": "invalid", "sdp": sdp,
@@ -442,10 +446,13 @@ fn malformed_offers_and_negotiation_timeout_release_admission_capacity() {
 
     // Then: Invalid offers consume no slot; an unconnected valid peer does.
     helper.successful_request(json!({
-        "command": "offer", "session_id": "unconnected", "sdp": unconnected_offer(),
+        "command": "offer", "session_id": "unconnected", "sdp": unconnected_offer(true),
         "lease_seconds": 30.0,
     }));
-    let replacement_offer = unconnected_offer();
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["viewer_count"], 0);
+    assert_eq!(status["active_session_count"], 1);
+    let replacement_offer = unconnected_offer(true);
     let request = json!({
         "command": "offer", "session_id": "replacement", "sdp": replacement_offer,
         "lease_seconds": 30.0,
@@ -455,6 +462,11 @@ fn malformed_offers_and_negotiation_timeout_release_admission_capacity() {
     assert_eq!(reply["error_code"], "session_limit");
 
     // When: The first peer never sends ICE/DTLS and its negotiation times out.
+    wait_until(|| {
+        let status = helper.successful_request(json!({"command": "status"}));
+        assert_eq!(status["viewer_count"], 0);
+        status["active_session_count"] == 0
+    });
     wait_until(|| {
         let reply = helper.request(request.clone());
         if reply["ok"] == true {
@@ -469,6 +481,33 @@ fn malformed_offers_and_negotiation_timeout_release_admission_capacity() {
         "command": "renew", "session_id": "unconnected", "lease_seconds": 30.0
     }));
     assert_eq!(reply["error_code"], "session_not_found");
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+#[test]
+fn unsupported_h264_packetization_is_refused_without_affecting_valid_viewers() {
+    // Given: A live helper can only send H.264 using STAP-A/FU-A packetization.
+    let (mut helper, ready) = Helper::start();
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": ffmpeg_args(&ready)}));
+
+    // When: A receive-only browser offers only H.264 packetization mode 0.
+    let reply = helper.request(json!({
+        "command": "offer", "session_id": "mode-zero", "sdp": unconnected_offer(false),
+        "lease_seconds": 30.0,
+    }));
+
+    // Then: Its unsupported offer consumes no slot, while a valid peer still receives media.
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error_code"], "invalid_offer");
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["active_session_count"], 0);
+    let mut viewer = Viewer::attach(&mut helper, "mode-one");
+    progress_until(&mut [&mut viewer], |viewers| viewers[0].has_media());
+    assert!(viewer.has_media());
+    viewer.assert_video_decodes();
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["viewer_count"], 1);
+    assert_eq!(status["active_session_count"], 1);
     helper.successful_request(json!({"command": "stop"}));
 }
 
@@ -522,7 +561,7 @@ fn failed_ffmpeg_input_refuses_new_sessions() {
     assert_eq!(status["media_active"], false);
     assert_eq!(status["viewer_count"], 0);
     let reply = helper.request(json!({
-        "command": "offer", "session_id": "refused", "sdp": unconnected_offer(),
+        "command": "offer", "session_id": "refused", "sdp": unconnected_offer(true),
         "lease_seconds": 30.0,
     }));
     assert_eq!(reply["ok"], false);

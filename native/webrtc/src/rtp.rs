@@ -82,9 +82,7 @@ impl H264Assembler {
         }
         if self.expected_sequence.is_some_and(|v| v != packet.sequence) {
             self.recovering = true;
-            if !new_frame {
-                self.damaged = true;
-            }
+            self.damaged = true;
         }
         self.expected_sequence = Some(packet.sequence.wrapping_add(1));
         if !self.damaged && !self.append_payload(packet.payload) {
@@ -322,6 +320,25 @@ mod tests {
                 .unwrap()
                 .keyframe
         );
+    }
+
+    #[test]
+    fn missing_leading_idr_slice_drops_dependents_until_complete_keyframe() {
+        // Given: Decoder parameters and a complete frame precede a multi-slice IDR.
+        let mut assembler = H264Assembler::default();
+        parameters(&mut assembler, 1);
+        assert!(assembler.push(packet(3, 9000, true, &[0x61, 1])).is_some());
+
+        // When: The leading IDR slice is lost before the new timestamp is observed.
+        let partial_idr = assembler.push(packet(5, 18000, true, &[0x65, 2]));
+        let dependent = assembler.push(packet(6, 27000, true, &[0x61, 3]));
+        let complete_idr = assembler.push(packet(7, 36000, true, &[0x65, 4]));
+
+        // Then: Neither damaged output nor its dependents pass; a complete IDR recovers.
+        assert!(partial_idr.is_none());
+        assert!(dependent.is_none());
+        assert!(complete_idr.unwrap().keyframe);
+        assert!(assembler.push(packet(8, 45000, true, &[0x61, 5])).is_some());
     }
 
     #[test]
