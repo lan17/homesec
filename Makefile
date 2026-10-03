@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint lock-check check db-migrate db-migration publish ui-% fake-camera
+.PHONY: help up down docker-build docker-push run db test coverage typecheck lint lock-check check rust-check rust-build db-migrate db-migration publish ui-% fake-camera
 
 help:
 	@echo "Targets:"
@@ -20,7 +20,9 @@ help:
 	@echo "    make typecheck     Run mypy"
 	@echo "    make lint          Run ruff linter"
 	@echo "    make lock-check    Verify uv.lock is up to date"
-	@echo "    make check         Run lint + typecheck + test + ui-check"
+	@echo "    make rust-build    Build the Rust WebRTC helper"
+	@echo "    make rust-check    Run Rust formatting, Clippy, and tests"
+	@echo "    make check         Run Rust + Python + UI checks"
 	@echo "    make fake-camera   Start a mock ONVIF + RTSP camera (requires ffmpeg, mediamtx)"
 	@echo ""
 	@echo "  Database:"
@@ -40,6 +42,8 @@ DOCKER_IMAGE ?= homesec
 DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
 UV_RUN ?= uv run --locked
+CARGO ?= cargo
+WEBRTC_MANIFEST := native/webrtc/Cargo.toml
 
 # Docker
 up:
@@ -91,7 +95,15 @@ lint-fix:
 lock-check:
 	uv lock --check
 
-check: lock-check lint typecheck test ui-check
+rust-build:
+	$(CARGO) build --manifest-path $(WEBRTC_MANIFEST) --release --locked
+
+rust-check:
+	$(CARGO) fmt --manifest-path $(WEBRTC_MANIFEST) --all -- --check
+	$(CARGO) clippy --manifest-path $(WEBRTC_MANIFEST) --all-targets --locked -- -D warnings
+	$(CARGO) test --manifest-path $(WEBRTC_MANIFEST) --locked
+
+check: lock-check rust-check lint typecheck test ui-check
 
 fake-camera:
 	@echo "Starting mock ONVIF server on port 8000..."

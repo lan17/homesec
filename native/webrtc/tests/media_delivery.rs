@@ -1,0 +1,570 @@
+//! Exercise the executable boundary with real FFmpeg RTP and encrypted WebRTC.
+
+use std::io::{BufRead, BufReader, Write};
+use std::net::UdpSocket;
+use std::path::Path;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+use str0m::change::SdpAnswer;
+use str0m::format::Codec;
+use str0m::media::{Direction, MediaKind};
+use str0m::net::{Protocol, Receive};
+use str0m::{Candidate, Event, Input, Output, Rtc};
+
+struct Helper {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    replies: Receiver<Value>,
+    next_request: usize,
+}
+
+impl Helper {
+    fn start() -> (Self, Value) {
+        Self::start_with(2, 10.0, None)
+    }
+
+    fn start_with(
+        max_viewers: usize,
+        negotiation_timeout_s: f64,
+        ffmpeg_fixture: Option<&Path>,
+    ) -> (Self, Value) {
+        let reservation = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = reservation.local_addr().unwrap().port().to_string();
+        drop(reservation);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_homesec-webrtc"));
+        command
+            .args([
+                "--advertised-ip",
+                "127.0.0.1",
+                "--udp-port-start",
+                &port,
+                "--udp-port-end",
+                &port,
+                "--max-viewers",
+                &max_viewers.to_string(),
+                "--negotiation-timeout-s",
+                &negotiation_timeout_s.to_string(),
+                "--max-session-duration-s",
+                "60",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        if let Some(directory) = ffmpeg_fixture {
+            let mut paths = vec![directory.to_owned()];
+            paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+            command.env("PATH", std::env::join_paths(paths).unwrap());
+            command.env("HOMESEC_FFMPEG_PID_FILE", directory.join("ffmpeg.pid"));
+        }
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, replies) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let line = line.unwrap();
+                let value = serde_json::from_str(&line).expect("helper emitted invalid JSON");
+                if tx.send(value).is_err() {
+                    break;
+                }
+            }
+        });
+        let helper = Self {
+            child,
+            stdin: Some(stdin),
+            replies,
+            next_request: 0,
+        };
+        let ready = helper
+            .replies
+            .recv_timeout(Duration::from_secs(10))
+            .expect("helper did not become ready");
+        assert_eq!(ready["event"], "ready", "{ready}");
+        (helper, ready)
+    }
+
+    fn request(&mut self, mut request: Value) -> Value {
+        self.next_request += 1;
+        let id = self.next_request.to_string();
+        request["request_id"] = json!(id);
+        let stdin = self.stdin.as_mut().unwrap();
+        serde_json::to_writer(&mut *stdin, &request).unwrap();
+        stdin.write_all(b"\n").unwrap();
+        stdin.flush().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let reply = self
+                .replies
+                .recv_timeout(remaining)
+                .expect("helper request timed out");
+            if reply["request_id"] == id {
+                return reply;
+            }
+        }
+    }
+
+    fn successful_request(&mut self, request: Value) -> Value {
+        let reply = self.request(request);
+        assert_eq!(reply["ok"], true, "{reply}");
+        reply
+    }
+}
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        // EOF is the real parent-loss boundary and should release FFmpeg too.
+        self.stdin.take();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            if Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+struct Viewer {
+    rtc: Rtc,
+    socket: UdpSocket,
+    connected: bool,
+    video_frames: usize,
+    keyframes: usize,
+    audio_packets: usize,
+    video_sample: Vec<u8>,
+}
+
+impl Viewer {
+    fn attach(helper: &mut Helper, session_id: &str) -> Self {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let mut rtc = Rtc::builder()
+            .clear_codecs()
+            .enable_h264(true)
+            .enable_opus(true, false)
+            .build(Instant::now());
+        rtc.add_local_candidate(Candidate::host(socket.local_addr().unwrap(), "udp").unwrap())
+            .unwrap();
+        let mut change = rtc.sdp_api();
+        change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        change.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None);
+        let (offer, pending) = change.apply().unwrap();
+        let reply = helper.successful_request(json!({
+            "command": "offer",
+            "session_id": session_id,
+            "sdp": offer.to_sdp_string(),
+            "lease_seconds": 30.0,
+        }));
+        let answer = SdpAnswer::from_sdp_string(reply["sdp"].as_str().unwrap()).unwrap();
+        rtc.sdp_api().accept_answer(pending, answer).unwrap();
+        Self {
+            rtc,
+            socket,
+            connected: false,
+            video_frames: 0,
+            keyframes: 0,
+            audio_packets: 0,
+            video_sample: Vec::new(),
+        }
+    }
+
+    fn progress(&mut self) {
+        let now = Instant::now();
+        self.rtc.handle_input(Input::Timeout(now)).unwrap();
+        let mut packet = [0_u8; 65_536];
+        loop {
+            match self.socket.recv_from(&mut packet) {
+                Ok((length, source)) => {
+                    let receive = Receive::new(
+                        Protocol::Udp,
+                        source,
+                        self.socket.local_addr().unwrap(),
+                        &packet[..length],
+                    )
+                    .unwrap();
+                    self.rtc
+                        .handle_input(Input::Receive(Instant::now(), receive))
+                        .unwrap();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("viewer UDP receive failed: {error}"),
+            }
+        }
+        loop {
+            match self.rtc.poll_output().unwrap() {
+                Output::Transmit(transmit) => {
+                    self.socket
+                        .send_to(&transmit.contents, transmit.destination)
+                        .unwrap();
+                }
+                Output::Event(Event::Connected) => self.connected = true,
+                Output::Event(Event::MediaData(data)) => {
+                    assert!(!data.data.is_empty());
+                    match data.params.spec().codec {
+                        Codec::H264 => {
+                            self.video_frames += 1;
+                            self.keyframes += usize::from(data.is_keyframe());
+                            if self.video_frames <= 3 {
+                                self.video_sample.extend_from_slice(&data.data);
+                            }
+                        }
+                        Codec::Opus => self.audio_packets += 1,
+                        codec => panic!("unexpected negotiated codec: {codec}"),
+                    }
+                }
+                Output::Timeout(_) => break,
+                Output::Event(_) => {}
+            }
+        }
+    }
+
+    fn has_media(&self) -> bool {
+        self.connected && self.video_frames >= 3 && self.keyframes >= 1 && self.audio_packets >= 5
+    }
+
+    fn assert_video_decodes(&self) {
+        let mut sample = tempfile::NamedTempFile::new().unwrap();
+        sample.write_all(&self.video_sample).unwrap();
+        let output = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-xerror",
+                "-f",
+                "h264",
+                "-i",
+            ])
+            .arg(sample.path())
+            .args([
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "rgb24",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "received H.264 did not decode");
+        assert_eq!(output.stdout.len(), 160 * 120 * 3);
+    }
+}
+
+fn ffmpeg_args(ready: &Value) -> Vec<String> {
+    let video_port = ready["video_port"].as_u64().unwrap();
+    let audio_port = ready["audio_port"].as_u64().unwrap();
+    [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x120:rate=10",
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "1",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-profile:v",
+        "baseline",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "10",
+        "-bf",
+        "0",
+        "-payload_type",
+        "96",
+        "-f",
+        "rtp",
+        &format!("rtp://127.0.0.1:{video_port}?pkt_size=1200"),
+        "-map",
+        "1:a:0",
+        "-c:a",
+        "libopus",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-payload_type",
+        "97",
+        "-f",
+        "rtp",
+        &format!("rtp://127.0.0.1:{audio_port}?pkt_size=1200"),
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn progress_until(viewers: &mut [&mut Viewer], complete: impl Fn(&[&mut Viewer]) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        for viewer in viewers.iter_mut() {
+            viewer.progress();
+        }
+        if complete(viewers) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "WebRTC media timed out: {:?}",
+            viewers
+                .iter()
+                .map(|v| (v.connected, v.video_frames, v.keyframes, v.audio_packets))
+                .collect::<Vec<_>>()
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn wait_until(mut complete: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !complete() {
+        assert!(Instant::now() < deadline, "lifecycle operation timed out");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn unconnected_offer() -> String {
+    let mut rtc = Rtc::builder()
+        .clear_codecs()
+        .enable_h264(true)
+        .build(Instant::now());
+    rtc.add_local_candidate(Candidate::host("127.0.0.1:9".parse().unwrap(), "udp").unwrap())
+        .unwrap();
+    let mut change = rtc.sdp_api();
+    change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+    change.apply().unwrap().0.to_sdp_string()
+}
+
+#[test]
+fn encrypted_media_reaches_two_viewers_and_survives_one_closing() {
+    // Given: The real helper receives H.264 and Opus RTP from a single FFmpeg input.
+    assert!(
+        Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("install ffmpeg to run the WebRTC integration test")
+            .success()
+    );
+    let (mut helper, ready) = Helper::start();
+    let media_port = ready["media_port"].as_u64().unwrap();
+    assert!(media_port > 0);
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": ffmpeg_args(&ready)}));
+
+    // When: A receive-only peer starts playing, then a second joins over real UDP.
+    let mut first = Viewer::attach(&mut helper, "first");
+    progress_until(&mut [&mut first], |viewers| viewers[0].has_media());
+    let mut second = Viewer::attach(&mut helper, "second");
+    progress_until(&mut [&mut first, &mut second], |viewers| {
+        viewers.iter().all(|viewer| viewer.has_media())
+    });
+
+    // Then: DTLS/SRTP delivery depayloads video keyframes and Opus for both peers.
+    assert!(first.has_media());
+    assert!(second.has_media());
+    first.assert_video_decodes();
+    second.assert_video_decodes();
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["viewer_count"], 2);
+    assert_eq!(status["media_active"], true);
+
+    // When: One viewer closes, and the surviving viewer renews its authorization.
+    helper.successful_request(json!({"command": "close", "session_id": "first"}));
+    helper.successful_request(json!({"command": "close", "session_id": "first"}));
+    helper.successful_request(json!({
+        "command": "renew", "session_id": "second", "lease_seconds": 30.0
+    }));
+    let previous_video = second.video_frames;
+    let previous_audio = second.audio_packets;
+    progress_until(&mut [&mut second], |viewers| {
+        viewers[0].video_frames >= previous_video + 5
+            && viewers[0].audio_packets >= previous_audio + 10
+    });
+
+    // Then: The camera input and surviving peer remain live; stop releases them.
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["viewer_count"], 1);
+    assert_eq!(status["media_active"], true);
+    helper.successful_request(json!({"command": "close", "session_id": "second"}));
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["viewer_count"], 0);
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+#[test]
+fn malformed_offers_and_negotiation_timeout_release_admission_capacity() {
+    // Given: One viewer slot and a short negotiation deadline on a live input.
+    let (mut helper, ready) = Helper::start_with(1, 0.2, None);
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": ffmpeg_args(&ready)}));
+
+    // When: Malformed or oversized SDP and invalid leases are submitted.
+    for (sdp, lease_seconds) in [
+        ("not SDP".to_owned(), 30.0),
+        ("x".repeat(128 * 1024 + 1), 30.0),
+        (unconnected_offer(), 0.0),
+    ] {
+        let reply = helper.request(json!({
+            "command": "offer", "session_id": "invalid", "sdp": sdp,
+            "lease_seconds": lease_seconds,
+        }));
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["error_code"], "invalid_offer");
+    }
+
+    // Then: Invalid offers consume no slot; an unconnected valid peer does.
+    helper.successful_request(json!({
+        "command": "offer", "session_id": "unconnected", "sdp": unconnected_offer(),
+        "lease_seconds": 30.0,
+    }));
+    let replacement_offer = unconnected_offer();
+    let request = json!({
+        "command": "offer", "session_id": "replacement", "sdp": replacement_offer,
+        "lease_seconds": 30.0,
+    });
+    let reply = helper.request(request.clone());
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error_code"], "session_limit");
+
+    // When: The first peer never sends ICE/DTLS and its negotiation times out.
+    wait_until(|| {
+        let reply = helper.request(request.clone());
+        if reply["ok"] == true {
+            return true;
+        }
+        assert_eq!(reply["error_code"], "session_limit");
+        false
+    });
+
+    // Then: Another peer can use the released slot, and the old lease cannot renew.
+    let reply = helper.request(json!({
+        "command": "renew", "session_id": "unconnected", "lease_seconds": 30.0
+    }));
+    assert_eq!(reply["error_code"], "session_not_found");
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+#[test]
+fn authorization_expiry_closes_a_connected_peer_without_stopping_the_input() {
+    // Given: A connected peer receiving encrypted video and audio.
+    let (mut helper, ready) = Helper::start();
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": ffmpeg_args(&ready)}));
+    let mut viewer = Viewer::attach(&mut helper, "expiring");
+    progress_until(&mut [&mut viewer], |viewers| viewers[0].has_media());
+    assert_eq!(
+        helper.successful_request(json!({"command": "status"}))["viewer_count"],
+        1
+    );
+
+    // When: Its renewed authorization lease expires while the socket stays open.
+    helper.successful_request(json!({
+        "command": "renew", "session_id": "expiring", "lease_seconds": 0.15
+    }));
+    wait_until(|| {
+        viewer.progress();
+        helper.successful_request(json!({"command": "status"}))["viewer_count"] == 0
+    });
+
+    // Then: The expired session cannot renew; source-owned input lifetime remains separate.
+    let reply = helper.request(json!({
+        "command": "renew", "session_id": "expiring", "lease_seconds": 30.0
+    }));
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error_code"], "session_not_found");
+    assert_eq!(
+        helper.successful_request(json!({"command": "status"}))["media_active"],
+        true
+    );
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+#[test]
+fn failed_ffmpeg_input_refuses_new_sessions() {
+    // Given: FFmpeg starts but exits before producing any video.
+    let (mut helper, _) = Helper::start();
+    helper.successful_request(json!({
+        "command": "start", "ffmpeg_args": ["-homesec-invalid-option"]
+    }));
+
+    // When: The worker observes the process failure.
+    wait_until(|| helper.successful_request(json!({"command": "status"}))["state"] == "error");
+
+    // Then: The failed input is inactive and no viewer can negotiate a dead stream.
+    let status = helper.successful_request(json!({"command": "status"}));
+    assert_eq!(status["media_active"], false);
+    assert_eq!(status["viewer_count"], 0);
+    let reply = helper.request(json!({
+        "command": "offer", "session_id": "refused", "sdp": unconnected_offer(),
+        "lease_seconds": 30.0,
+    }));
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error_code"], "preview_temporarily_unavailable");
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_eof_reaps_the_ffmpeg_process_and_releases_the_media_socket() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Given: A live FFmpeg fixture records its PID at the subprocess boundary.
+    let fixture = tempfile::tempdir().unwrap();
+    let executable = fixture.path().join("ffmpeg");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\nprintf '%s' \"$$\" > \"$HOMESEC_FFMPEG_PID_FILE\"\nexec sleep 60\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (mut helper, ready) = Helper::start_with(1, 10.0, Some(fixture.path()));
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": ["fixture"]}));
+    let pid_file = fixture.path().join("ffmpeg.pid");
+    wait_until(|| pid_file.exists() && !std::fs::read_to_string(&pid_file).unwrap().is_empty());
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+
+    // When: Its parent closes control stdin without sending a stop command.
+    helper.stdin.take();
+    wait_until(|| helper.child.try_wait().unwrap().is_some());
+
+    // Then: The helper exits successfully, reaps FFmpeg, and releases its UDP port.
+    assert!(helper.child.wait().unwrap().success());
+    assert!(
+        !Command::new("kill")
+            .args(["-0", &pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let media_port = ready["media_port"].as_u64().unwrap();
+    assert!(UdpSocket::bind(format!("127.0.0.1:{media_port}")).is_ok());
+}

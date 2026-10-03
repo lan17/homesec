@@ -16,6 +16,12 @@ from homesec.config.loader import ConfigError, ConfigErrorCode
 from homesec.config.manager import ConfigManager
 from homesec.maintenance.postgres_backup import PostgresBackupManager
 from homesec.models.config import FastAPIServerConfig
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+)
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat
 from homesec.plugins.registry import PluginType, get_plugin_names
 from homesec.runtime.bootstrap import (
@@ -364,6 +370,30 @@ class Application:
     async def wait_for_runtime_reload(self) -> RuntimeReloadResult | None:
         """Wait for the in-flight runtime reload (if any)."""
         return await self._require_runtime_manager().wait_for_reload()
+
+    async def negotiate_camera_preview(
+        self, camera_name: str, *, offer: PreviewOffer, lease_expires_at: float
+    ) -> PreviewAnswer | PreviewSessionRefusal:
+        """Negotiate one preview viewer through the active runtime."""
+        return await self._require_runtime_manager().negotiate_preview(
+            camera_name, offer=offer, lease_expires_at=lease_expires_at
+        )
+
+    async def renew_camera_preview_session(
+        self, camera_name: str, *, session_id: str, lease_expires_at: float
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        """Renew one viewer without changing camera lifecycle policy."""
+        return await self._require_runtime_manager().renew_preview_session(
+            camera_name, session_id=session_id, lease_expires_at=lease_expires_at
+        )
+
+    async def close_camera_preview_session(
+        self, camera_name: str, *, session_id: str
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        """Detach a viewer without force-stopping shared preview."""
+        return await self._require_runtime_manager().close_preview_session(
+            camera_name, session_id=session_id
+        )
 
     async def get_camera_preview_status(self, camera_name: str) -> CameraPreviewStatus:
         """Return preview status for a runtime camera."""

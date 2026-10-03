@@ -37,6 +37,103 @@ describe('useCameraPreview', () => {
     vi.useRealTimers()
   })
 
+  it('stops a WebRTC viewer locally without force-stopping the camera publisher', async () => {
+    // Given: A camera with another viewer and an active WebRTC attachment
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front', enabled: true, state: 'ready', viewer_count: 2,
+      degraded_reason: null, last_error: null, idle_shutdown_at: null, httpStatus: 200,
+    })
+    vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front', state: 'ready', viewer_count: 2, transport: 'webrtc',
+      token: 'preview-token', token_expires_at: null, playlist_url: null,
+      signaling_url: '/api/v1/preview/cameras/front/sessions', ice_servers: [],
+      idle_timeout_s: 30, warning: null, httpStatus: 200,
+    })
+    const forceStop = vi.spyOn(apiClient, 'stopCameraPreview')
+    const { result } = renderHook(() => useCameraPreview('front'), { wrapper: createWrapper() })
+    await act(async () => { await result.current.start() })
+    await waitFor(() => expect(result.current.session?.transport).toBe('webrtc'))
+
+    // When: This viewer presses Stop live view
+    await act(async () => { await result.current.stop() })
+
+    // Then: Attachment removal triggers player cleanup while the shared publisher stays active
+    expect(result.current.session).toBeNull()
+    expect(result.current.playlistUrl).toBeNull()
+    expect(forceStop).not.toHaveBeenCalled()
+  })
+
+  it('does not reactivate WebRTC media through token refresh while backgrounded', async () => {
+    // Given: A WebRTC attachment whose token refresh is due shortly
+    freezePreviewClock()
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front', enabled: true, state: 'ready', viewer_count: 1,
+      degraded_reason: null, last_error: null, idle_shutdown_at: null, httpStatus: 200,
+    })
+    const ensure = vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front', state: 'ready', viewer_count: 1, transport: 'webrtc',
+      token: 'preview-token', token_expires_at: '2026-04-23T12:00:10.000Z', playlist_url: null,
+      signaling_url: '/api/v1/preview/cameras/front/sessions', ice_servers: [],
+      idle_timeout_s: 30, warning: null, httpStatus: 200,
+    })
+    const { result, unmount } = renderHook(() => useCameraPreview('front'), { wrapper: createWrapper() })
+    await act(async () => { await result.current.start() })
+    await waitFor(() => expect(result.current.session?.transport).toBe('webrtc'))
+    vi.useFakeTimers()
+
+    // When: The app remains hidden past the scheduled authorization refresh
+    act(() => {
+      visibility.mockReturnValue('hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+
+    // Then: Camera activation remains idle until returning to the foreground
+    expect(ensure).toHaveBeenCalledOnce()
+    await act(async () => {
+      visibility.mockReturnValue('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(ensure).toHaveBeenCalledTimes(2)
+    unmount()
+  })
+
+  it('refreshes tokenless WebRTC sessions from their lease deadline', async () => {
+    // Given: An authentication-disabled server with a short viewer lease
+    freezePreviewClock()
+    const setTimeout = window.setTimeout.bind(window)
+    let refresh: (() => void) | undefined
+    vi.spyOn(window, 'setTimeout').mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 5_000 && typeof handler === 'function') {
+        refresh = () => handler(...args)
+      }
+      return setTimeout(handler, timeout, ...args)
+    })
+    vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
+      camera_name: 'front', enabled: true, state: 'ready', viewer_count: 1,
+      degraded_reason: null, last_error: null, idle_shutdown_at: null, httpStatus: 200,
+    })
+    const ensure = vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front', state: 'ready', viewer_count: 1, transport: 'webrtc',
+      token: null, token_expires_at: null, lease_expires_at: '2026-04-23T12:00:10.000Z',
+      playlist_url: null, signaling_url: '/api/v1/preview/cameras/front/sessions', ice_servers: [],
+      idle_timeout_s: 30, warning: null, httpStatus: 200,
+    })
+    const { result, unmount } = renderHook(() => useCameraPreview('front'), { wrapper: createWrapper() })
+    await act(async () => { await result.current.start() })
+    await waitFor(() => expect(result.current.session?.transport).toBe('webrtc'))
+    expect(refresh).toBeDefined()
+
+    // When: The refresh point precedes the lease deadline, despite there being no token
+    await act(async () => { refresh!(); await Promise.resolve() })
+
+    // Then: A fresh snapshot renews authorization without inventing a token
+    expect(ensure).toHaveBeenCalledTimes(2)
+    expect(result.current.session?.token).toBeNull()
+    unmount()
+  })
+
   it('swallows start mutation rejections and exposes the failure via hook state', async () => {
     // Given: Status loads but preview activation fails
     vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
@@ -90,6 +187,7 @@ describe('useCameraPreview', () => {
       camera_name: 'front',
       state: 'ready',
       viewer_count: 1,
+      transport: 'hls',
       token: 'preview-token-1',
       token_expires_at: '2026-04-24T12:00:10.000Z',
       playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
@@ -171,6 +269,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-1',
         token_expires_at: '2026-04-24T12:00:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
@@ -263,6 +362,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-1',
         token_expires_at: '2026-04-23T12:00:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
@@ -274,6 +374,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-2',
         token_expires_at: '2026-04-23T12:01:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-2',
@@ -333,6 +434,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-1',
         token_expires_at: '2026-04-23T12:00:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
@@ -345,6 +447,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-2',
         token_expires_at: '2026-04-23T12:01:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-2',
@@ -410,6 +513,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-1',
         token_expires_at: '2026-04-23T12:00:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
@@ -425,6 +529,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-2',
         token_expires_at: '2026-04-23T12:01:11.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-2',
@@ -506,6 +611,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-1',
         token_expires_at: '2026-04-23T12:00:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',
@@ -576,6 +682,7 @@ describe('useCameraPreview', () => {
         camera_name: 'front',
         state: 'ready',
         viewer_count: 1,
+        transport: 'hls',
         token: 'preview-token-1',
         token_expires_at: '2026-04-23T12:00:10.000Z',
         playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-1',

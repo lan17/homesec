@@ -1,0 +1,154 @@
+# Rust WebRTC preview
+
+WebRTC preview is an opt-in backend for live camera viewing. HLS remains the
+default. HomeSec supervises a `homesec-webrtc` Rust helper for each active camera;
+FFmpeg supplies H.264 video and optional Opus audio. Viewers share one preview
+RTSP input per camera. Recording, motion detection, and push-to-talk retain their
+existing paths and camera session requirements.
+
+The initial deployment scope is direct UDP connectivity over LAN or VPN. HTTP
+signaling uses the existing HomeSec server and authentication. Media travels
+directly between the helper and browser, so an HTTP reverse proxy alone does not
+provide connectivity. Optional browser STUN/TURN configuration is supported,
+but public internet access, relay connectivity, and real-browser/device latency
+must be validated separately before relying on them.
+
+## Configuration
+
+Select the backend in the existing `preview` section:
+
+```yaml
+preview:
+  enabled: true
+  backend: webrtc
+  token_ttl_s: 60
+  idle_timeout_s: 30
+  recording_policy: stop_on_recording
+  config:
+    helper_path: homesec-webrtc
+    advertised_ip: "192.0.2.10" # Replace with this host's client-reachable LAN/VPN IP.
+    udp_port_start: 8189
+    udp_port_end: 8199
+    max_viewers: 4
+    negotiation_timeout_s: 10
+    max_session_duration_s: 3600
+    audio_enabled: true
+    video_codec: h264
+    ice_servers: []
+```
+
+`advertised_ip` must identify the HomeSec host from the viewer's network. Do not
+advertise a Docker bridge address, loopback address, or camera address. A LAN
+address must also be routable from VPN clients; otherwise use a VPN address and
+validate connectivity from every supported client network.
+
+For clients that require STUN or a TURN relay, supply `ice_servers` entries with
+`urls` (a list), optional `username`, and optional `credential_env` naming an
+environment variable containing the credential. HomeSec returns resolved
+credentials only in the authorized, short-lived preview descriptor. The helper
+still needs a reachable advertised UDP address; this configuration does not
+give the server its own TURN allocation. Validate the relay path from the target
+network before enabling public access.
+
+The UDP range is shared by active camera helpers. Match the configured range to
+firewall rules and Docker port mappings. The helper's FFmpeg ingestion uses
+separate loopback RTP sockets, which should not be published externally.
+
+`max_viewers` limits peers for each camera, including sessions negotiating a
+connection. Authentication leases are renewed by the UI. Expired leases and
+failed connections close the associated peer; `max_session_duration_s` also caps
+the lifetime of a session. After the final viewer leaves, `idle_timeout_s` bounds
+how long the preview input and helper remain active.
+
+The default `stop_on_recording` policy yields preview resources to recording.
+`allow_during_recording` is best-effort and can consume another direct camera
+session. Existing camera preflight and concurrency refusal behavior still apply.
+A preview failure must not prevent recording or upload.
+
+## Codecs and playback
+
+`video_codec: h264` transcodes to a browser-compatible H.264 stream without
+B-frames. This uses CPU and is the compatibility-first setting. `video_codec:
+copy` avoids video transcoding but requires a compatible camera H.264 profile,
+packetization, and keyframe cadence; validate new viewer joins and loss recovery
+with the actual camera and browser before using it. H.265 and H.264 with B-frames
+require transcoding for this path.
+
+When `audio_enabled` is true and the camera supplies audio, FFmpeg converts it to
+Opus. Camera AAC is not passed directly to WebRTC. The UI preserves its existing
+mute behavior and push-to-talk coordination; changing the preview transport does
+not change microphone-to-camera transport.
+
+Closing a viewer detaches only that peer. The camera-level force-stop operation
+and recording-priority shedding stop the shared preview and all its peers.
+Runtime replacement also invalidates old sessions.
+
+## Docker
+
+The Docker image builds the helper with the pinned Rust toolchain and installs it
+at `/usr/local/bin/homesec-webrtc`. Rust tooling is confined to the build stage;
+FFmpeg is already part of the runtime image.
+
+The bundled Compose file publishes UDP `8189-8199` alongside HTTP `8081`. The UDP
+ports are used only by the WebRTC backend. Remove that mapping for HLS-only
+deployments, or adjust both the mapping and preview config when choosing another
+range. Docker must preserve the advertised UDP port numbers:
+
+```yaml
+ports:
+  - "8081:8081"
+  - "8189-8199:8189-8199/udp"
+```
+
+The HLS tmpfs mount can remain in place. WebRTC does not use it for its media.
+Neither raw media nor signaling should be persisted as troubleshooting output.
+
+## Local development and Python installations
+
+The Python wheel does not contain a native helper. Build or install it from the
+same HomeSec source revision used by the Python application. Install Rust through
+rustup; the repository's `rust-toolchain.toml` selects the compiler and required
+components. FFmpeg must also be available on `PATH`.
+
+```bash
+make rust-build
+cargo install --path native/webrtc --locked
+```
+
+`cargo install` normally places the executable in `~/.cargo/bin`. Add that
+directory to the HomeSec service's `PATH`, or set `preview.config.helper_path` to
+the absolute executable path. For development, it can point directly to
+`native/webrtc/target/release/homesec-webrtc`. An absent or incompatible helper
+makes WebRTC preview unavailable; it does not affect the HLS backend.
+
+```bash
+make rust-check # Formatting, Clippy, and Rust tests.
+make check      # Rust, Python, and UI checks.
+```
+
+Prebuilt standalone helper distribution is not provided by the Python release
+workflow. Docker includes the helper; other installations need the source build
+above.
+
+## Validation and troubleshooting
+
+An SDP answer proves signaling succeeded, not that media can reach the browser.
+For a connected client with no picture, check the advertised IP, UDP mapping,
+host/VPN firewall, camera input availability, codec compatibility, and receipt of
+a decodable keyframe. A connection setup timeout should terminate the peer rather
+than leave a camera input running indefinitely.
+
+Compare HLS and WebRTC using the same camera, browser, and network. Record
+camera-to-screen latency, startup time, CPU/memory, and the chosen codec mode.
+Exercise two viewers, late joins, one viewer closing, network loss/reconnect,
+camera stalls, helper termination, runtime reload, and recording plus preview
+plus talk. Validate Chrome, Firefox, Safari, and the actual iOS WebView/device;
+automated fixture results do not establish physical-device behavior.
+
+Logs should contain stable errors and bounded operational context. Do not capture
+API keys, preview tokens, RTSP credentials, SDP/ICE credentials, or raw media.
+
+To roll back, select `preview.backend: hls` and replace `preview.config` with the
+HLS configuration described in [preview deployment notes](preview-deployment.md).
+Backend-specific config fields cannot be mixed. Runtime reload closes existing
+WebRTC sessions; viewers can then attach using HLS.

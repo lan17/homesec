@@ -1263,19 +1263,156 @@
         "title": "PreflightResponse",
         "type": "object"
       },
+      "PreviewAnswer": {
+        "properties": {
+          "sdp": {
+            "maxLength": 48000,
+            "minLength": 1,
+            "title": "Sdp",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "answer",
+            "default": "answer",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "sdp"
+        ],
+        "title": "PreviewAnswer",
+        "type": "object"
+      },
+      "PreviewIceServer": {
+        "description": "Browser-safe ICE server description; never persisted as a session record.",
+        "properties": {
+          "credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential"
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Urls",
+            "type": "array"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "urls"
+        ],
+        "title": "PreviewIceServer",
+        "type": "object"
+      },
+      "PreviewOffer": {
+        "additionalProperties": false,
+        "properties": {
+          "sdp": {
+            "maxLength": 48000,
+            "minLength": 1,
+            "title": "Sdp",
+            "type": "string"
+          },
+          "type": {
+            "const": "offer",
+            "default": "offer",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sdp"
+        ],
+        "title": "PreviewOffer",
+        "type": "object"
+      },
+      "PreviewSessionAction": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "PreviewSessionAction",
+        "type": "object"
+      },
       "PreviewSessionResponse": {
         "properties": {
           "camera_name": {
             "title": "Camera Name",
             "type": "string"
           },
+          "ice_servers": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewIceServer"
+            },
+            "title": "Ice Servers",
+            "type": "array"
+          },
           "idle_timeout_s": {
             "title": "Idle Timeout S",
             "type": "number"
           },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
           "playlist_url": {
-            "title": "Playlist Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlist Url"
+          },
+          "signaling_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signaling Url"
           },
           "state": {
             "$ref": "#/components/schemas/PreviewState"
@@ -1303,6 +1440,15 @@
             ],
             "title": "Token Expires At"
           },
+          "transport": {
+            "default": "hls",
+            "enum": [
+              "hls",
+              "webrtc"
+            ],
+            "title": "Transport",
+            "type": "string"
+          },
           "viewer_count": {
             "anyOf": [
               {
@@ -1329,7 +1475,6 @@
         "required": [
           "camera_name",
           "state",
-          "playlist_url",
           "idle_timeout_s"
         ],
         "title": "PreviewSessionResponse",
@@ -3197,6 +3342,211 @@
           }
         },
         "summary": "Get Preview Playlist",
+        "tags": [
+          "preview"
+        ]
+      }
+    },
+    "/api/v1/preview/cameras/{camera_name}/sessions": {
+      "post": {
+        "description": "Attach one authorized viewer to the runtime-owned preview.",
+        "operationId": "negotiate_preview_session_api_v1_preview_cameras__camera_name__sessions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewOffer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewAnswer"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Negotiate Preview Session",
+        "tags": [
+          "preview"
+        ]
+      }
+    },
+    "/api/v1/preview/cameras/{camera_name}/sessions/{session_id}": {
+      "delete": {
+        "description": "Detach one viewer without stopping other viewers or the camera runtime.",
+        "operationId": "close_preview_session_api_v1_preview_cameras__camera_name__sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewSessionAction"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close Preview Session",
+        "tags": [
+          "preview"
+        ]
+      },
+      "patch": {
+        "description": "Renew a viewer only for the remaining authenticated lifetime.",
+        "operationId": "renew_preview_session_api_v1_preview_cameras__camera_name__sessions__session_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_name",
+            "required": true,
+            "schema": {
+              "title": "Camera Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewSessionAction"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Renew Preview Session",
         "tags": [
           "preview"
         ]

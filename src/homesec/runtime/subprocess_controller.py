@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+)
 from homesec.models.talk import CameraTalkStatus, TalkInputFormat, TalkRefusalReason, TalkState
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import (
@@ -268,6 +274,91 @@ class SubprocessRuntimeController(RuntimeController):
         if errors:
             summary = "; ".join(errors)
             raise RuntimeError(f"Runtime shutdown_all completed with errors: {summary[:512]}")
+
+    async def negotiate_preview(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        offer: PreviewOffer,
+        lease_expires_at: float,
+    ) -> PreviewAnswer | PreviewSessionRefusal:
+        result = await self._preview_session_command(
+            runtime,
+            camera_name,
+            WorkerCommandType.PREVIEW_NEGOTIATE,
+            offer=offer,
+            lease_expires_at=lease_expires_at,
+        )
+        if result.preview_session_refusal is not None:
+            return result.preview_session_refusal
+        if result.preview_answer is None:
+            raise PreviewRuntimeUnavailableError("Runtime returned no preview answer")
+        return result.preview_answer
+
+    async def renew_preview_session(
+        self, runtime: ManagedRuntime, camera_name: str, *, session_id: str, lease_expires_at: float
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        result = await self._preview_session_command(
+            runtime,
+            camera_name,
+            WorkerCommandType.PREVIEW_RENEW_SESSION,
+            session_id=session_id,
+            lease_expires_at=lease_expires_at,
+        )
+        return self._preview_session_action(result)
+
+    async def close_preview_session(
+        self, runtime: ManagedRuntime, camera_name: str, *, session_id: str
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        result = await self._preview_session_command(
+            runtime,
+            camera_name,
+            WorkerCommandType.PREVIEW_CLOSE_SESSION,
+            session_id=session_id,
+        )
+        return self._preview_session_action(result)
+
+    @staticmethod
+    def _preview_session_action(
+        result: WorkerCommandResult,
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        if result.preview_session_refusal is not None:
+            return result.preview_session_refusal
+        if result.preview_session_action is None:
+            raise PreviewRuntimeUnavailableError("Runtime returned no preview session result")
+        return result.preview_session_action
+
+    async def _preview_session_command(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        command_type: WorkerCommandType,
+        *,
+        offer: PreviewOffer | None = None,
+        session_id: str | None = None,
+        lease_expires_at: float | None = None,
+    ) -> WorkerCommandResult:
+        handle = self._require_handle(runtime)
+        if not self._camera_exists(handle, camera_name):
+            raise PreviewCameraNotFoundError(camera_name)
+        if not handle.heartbeat_is_fresh(max_age_s=self.heartbeat_stale_s):
+            raise PreviewRuntimeUnavailableError("Preview runtime is unavailable")
+        try:
+            return await self._send_command(
+                handle,
+                command_type,
+                camera_name,
+                preview_offer=offer,
+                session_id=session_id,
+                lease_expires_at=lease_expires_at,
+                response_timeout_s=max(self.command_timeout_s, self.preview_start_timeout_s),
+            )
+        except PreviewCameraNotFoundError:
+            raise
+        except Exception as exc:
+            # Never publish SDP or helper/camera transport details through errors.
+            raise PreviewRuntimeUnavailableError("Preview session command failed") from exc
 
     async def get_preview_status(
         self,
@@ -827,6 +918,8 @@ class SubprocessRuntimeController(RuntimeController):
         viewer_id: str | None = None,
         session_id: str | None = None,
         talk_input: TalkInputFormat | None = None,
+        preview_offer: PreviewOffer | None = None,
+        lease_expires_at: float | None = None,
         response_timeout_s: float | None = None,
     ) -> WorkerCommandResult:
         command = WorkerCommand(
@@ -838,6 +931,8 @@ class SubprocessRuntimeController(RuntimeController):
             viewer_id=viewer_id,
             session_id=session_id,
             talk_input=talk_input,
+            preview_offer=preview_offer,
+            lease_expires_at=lease_expires_at,
         )
 
         try:

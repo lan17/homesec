@@ -47,7 +47,7 @@ def validate_camera_references(config: Config, camera_names: list[str] | None = 
 
 def validate_preview_camera_names(config: Config) -> None:
     """Validate preview-enabled configs do not alias camera artifact paths."""
-    if not config.preview.enabled:
+    if not config.preview.enabled or config.preview.backend != "hls":
         return
 
     slug_to_names: dict[str, list[str]] = {}

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { APIError } from '../../../api/client'
@@ -166,6 +166,26 @@ describe('CameraPreviewPanel', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+  })
+
+  it('restarts HLS playback after a fatal error when the playlist URL stays unchanged', async () => {
+    // Given: A tokenless HLS session with a stable playlist URL
+    mockReadyPreviewSession('http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8')
+    const { container } = render(<CameraPreviewPanel cameraName="front" showTalkControl={false} />)
+    await waitFor(() => expect(hlsConstructMock).toHaveBeenCalledOnce())
+    const errorHandler = hlsOnMock.mock.calls.find(([event]) => event === 'error')?.[1] as
+      ((_event: string, data: { fatal: boolean }) => void) | undefined
+
+    // When: Playback fails and the user explicitly starts another attempt
+    act(() => { errorHandler?.('error', { fatal: true }) })
+    await waitFor(() => expect(screen.getByText('Preview playback failed. Restart preview.')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Show live view' }))
+
+    // Then: A new player mounts and consumes the same URL instead of retaining the old failure
+    await waitFor(() => expect(hlsConstructMock).toHaveBeenCalledTimes(2))
+    expect(hlsLoadSourceMock.mock.calls[1]?.[0]).toBe('http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8')
+    expect(container.querySelector('video')).toBeTruthy()
+    expect(screen.queryByText('Preview playback failed. Restart preview.')).toBeNull()
   })
 
   it('renders disabled preview state from the hook', () => {

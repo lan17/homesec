@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+)
+
 if TYPE_CHECKING:
     from homesec.models.config import Config
     from homesec.models.talk import CameraTalkStatus, TalkInputFormat
@@ -36,6 +43,29 @@ class RuntimeController(Protocol):
 
     async def shutdown_all(self) -> None:
         """Best-effort cleanup for any active or in-flight runtimes."""
+        ...
+
+    async def negotiate_preview(
+        self,
+        runtime: ManagedRuntime,
+        camera_name: str,
+        *,
+        offer: PreviewOffer,
+        lease_expires_at: float,
+    ) -> PreviewAnswer | PreviewSessionRefusal:
+        """Negotiate one preview viewer within the active runtime."""
+        ...
+
+    async def renew_preview_session(
+        self, runtime: ManagedRuntime, camera_name: str, *, session_id: str, lease_expires_at: float
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        """Renew the authorization lease of a preview viewer."""
+        ...
+
+    async def close_preview_session(
+        self, runtime: ManagedRuntime, camera_name: str, *, session_id: str
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        """Close only the selected preview viewer."""
         ...
 
     async def get_preview_status(

@@ -4,18 +4,33 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, NoReturn
 from urllib.parse import quote, urlencode
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homesec.api.dependencies import get_homesec_app, verify_preview_access
 from homesec.api.errors import APIError, APIErrorCode
-from homesec.api.preview_tokens import issue_camera_preview_token
+from homesec.api.preview_tokens import (
+    PreviewTokenError,
+    issue_camera_preview_token,
+    validate_camera_preview_token,
+)
+from homesec.models.config import HLSPreviewConfig, WebRTCPreviewConfig
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewIceServer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+    PreviewSessionRefusalReason,
+)
 from homesec.preview_paths import (
     is_preview_segment_name,
     preview_playlist_path,
@@ -59,7 +74,11 @@ class PreviewSessionResponse(BaseModel):
     viewer_count: int | None = None
     token: str | None = None
     token_expires_at: datetime | None = None
-    playlist_url: str
+    lease_expires_at: datetime | None = None
+    transport: Literal["hls", "webrtc"] = "hls"
+    playlist_url: str | None = None
+    signaling_url: str | None = None
+    ice_servers: list[PreviewIceServer] = Field(default_factory=list)
     idle_timeout_s: float
     warning: str | None = None
 
@@ -125,7 +144,33 @@ def _raise_runtime_unavailable(exc: PreviewRuntimeUnavailableError) -> None:
 
 
 def _preview_storage_dir(app: Application) -> Path:
-    return Path(app.config.preview.config.storage_dir)
+    config = app.config.preview.config
+    if not isinstance(config, HLSPreviewConfig):
+        raise APIError(
+            "HLS playback is not configured",
+            status_code=status.HTTP_409_CONFLICT,
+            error_code=APIErrorCode.PREVIEW_MEDIA_UNAVAILABLE,
+        )
+    return Path(config.storage_dir)
+
+
+def _ice_servers(app: Application) -> list[PreviewIceServer]:
+    config = app.config.preview.config
+    if not isinstance(config, WebRTCPreviewConfig):
+        return []
+    result: list[PreviewIceServer] = []
+    for server in config.ice_servers:
+        credential = os.environ.get(server.credential_env) if server.credential_env else None
+        if server.credential_env and not credential:
+            raise APIError(
+                "Preview ICE credentials are unavailable",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                error_code=APIErrorCode.PREVIEW_TEMPORARILY_UNAVAILABLE,
+            )
+        result.append(
+            PreviewIceServer(urls=server.urls, username=server.username, credential=credential)
+        )
+    return result
 
 
 def _read_playlist_text(playlist_path: Path) -> str:
@@ -330,7 +375,21 @@ async def ensure_preview_active(
         viewer_count=outcome.viewer_count,
         token=token,
         token_expires_at=expires_at,
-        playlist_url=_playlist_url(camera_name, token=token),
+        lease_expires_at=(
+            expires_at or datetime.now(UTC) + timedelta(seconds=preview_config.token_ttl_s)
+            if preview_config.backend == "webrtc"
+            else None
+        ),
+        transport="webrtc" if preview_config.backend == "webrtc" else "hls",
+        playlist_url=(
+            _playlist_url(camera_name, token=token) if preview_config.backend == "hls" else None
+        ),
+        signaling_url=(
+            f"/api/v1/preview/cameras/{quote(camera_name, safe='')}/sessions"
+            if preview_config.backend == "webrtc"
+            else None
+        ),
+        ice_servers=_ice_servers(app),
         idle_timeout_s=preview_config.idle_timeout_s,
         warning=_warning(outcome),
     )
@@ -354,6 +413,140 @@ async def force_stop_preview(
         _raise_runtime_unavailable(exc)
 
     return PreviewStopResponse(accepted=result.accepted, state=result.state)
+
+
+def _lease_expires_at(app: Application, camera_name: str, token: str | None) -> float:
+    """Bound a peer lease by the authorization that admitted this request."""
+    ttl_s = float(app.config.preview.token_ttl_s)
+    if token is None:
+        return datetime.now(UTC).timestamp() + ttl_s
+    api_key = app.server_config.get_api_key()
+    if api_key is None:
+        raise APIError(
+            "Preview authorization unavailable",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.PREVIEW_TOKEN_REJECTED,
+        )
+    try:
+        payload = validate_camera_preview_token(
+            api_key=api_key, camera_name=camera_name, token=token
+        )
+    except PreviewTokenError as exc:
+        raise APIError(
+            "Preview token rejected",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.PREVIEW_TOKEN_REJECTED,
+        ) from exc
+    remaining_s = payload.exp - datetime.now(UTC).timestamp()
+    if remaining_s <= 0:
+        raise APIError(
+            "Preview token expired",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=APIErrorCode.PREVIEW_TOKEN_REJECTED,
+        )
+    return min(datetime.now(UTC).timestamp() + ttl_s, float(payload.exp))
+
+
+def _raise_session_refusal(refusal: PreviewSessionRefusal) -> NoReturn:
+    code = status.HTTP_409_CONFLICT
+    if refusal.reason == PreviewSessionRefusalReason.INVALID_OFFER:
+        code = status.HTTP_400_BAD_REQUEST
+    elif refusal.reason == PreviewSessionRefusalReason.SESSION_NOT_FOUND:
+        code = status.HTTP_404_NOT_FOUND
+    raise APIError(
+        refusal.message,
+        status_code=code,
+        error_code=APIErrorCode.PREVIEW_TEMPORARILY_UNAVAILABLE,
+        extra={"reason": refusal.reason.value},
+    )
+
+
+async def _ensure_signaling_enabled(app: Application, camera_name: str) -> None:
+    await _ensure_preview_playback_enabled(app, camera_name)
+    if app.config.preview.backend != "webrtc":
+        _raise_session_refusal(
+            PreviewSessionRefusal(
+                reason=PreviewSessionRefusalReason.UNSUPPORTED_TRANSPORT,
+                message="WebRTC preview is not configured",
+            )
+        )
+
+
+@playback_router.post(
+    "/api/v1/preview/cameras/{camera_name}/sessions", response_model=PreviewAnswer
+)
+async def negotiate_preview_session(
+    camera_name: str,
+    offer: PreviewOffer,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> PreviewAnswer:
+    """Attach one authorized viewer to the runtime-owned preview."""
+    await _ensure_signaling_enabled(app, camera_name)
+    try:
+        result = await app.negotiate_camera_preview(
+            camera_name,
+            offer=offer,
+            lease_expires_at=_lease_expires_at(app, camera_name, preview_token),
+        )
+    except PreviewCameraNotFoundError as exc:
+        _raise_camera_not_found(exc)
+    except PreviewRuntimeUnavailableError as exc:
+        _raise_runtime_unavailable(exc)
+    if isinstance(result, PreviewSessionRefusal):
+        _raise_session_refusal(result)
+    return result
+
+
+@playback_router.patch(
+    "/api/v1/preview/cameras/{camera_name}/sessions/{session_id}",
+    response_model=PreviewSessionAction,
+)
+async def renew_preview_session(
+    camera_name: str,
+    session_id: UUID,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> PreviewSessionAction:
+    """Renew a viewer only for the remaining authenticated lifetime."""
+    await _ensure_signaling_enabled(app, camera_name)
+    try:
+        result = await app.renew_camera_preview_session(
+            camera_name,
+            session_id=str(session_id),
+            lease_expires_at=_lease_expires_at(app, camera_name, preview_token),
+        )
+    except PreviewCameraNotFoundError as exc:
+        _raise_camera_not_found(exc)
+    except PreviewRuntimeUnavailableError as exc:
+        _raise_runtime_unavailable(exc)
+    if isinstance(result, PreviewSessionRefusal):
+        _raise_session_refusal(result)
+    return result
+
+
+@playback_router.delete(
+    "/api/v1/preview/cameras/{camera_name}/sessions/{session_id}",
+    response_model=PreviewSessionAction,
+)
+async def close_preview_session(
+    camera_name: str,
+    session_id: UUID,
+    preview_token: str | None = Depends(verify_preview_access),
+    app: Application = Depends(get_homesec_app),
+) -> PreviewSessionAction:
+    """Detach one viewer without stopping other viewers or the camera runtime."""
+    _ = preview_token
+    await _ensure_signaling_enabled(app, camera_name)
+    try:
+        result = await app.close_camera_preview_session(camera_name, session_id=str(session_id))
+    except PreviewCameraNotFoundError as exc:
+        _raise_camera_not_found(exc)
+    except PreviewRuntimeUnavailableError as exc:
+        _raise_runtime_unavailable(exc)
+    if isinstance(result, PreviewSessionRefusal):
+        _raise_session_refusal(result)
+    return result
 
 
 @playback_router.get("/api/v1/preview/cameras/{camera_name}/playlist.m3u8")
