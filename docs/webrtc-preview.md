@@ -114,20 +114,57 @@ Neither raw media nor signaling should be persisted as troubleshooting output.
 ## Local development and Python installations
 
 The Python wheel does not contain a native helper. Build or install it from the
-same HomeSec source revision used by the Python application. Install Rust through
-rustup; the repository's `rust-toolchain.toml` selects the compiler and required
-components. FFmpeg must also be available on `PATH`.
+same HomeSec source revision used by the Python application.
+
+For a source checkout on Linux or macOS, install these developer tools first:
+
+- Rust via [rustup](https://rust-lang.org/tools/install/). The repository's
+  `rust-toolchain.toml` selects the compiler and required components.
+- A C compiler/linker for the bundled native crypto dependency. On macOS, use
+  Xcode Command Line Tools (`xcode-select --install`).
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+
+  or 22.12+, and pnpm 10.15.1 (the version in `ui/package.json`).
+- FFmpeg, including `ffprobe`, on `PATH`.
+
+On Debian/Ubuntu, install the compiler tools, FFmpeg, and libraries required by
+the existing OpenCV dependency with:
 
 ```bash
-make rust-build
-cargo install --path native/webrtc --locked
+sudo apt-get update
+sudo apt-get install build-essential ffmpeg libgl1 libglib2.0-0
 ```
 
-`cargo install` normally places the executable in `~/.cargo/bin`. Add that
-directory to the HomeSec service's `PATH`, or set `preview.config.helper_path` to
-the absolute executable path. For development, it can point directly to
-`native/webrtc/target/release/homesec-webrtc`. An absent or incompatible helper
-makes WebRTC preview unavailable; it does not affect the HLS backend.
+On Ubuntu 24.04, use `libglib2.0-0t64` in place of `libglib2.0-0`.
+
+Then prepare the checkout:
+
+```bash
+make dev-setup
+```
+
+This checks the tools before syncing Python and UI dependencies from their
+lockfiles, building the Rust helper, and building the UI. It does not install
+global tools or OS packages, start services, or run database migrations.
+Rustup may download the repository's pinned toolchain on its first use.
+
+`make run` adds the checkout's release-helper directory to the application
+`PATH`, so `preview.config.helper_path: homesec-webrtc` works without a global
+helper installation. It retains its existing database-migration step; configure
+the intended database and application config before running it. If invoking the
+Python CLI directly, set `preview.config.helper_path` to the absolute
+`native/webrtc/target/release/homesec-webrtc` path, or add its directory to `PATH`.
+`CARGO_TARGET_DIR` is respected when choosing the release-helper directory.
+
+After Rust edits, run `make rust-build` and stop/start preview to launch the new
+helper. Python and UI changes do not require a Rust rebuild. For UI hot reload,
+use `make ui-run-local VITE_API_PROXY_TARGET=http://127.0.0.1:8081`, replacing
+the proxy URL with the backend's address.
+
+For Python installations outside a source checkout, `cargo install --path
+native/webrtc --locked` builds and installs the helper, normally in
+`~/.cargo/bin`. Add that directory to the HomeSec service's `PATH`, or configure
+an absolute helper path. An absent or incompatible helper makes WebRTC preview
+unavailable; it does not affect the HLS backend.
 
 ```bash
 make rust-check # Formatting, Clippy, and Rust tests.

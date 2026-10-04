@@ -27,7 +27,7 @@ help:
 	@echo "  VITE_DEV_PORT=5173"
 
 install:
-	$(PNPM) install
+	$(PNPM) install --frozen-lockfile
 
 run-local:
 	VITE_API_PROXY_TARGET="$(VITE_API_PROXY_TARGET)" \

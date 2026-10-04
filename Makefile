@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help up down docker-build docker-push run db test coverage typecheck lint lock-check check rust-check rust-build db-migrate db-migration publish ui-% fake-camera
+.PHONY: help up down docker-build docker-push dev-setup run db test coverage typecheck lint lock-check check rust-check rust-build db-migrate db-migration publish ui-% fake-camera
 
 help:
 	@echo "Targets:"
@@ -13,6 +13,7 @@ help:
 	@echo "    make docker-push   Push to DockerHub"
 	@echo ""
 	@echo "  Local dev:"
+	@echo "    make dev-setup     Check tools, install locked dependencies, build helper + UI"
 	@echo "    make run           Run HomeSec locally (requires Postgres)"
 	@echo "    make db            Start just Postgres"
 	@echo "    make test          Run tests with coverage"
@@ -43,7 +44,9 @@ DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
 UV_RUN ?= uv run --locked
 CARGO ?= cargo
+PNPM ?= pnpm
 WEBRTC_MANIFEST := native/webrtc/Cargo.toml
+WEBRTC_RELEASE_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/native/webrtc/target)/release
 
 # Docker
 up:
@@ -66,10 +69,35 @@ docker-push: docker-build
 	docker push $(DOCKERHUB_USER)/$(DOCKER_IMAGE):latest
 
 # Local dev
+dev-setup:
+	@for tool in uv node ffmpeg ffprobe; do \
+		if ! command -v "$$tool" >/dev/null 2>&1; then \
+			echo "Missing $$tool. See docs/webrtc-preview.md for developer prerequisites."; \
+			exit 1; \
+		fi; \
+	done
+	@$(PNPM) --version >/dev/null || { \
+		echo "pnpm is unavailable. Install the version in ui/package.json; see docs/webrtc-preview.md."; \
+		exit 1; \
+	}
+	@$(CARGO) --version >/dev/null || { \
+		echo "Cargo or the pinned Rust toolchain is unavailable. Install Rust via rustup; see docs/webrtc-preview.md."; \
+		exit 1; \
+	}
+	@$(CC) --version >/dev/null || { \
+		echo "A C compiler/linker is required. See docs/webrtc-preview.md for Linux/macOS prerequisites."; \
+		exit 1; \
+	}
+	uv sync --locked
+	$(MAKE) rust-build
+	$(MAKE) ui-install
+	$(MAKE) ui-build
+	@echo "Developer setup complete. WebRTC helper: $(WEBRTC_RELEASE_DIR)/homesec-webrtc"
+
 run:
 	@echo "Running database migrations..."
 	@$(UV_RUN) alembic -c alembic.ini upgrade head
-	$(UV_RUN) python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
+	PATH="$(WEBRTC_RELEASE_DIR):$$PATH" $(UV_RUN) python -m homesec.cli run --config $(HOMESEC_CONFIG) --log_level $(HOMESEC_LOG_LEVEL)
 
 db:
 	docker compose up -d postgres
