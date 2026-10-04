@@ -227,7 +227,17 @@ class _HelperClient:
                 self._ready.put_nowait(None)
 
     def stop(self) -> None:
-        """Terminate the helper and its FFmpeg child as one bounded process group."""
+        """Allow camera teardown, then bound helper and child process cleanup."""
+        if self.process.poll() is None:
+            try:
+                self.request("stop", timeout_s=0.5)
+            except _HelperError:
+                pass
+            # The reply precedes Rust destruction, including RTSP TEARDOWN.
+            try:
+                self.process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)

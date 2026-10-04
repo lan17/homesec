@@ -74,6 +74,8 @@ for raw in sys.stdin:
     result['viewer_count'] = len(peers)
     result['active_session_count'] = len(peers)
     reply(result)
+    if command['command'] == 'stop':
+        break
 """
     )
     script.chmod(0o700)
@@ -670,6 +672,42 @@ def test_expired_authorization_does_not_start_camera_input(helper: tuple[Path, P
         # Then: No helper or media input starts
         assert isinstance(result, PreviewSessionRefusal)
         assert not helper[1].exists()
+        assert preview.status().state == LivePublisherState.IDLE
+    finally:
+        preview.shutdown()
+
+
+@pytest.mark.parametrize("stop_reason", ["explicit", "recording", "shutdown", "idle"])
+def test_publisher_waits_for_camera_cleanup_after_stop_reply(
+    helper: tuple[Path, Path], tmp_path: Path, stop_reason: str
+) -> None:
+    # Given: A camera helper that acknowledges stop before finishing its teardown.
+    cleaned = tmp_path / "camera-teardown-finished"
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace(
+            "        break",
+            f"        time.sleep(0.1)\n        open({str(cleaned)!r}, 'w').close()\n        break",
+        )
+    )
+    preview = publisher(helper, idle=0.1 if stop_reason == "idle" else 5)
+    try:
+        assert not isinstance(preview.ensure_active(), LivePublisherStartRefusal)
+
+        # When: The publisher releases its input through each ordinary stop path.
+        if stop_reason == "explicit":
+            preview.request_stop()
+        elif stop_reason == "recording":
+            preview.sync_recording_active(True)
+        elif stop_reason == "shutdown":
+            preview.shutdown()
+        wait_until(cleaned.exists)
+        wait_until(lambda: preview.status().state == LivePublisherState.IDLE)
+
+        # Then: Cleanup after the reply completes instead of being killed by SIGTERM.
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        assert [command["command"] for command in commands].count("stop") == 1
         assert preview.status().state == LivePublisherState.IDLE
     finally:
         preview.shutdown()

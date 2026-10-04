@@ -242,6 +242,7 @@ async fn ingest(
         profile = Some(profile_level_id);
     }
     let mut recovering = true;
+    let mut initial_timestamp = None;
     let mut previous_timestamp = None;
     let mut packet_batch = 0_u8;
     // A stream of RTCP or incomplete fragments must not reset the media deadline.
@@ -267,6 +268,7 @@ async fn ingest(
             continue;
         }
         let timestamp = packet.timestamp().timestamp();
+        let first_timestamp = *initial_timestamp.get_or_insert(timestamp);
         // Retina validates the negotiated payload type. Normalize only this
         // private handoff's payload type for the shared bounded assembler.
         let Some(frame) = assembler.push(Packet {
@@ -278,6 +280,13 @@ async fn ingest(
         }) else {
             continue;
         };
+        // PLAY can begin midway through a picture. RTP-Info may be absent or
+        // inaccurate, so only a later timestamp establishes a known boundary.
+        // Still assemble the initial packets to retain in-band SPS/PPS and
+        // sequence continuity; recovery waits for the next complete IDR.
+        if timestamp == first_timestamp {
+            continue;
+        }
         let Some((sps, pps)) = assembler.parameter_sets() else {
             continue;
         };
@@ -436,6 +445,47 @@ fn validate_access_unit(data: &[u8]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joining_mid_idr_waits_for_a_complete_keyframe() {
+        // Given: SDP initializes decoding, but RTP starts at the second IDR slice.
+        // seq=1 in RTP-Info is ignored by Retina for compatibility with real cameras.
+        let camera = crate::rtsp_camera::RtspCamera::start("PARTIAL_IDR");
+        let poll = mio::Poll::new().unwrap();
+        let waker = Arc::new(Waker::new(poll.registry(), mio::Token(0)).unwrap());
+        let source = RtspSource::start(
+            camera.url.clone(),
+            Duration::from_secs(5),
+            Duration::from_secs(10),
+            waker,
+        )
+        .unwrap();
+
+        // When: The partial IDR, dependent pictures, and a later intact IDR arrive.
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let frame = loop {
+            if let Some(Event::Frame(frame)) = source.try_recv().unwrap() {
+                break frame;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no intact IDR received"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+
+        // Then: Delivery begins at the next GOP, preserving both real IDR slices.
+        assert_eq!(frame.timestamp, 27000);
+        assert!(frame.keyframe);
+        let expected = crate::rtsp_camera::annex_b_nals(include_bytes!(
+            "../tests/fixtures/baseline-multislice-160x120.h264"
+        ));
+        let actual = crate::rtsp_camera::annex_b_nals(&frame.data);
+        let expected_slices: Vec<_> = expected.iter().filter(|nal| nal[0] & 31 == 5).collect();
+        let actual_slices: Vec<_> = actual.iter().filter(|nal| nal[0] & 31 == 5).collect();
+        assert_eq!(expected_slices.len(), 2);
+        assert_eq!(actual_slices, expected_slices);
+    }
 
     #[test]
     fn undrained_media_queue_fails_closed_and_reports_overflow_before_queued_frames() {

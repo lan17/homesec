@@ -138,7 +138,12 @@ fn serve_rtsp_camera(
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
-    let nals = annex_b_nals(include_bytes!("../fixtures/baseline-160x120.h264"));
+    let partial_idr = codec == "PARTIAL_IDR";
+    let nals = annex_b_nals(if partial_idr {
+        include_bytes!("../fixtures/baseline-multislice-160x120.h264")
+    } else {
+        include_bytes!("../fixtures/baseline-160x120.h264")
+    });
     let sps = nals.iter().find(|nal| nal[0] & 31 == 7).unwrap();
     let pps = nals.iter().find(|nal| nal[0] & 31 == 8).unwrap();
     let encoding = if codec == "H265" { "H265" } else { "H264" };
@@ -237,7 +242,7 @@ fn serve_rtsp_camera(
             let stop = Arc::clone(&streaming_stop);
             let nals = nals.clone();
             streaming = Some(thread::spawn(move || {
-                stream_h264(writer, stop, channel, nals)
+                stream_h264(writer, stop, channel, nals, partial_idr)
             }));
         }
     }
@@ -254,6 +259,7 @@ fn stream_h264(
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     channel: u8,
     nals: Vec<Vec<u8>>,
+    partial_idr: bool,
 ) {
     let mut frames: Vec<Vec<Vec<u8>>> = Vec::new();
     for nal in nals {
@@ -263,14 +269,18 @@ fn stream_h264(
             _ => frames.last_mut().unwrap().push(nal),
         }
     }
-    let mut sequence = 1_u16;
+    let mut sequence = if partial_idr { 2_u16 } else { 1_u16 };
     let mut timestamp = 0_u32;
     for frame in frames.iter().cycle() {
         if stop.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
         let mut payloads = Vec::new();
-        for nal in frame {
+        let first_slice = frame.iter().position(|nal| nal[0] & 31 == 5);
+        for (index, nal) in frame.iter().enumerate() {
+            if partial_idr && timestamp == 0 && Some(index) == first_slice {
+                continue;
+            }
             if nal.len() <= 1000 {
                 payloads.push(nal.clone());
             } else {

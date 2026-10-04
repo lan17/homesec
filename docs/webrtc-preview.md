@@ -100,9 +100,14 @@ payload types are honored. Damaged or oversized RTP access units are discarded,
 with delivery resuming at a valid keyframe. Unsupported video, changed profiles,
 reversed video timestamps, or an overflowing source queue stop preview; select
 the default `video_codec: h264` to transcode an incompatible camera.
+On initial connection, the first observed picture is discarded because the
+camera may have started sending midway through it. Playback waits for the next
+complete keyframe; startup can therefore take one camera GOP. Use a short camera
+keyframe interval that fits within the ten-second media deadline.
 Native connection setup is bounded to five seconds, media reads to ten seconds,
 and stop/parent disconnect cancels the source. It never waits on camera I/O in
-the WebRTC control loop.
+the WebRTC control loop. Python requests graceful stop and allows camera teardown
+to finish before falling back to bounded process-group termination.
 
 Native media assembly and delivery queues have byte/count limits. Retina's RTSP
 control-response parser currently exposes no response-size limit, so oversized
