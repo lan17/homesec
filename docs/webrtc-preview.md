@@ -77,6 +77,11 @@ packetization, and keyframe cadence; validate new viewer joins and loss recovery
 with the actual camera and browser before using it. H.265 and H.264 with B-frames
 require transcoding for this path.
 
+The preview input decoder uses slice threading rather than frame threading.
+Frame threading queues future frames and can add about a second of delay at
+15 fps on a many-core host; slice threading avoids that queue while preserving
+source frame reordering. Encoding already uses FFmpeg's zero-latency tuning.
+
 When `audio_enabled` is true and the camera supplies audio, FFmpeg converts it to
 Opus. Camera AAC is not passed directly to WebRTC. The UI preserves its existing
 mute behavior and push-to-talk coordination; changing the preview transport does

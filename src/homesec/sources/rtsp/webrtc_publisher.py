@@ -648,7 +648,21 @@ class RustWebRTCLivePublisher:
                 connect_timeout_s=self._connect_timeout_s, io_timeout_s=self._io_timeout_s
             )
         )
-        args.extend(["-fflags", "+genpts+igndts", "-i", self._rtsp_url, "-map", "0:v:0", "-an"])
+        # Frame threading queues future frames before decoding; slice threading
+        # keeps parallel decoding within the current frame for live preview.
+        args.extend(
+            [
+                "-fflags",
+                "+genpts+igndts",
+                "-thread_type:v",
+                "slice",
+                "-i",
+                self._rtsp_url,
+                "-map",
+                "0:v:0",
+                "-an",
+            ]
+        )
         if self._config.video_codec == "copy":
             args.extend(["-c:v", "copy"])
         else:

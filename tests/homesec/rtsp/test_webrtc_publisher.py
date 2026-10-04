@@ -129,6 +129,9 @@ def test_viewers_share_one_media_reader_and_detach_independently(helper: tuple[P
         args = next(command["ffmpeg_args"] for command in commands if command["command"] == "start")
         assert args[args.index("-profile:v") + 1] == "baseline"
         assert args[args.index("-bf") + 1] == "0"
+        # The input decoder must not queue future frames across decode threads.
+        input_args = args[: args.index("-i")]
+        assert input_args[input_args.index("-thread_type:v") + 1] == "slice"
         assert "libopus" not in args  # No empty audio output for video-only cameras.
     finally:
         preview.shutdown()
