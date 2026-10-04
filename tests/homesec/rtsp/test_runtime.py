@@ -369,6 +369,7 @@ def test_runtime_preview_publisher_receives_hwaccel_config(
         stream={"disable_hwaccel": False},
         __runtime_preview__={
             "enabled": True,
+            "backend": "hls",
             "recording_policy": "allow_during_recording",
         },
     )
@@ -470,6 +471,7 @@ def test_startup_preflight_fallback_keeps_concurrent_preview_unclassified(
         tmp_path,
         __runtime_preview__={
             "enabled": True,
+            "backend": "hls",
             "recording_policy": "allow_during_recording",
         },
     )
@@ -649,6 +651,7 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
         detect_rtsp_url="rtsp://host/detect",
         __runtime_preview__={
             "enabled": True,
+            "backend": "hls",
             "recording_policy": "allow_during_recording",
         },
     )
@@ -674,6 +677,7 @@ def test_startup_preflight_downgrade_reaches_live_publisher(tmp_path: Path) -> N
         tmp_path,
         __runtime_preview__={
             "enabled": True,
+            "backend": "hls",
             "recording_policy": "allow_during_recording",
         },
     )
@@ -720,6 +724,7 @@ def test_startup_preflight_downgrade_failure_does_not_abort_source(
         tmp_path,
         __runtime_preview__={
             "enabled": True,
+            "backend": "hls",
             "recording_policy": "allow_during_recording",
         },
     )

@@ -16,6 +16,13 @@ from homesec.config import resolve_env_var
 from homesec.interfaces import Notifier
 from homesec.logging_setup import configure_logging
 from homesec.models.alert import Alert
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+    PreviewSessionRefusalReason,
+)
 from homesec.models.talk import (
     CameraTalkStatus,
     TalkCapabilityState,
@@ -113,6 +120,21 @@ class _PreviewCapableSource(Protocol):
     def stop_preview(self) -> None: ...
 
     def note_preview_viewer_activity(self, viewer_id: str | None = None) -> None: ...
+
+
+@runtime_checkable
+class _WebRTCPreviewCapableSource(Protocol):
+    def negotiate_preview(
+        self, offer: PreviewOffer, lease_expires_at: float
+    ) -> PreviewAnswer | PreviewSessionRefusal: ...
+
+    def renew_preview_session(
+        self, session_id: str, lease_expires_at: float
+    ) -> PreviewSessionAction | PreviewSessionRefusal: ...
+
+    def close_preview_session(
+        self, session_id: str
+    ) -> PreviewSessionAction | PreviewSessionRefusal: ...
 
 
 @runtime_checkable
@@ -423,13 +445,19 @@ class _RuntimeWorkerService:
             try:
                 command = WorkerCommand.model_validate_json(raw_command.decode("utf-8"))
             except Exception as exc:
-                logger.warning("Dropping invalid runtime preview command: %s", exc, exc_info=True)
+                logger.warning(
+                    "Dropping invalid runtime preview command",
+                    extra={"error_type": type(exc).__name__},
+                )
                 return
 
             if command.command == WorkerCommandType.TALK_STREAM_OPEN:
                 await self._handle_talk_stream(command, reader, writer)
                 return
             if command.command in {
+                WorkerCommandType.PREVIEW_NEGOTIATE,
+                WorkerCommandType.PREVIEW_RENEW_SESSION,
+                WorkerCommandType.PREVIEW_CLOSE_SESSION,
                 WorkerCommandType.TALK_STATUS,
                 WorkerCommandType.TALK_PREPARE_SESSION,
                 WorkerCommandType.TALK_STOP_SESSION,
@@ -543,6 +571,12 @@ class _RuntimeWorkerService:
             return validation_error
 
         match command.command:
+            case (
+                WorkerCommandType.PREVIEW_NEGOTIATE
+                | WorkerCommandType.PREVIEW_RENEW_SESSION
+                | WorkerCommandType.PREVIEW_CLOSE_SESSION
+            ):
+                return await self._handle_preview_session_command(command)
             case WorkerCommandType.TALK_STATUS:
                 return WorkerCommandResult(
                     command=command.command,
@@ -597,6 +631,65 @@ class _RuntimeWorkerService:
                 )
             case _:
                 return self._handle_command(command)
+
+    async def _handle_preview_session_command(self, command: WorkerCommand) -> WorkerCommandResult:
+        result = WorkerCommandResult(
+            command=command.command,
+            command_id=command.command_id,
+            generation=self._generation,
+            correlation_id=self._correlation_id,
+            camera_name=command.camera_name,
+        )
+        source = self._source_for_camera(command.camera_name)
+        if not self._preview_enabled(command.camera_name, source) or not isinstance(
+            source, _WebRTCPreviewCapableSource
+        ):
+            result.preview_session_refusal = PreviewSessionRefusal(
+                reason=PreviewSessionRefusalReason.UNSUPPORTED_TRANSPORT,
+                message="WebRTC preview is not available for this camera",
+            )
+            return result
+        outcome: PreviewAnswer | PreviewSessionAction | PreviewSessionRefusal
+        try:
+            if (
+                command.command == WorkerCommandType.PREVIEW_NEGOTIATE
+                and command.preview_offer is not None
+                and command.lease_expires_at is not None
+            ):
+                outcome = await asyncio.to_thread(
+                    source.negotiate_preview, command.preview_offer, command.lease_expires_at
+                )
+            elif (
+                command.command == WorkerCommandType.PREVIEW_RENEW_SESSION
+                and command.session_id is not None
+                and command.lease_expires_at is not None
+            ):
+                outcome = await asyncio.to_thread(
+                    source.renew_preview_session, command.session_id, command.lease_expires_at
+                )
+            elif (
+                command.command == WorkerCommandType.PREVIEW_CLOSE_SESSION
+                and command.session_id is not None
+            ):
+                outcome = await asyncio.to_thread(source.close_preview_session, command.session_id)
+            else:
+                outcome = PreviewSessionRefusal(
+                    reason=PreviewSessionRefusalReason.INVALID_OFFER,
+                    message="Preview session request is incomplete",
+                )
+        except Exception:
+            # Signaling and camera data may occur in exception details; expose a stable refusal only.
+            outcome = PreviewSessionRefusal(
+                reason=PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="Preview session command failed",
+            )
+        if isinstance(outcome, PreviewAnswer):
+            result.preview_answer = outcome
+        elif isinstance(outcome, PreviewSessionAction):
+            result.preview_session_action = outcome
+        else:
+            result.preview_session_refusal = outcome
+        return result
 
     def _validate_command(self, command: WorkerCommand) -> WorkerCommandResult | None:
         if command.generation != self._generation or command.correlation_id != self._correlation_id:

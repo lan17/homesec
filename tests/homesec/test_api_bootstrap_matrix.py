@@ -43,7 +43,7 @@ class _MatrixStubApp(_StubApp):
     ) -> None:
         super().__init__(**kwargs)
         self._runtime_status = runtime_status
-        self._config.preview = PreviewConfig(enabled=True)
+        self._config.preview = PreviewConfig(enabled=True, backend="hls")
 
     def get_runtime_status(self) -> RuntimeStatusSnapshot:
         return self._runtime_status

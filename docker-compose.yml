@@ -10,6 +10,9 @@ services:
         condition: service_healthy
     ports:
       - "8081:8081"
+      # Required when preview.backend is webrtc; advertised_ip must be reachable
+      # by clients and udp_port_start/end must match this published range.
+      - "8189-8199:8189-8199/udp"
     tmpfs:
       - /tmp/homesec-preview:size=${HOMESEC_PREVIEW_TMPFS_SIZE:-256m}
     volumes:

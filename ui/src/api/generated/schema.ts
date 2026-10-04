@@ -379,6 +379,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/preview/cameras/{camera_name}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Negotiate Preview Session
+         * @description Attach one authorized viewer to the runtime-owned preview.
+         */
+        post: operations["negotiate_preview_session_api_v1_preview_cameras__camera_name__sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/preview/cameras/{camera_name}/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Close Preview Session
+         * @description Detach one viewer without stopping other viewers or the camera runtime.
+         */
+        delete: operations["close_preview_session_api_v1_preview_cameras__camera_name__sessions__session_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Renew Preview Session
+         * @description Renew a viewer only for the remaining authenticated lifetime.
+         */
+        patch: operations["renew_preview_session_api_v1_preview_cameras__camera_name__sessions__session_id__patch"];
+        trace?: never;
+    };
     "/api/v1/preview/cameras/{camera_name}/{segment_name}": {
         parameters: {
             query?: never;
@@ -1178,19 +1222,72 @@ export interface components {
             /** Checks */
             checks: components["schemas"]["PreflightCheckResponse"][];
         };
+        /** PreviewAnswer */
+        PreviewAnswer: {
+            /** Sdp */
+            sdp: string;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @default answer
+             * @constant
+             */
+            type: "answer";
+        };
+        /**
+         * PreviewIceServer
+         * @description Browser-safe ICE server description; never persisted as a session record.
+         */
+        PreviewIceServer: {
+            /** Credential */
+            credential?: string | null;
+            /** Urls */
+            urls: string[];
+            /** Username */
+            username?: string | null;
+        };
+        /** PreviewOffer */
+        PreviewOffer: {
+            /** Sdp */
+            sdp: string;
+            /**
+             * Type
+             * @default offer
+             * @constant
+             */
+            type: "offer";
+        };
+        /** PreviewSessionAction */
+        PreviewSessionAction: {
+            /** Accepted */
+            accepted: boolean;
+        };
         /** PreviewSessionResponse */
         PreviewSessionResponse: {
             /** Camera Name */
             camera_name: string;
+            /** Ice Servers */
+            ice_servers?: components["schemas"]["PreviewIceServer"][];
             /** Idle Timeout S */
             idle_timeout_s: number;
+            /** Lease Expires At */
+            lease_expires_at?: string | null;
             /** Playlist Url */
-            playlist_url: string;
+            playlist_url?: string | null;
+            /** Signaling Url */
+            signaling_url?: string | null;
             state: components["schemas"]["PreviewState"];
             /** Token */
             token?: string | null;
             /** Token Expires At */
             token_expires_at?: string | null;
+            /**
+             * Transport
+             * @default hls
+             * @enum {string}
+             */
+            transport: "hls" | "webrtc";
             /** Viewer Count */
             viewer_count?: number | null;
             /** Warning */
@@ -2289,6 +2386,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    negotiate_preview_session_api_v1_preview_cameras__camera_name__sessions_post: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                camera_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewOffer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewAnswer"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_preview_session_api_v1_preview_cameras__camera_name__sessions__session_id__delete: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                camera_name: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewSessionAction"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    renew_preview_session_api_v1_preview_cameras__camera_name__sessions__session_id__patch: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                camera_name: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewSessionAction"];
                 };
             };
             /** @description Validation Error */

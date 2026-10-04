@@ -25,6 +25,7 @@ export interface CameraPreviewState {
   isPending: boolean
   isStarting: boolean
   isStopping: boolean
+  canStop: boolean
   start: () => Promise<void>
   stop: () => Promise<void>
   refreshStatus: () => Promise<PreviewStatusSnapshot | null>
@@ -57,6 +58,8 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const nativeLifecycleRef = useRef(nativeLifecycle)
   const handledPauseCountRef = useRef(nativeLifecycle.pauseCount)
   const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
+  const [knownTransport, setKnownTransport] = useState<Pick<PreviewSessionSnapshot, 'camera_name' | 'transport'> | null>(null)
+  const knownTransportRef = useRef(knownTransport)
   const [startError, setStartError] = useState<Error | null>(null)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
   const [stopError, setStopError] = useState<Error | null>(null)
@@ -65,12 +68,22 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const sessionRequestSeqRef = useRef(0)
   const stopInFlightSeqRef = useRef<number | null>(null)
   const latestStopRequestSeqRef = useRef(0)
+  const activeCameraRef = useRef(cameraName)
+  const refreshesInFlightRef = useRef(0)
 
   useLayoutEffect(() => {
     nativeLifecycleRef.current = nativeLifecycle
   }, [nativeLifecycle])
 
+  useLayoutEffect(() => {
+    activeCameraRef.current = cameraName
+    sessionRequestSeqRef.current += 1
+  }, [cameraName])
+
   const storeSession = useCallback((nextSession: PreviewSessionSnapshot) => {
+    if (nextSession.camera_name !== activeCameraRef.current) {
+      return
+    }
     const nextState = {
       snapshot: nextSession,
       receivedAtMs: Date.now(),
@@ -79,6 +92,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     setStopError(null)
     setStartError(null)
     sessionStateRef.current = nextState
+    const nextTransport = { camera_name: nextSession.camera_name, transport: nextSession.transport }
+    knownTransportRef.current = nextTransport
+    setKnownTransport(nextTransport)
     setSessionState(nextState)
   }, [])
 
@@ -113,6 +129,9 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   }, [])
 
   const storeActivationIfCurrent = useCallback(async (activation: PreviewActivation) => {
+    if (activation.snapshot.camera_name !== activeCameraRef.current) {
+      return
+    }
     const isLatestActivation = activation.activationSeq === sessionRequestSeqRef.current
     const wasSupersededByLatestStop =
       !isLatestActivation
@@ -148,7 +167,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     }
 
     if (!isLatestActivation) {
-      if (wasSupersededByLatestStop) {
+      if (wasSupersededByLatestStop && activation.snapshot.transport !== 'webrtc') {
         await stopLateActivation()
       }
       return
@@ -184,11 +203,19 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       const requestSeq = statusRequestSeqRef.current
       const nextStatus = await apiClient.getCameraPreviewStatus(cameraName, { signal })
       const currentSession = sessionStateRef.current
+      // Browser WebRTC peers detach while hidden and reattach when visible.
+      const idleWhileBackgrounded = nextStatus.state === 'idle'
+        && document.visibilityState === 'hidden'
+        && currentSession?.snapshot.transport === 'webrtc'
       if (
         currentSession !== null
+        && currentSession.snapshot.camera_name === cameraName
         && requestSeq > currentSession.statusRequestSeq
         && (nextStatus.enabled === false
-          || (!PREVIEW_SESSION_ACTIVE_STATES.has(nextStatus.state) && !startMutation.isPending))
+          || (!PREVIEW_SESSION_ACTIVE_STATES.has(nextStatus.state)
+            && !idleWhileBackgrounded
+            && (nextStatus.state !== 'idle'
+              || (!startMutation.isPending && refreshesInFlightRef.current === 0))))
       ) {
         beginCleanupBoundary()
         clearSession()
@@ -221,13 +248,24 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   })
   const refetchStatus = statusQuery.refetch
   const stopPreview = stopMutation.mutateAsync
-  const session = sessionState?.snapshot ?? null
+  const session = sessionState?.snapshot.camera_name === cameraName ? sessionState.snapshot : null
+  const isWebRTC = knownTransport?.camera_name === cameraName && knownTransport.transport === 'webrtc'
+  const authorizationExpiresAt = session?.transport === 'webrtc'
+    ? session.lease_expires_at ?? session.token_expires_at
+    : session?.token_expires_at
 
   const stop = useCallback(async () => {
     const requestSeq = beginStopRequest()
     clearSession()
     setStartError(null)
     setStopError(null)
+    setRefreshError(null)
+    const transport = knownTransportRef.current
+    if (transport?.camera_name === cameraName && transport.transport === 'webrtc') {
+      // Player cleanup closes this viewer without interrupting the publisher.
+      finishStopRequest(requestSeq)
+      return
+    }
     try {
       await stopPreview({ requestSeq })
     } catch (nextError) {
@@ -236,7 +274,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       }
       return
     }
-  }, [beginStopRequest, clearSession, stopPreview])
+  }, [beginStopRequest, cameraName, clearSession, finishStopRequest, stopPreview])
 
   const refreshSession = useCallback(async () => {
     if (nativeLifecycle.isBackgrounded || stopInFlightSeqRef.current !== null) {
@@ -244,6 +282,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     }
     const activationSeq = beginSessionRequest()
     const pauseCountAtRequest = nativeLifecycleRef.current.pauseCount
+    refreshesInFlightRef.current += 1
     try {
       const snapshot = await apiClient.ensureCameraPreviewActive(cameraName)
       if (activationSeq === sessionRequestSeqRef.current) {
@@ -254,6 +293,8 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       if (activationSeq === sessionRequestSeqRef.current && !nativeLifecycleRef.current.isBackgrounded) {
         setRefreshError(nextError as Error)
       }
+    } finally {
+      refreshesInFlightRef.current -= 1
     }
   }, [beginSessionRequest, cameraName, nativeLifecycle.isBackgrounded, storeActivationIfCurrent])
 
@@ -279,11 +320,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   }, [nativeLifecycle.isActive, nativeLifecycle.resumeCount, refetchStatus])
 
   useEffect(() => {
-    if (nativeLifecycle.isBackgrounded || session?.token_expires_at == null || stopMutation.isPending) {
+    if (nativeLifecycle.isBackgrounded || authorizationExpiresAt == null || stopMutation.isPending) {
       return
     }
 
-    const expiresAtMs = Date.parse(session.token_expires_at)
+    const expiresAtMs = Date.parse(authorizationExpiresAt)
     if (Number.isNaN(expiresAtMs)) {
       return
     }
@@ -303,16 +344,43 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
           ? Math.min(PREVIEW_TOKEN_REFRESH_RETRY_MS, remainingMs)
           : PREVIEW_TOKEN_REFRESH_RETRY_MS
 
-    const timeoutId = window.setTimeout(() => {
-      void refreshSession()
-    }, refreshDelayMs)
+    const isWebRTC = session?.transport === 'webrtc'
+    let timeoutId: number | null = null
+    if (!isWebRTC || document.visibilityState !== 'hidden') {
+      timeoutId = window.setTimeout(() => {
+        if (!isWebRTC || document.visibilityState !== 'hidden') {
+          void refreshSession()
+        }
+      }, refreshDelayMs)
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') {
+        beginSessionRequest()
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId)
+          timeoutId = null
+        }
+      } else {
+        void refreshSession()
+      }
+    }
+    if (isWebRTC) {
+      document.addEventListener('visibilitychange', onVisibility)
+    }
 
     return () => {
-      window.clearTimeout(timeoutId)
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId)
+      }
+      if (isWebRTC) {
+        document.removeEventListener('visibilitychange', onVisibility)
+      }
     }
   }, [
     nativeLifecycle.isBackgrounded,
-    session?.token_expires_at,
+    authorizationExpiresAt,
+    session?.transport,
+    beginSessionRequest,
     refreshError,
     refreshSession,
     stopMutation.isPending,
@@ -324,7 +392,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
     ?? statusQuery.data?.last_error
     ?? null
 
-  const playlistUrl = session ? apiClient.resolvePath(session.playlist_url) : null
+  const playlistUrl = session?.playlist_url ? apiClient.resolvePath(session.playlist_url) : null
   const error = (startError
     ?? stopError
     ?? refreshError
@@ -343,6 +411,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       || stopMutation.isPending,
     isStarting: startMutation.isPending,
     isStopping: stopMutation.isPending,
+    canStop: session !== null || (!isWebRTC && (statusQuery.data?.state ?? 'idle') !== 'idle'),
     start: async () => {
       if (
         !nativeLifecycle.isActive

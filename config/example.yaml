@@ -154,21 +154,20 @@ state_store:
   dsn_env: DB_DSN  # e.g., postgresql+asyncpg://user:pass@localhost:5432/homesec
 
 # =============================================================================
-# Preview - Live preview config contract (v1 HLS; RTSP sources support on-demand preview)
+# Preview - On-demand live view for RTSP sources (WebRTC by default)
 # =============================================================================
 preview:
   enabled: false
-  backend: hls
+  backend: webrtc
   token_ttl_s: 60
   idle_timeout_s: 30.0
   recording_policy: stop_on_recording  # Use allow_during_recording for best-effort concurrent preview; may consume an extra RTSP session
   config:
-    segment_duration_ms: 1000  # Lower latency means more segment churn
-    live_window_segments: 4    # Total window ~= segment_duration_ms * segment count
-    storage_dir: /tmp/homesec-preview  # Prefer tmpfs; keep separate from recordings and other durable storage
+    advertised_ip: null  # Set this server's client-reachable LAN/VPN IP before enabling preview
+    udp_port_start: 8189
+    udp_port_end: 8199
     audio_enabled: true
-    audio_codec: auto
-    video_codec: auto
+    video_codec: h264
 
 
 # =============================================================================

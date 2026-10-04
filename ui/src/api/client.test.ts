@@ -878,6 +878,7 @@ describe('HomeSecApiClient preview methods', () => {
     expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
     expect(result.playlist_url).toContain('/api/v1/preview/cameras/front/playlist.m3u8')
     expect(result.token).toBe('preview-token')
+    expect(result.transport).toBe('hls')
   })
 
   it('deletes preview sessions and parses the stop payload', async () => {
@@ -905,6 +906,93 @@ describe('HomeSecApiClient preview methods', () => {
     expect(result.httpStatus).toBe(202)
     expect(result.accepted).toBe(true)
     expect(result.state).toBe('stopping')
+  })
+
+  it('parses WebRTC preview transport and ICE credentials', async () => {
+    // Given: A WebRTC preview response with TURN credentials and no HLS playlist
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      camera_name: 'front', state: 'ready', viewer_count: 0, transport: 'webrtc',
+      token: 'preview-token', token_expires_at: null, playlist_url: null,
+      signaling_url: '/api/v1/preview/cameras/front/sessions', idle_timeout_s: 30,
+      ice_servers: [{ urls: ['turn:relay.example'], username: 'viewer', credential: 'temporary-password' }],
+      warning: null,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Activating live view
+    const result = await client.ensureCameraPreviewActive('front')
+
+    // Then: Browser-safe transport configuration is typed and HLS is optional
+    expect(result.transport).toBe('webrtc')
+    expect(result.playlist_url).toBeNull()
+    expect(result.ice_servers).toEqual([{ urls: ['turn:relay.example'], username: 'viewer', credential: 'temporary-password' }])
+  })
+
+  it('signals offers and controls only the identified viewer with camera-scoped tokens', async () => {
+    // Given: Signaling endpoints returning an answer and accepted viewer actions
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session_id: 'viewer/1', type: 'answer', sdp: 'answer-sdp' }),
+        { status: 201, headers: { 'content-type': 'application/json' } }))
+      .mockImplementation(async () => new Response(JSON.stringify({ accepted: true }),
+        { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = new HomeSecApiClient('http://localhost:8081')
+
+    // When: Creating, renewing, and closing one viewer
+    const answer = await client.createCameraPreviewPeer('front door', 'token+1', { type: 'offer', sdp: 'offer-sdp' }, { apiKey: 'api-secret' })
+    await client.renewCameraPreviewPeer('front door', answer.session_id, 'token+2')
+    await client.closeCameraPreviewPeer('front door', answer.session_id, 'token+2')
+
+    // Then: Encoded camera and peer paths, fresh tokens, and normal API authorization are sent
+    expect(fetchSpy.mock.calls.map((call) => call[0])).toEqual([
+      'http://localhost:8081/api/v1/preview/cameras/front%20door/sessions?token=token%2B1',
+      'http://localhost:8081/api/v1/preview/cameras/front%20door/sessions/viewer%2F1?token=token%2B2',
+      'http://localhost:8081/api/v1/preview/cameras/front%20door/sessions/viewer%2F1?token=token%2B2',
+    ])
+    expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST', body: JSON.stringify({ type: 'offer', sdp: 'offer-sdp' }),
+      headers: { Authorization: 'Bearer api-secret' },
+    })
+    expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({ method: 'PATCH' })
+    expect(fetchSpy.mock.calls[2]?.[1]).toMatchObject({ method: 'DELETE' })
+  })
+
+  it.each([
+    { session_id: 'viewer', type: 'offer', sdp: 'secret-sdp' },
+    { session_id: '', type: 'answer', sdp: 'secret-sdp' },
+    { session_id: 'viewer', type: 'answer', sdp: 123 },
+  ])('rejects malformed signaling answers without retaining SDP in the error', async (payload) => {
+    // Given: An invalid peer response
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(payload),
+      { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = new HomeSecApiClient()
+
+    // When: Sending a valid browser offer
+    const request = client.createCameraPreviewPeer('front', 'token', { type: 'offer', sdp: 'offer' })
+
+    // Then: A canonical error is returned without retaining sensitive session details
+    await expect(request).rejects.toMatchObject({ message: 'Invalid preview answer response payload', payload: null })
+  })
+
+  it('omits token queries for tokenless preview signaling and cleanup', async () => {
+    // Given: A server configured without authentication
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session_id: 'viewer', type: 'answer', sdp: 'answer' }),
+        { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockImplementation(async () => new Response(JSON.stringify({ accepted: true }),
+        { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = new HomeSecApiClient()
+
+    // When: A viewer negotiates, renews, and closes without a token
+    await client.createCameraPreviewPeer('front', null, { type: 'offer', sdp: 'offer' })
+    await client.renewCameraPreviewPeer('front', 'viewer', null)
+    await client.closeCameraPreviewPeer('front', 'viewer', null)
+
+    // Then: The API receives clean camera/session paths without null query credentials
+    expect(fetchSpy.mock.calls.map((call) => call[0])).toEqual([
+      '/api/v1/preview/cameras/front/sessions',
+      '/api/v1/preview/cameras/front/sessions/viewer',
+      '/api/v1/preview/cameras/front/sessions/viewer',
+    ])
   })
 })
 

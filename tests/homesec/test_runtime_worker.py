@@ -118,7 +118,7 @@ def _make_config(
         filter=FilterConfig(backend="yolo", config={}),
         vlm=VLMConfig(backend="openai", run_mode=run_mode, config={}),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
-        preview={"enabled": preview_enabled},
+        preview={"enabled": preview_enabled, "backend": "hls"},
         talk=TalkConfig(
             enabled=talk_enabled,
             input=talk_input or TalkInputFormat(),

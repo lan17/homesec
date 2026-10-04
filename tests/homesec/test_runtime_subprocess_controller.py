@@ -106,7 +106,7 @@ def _make_config(
             trigger_classes=["person"],
         ),
         alert_policy=AlertPolicyConfig(backend="default", config={}),
-        preview={"enabled": preview_enabled},
+        preview={"enabled": preview_enabled, "backend": "hls"},
         talk={"enabled": talk_enabled},
     )
 

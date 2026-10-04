@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Hls from 'hls.js'
 
-import { isAPIError } from '../../../api/client'
+import { apiClient, isAPIError } from '../../../api/client'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
 import { isIOSNativeApp } from '../../../runtime/nativeRuntime'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { useCameraPreview } from '../hooks/useCameraPreview'
+import { useWebRTCPreview } from '../hooks/useWebRTCPreview'
 import { PushToTalkControl } from './PushToTalkControl'
 
 const PLAYLIST_POLL_DELAY_MS = 500
@@ -133,6 +134,7 @@ export function CameraPreviewPanel({
   className,
 }: CameraPreviewPanelProps) {
   const {
+    canStop,
     error,
     isPending,
     isStarting,
@@ -146,9 +148,22 @@ export function CameraPreviewPanel({
   } = useCameraPreview(cameraName)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const [playlistReady, setPlaylistReady] = useState(false)
+  const [previewAttempt, setPreviewAttempt] = useState(0)
+  const webRTC = useWebRTCPreview(session, videoRef, previewAttempt)
+  const isWebRTC = session?.transport === 'webrtc'
+  const [playlistState, setPlaylistState] = useState<{
+    url: string | null
+    attempt: number
+    ready: boolean
+    error: string | null
+  }>({ url: null, attempt: 0, ready: false, error: null })
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false)
-  const [playerError, setPlayerError] = useState<string | null>(null)
+  const [playbackError, setPlaybackError] = useState<{ url: string; attempt: number; error: string } | null>(null)
+  const playlistReady = playlistState.url === playlistUrl && playlistState.attempt === previewAttempt && playlistState.ready
+  const playerError = playlistUrl
+    ? (playlistState.url === playlistUrl && playlistState.attempt === previewAttempt ? playlistState.error : null)
+      ?? (playbackError?.url === playlistUrl && playbackError.attempt === previewAttempt ? playbackError.error : null)
+    : null
   const isIOSNative = isIOSNativeApp()
   const effectiveState =
     session && (!status || !PREVIEW_DISPLAY_STATUS_STATES.has(status.state))
@@ -158,45 +173,37 @@ export function CameraPreviewPanel({
 
   useEffect(() => {
     if (!playlistUrl) {
-      setPlaylistReady(false)
-      setPlayerError(null)
       return
     }
 
     let cancelled = false
     let timeoutId: number | null = null
     const controller = new AbortController()
-    setPlaylistReady(false)
-    setPlayerError(null)
 
     const pollPlaylist = async (attempt: number): Promise<void> => {
       try {
-        const response = await fetch(playlistUrl, {
-          cache: 'no-store',
+        const ready = await apiClient.isPreviewPlaylistReady(playlistUrl, {
           signal: controller.signal,
         })
-        if (response.ok) {
+        if (ready) {
           if (!cancelled) {
-            setPlaylistReady(true)
+            setPlaylistState({ url: playlistUrl, attempt: previewAttempt, ready: true, error: null })
           }
           return
-        }
-        if (response.status !== 404 && response.status !== 409) {
-          throw new Error(`Preview playlist unavailable (${response.status})`)
         }
       } catch (nextError) {
         if (controller.signal.aborted || cancelled) {
           return
         }
         if (attempt >= PLAYLIST_POLL_MAX_ATTEMPTS) {
-          setPlayerError(describeUnknownError(nextError))
+          setPlaylistState({ url: playlistUrl, attempt: previewAttempt, ready: false, error: describeUnknownError(nextError) })
           return
         }
       }
 
       if (attempt >= PLAYLIST_POLL_MAX_ATTEMPTS) {
         if (!cancelled) {
-          setPlayerError('Preview media is still starting. Try again.')
+          setPlaylistState({ url: playlistUrl, attempt: previewAttempt, ready: false, error: 'Preview media is still starting. Try again.' })
         }
         return
       }
@@ -215,7 +222,7 @@ export function CameraPreviewPanel({
         window.clearTimeout(timeoutId)
       }
     }
-  }, [playlistUrl])
+  }, [playlistUrl, previewAttempt])
 
   useEffect(() => {
     const syncFullscreenState = (): void => {
@@ -238,13 +245,13 @@ export function CameraPreviewPanel({
       return
     }
     const activeVideo: HTMLVideoElement = videoElement
+    const activePlaylistUrl = playlistUrl
 
     let hls: Hls | null = null
     let keepPlaybackActive = true
     let playbackCleanedUp = false
     let resumeTimeoutId: number | null = null
     let resumeIntervalId: number | null = null
-    setPlayerError(null)
 
     activeVideo.muted = true
     activeVideo.defaultMuted = true
@@ -337,7 +344,7 @@ export function CameraPreviewPanel({
     }
 
     function handleVideoError(): void {
-      setPlayerError(previewPlaybackFailureMessage(isIOSNative))
+      setPlaybackError({ url: activePlaylistUrl, attempt: previewAttempt, error: previewPlaybackFailureMessage(isIOSNative) })
       teardownPlayback()
     }
 
@@ -372,7 +379,7 @@ export function CameraPreviewPanel({
         if (!data.fatal) {
           return
         }
-        setPlayerError(previewPlaybackFailureMessage(isIOSNative))
+        setPlaybackError({ url: playlistUrl, attempt: previewAttempt, error: previewPlaybackFailureMessage(isIOSNative) })
         teardownPlayback()
       })
 
@@ -387,11 +394,15 @@ export function CameraPreviewPanel({
       return teardownPlayback
     }
 
-    setPlayerError(previewUnsupportedMessage(isIOSNative))
-    teardownPlayback()
+    queueMicrotask(() => {
+      if (keepPlaybackActive) {
+        setPlaybackError({ url: playlistUrl, attempt: previewAttempt, error: previewUnsupportedMessage(isIOSNative) })
+        teardownPlayback()
+      }
+    })
 
     return teardownPlayback
-  }, [isIOSNative, playlistReady, playlistUrl])
+  }, [isIOSNative, playlistReady, playlistUrl, previewAttempt])
 
   const toggleFullscreen = async (): Promise<void> => {
     const viewport = viewportRef.current
@@ -417,6 +428,9 @@ export function CameraPreviewPanel({
   }
 
   const statusMessage = useMemo(() => {
+    if (isWebRTC && webRTC.error) {
+      return webRTC.error
+    }
     if (playerError) {
       return playerError
     }
@@ -429,14 +443,16 @@ export function CameraPreviewPanel({
     if (warning) {
       return warning
     }
-    if (playlistUrl && !playlistReady) {
+    if ((playlistUrl && !playlistReady) || (isWebRTC && webRTC.state !== 'connected')) {
       return 'Starting live view.'
     }
     if (status?.enabled === false) {
       return 'Live view is disabled.'
     }
     return null
-  }, [error, playerError, playlistReady, playlistUrl, status?.enabled, warning])
+  }, [error, isWebRTC, playerError, playlistReady, playlistUrl, status?.enabled, warning, webRTC.error, webRTC.state])
+
+  const showVideo = isWebRTC || Boolean(playlistUrl && playlistReady && !playerError)
 
   return (
     <section className={className ? `camera-preview ${className}` : 'camera-preview'}>
@@ -456,7 +472,7 @@ export function CameraPreviewPanel({
       </header>
 
       <div className="camera-preview__viewport" ref={viewportRef}>
-        {playlistUrl && playlistReady && !playerError ? (
+        {showVideo ? (
           <>
             <video
               ref={videoRef}
@@ -488,7 +504,7 @@ export function CameraPreviewPanel({
         )}
       </div>
 
-      {statusMessage && playlistUrl && playlistReady && !playerError ? (
+      {statusMessage && showVideo ? (
         <p className="camera-preview__message">{statusMessage}</p>
       ) : null}
 
@@ -497,6 +513,7 @@ export function CameraPreviewPanel({
       <div className="inline-form__actions">
         <Button
           onClick={() => {
+            setPreviewAttempt((attempt) => attempt + 1)
             void start()
           }}
           disabled={isPending || status?.enabled === false}
@@ -508,7 +525,7 @@ export function CameraPreviewPanel({
           onClick={() => {
             void stop()
           }}
-          disabled={isStopping || (!session && (effectiveState ?? 'idle') === 'idle')}
+          disabled={isStopping || !canStop}
         >
           {isStopping ? 'Stopping...' : 'Stop live view'}
         </Button>

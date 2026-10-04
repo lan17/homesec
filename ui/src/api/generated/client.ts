@@ -14,6 +14,9 @@ import type {
   PreviewSessionResponse,
   PreviewStatusResponse,
   PreviewStopResponse,
+  PreviewOfferRequest,
+  PreviewAnswerResponse,
+  PreviewSessionActionResponse,
   TalkSessionRequest,
   TalkSessionResponse,
   TalkStatusResponse,
@@ -79,6 +82,24 @@ export interface GeneratedHomeSecClient {
     cameraName: string,
     options?: ApiRequestOptions,
   ): Promise<ApiResponseWithStatus<PreviewStopResponse>>
+  createCameraPreviewPeer(
+    cameraName: string,
+    token: string | null,
+    offer: PreviewOfferRequest,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PreviewAnswerResponse>>
+  renewCameraPreviewPeer(
+    cameraName: string,
+    sessionId: string,
+    token: string | null,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PreviewSessionActionResponse>>
+  closeCameraPreviewPeer(
+    cameraName: string,
+    sessionId: string,
+    token: string | null,
+    options?: ApiRequestOptions,
+  ): Promise<ApiResponseWithStatus<PreviewSessionActionResponse>>
   getCameraTalkStatus(
     cameraName: string,
     options?: ApiRequestOptions,

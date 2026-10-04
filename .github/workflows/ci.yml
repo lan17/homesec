@@ -30,6 +30,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Rust
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/webrtc/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.lock') }}
+
+      - name: Rust check
+        # Native integration tests exercise real H.264/Opus RTP input.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          make rust-check
+
+      - name: Build WebRTC helper
+        run: |
+          make rust-build
+          echo "$GITHUB_WORKSPACE/native/webrtc/target/release" >> "$GITHUB_PATH"
+
       - name: Setup uv and Python
         uses: astral-sh/setup-uv@v3
         with:

@@ -22,6 +22,7 @@ env
 *.egg-info
 dist
 build
+native/webrtc/target
 
 # IDE
 .idea

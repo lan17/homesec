@@ -8,6 +8,8 @@ import type {
   PreviewState,
   PreviewStatusResponse,
   PreviewStopResponse,
+  PreviewAnswerResponse,
+  PreviewSessionActionResponse,
   TalkCapabilityState,
   TalkInputFormat,
   TalkSessionResponse,
@@ -542,16 +544,68 @@ export function parsePreviewSessionResponse(payload: unknown): PreviewSessionRes
     throw new Error('Preview session response is not a JSON object')
   }
 
+  const transport = payload.transport ?? 'hls'
+  if (transport !== 'hls' && transport !== 'webrtc') {
+    throw new Error('transport must be hls or webrtc')
+  }
+  const playlistUrl = expectNullableString(payload.playlist_url, 'playlist_url')
+  const signalingUrl = expectNullableString(payload.signaling_url, 'signaling_url')
+  if (transport === 'hls' && !playlistUrl) {
+    throw new Error('HLS preview requires playlist_url')
+  }
+  if (transport === 'webrtc' && !signalingUrl) {
+    throw new Error('WebRTC preview requires signaling_url')
+  }
+  const iceServers = payload.ice_servers ?? []
+  if (!Array.isArray(iceServers)) {
+    throw new Error('ice_servers must be an array')
+  }
   return {
     camera_name: expectString(payload.camera_name, 'camera_name'),
     state: parsePreviewState(payload.state, 'state'),
     viewer_count: expectNullableNumber(payload.viewer_count, 'viewer_count'),
     token: expectNullableString(payload.token, 'token'),
     token_expires_at: expectNullableString(payload.token_expires_at, 'token_expires_at'),
-    playlist_url: expectString(payload.playlist_url, 'playlist_url'),
+    lease_expires_at: expectNullableString(payload.lease_expires_at, 'lease_expires_at'),
+    transport,
+    playlist_url: playlistUrl,
+    signaling_url: signalingUrl,
+    ice_servers: iceServers.map((server: unknown) => {
+      if (!isJsonObject(server)) {
+        throw new Error('ice_servers entry must be an object')
+      }
+      const urls = expectStringArray(server.urls, 'ice_servers.urls')
+      if (urls.length === 0) {
+        throw new Error('ice_servers.urls must not be empty')
+      }
+      return {
+        urls,
+        username: expectNullableString(server.username, 'ice_servers.username'),
+        credential: expectNullableString(server.credential, 'ice_servers.credential'),
+      }
+    }),
     idle_timeout_s: expectNumber(payload.idle_timeout_s, 'idle_timeout_s'),
     warning: expectNullableString(payload.warning, 'warning'),
   }
+}
+
+export function parsePreviewAnswerResponse(payload: unknown): PreviewAnswerResponse {
+  if (!isJsonObject(payload) || payload.type !== 'answer') {
+    throw new Error('Preview answer must be an answer object')
+  }
+  const sessionId = expectString(payload.session_id, 'session_id')
+  const sdp = expectString(payload.sdp, 'sdp')
+  if (!sessionId || !sdp) {
+    throw new Error('Preview answer requires session_id and sdp')
+  }
+  return { session_id: sessionId, type: 'answer', sdp }
+}
+
+export function parsePreviewSessionActionResponse(payload: unknown): PreviewSessionActionResponse {
+  if (!isJsonObject(payload)) {
+    throw new Error('Preview action response is not an object')
+  }
+  return { accepted: expectBoolean(payload.accepted, 'accepted') }
 }
 
 export function parsePreviewStopResponse(payload: unknown): PreviewStopResponse {
