@@ -78,6 +78,11 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   useLayoutEffect(() => {
     activeCameraRef.current = cameraName
     sessionRequestSeqRef.current += 1
+
+    return () => {
+      // Detached viewers cannot accept or clean up responses from their old connection.
+      sessionRequestSeqRef.current += 1
+    }
   }, [cameraName])
 
   const storeSession = useCallback((nextSession: PreviewSessionSnapshot) => {
