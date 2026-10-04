@@ -1,4 +1,5 @@
-//! The private FFmpeg handoff: RTP/H.264 access units and Opus packets.
+//! Bounded H.264 assembly shared by native RTSP and the private FFmpeg handoff.
+//! FFmpeg additionally supplies Opus packets through its local RTP handoff.
 //! WebRTC packetization, encryption and retransmission belong to str0m.
 
 const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
@@ -65,8 +66,35 @@ pub struct H264Assembler {
 }
 
 impl H264Assembler {
+    /// Initialize parameter sets supplied only in the camera's SDP.
+    pub fn seed_parameter_sets(&mut self, sps: &[u8], pps: &[u8]) -> bool {
+        if sps.is_empty()
+            || pps.is_empty()
+            || sps.len() > MAX_PARAMETER_BYTES
+            || pps.len() > MAX_PARAMETER_BYTES
+            || sps[0] & 0x9f != 7
+            || pps[0] & 0x9f != 8
+        {
+            return false;
+        }
+        self.sps = Some(sps.to_vec());
+        self.pps = Some(pps.to_vec());
+        true
+    }
+
+    pub fn parameter_sets(&self) -> Option<(&[u8], &[u8])> {
+        Some((self.sps.as_deref()?, self.pps.as_deref()?))
+    }
+
     pub fn push(&mut self, packet: Packet<'_>) -> Option<Frame> {
         if packet.payload_type != 96 {
+            return None;
+        }
+        if packet.payload.is_empty() {
+            self.recovering = true;
+            self.damaged = true;
+            self.data.clear();
+            self.fragment_start = None;
             return None;
         }
         let new_frame = self.timestamp != Some(packet.timestamp);
@@ -257,6 +285,78 @@ mod tests {
     fn parameters(assembler: &mut H264Assembler, seq: u16) {
         assembler.push(packet(seq, 0, false, &[0x67, 0x42, 0, 31]));
         assembler.push(packet(seq + 1, 0, true, &[0x68, 1]));
+    }
+
+    #[test]
+    fn sdp_parameters_initialize_idr_and_inband_updates_replace_them() {
+        // Given: a camera supplies initial parameter sets through SDP only.
+        let mut assembler = H264Assembler::default();
+        let original_sps = [0x67, 0x42, 0, 31];
+        let pps = [0x68, 1];
+        assert!(assembler.seed_parameter_sets(&original_sps, &pps));
+        // When: an IDR arrives, followed by a new in-band SPS and another IDR.
+        let initial = assembler.push(packet(1, 9000, true, &[0x65, 1])).unwrap();
+        let updated_sps = [0x67, 0x42, 0xe0, 31];
+        assert!(
+            assembler
+                .push(packet(2, 18000, false, &updated_sps))
+                .is_none()
+        );
+        let updated = assembler.push(packet(3, 18000, true, &[0x65, 2])).unwrap();
+        // Then: every decodable keyframe includes the corresponding parameter sets.
+        assert!(initial.keyframe && updated.keyframe);
+        assert_eq!(&initial.data[4..8], &original_sps);
+        assert_eq!(&updated.data[4..8], &updated_sps);
+        assert_eq!(
+            assembler.parameter_sets(),
+            Some((&updated_sps[..], &pps[..]))
+        );
+    }
+
+    #[test]
+    fn oversized_fragmented_access_unit_is_dropped_then_keyframe_recovers() {
+        // Given: SDP initialization and a FU-A stream that exceeds the byte budget.
+        let mut assembler = H264Assembler::default();
+        assert!(assembler.seed_parameter_sets(&[0x67, 0x42, 0, 31], &[0x68, 1]));
+        let mut fragment = vec![1; 60_000];
+        fragment[..2].copy_from_slice(&[0x7c, 0x85]);
+        assert!(assembler.push(packet(1, 9000, false, &fragment)).is_none());
+        // When: contiguous fragments exceed 2 MiB before the FU-A end marker.
+        fragment[1] = 0x05;
+        for sequence in 2..=40 {
+            assert!(
+                assembler
+                    .push(packet(sequence, 9000, false, &fragment))
+                    .is_none()
+            );
+        }
+        let oversized_end = assembler.push(packet(41, 9000, true, &[0x7c, 0x45, 1]));
+        let dependent = assembler.push(packet(42, 18000, true, &[0x61, 2]));
+        let recovered = assembler.push(packet(43, 27000, true, &[0x65, 3]));
+        // Then: oversize media and its dependents drop; a complete IDR recovers.
+        assert!(oversized_end.is_none());
+        assert!(dependent.is_none());
+        assert!(recovered.unwrap().keyframe);
+    }
+
+    #[test]
+    fn empty_payload_damages_current_access_unit_without_panicking() {
+        // Given: a fragmented IDR is in progress in a native packet handoff.
+        let mut assembler = H264Assembler::default();
+        assert!(assembler.seed_parameter_sets(&[0x67, 0x42, 0, 31], &[0x68, 1]));
+        assert!(
+            assembler
+                .push(packet(1, 9000, false, &[0x7c, 0x85, 1]))
+                .is_none()
+        );
+        // When: an empty payload interrupts the fragmented frame.
+        let empty = assembler.push(packet(2, 9000, false, &[]));
+        let end = assembler.push(packet(3, 9000, true, &[0x7c, 0x45, 2]));
+        let dependent = assembler.push(packet(4, 18000, true, &[0x61, 1]));
+        let recovered = assembler.push(packet(5, 27000, true, &[0x65, 2]));
+        // Then: invalid media and dependent frames drop until a fresh keyframe.
+        assert!(empty.is_none() && end.is_none() && dependent.is_none());
+        assert!(recovered.unwrap().keyframe);
     }
 
     #[test]

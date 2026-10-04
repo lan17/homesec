@@ -1,6 +1,7 @@
 use crate::Options;
 use crate::protocol::{MAX_CONTROL_BYTES, MAX_SDP_BYTES, Operation, Reply, Request};
 use crate::rtp::{H264Assembler, Packet, TimestampClock};
+use crate::rtsp::{Event as SourceEvent, RtspSource};
 use mio::net::UdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
 use serde::Serialize;
@@ -11,8 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use str0m::change::SdpOffer;
-use str0m::format::Codec;
+use str0m::change::{SdpAnswer, SdpOffer};
+use str0m::format::{Codec, CodecConfig};
 use str0m::media::{Frequency, MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
@@ -139,14 +140,18 @@ impl Drop for MediaChild {
     }
 }
 
+enum MediaInput {
+    Ffmpeg(MediaChild),
+    Rtsp(RtspSource),
+}
+
 enum Control {
     Request(Request),
     End,
 }
 
-fn controls(poll: &Poll) -> Result<Receiver<Control>> {
+fn controls(waker: Arc<Waker>) -> Receiver<Control> {
     let (sender, receiver) = mpsc::sync_channel(16);
-    let waker = Arc::new(Waker::new(poll.registry(), CONTROL)?);
     std::thread::spawn(move || {
         let mut input = io::stdin().lock();
         loop {
@@ -173,7 +178,69 @@ fn controls(poll: &Poll) -> Result<Receiver<Control>> {
         let _ = sender.send(Control::End);
         let _ = waker.wake();
     });
-    Ok(receiver)
+    receiver
+}
+
+// Passthrough cannot lower the camera's encoder level to match a receiver.
+// str0m matches profiles but permits level differences, so check the selected
+// payload against the original offer before promising to send camera bytes.
+fn h264_level(profile: u32) -> u32 {
+    // Level 1b lies between 1.0 and 1.1 (RFC 6184, section 8.1).
+    if profile & 0xff == 11 && profile & 0x1000 != 0 && matches!(profile >> 16, 66 | 77 | 88) {
+        105
+    } else {
+        (profile & 0xff) * 10
+    }
+}
+
+fn source_receiver_profile(offer: &SdpOffer, source: u32) -> Option<u32> {
+    let mut codecs = CodecConfig::empty();
+    codecs.add_h264(127.into(), None, true, source);
+    // str0m prefers the closest level even when it is too low for passthrough.
+    // Pick a compatible receive envelope first, then let its exact match win.
+    offer
+        .media_lines
+        .iter()
+        .filter(|line| line.direction().is_receiving())
+        .flat_map(|line| line.rtp_params())
+        .filter(|params| codecs.match_params(*params).is_some())
+        .map(|params| params.spec().format.profile_level_id.unwrap_or(0x42e01f))
+        .filter(|profile| h264_level(*profile) >= h264_level(source))
+        .min_by_key(|profile| h264_level(*profile))
+}
+
+fn source_level_supported(offer: &SdpOffer, answer: &SdpAnswer, source: u32) -> bool {
+    answer
+        .media_lines
+        .iter()
+        .filter(|line| line.direction().is_sending())
+        .all(|line| {
+            line.rtp_params()
+                .iter()
+                .filter(|param| param.spec().codec == Codec::H264)
+                .all(|param| {
+                    offer
+                        .media_lines
+                        .iter()
+                        .find(|offered| offered.mid() == line.mid())
+                        .is_some_and(|offered| {
+                            offered
+                                .rtp_params()
+                                .iter()
+                                .find(|candidate| candidate.pt() == param.pt())
+                                .is_some_and(|candidate| {
+                                    h264_level(source)
+                                        <= h264_level(
+                                            candidate
+                                                .spec()
+                                                .format
+                                                .profile_level_id
+                                                .unwrap_or(0x42e01f),
+                                        )
+                                })
+                        })
+                })
+        })
 }
 
 fn output(value: &impl Serialize) -> Result<()> {
@@ -236,13 +303,16 @@ pub fn run(options: Options) -> Result<()> {
         poll.registry()
             .register(socket, token, Interest::READABLE)?;
     }
-    let controls = controls(&poll)?;
+    let waker = Arc::new(Waker::new(poll.registry(), CONTROL)?);
+    let controls = controls(Arc::clone(&waker));
     output(
         &serde_json::json!({"event":"ready", "video_port":video.local_addr()?.port(),
         "audio_port":audio.local_addr()?.port(), "media_port":candidate_addr.port()}),
     )?;
     let mut peers: HashMap<String, Peer> = HashMap::new();
-    let mut child: Option<MediaChild> = None;
+    let mut input: Option<MediaInput> = None;
+    let mut pending_start: Option<String> = None;
+    let mut source_profile: Option<u32> = None;
     let mut started: Option<Instant> = None;
     let mut last_video: Option<Instant> = None;
     let mut media_failed = false;
@@ -256,15 +326,57 @@ pub fn run(options: Options) -> Result<()> {
     let mut bytes = [0u8; 65536];
     loop {
         let now = Instant::now();
-        if let Some(process) = &mut child {
-            if process.0.try_wait()?.is_some()
+        let exited = match &mut input {
+            Some(MediaInput::Ffmpeg(process)) => process.0.try_wait()?.is_some(),
+            _ => false,
+        };
+        if input.is_some()
+            && (exited
                 || last_video
                     .or(started)
-                    .is_some_and(|last| now.duration_since(last) >= MEDIA_TIMEOUT)
-            {
-                child = None;
-                media_failed = true;
-                peers.clear();
+                    .is_some_and(|last| now.duration_since(last) >= MEDIA_TIMEOUT))
+        {
+            input = None;
+            media_failed = true;
+            peers.clear();
+            if let Some(request_id) = pending_start.take() {
+                output(&Reply::error(request_id, "source_timeout"))?;
+            }
+        }
+        // Source reads run outside this loop. A bounded batch preserves control
+        // and peer deadlines even if the camera produces frames continuously.
+        for _ in 0..16 {
+            let Some(MediaInput::Rtsp(source)) = &input else {
+                break;
+            };
+            match source.try_recv() {
+                Ok(Some(SourceEvent::Info { profile_level_id })) => {
+                    source_profile = Some(profile_level_id);
+                    if let Some(request_id) = pending_start.take() {
+                        output(&Reply::success(request_id))?;
+                    }
+                }
+                Ok(Some(SourceEvent::Frame(frame))) => {
+                    last_video = Some(now);
+                    if let Some(time) = video_clock.extend(frame.timestamp) {
+                        for peer in peers.values_mut() {
+                            peer.write(true, frame.keyframe, time, Arc::clone(&frame.data), now);
+                            if peer.pump(&media, now).is_err() {
+                                peer.failed = true;
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(code) => {
+                    input = None;
+                    media_failed = true;
+                    peers.clear();
+                    if let Some(request_id) = pending_start.take() {
+                        output(&Reply::error(request_id, code))?;
+                    }
+                    break;
+                }
             }
         }
         peers.retain(|_, peer| !peer.expired(now));
@@ -287,26 +399,55 @@ pub fn run(options: Options) -> Result<()> {
             let mut reply = Reply::success(request.request_id.clone());
             let mut stop = false;
             match request.operation {
-                Operation::Start { ffmpeg_args } => {
-                    if started.is_some()
-                        || ffmpeg_args.is_empty()
-                        || ffmpeg_args.iter().map(String::len).sum::<usize>()
-                            > MAX_CONTROL_BYTES / 2
-                    {
+                Operation::Start {
+                    ffmpeg_args,
+                    rtsp_url,
+                } => {
+                    if started.is_some() {
                         reply = Reply::error(request.request_id, "preview_temporarily_unavailable");
                     } else {
-                        match Command::new("ffmpeg")
-                            .args(ffmpeg_args)
-                            .stdin(Stdio::null())
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .spawn()
-                        {
-                            Ok(process) => {
-                                child = Some(MediaChild(process));
-                                started = Some(now);
+                        match (ffmpeg_args, rtsp_url) {
+                            (Some(ffmpeg_args), None)
+                                if !ffmpeg_args.is_empty()
+                                    && ffmpeg_args.iter().map(String::len).sum::<usize>()
+                                        <= MAX_CONTROL_BYTES / 2 =>
+                            {
+                                match Command::new("ffmpeg")
+                                    .args(ffmpeg_args)
+                                    .stdin(Stdio::null())
+                                    .stdout(Stdio::null())
+                                    .stderr(Stdio::null())
+                                    .spawn()
+                                {
+                                    Ok(process) => {
+                                        input = Some(MediaInput::Ffmpeg(MediaChild(process)));
+                                        started = Some(now);
+                                    }
+                                    Err(_) => {
+                                        reply = Reply::error(
+                                            request.request_id,
+                                            "preview_temporarily_unavailable",
+                                        )
+                                    }
+                                }
                             }
-                            Err(_) => {
+                            (None, Some(url)) if !url.is_empty() && url.len() <= 16_384 => {
+                                match RtspSource::start(
+                                    url,
+                                    Duration::from_secs(5),
+                                    MEDIA_TIMEOUT,
+                                    Arc::clone(&waker),
+                                ) {
+                                    Ok(source) => {
+                                        input = Some(MediaInput::Rtsp(source));
+                                        started = Some(now);
+                                        pending_start = Some(request.request_id);
+                                        continue;
+                                    }
+                                    Err(code) => reply = Reply::error(request.request_id, code),
+                                }
+                            }
+                            _ => {
                                 reply = Reply::error(
                                     request.request_id,
                                     "preview_temporarily_unavailable",
@@ -322,7 +463,7 @@ pub fn run(options: Options) -> Result<()> {
                     lease_expires_at,
                 } => {
                     let deadline = lease(lease_seconds, lease_expires_at, now, session_limit);
-                    if child.is_none() || media_failed {
+                    if input.is_none() || media_failed || pending_start.is_some() {
                         reply = Reply::error(request.request_id, "preview_temporarily_unavailable");
                     } else if peers.len() >= options.max_viewers {
                         reply = Reply::error(request.request_id, "session_limit");
@@ -334,19 +475,31 @@ pub fn run(options: Options) -> Result<()> {
                     {
                         reply = Reply::error(request.request_id, "invalid_offer");
                     } else {
+                        let offer = SdpOffer::from_sdp_string(&sdp).ok();
                         let mut config = RtcConfig::new()
                             .clear_codecs()
+                            // Browsers also offer an audio m-line for video-only
+                            // sources. Keep it negotiable; no samples are sent.
                             .enable_opus(true, false)
                             .set_ice_lite(true)
                             .set_send_buffer_video(2048)
                             .set_send_buffer_audio(64);
                         // str0m packetizes H.264 with STAP-A/FU-A, which requires mode 1.
-                        for (pt, resend, profile) in [
-                            (127_u8, 121_u8, 0x42001f),
-                            (108, 109, 0x42e01f),
-                            (123, 119, 0x4d001f),
-                            (114, 115, 0x64001f),
-                        ] {
+                        let profiles = if let Some(source) = source_profile {
+                            offer
+                                .as_ref()
+                                .and_then(|offer| source_receiver_profile(offer, source))
+                                .map(|profile| vec![(127_u8, 121_u8, profile)])
+                                .unwrap_or_default()
+                        } else {
+                            vec![
+                                (127_u8, 121_u8, 0x42001f),
+                                (108, 109, 0x42e01f),
+                                (123, 119, 0x4d001f),
+                                (114, 115, 0x64001f),
+                            ]
+                        };
+                        for (pt, resend, profile) in profiles {
                             config.codec_config().add_h264(
                                 pt.into(),
                                 Some(resend.into()),
@@ -358,10 +511,17 @@ pub fn run(options: Options) -> Result<()> {
                         let candidate = Candidate::host(candidate_addr, "udp")?;
                         rtc.add_local_candidate(candidate)
                             .ok_or("invalid_candidate")?;
-                        match SdpOffer::from_sdp_string(&sdp)
-                            .ok()
-                            .and_then(|offer| rtc.sdp_api().accept_offer(offer).ok())
-                        {
+                        match offer.and_then(|offer| {
+                            let answer = rtc
+                                .sdp_api()
+                                .accept_offer(SdpOffer::from((*offer).clone()))
+                                .ok()?;
+                            source_profile
+                                .is_none_or(|profile| {
+                                    source_level_supported(&offer, &answer, profile)
+                                })
+                                .then_some(answer)
+                        }) {
                             Some(answer) => {
                                 let mut peer = Peer {
                                     rtc,
@@ -450,7 +610,7 @@ pub fn run(options: Options) -> Result<()> {
                     );
                     reply.active_session_count =
                         Some(peers.values().filter(|p| !p.expired(now)).count());
-                    reply.media_active = Some(child.is_some() && last_video.is_some());
+                    reply.media_active = Some(input.is_some() && last_video.is_some());
                 }
                 Operation::Stop => stop = true,
             }
@@ -524,13 +684,13 @@ pub fn run(options: Options) -> Result<()> {
                     if let Some(peer) = peers
                         .values_mut()
                         .find(|p| !p.expired(now) && p.rtc.accepts(&input))
+                        && (peer.rtc.handle_input(input).is_err()
+                            || peer.pump(&media, now).is_err())
                     {
-                        if peer.rtc.handle_input(input).is_err() || peer.pump(&media, now).is_err()
-                        {
-                            peer.failed = true;
-                        }
+                        peer.failed = true;
                     }
-                } else if source.ip().is_loopback() && child.is_some() {
+                } else if source.ip().is_loopback() && matches!(input, Some(MediaInput::Ffmpeg(_)))
+                {
                     let Some(packet) = Packet::parse(&bytes[..len]) else {
                         continue;
                     };
@@ -547,14 +707,15 @@ pub fn run(options: Options) -> Result<()> {
                                 }
                             }
                         }
-                    } else if packet.payload_type == 97 && packet.payload.len() <= 4000 {
-                        if let Some(time) = audio_clock.extend(packet.timestamp) {
-                            let data: Arc<[u8]> = packet.payload.into();
-                            for peer in peers.values_mut() {
-                                peer.write(false, false, time, Arc::clone(&data), now);
-                                if peer.pump(&media, now).is_err() {
-                                    peer.failed = true;
-                                }
+                    } else if packet.payload_type == 97
+                        && packet.payload.len() <= 4000
+                        && let Some(time) = audio_clock.extend(packet.timestamp)
+                    {
+                        let data: Arc<[u8]> = packet.payload.into();
+                        for peer in peers.values_mut() {
+                            peer.write(false, false, time, Arc::clone(&data), now);
+                            if peer.pump(&media, now).is_err() {
+                                peer.failed = true;
                             }
                         }
                     }
@@ -567,6 +728,16 @@ pub fn run(options: Options) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn level_1b_flag_only_applies_to_its_defined_profiles() {
+        // Given: Level 1.1 with constraint_set3 in baseline, main, extended and high profiles.
+        let profiles = [0x42100b, 0x4d100b, 0x58100b, 0x64100b];
+        // When: Comparing each profile's advertised receiver level.
+        let levels = profiles.map(h264_level);
+        // Then: High stays at level 1.1; the other profiles encode level 1b.
+        assert_eq!(levels, [105, 105, 105, 110]);
+    }
 
     #[test]
     fn queued_authorization_cannot_outlive_absolute_expiry() {

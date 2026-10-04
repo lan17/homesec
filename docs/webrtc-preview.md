@@ -2,9 +2,11 @@
 
 WebRTC is the default backend for live camera viewing. Preview remains disabled
 until enabled in config. HomeSec supervises a `homesec-webrtc` Rust helper for
-each active camera; FFmpeg supplies H.264 video and optional Opus audio. Viewers
-share one preview RTSP input per camera. Recording, motion detection, and
-push-to-talk retain their existing paths and camera session requirements.
+each active camera. Viewers share one preview RTSP input per camera. Video-only
+H.264 copy mode uses native Rust RTSP ingestion; transcoding and audio-enabled
+configurations use FFmpeg for H.264 video and optional Opus audio. Recording,
+motion detection, and push-to-talk retain their existing paths and camera
+session requirements.
 
 The initial deployment scope is direct UDP connectivity over LAN or VPN. HTTP
 signaling uses the existing HomeSec server and authentication. Media travels
@@ -84,6 +86,34 @@ copy` avoids video transcoding but requires a compatible camera H.264 profile,
 packetization, and keyframe cadence; validate new viewer joins and loss recovery
 with the actual camera and browser before using it. H.265 and H.264 with B-frames
 require transcoding for this path.
+
+With `video_codec: copy` and `audio_enabled: false`, the helper connects directly
+to the camera over RTSP/TCP using Retina. It does not launch FFmpeg for preview.
+The same camera input feeds every preview viewer. Camera credentials travel only
+through the private Python-to-helper control pipe. RTSP authentication, keepalive,
+and teardown are handled by the client library.
+
+Native copy supports H.264 Baseline, Main, and High profiles through level 3.1,
+without B-frames. Negotiation checks the actual source profile and selects a
+compatible receiver level at least as high as the camera's. SDP parameter sets and camera RTP
+payload types are honored. Damaged or oversized RTP access units are discarded,
+with delivery resuming at a valid keyframe. Unsupported video, changed profiles,
+reversed video timestamps, or an overflowing source queue stop preview; select
+the default `video_codec: h264` to transcode an incompatible camera.
+Native connection setup is bounded to five seconds, media reads to ten seconds,
+and stop/parent disconnect cancels the source. It never waits on camera I/O in
+the WebRTC control loop.
+
+Native media assembly and delivery queues have byte/count limits. Retina's RTSP
+control-response parser currently exposes no response-size limit, so oversized
+camera responses can consume memory before the I/O deadline. This first mode
+is intended for operator-configured cameras on a trusted LAN/VPN; it does not
+provide a total memory bound against a malicious RTSP server. A library-level
+response cap is required before migrating shared recording into this process.
+
+This is the first step of the [shared Rust media plan](shared-rust-media.md).
+Recording and motion still use their existing independent inputs. FFmpeg and
+ffprobe remain required for those paths and for preview transcoding/audio.
 
 The preview input decoder uses slice threading rather than frame threading.
 Frame threading queues future frames and can add about a second of delay at

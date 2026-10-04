@@ -14,7 +14,8 @@ pub struct Request {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Operation {
     Start {
-        ffmpeg_args: Vec<String>,
+        ffmpeg_args: Option<Vec<String>>,
+        rtsp_url: Option<String>,
     },
     Offer {
         session_id: String,
