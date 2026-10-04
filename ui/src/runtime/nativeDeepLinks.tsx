@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { App } from '@capacitor/app'
 import { PushNotifications } from '@capacitor/push-notifications'
 import type { PluginListenerHandle } from '@capacitor/core'
@@ -35,12 +35,31 @@ export function NativeDeepLinkRouter({
   pushNotifications?: NativePushNotificationActions
 }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const navigateRef = useRef(navigate)
+  const locationRef = useRef(location)
   const isIOS = isIOSNativeApp()
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     navigateRef.current = navigate
-  }, [navigate])
+    locationRef.current = location
+  }, [location, navigate])
+
+  const navigateToRoute = useCallback((route: string, options: { replace: boolean }) => {
+    const currentLocation = locationRef.current
+    if (currentLocation.pathname === '/native-setup') {
+      // Keep pending validation and credential writes owned by the mounted form.
+      const state = currentLocation.state && typeof currentLocation.state === 'object'
+        ? currentLocation.state
+        : {}
+      navigateRef.current('/native-setup', {
+        replace: true,
+        state: { ...state, nativeSetupReturnTo: route },
+      })
+      return
+    }
+    navigateRef.current(route, options)
+  }, [])
 
   const navigateToDeepLink = useCallback((
     rawUrl: string | null | undefined,
@@ -53,8 +72,8 @@ export function NativeDeepLinkRouter({
     if (route === null) {
       return
     }
-    navigateRef.current(route, { replace: options.replace })
-  }, [])
+    navigateToRoute(route, options)
+  }, [navigateToRoute])
 
   const navigateToNotificationRoute = useCallback((
     action: ActionPerformed,
@@ -64,8 +83,8 @@ export function NativeDeepLinkRouter({
     if (route === null) {
       return
     }
-    navigateRef.current(route, { replace: options.replace })
-  }, [])
+    navigateToRoute(route, options)
+  }, [navigateToRoute])
 
   useEffect(() => {
     if (!isIOS) {

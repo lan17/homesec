@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { startTransition, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -92,6 +92,7 @@ export function NativeSetupPage({
   const [tokenError, setTokenError] = useState<string | null>(null)
   const [step, setStep] = useState<NativeSetupStep>('server')
   const [operation, setOperation] = useState<NativeSetupOperation | null>(null)
+  const [saveCompleted, setSaveCompleted] = useState(false)
   const operationControllerRef = useRef<{
     controller: AbortController
     phase: NativeSetupOperation
@@ -99,6 +100,12 @@ export function NativeSetupPage({
   const isCheckingServer = operation === 'checking-server'
   const isSaving = operation === 'validating-token' || operation === 'persisting'
   const canReturnToApp = Boolean(serverBaseUrlProvider.getBaseUrlSync()) && isRuntimeAuthSessionReady()
+
+  useLayoutEffect(() => {
+    if (saveCompleted) {
+      navigate(nativeSetupReturnTo(location.state), { replace: true })
+    }
+  }, [location.state, navigate, saveCompleted])
 
   useEffect(() => () => {
     operationControllerRef.current?.controller.abort()
@@ -222,7 +229,8 @@ export function NativeSetupPage({
       await persistRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })
       queryClient.clear()
       if (!controller.signal.aborted) {
-        navigate(nativeSetupReturnTo(location.state), { replace: true })
+        // Router navigation is a transition; commit its pending destination before exiting setup.
+        startTransition(() => { setSaveCompleted(true) })
       }
     } catch (error) {
       if (!controller.signal.aborted) {

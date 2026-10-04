@@ -1,6 +1,6 @@
 # HomeSec iOS Build And Runbook
 
-Last reviewed: 2026-10-03
+Last reviewed: 2026-10-04
 
 This runbook covers personal HomeSec iPhone and iPad builds from this repo.
 The current app is a Capacitor iOS shell around the React UI in `ui/`.
@@ -145,6 +145,9 @@ During first-time setup, **Cancel** aborts a pending server or token check and
 leaves the connection form editable. Credential persistence cannot be cancelled.
 Saving a different server clears the previous server's unfinished setup draft.
 Updating credentials for the same normalized server URL preserves that draft.
+Notification taps and `homesec://` links received on the connection form preserve
+its inputs and pending save. After a successful save, the app opens the latest
+received destination, including its query and fragment.
 
 Use HTTPS or VPN whenever possible. Plain HTTP is only acceptable for a trusted
 LAN/VPN development setup; the app allows local networking for LAN bootstrap but
