@@ -1,10 +1,10 @@
 # Rust WebRTC preview
 
-WebRTC preview is an opt-in backend for live camera viewing. HLS remains the
-default. HomeSec supervises a `homesec-webrtc` Rust helper for each active camera;
-FFmpeg supplies H.264 video and optional Opus audio. Viewers share one preview
-RTSP input per camera. Recording, motion detection, and push-to-talk retain their
-existing paths and camera session requirements.
+WebRTC is the default backend for live camera viewing. Preview remains disabled
+until enabled in config. HomeSec supervises a `homesec-webrtc` Rust helper for
+each active camera; FFmpeg supplies H.264 video and optional Opus audio. Viewers
+share one preview RTSP input per camera. Recording, motion detection, and
+push-to-talk retain their existing paths and camera session requirements.
 
 The initial deployment scope is direct UDP connectivity over LAN or VPN. HTTP
 signaling uses the existing HomeSec server and authentication. Media travels
@@ -15,7 +15,7 @@ must be validated separately before relying on them.
 
 ## Configuration
 
-Select the backend in the existing `preview` section:
+Enable preview in the existing `preview` section and configure the server IP:
 
 ```yaml
 preview:
@@ -37,10 +37,18 @@ preview:
     ice_servers: []
 ```
 
-`advertised_ip` must identify the HomeSec host from the viewer's network. Do not
-advertise a Docker bridge address, loopback address, or camera address. A LAN
-address must also be routable from VPN clients; otherwise use a VPN address and
-validate connectivity from every supported client network.
+`advertised_ip` is required when WebRTC preview is enabled; it may remain unset
+while preview is disabled. It must identify the HomeSec host from the viewer's
+network. Do not advertise a Docker bridge address, loopback address, or camera
+address. A LAN address must also be routable from VPN clients; otherwise use a
+VPN address and validate connectivity from every supported client network.
+
+Explicit `backend: hls` settings remain HLS. Older configs that omit `backend`
+but include HLS-specific settings such as `storage_dir`, `segment_duration_ms`,
+`live_window_segments`, `audio_codec`, or `video_codec: auto` also retain HLS.
+For new configurations, omitting `backend` selects WebRTC.
+If an older enabled preview has no backend or HLS-specific settings, add
+`backend: hls` to retain HLS, or configure `advertised_ip` to use WebRTC.
 
 For clients that require STUN or a TURN relay, supply `ice_servers` entries with
 `urls` (a list), optional `username`, and optional `credential_env` naming an

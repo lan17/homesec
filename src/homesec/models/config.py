@@ -228,7 +228,7 @@ class WebRTCPreviewConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     helper_path: str = Field(default="homesec-webrtc", min_length=1)
-    advertised_ip: str = Field(min_length=1)
+    advertised_ip: str | None = Field(default=None, min_length=1)
     udp_port_start: int = Field(default=8189, ge=1024, le=65535)
     udp_port_end: int = Field(default=8199, ge=1024, le=65535)
     max_viewers: int = Field(default=4, ge=1, le=32)
@@ -240,8 +240,8 @@ class WebRTCPreviewConfig(BaseModel):
 
     @field_validator("advertised_ip")
     @classmethod
-    def _validate_advertised_ip(cls, value: str) -> str:
-        return str(ip_address(value))
+    def _validate_advertised_ip(cls, value: str | None) -> str | None:
+        return str(ip_address(value)) if value is not None else None
 
     @model_validator(mode="after")
     def _validate_ports(self) -> WebRTCPreviewConfig:
@@ -256,7 +256,7 @@ class PreviewConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     enabled: bool = False
-    backend: str = "hls"
+    backend: str = "webrtc"
     token_ttl_s: int = Field(
         default=60,
         ge=1,
@@ -274,7 +274,7 @@ class PreviewConfig(BaseModel):
             "'allow_during_recording' is best-effort and may consume an extra RTSP session."
         ),
     )
-    config: HLSPreviewConfig | WebRTCPreviewConfig = Field(default_factory=HLSPreviewConfig)
+    config: HLSPreviewConfig | WebRTCPreviewConfig = Field(default_factory=WebRTCPreviewConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -283,7 +283,19 @@ class PreviewConfig(BaseModel):
             return value
 
         config = dict(value)
-        backend = config.get("backend", "hls")
+        preview_config = config.get("config", {})
+        # Older HLS configurations could omit the backend. Preserve their settings.
+        legacy_hls = isinstance(preview_config, HLSPreviewConfig) or (
+            isinstance(preview_config, dict)
+            and (
+                bool(
+                    {"segment_duration_ms", "live_window_segments", "storage_dir", "audio_codec"}
+                    & preview_config.keys()
+                )
+                or preview_config.get("video_codec") == "auto"
+            )
+        )
+        backend = config.get("backend", "hls" if legacy_hls else "webrtc")
         if isinstance(backend, str):
             backend = backend.lower()
             config["backend"] = backend
@@ -291,8 +303,11 @@ class PreviewConfig(BaseModel):
         if backend not in {"hls", "webrtc"}:
             raise ValueError("preview.backend must be 'hls' or 'webrtc'")
 
-        if backend == "webrtc":
-            config["config"] = WebRTCPreviewConfig.model_validate(config.get("config", {}))
+        config["config"] = (
+            WebRTCPreviewConfig.model_validate(preview_config)
+            if backend == "webrtc"
+            else preview_config
+        )
 
         return config
 
@@ -300,6 +315,14 @@ class PreviewConfig(BaseModel):
     def _validate_config_backend(self) -> PreviewConfig:
         if (self.backend == "hls") != isinstance(self.config, HLSPreviewConfig):
             raise ValueError("preview.config does not match preview.backend")
+        if (
+            self.enabled
+            and isinstance(self.config, WebRTCPreviewConfig)
+            and self.config.advertised_ip is None
+        ):
+            raise ValueError(
+                "preview.config.advertised_ip is required when WebRTC preview is enabled"
+            )
         return self
 
     @field_validator("backend", mode="before")

@@ -29,7 +29,6 @@ class _WebRTCApp(_StubPreviewApp):
             server_config=FastAPIServerConfig(auth_enabled=auth, api_key_env="HOMESEC_API_KEY"),
             preview_config=PreviewConfig(
                 enabled=True,
-                backend="webrtc",
                 config=WebRTCPreviewConfig(
                     advertised_ip="127.0.0.1", ice_servers=ice_servers or []
                 ),
@@ -57,10 +56,10 @@ class _WebRTCApp(_StubPreviewApp):
         return PreviewSessionAction(accepted=True)
 
 
-def test_webrtc_session_snapshot_preserves_hls_and_returns_signaling(
+def test_default_webrtc_session_snapshot_returns_signaling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: An authorized WebRTC preview backend
+    # Given: An authorized preview with the default backend and configured server IP
     monkeypatch.setenv("HOMESEC_API_KEY", "secret")
     client = _client(_WebRTCApp())
 
@@ -209,9 +208,9 @@ def test_turn_credentials_resolve_only_for_authorized_snapshot(
     assert "turn-secret" not in app.config.preview.model_dump_json()
 
 
-def test_backend_config_is_explicit_and_hls_defaults_are_unchanged() -> None:
-    # Given: The existing HLS config and an explicitly selected WebRTC backend
-    hls = PreviewConfig(enabled=True)
+def test_explicit_hls_defaults_remain_available_with_webrtc_default() -> None:
+    # Given: An explicitly selected HLS deployment
+    hls = PreviewConfig(enabled=True, backend="hls")
 
     # When: Loading a WebRTC config and malformed port range
     webrtc = PreviewConfig.model_validate(
@@ -220,7 +219,7 @@ def test_backend_config_is_explicit_and_hls_defaults_are_unchanged() -> None:
     with pytest.raises(ValidationError, match="udp_port_end"):
         WebRTCPreviewConfig(advertised_ip="127.0.0.1", udp_port_start=9000, udp_port_end=8189)
 
-    # Then: Existing installations stay HLS; only explicit selection enables WebRTC
+    # Then: Explicit HLS retains its defaults while WebRTC settings remain validated
     assert hls.backend == "hls"
     assert hls.config.segment_duration_ms == 1000
     assert isinstance(webrtc.config, WebRTCPreviewConfig)

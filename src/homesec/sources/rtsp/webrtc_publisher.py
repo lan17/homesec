@@ -263,9 +263,13 @@ class RustWebRTCLivePublisher:
         rtsp_io_timeout_s: float,
         timeout_capabilities: RTSPTimeoutCapabilities,
     ) -> None:
+        advertised_ip = config.advertised_ip
+        if advertised_ip is None:
+            raise ValueError("WebRTC preview requires advertised_ip")
         self._camera_name = camera_name
         self._rtsp_url = rtsp_url
         self._config = config
+        self._advertised_ip = advertised_ip
         self._audio_available = False
         self._idle_timeout_s = idle_timeout_s
         self._recording_policy = recording_policy
@@ -328,7 +332,7 @@ class RustWebRTCLivePublisher:
                     [
                         self._config.helper_path,
                         "--advertised-ip",
-                        self._config.advertised_ip,
+                        self._advertised_ip,
                         "--udp-port-start",
                         str(self._config.udp_port_start),
                         "--udp-port-end",
