@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { APIError } from '../../../api/client'
@@ -90,6 +90,7 @@ function mockIdlePushToTalk(overrides: Record<string, unknown> = {}) {
 
 function mockReadyPreviewSession(playlistUrl: string = DEFAULT_PLAYLIST_URL) {
   useCameraPreviewMock.mockReturnValue({
+    canStop: true,
     status: {
       camera_name: 'front',
       enabled: true,
@@ -168,9 +169,30 @@ describe('CameraPreviewPanel', () => {
     vi.restoreAllMocks()
   })
 
+  it('restarts HLS playback after a fatal error when the playlist URL stays unchanged', async () => {
+    // Given: A tokenless HLS session with a stable playlist URL
+    mockReadyPreviewSession('http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8')
+    const { container } = render(<CameraPreviewPanel cameraName="front" showTalkControl={false} />)
+    await waitFor(() => expect(hlsConstructMock).toHaveBeenCalledOnce())
+    const errorHandler = hlsOnMock.mock.calls.find(([event]) => event === 'error')?.[1] as
+      ((_event: string, data: { fatal: boolean }) => void) | undefined
+
+    // When: Playback fails and the user explicitly starts another attempt
+    act(() => { errorHandler?.('error', { fatal: true }) })
+    await waitFor(() => expect(screen.getByText('Preview playback failed. Restart preview.')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Show live view' }))
+
+    // Then: A new player mounts and consumes the same URL instead of retaining the old failure
+    await waitFor(() => expect(hlsConstructMock).toHaveBeenCalledTimes(2))
+    expect(hlsLoadSourceMock.mock.calls[1]?.[0]).toBe('http://localhost:8081/api/v1/preview/cameras/front/playlist.m3u8')
+    expect(container.querySelector('video')).toBeTruthy()
+    expect(screen.queryByText('Preview playback failed. Restart preview.')).toBeNull()
+  })
+
   it('renders disabled preview state from the hook', () => {
     // Given: Preview is disabled for the current camera
     useCameraPreviewMock.mockReturnValue({
+      canStop: false,
       status: {
         camera_name: 'front',
         enabled: false,
@@ -207,6 +229,7 @@ describe('CameraPreviewPanel', () => {
     const stop = vi.fn().mockResolvedValue(undefined)
     const refreshStatus = vi.fn().mockResolvedValue(undefined)
     useCameraPreviewMock.mockReturnValue({
+      canStop: true,
       status: {
         camera_name: 'front',
         enabled: true,
@@ -380,6 +403,7 @@ describe('CameraPreviewPanel', () => {
   it('keeps stop enabled when a session exists but status is temporarily unavailable', () => {
     // Given: An active preview session with no current status snapshot
     useCameraPreviewMock.mockReturnValue({
+      canStop: true,
       status: null,
       session: {
         camera_name: 'front',
@@ -413,9 +437,35 @@ describe('CameraPreviewPanel', () => {
     expect(screen.getByText('Ready')).toBeTruthy()
   })
 
+  it('disables stop for a detached WebRTC viewer while another viewer keeps the publisher ready', async () => {
+    // Given: The hook retains a ready shared publisher after its local WebRTC viewer detached
+    const stop = vi.fn().mockResolvedValue(undefined)
+    useCameraPreviewMock.mockReturnValue({
+      status: {
+        camera_name: 'front', enabled: true, state: 'ready', viewer_count: 1,
+        degraded_reason: null, last_error: null, idle_shutdown_at: null, httpStatus: 200,
+      },
+      session: null, playlistUrl: null, warning: null, error: null,
+      isPending: false, isStarting: false, isStopping: false, canStop: false,
+      start: vi.fn(), stop, refreshStatus: vi.fn(),
+    })
+    const user = userEvent.setup()
+
+    // When: The user tries the ordinary Stop control after detaching
+    render(<CameraPreviewPanel cameraName="front" showTalkControl={false} />)
+    const stopButton = screen.getByRole('button', { name: 'Stop live view' })
+    await user.click(stopButton)
+
+    // Then: Publisher readiness does not enable an action that could stop another viewer
+    expect(stopButton.hasAttribute('disabled')).toBe(true)
+    expect(stop).not.toHaveBeenCalled()
+    expect(screen.getByText('1 viewer')).toBeTruthy()
+  })
+
   it('prefers the active session state over a stale terminal status snapshot', () => {
     // Given: A live preview session with a stale idle status snapshot
     useCameraPreviewMock.mockReturnValue({
+      canStop: true,
       status: {
         camera_name: 'front',
         enabled: true,
@@ -461,6 +511,7 @@ describe('CameraPreviewPanel', () => {
     const startTalk = vi.fn().mockResolvedValue(undefined)
     const stopTalk = vi.fn().mockResolvedValue(undefined)
     useCameraPreviewMock.mockReturnValue({
+      canStop: false,
       status: {
         camera_name: 'front',
         enabled: true,

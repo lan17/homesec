@@ -20,6 +20,7 @@ from homesec.models.config import (
     Config,
     FastAPIServerConfig,
     MaintenanceConfig,
+    PreviewConfig,
     StateStoreConfig,
     StorageConfig,
 )
@@ -537,6 +538,7 @@ async def _build_finalize_config(
         defaults_applied=defaults_applied,
     )
     maintenance = existing.maintenance if existing is not None else MaintenanceConfig()
+    preview = existing.preview if existing is not None else PreviewConfig()
 
     version = existing.version if existing is not None else 1
     return Config(
@@ -550,6 +552,7 @@ async def _build_finalize_config(
         alert_policy=alert_policy,
         server=server,
         maintenance=maintenance,
+        preview=preview,
     ), defaults_applied
 
 

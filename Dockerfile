@@ -11,7 +11,17 @@
 #          -p 8081:8081 homesec
 
 # =============================================================================
-# Stage 1: Builder
+# Stage 1: WebRTC Helper Builder
+# =============================================================================
+FROM rust:1.99.0-slim-bookworm AS webrtc-builder
+
+WORKDIR /app
+COPY rust-toolchain.toml ./
+COPY native/webrtc/ ./native/webrtc/
+RUN cargo build --manifest-path native/webrtc/Cargo.toml --release --locked
+
+# =============================================================================
+# Stage 2: Python Builder
 # =============================================================================
 FROM python:3.14-slim-bookworm AS builder
 
@@ -45,7 +55,7 @@ COPY alembic.ini ./
 RUN uv pip install --no-deps .
 
 # =============================================================================
-# Stage 2: UI Builder
+# Stage 3: UI Builder
 # =============================================================================
 FROM node:22-bookworm-slim AS ui-builder
 
@@ -63,7 +73,7 @@ COPY ui/ ./
 RUN pnpm build
 
 # =============================================================================
-# Stage 3: Runtime
+# Stage 4: Runtime
 # =============================================================================
 FROM python:3.14-slim-bookworm AS runtime
 
@@ -99,6 +109,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/alembic /app/alembic
 COPY --from=builder /app/alembic.ini /app/alembic.ini
 COPY --from=ui-builder /app/ui/dist /app/ui/dist
+COPY --from=webrtc-builder /app/native/webrtc/target/release/homesec-webrtc /usr/local/bin/homesec-webrtc
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
@@ -119,6 +130,8 @@ USER homesec
 
 # Health check endpoint
 EXPOSE 8081
+# Direct WebRTC media; signaling uses the existing HTTP port.
+EXPOSE 8189-8199/udp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')" || exit 1
 

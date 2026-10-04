@@ -9,6 +9,12 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+)
 from homesec.runtime.controller import RuntimeController
 from homesec.runtime.errors import (
     PreviewRuntimeUnavailableError,
@@ -152,6 +158,36 @@ class RuntimeManager:
         status = replace(self._status)
         status.reload_in_progress = self._reload_task is not None and not self._reload_task.done()
         return status
+
+    async def negotiate_preview(
+        self, camera_name: str, *, offer: PreviewOffer, lease_expires_at: float
+    ) -> PreviewAnswer | PreviewSessionRefusal:
+        """Negotiate a viewer with the active runtime generation."""
+        return await self._controller.negotiate_preview(
+            self._require_active_runtime(),
+            camera_name,
+            offer=offer,
+            lease_expires_at=lease_expires_at,
+        )
+
+    async def renew_preview_session(
+        self, camera_name: str, *, session_id: str, lease_expires_at: float
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        """Renew a viewer with the active runtime generation."""
+        return await self._controller.renew_preview_session(
+            self._require_active_runtime(),
+            camera_name,
+            session_id=session_id,
+            lease_expires_at=lease_expires_at,
+        )
+
+    async def close_preview_session(
+        self, camera_name: str, *, session_id: str
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        """Detach one viewer from the active runtime generation."""
+        return await self._controller.close_preview_session(
+            self._require_active_runtime(), camera_name, session_id=session_id
+        )
 
     async def get_preview_status(self, camera_name: str) -> CameraPreviewStatus:
         """Return preview status for a camera in the active runtime."""

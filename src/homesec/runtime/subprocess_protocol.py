@@ -7,6 +7,12 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
 
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+)
 from homesec.models.talk import (
     CameraTalkStatus,
     TalkCapabilityState,
@@ -136,6 +142,9 @@ class WorkerTalkStopPayload(BaseModel):
 class WorkerCommandType(StrEnum):
     """Parent-to-worker control command type."""
 
+    PREVIEW_NEGOTIATE = "preview_negotiate"
+    PREVIEW_RENEW_SESSION = "preview_renew_session"
+    PREVIEW_CLOSE_SESSION = "preview_close_session"
     PREVIEW_STATUS = "preview_status"
     PREVIEW_ENSURE_ACTIVE = "preview_ensure_active"
     PREVIEW_FORCE_STOP = "preview_force_stop"
@@ -190,6 +199,8 @@ class WorkerCommand(BaseModel):
     camera_name: str
     viewer_id: str | None = None
     session_id: str | None = None
+    preview_offer: PreviewOffer | None = None
+    lease_expires_at: float | None = Field(default=None, gt=0.0)
     talk_input: TalkInputFormat | None = None
 
 
@@ -201,6 +212,9 @@ class WorkerCommandResult(BaseModel):
     generation: int
     correlation_id: str
     camera_name: str
+    preview_answer: PreviewAnswer | None = None
+    preview_session_action: PreviewSessionAction | None = None
+    preview_session_refusal: PreviewSessionRefusal | None = None
     status: WorkerPreviewStatusPayload | None = None
     refusal: WorkerPreviewRefusalPayload | None = None
     stop_result: WorkerPreviewStopPayload | None = None

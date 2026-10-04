@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Literal
 
@@ -202,13 +203,60 @@ class HLSPreviewConfig(BaseModel):
     )
 
 
+class PreviewIceServerConfig(BaseModel):
+    """ICE credentials are resolved from the environment only for authorized clients."""
+
+    model_config = {"extra": "forbid"}
+
+    urls: list[str] = Field(min_length=1)
+    username: str | None = None
+    credential_env: str | None = None
+
+    @field_validator("urls")
+    @classmethod
+    def _validate_urls(cls, urls: list[str]) -> list[str]:
+        if any(
+            not url.startswith(("stun:", "stuns:", "turn:", "turns:")) or "@" in url for url in urls
+        ):
+            raise ValueError("ICE URLs must be STUN or TURN URLs without embedded credentials")
+        return urls
+
+
+class WebRTCPreviewConfig(BaseModel):
+    """Configuration for the supervised Rust preview helper."""
+
+    model_config = {"extra": "forbid"}
+
+    helper_path: str = Field(default="homesec-webrtc", min_length=1)
+    advertised_ip: str | None = Field(default=None, min_length=1)
+    udp_port_start: int = Field(default=8189, ge=1024, le=65535)
+    udp_port_end: int = Field(default=8199, ge=1024, le=65535)
+    max_viewers: int = Field(default=4, ge=1, le=32)
+    negotiation_timeout_s: float = Field(default=10.0, gt=0.0, le=60.0)
+    max_session_duration_s: float = Field(default=3600.0, gt=0.0, le=86400.0)
+    audio_enabled: bool = True
+    video_codec: Literal["h264", "copy"] = "h264"
+    ice_servers: list[PreviewIceServerConfig] = Field(default_factory=list)
+
+    @field_validator("advertised_ip")
+    @classmethod
+    def _validate_advertised_ip(cls, value: str | None) -> str | None:
+        return str(ip_address(value)) if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_ports(self) -> WebRTCPreviewConfig:
+        if self.udp_port_end < self.udp_port_start:
+            raise ValueError("udp_port_end must be >= udp_port_start")
+        return self
+
+
 class PreviewConfig(BaseModel):
     """Top-level live preview configuration."""
 
     model_config = {"extra": "forbid"}
 
     enabled: bool = False
-    backend: str = "hls"
+    backend: str = "webrtc"
     token_ttl_s: int = Field(
         default=60,
         ge=1,
@@ -226,7 +274,7 @@ class PreviewConfig(BaseModel):
             "'allow_during_recording' is best-effort and may consume an extra RTSP session."
         ),
     )
-    config: HLSPreviewConfig = Field(default_factory=HLSPreviewConfig)
+    config: HLSPreviewConfig | WebRTCPreviewConfig = Field(default_factory=WebRTCPreviewConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -235,15 +283,47 @@ class PreviewConfig(BaseModel):
             return value
 
         config = dict(value)
-        backend = config.get("backend", "hls")
+        preview_config = config.get("config", {})
+        # Older HLS configurations could omit the backend. Preserve their settings.
+        legacy_hls = isinstance(preview_config, HLSPreviewConfig) or (
+            isinstance(preview_config, dict)
+            and (
+                bool(
+                    {"segment_duration_ms", "live_window_segments", "storage_dir", "audio_codec"}
+                    & preview_config.keys()
+                )
+                or preview_config.get("video_codec") == "auto"
+            )
+        )
+        backend = config.get("backend", "hls" if legacy_hls else "webrtc")
         if isinstance(backend, str):
             backend = backend.lower()
             config["backend"] = backend
 
-        if backend != "hls":
-            raise ValueError("preview.backend must be 'hls' in config contract v1")
+        if backend not in {"hls", "webrtc"}:
+            raise ValueError("preview.backend must be 'hls' or 'webrtc'")
+
+        config["config"] = (
+            WebRTCPreviewConfig.model_validate(preview_config)
+            if backend == "webrtc"
+            else preview_config
+        )
 
         return config
+
+    @model_validator(mode="after")
+    def _validate_config_backend(self) -> PreviewConfig:
+        if (self.backend == "hls") != isinstance(self.config, HLSPreviewConfig):
+            raise ValueError("preview.config does not match preview.backend")
+        if (
+            self.enabled
+            and isinstance(self.config, WebRTCPreviewConfig)
+            and self.config.advertised_ip is None
+        ):
+            raise ValueError(
+                "preview.config.advertised_ip is required when WebRTC preview is enabled"
+            )
+        return self
 
     @field_validator("backend", mode="before")
     @classmethod

@@ -1,5 +1,9 @@
 # Preview Deployment Notes
 
+These notes cover HLS preview, selected with `preview.backend: hls`. WebRTC is
+the default backend; see [WebRTC preview](webrtc-preview.md) for its deployment
+requirements.
+
 `preview.config.storage_dir` is a scratch directory intended for HLS preview output
 (short-lived playlists and segments). It is not durable clip storage. Keep it
 separate from `recordings/` and any long-term storage backend.
@@ -14,6 +18,7 @@ By default, preview yields to active recording with:
 
 ```yaml
 preview:
+  backend: hls
   recording_policy: stop_on_recording
 ```
 
@@ -21,6 +26,7 @@ You can opt into best-effort concurrent preview during recording with:
 
 ```yaml
 preview:
+  backend: hls
   recording_policy: allow_during_recording
 ```
 
@@ -40,10 +46,11 @@ Why:
 - tmpfs uses RAM (and may count against container memory limits)
 - capping size bounds preview RAM usage
 
-The default preview storage path is:
+The default HLS preview storage path is:
 
 ```yaml
 preview:
+  backend: hls
   config:
     storage_dir: /tmp/homesec-preview
 ```

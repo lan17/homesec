@@ -14,6 +14,9 @@ import type {
   PreviewSessionResponse,
   PreviewStatusResponse,
   PreviewStopResponse,
+  PreviewOfferRequest,
+  PreviewAnswerResponse,
+  PreviewSessionActionResponse,
   TalkSessionRequest,
   TalkSessionResponse,
   TalkStatusResponse,
@@ -50,6 +53,8 @@ import {
   parsePreviewSessionResponse,
   parsePreviewStatusResponse,
   parsePreviewStopResponse,
+  parsePreviewAnswerResponse,
+  parsePreviewSessionActionResponse,
   parseTalkSessionResponse,
   parseTalkStatusResponse,
   parseTalkStopResponse,
@@ -81,6 +86,8 @@ export type ConfigChangeSnapshot = ApiSnapshot<ConfigChangeResponse>
 export type PreviewSessionSnapshot = ApiSnapshot<PreviewSessionResponse>
 export type PreviewStatusSnapshot = ApiSnapshot<PreviewStatusResponse>
 export type PreviewStopSnapshot = ApiSnapshot<PreviewStopResponse>
+export type PreviewAnswerSnapshot = ApiSnapshot<PreviewAnswerResponse>
+export type PreviewSessionActionSnapshot = ApiSnapshot<PreviewSessionActionResponse>
 export type TalkSessionSnapshot = ApiSnapshot<TalkSessionResponse>
 export type TalkStatusSnapshot = ApiSnapshot<TalkStatusResponse>
 export type TalkStopSnapshot = ApiSnapshot<TalkStopResponse>
@@ -258,6 +265,70 @@ export class HomeSecApiClient implements GeneratedHomeSecClient {
         null,
       )
     }
+  }
+
+  async createCameraPreviewPeer(
+    cameraName: string,
+    token: string | null,
+    offer: PreviewOfferRequest,
+    options: ApiRequestOptions = {},
+  ): Promise<PreviewAnswerSnapshot> {
+    const response = await this.httpClient.requestJson(
+      `/api/v1/preview/cameras/${encodeURIComponent(cameraName)}/sessions`,
+      { ...options, query: { token }, method: 'POST', body: offer },
+    )
+    try {
+      return withHttpStatus(parsePreviewAnswerResponse(response.payload), response.status)
+    } catch {
+      throw new APIError('Invalid preview answer response payload', response.status, null, null)
+    }
+  }
+
+  async renewCameraPreviewPeer(
+    cameraName: string,
+    sessionId: string,
+    token: string | null,
+    options: ApiRequestOptions = {},
+  ): Promise<PreviewSessionActionSnapshot> {
+    return this.cameraPreviewPeerAction(cameraName, sessionId, token, 'PATCH', options)
+  }
+
+  async closeCameraPreviewPeer(
+    cameraName: string,
+    sessionId: string,
+    token: string | null,
+    options: ApiRequestOptions = {},
+  ): Promise<PreviewSessionActionSnapshot> {
+    return this.cameraPreviewPeerAction(cameraName, sessionId, token, 'DELETE', options)
+  }
+
+  private async cameraPreviewPeerAction(
+    cameraName: string,
+    sessionId: string,
+    token: string | null,
+    method: 'PATCH' | 'DELETE',
+    options: ApiRequestOptions,
+  ): Promise<PreviewSessionActionSnapshot> {
+    const response = await this.httpClient.requestJson(
+      `/api/v1/preview/cameras/${encodeURIComponent(cameraName)}/sessions/${encodeURIComponent(sessionId)}`,
+      { ...options, query: { token }, method },
+    )
+    try {
+      return withHttpStatus(parsePreviewSessionActionResponse(response.payload), response.status)
+    } catch {
+      throw new APIError('Invalid preview session action response payload', response.status, null, null)
+    }
+  }
+
+  async isPreviewPlaylistReady(playlistUrl: string, options: ApiRequestOptions = {}): Promise<boolean> {
+    const response = await fetch(playlistUrl, { cache: 'no-store', signal: options.signal })
+    if (response.ok) {
+      return true
+    }
+    if (response.status === 404 || response.status === 409) {
+      return false
+    }
+    throw new APIError(`Preview playlist unavailable (${response.status})`, response.status, null, null)
   }
 
   async getCameraTalkStatus(

@@ -22,7 +22,20 @@ import numpy.typing as npt
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from homesec.models.clip import Clip
-from homesec.models.config import CameraTalkConfig, PreviewConfig, TalkConfig
+from homesec.models.config import (
+    CameraTalkConfig,
+    HLSPreviewConfig,
+    PreviewConfig,
+    TalkConfig,
+    WebRTCPreviewConfig,
+)
+from homesec.models.preview import (
+    PreviewAnswer,
+    PreviewOffer,
+    PreviewSessionAction,
+    PreviewSessionRefusal,
+    PreviewSessionRefusalReason,
+)
 from homesec.models.talk import (
     CameraTalkStatus,
     TalkCapabilityProbeResult,
@@ -68,6 +81,7 @@ from homesec.sources.rtsp.utils import (
     _next_backoff,
     _redact_rtsp_url,
 )
+from homesec.sources.rtsp.webrtc_publisher import RustWebRTCLivePublisher, WebRTCPreviewPublisher
 from homesec.talk.backends import (
     CameraTalkFingerprint,
     TalkBackendConfigError,
@@ -476,9 +490,10 @@ class RTSPSource(ThreadedClipSource):
         if config.runtime_preview is not None:
             preview_hls_config = config.runtime_preview.config
             self._preview_audio_enabled = preview_hls_config.audio_enabled
-            self._preview_startup_probe_required = preview_hls_config.video_codec == "auto" or (
-                preview_hls_config.audio_enabled and preview_hls_config.audio_codec == "auto"
-            )
+            if isinstance(preview_hls_config, HLSPreviewConfig):
+                self._preview_startup_probe_required = preview_hls_config.video_codec == "auto" or (
+                    preview_hls_config.audio_enabled and preview_hls_config.audio_codec == "auto"
+                )
 
         if config.stream.disable_hwaccel:
             logger.info("Hardware acceleration manually disabled")
@@ -590,6 +605,11 @@ class RTSPSource(ThreadedClipSource):
 
     def ensure_preview_active(self) -> LivePublisherStatus | LivePublisherStartRefusal:
         """Ensure the preview publisher is active for this camera."""
+        if self._webrtc_preview_preflight_pending():
+            return LivePublisherStartRefusal(
+                reason=LivePublisherRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="WebRTC preview is waiting for camera discovery",
+            )
         try:
             return self._live_publisher.ensure_active()
         except Exception as exc:
@@ -612,6 +632,49 @@ class RTSPSource(ThreadedClipSource):
             self._live_publisher.note_viewer_activity(viewer_id=viewer_id)
         except Exception as exc:
             logger.warning("Preview viewer activity update failed: %s", exc, exc_info=True)
+
+    def negotiate_preview(
+        self, offer: PreviewOffer, lease_expires_at: float
+    ) -> PreviewAnswer | PreviewSessionRefusal:
+        """Negotiate with the source-owned media helper, never the recording reader."""
+        publisher = self._live_publisher
+        if self._webrtc_preview_preflight_pending():
+            return PreviewSessionRefusal(
+                reason=PreviewSessionRefusalReason.PREVIEW_TEMPORARILY_UNAVAILABLE,
+                message="WebRTC preview is waiting for camera discovery",
+            )
+        if isinstance(publisher, WebRTCPreviewPublisher):
+            return publisher.negotiate(offer, lease_expires_at)
+        return self._unsupported_preview_transport()
+
+    def _webrtc_preview_preflight_pending(self) -> bool:
+        return (
+            isinstance(self._live_publisher, RustWebRTCLivePublisher)
+            and self._preflight_outcome is None
+        )
+
+    def renew_preview_session(
+        self, session_id: str, lease_expires_at: float
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        publisher = self._live_publisher
+        if isinstance(publisher, WebRTCPreviewPublisher):
+            return publisher.renew(session_id, lease_expires_at)
+        return self._unsupported_preview_transport()
+
+    def close_preview_session(
+        self, session_id: str
+    ) -> PreviewSessionAction | PreviewSessionRefusal:
+        publisher = self._live_publisher
+        if isinstance(publisher, WebRTCPreviewPublisher):
+            return publisher.close(session_id)
+        return self._unsupported_preview_transport()
+
+    @staticmethod
+    def _unsupported_preview_transport() -> PreviewSessionRefusal:
+        return PreviewSessionRefusal(
+            reason=PreviewSessionRefusalReason.UNSUPPORTED_TRANSPORT,
+            message="WebRTC preview is not configured",
+        )
 
     def talk_status(self) -> CameraTalkStatus:
         """Return the current push-to-talk status for this camera."""
@@ -866,8 +929,15 @@ class RTSPSource(ThreadedClipSource):
         )
 
     def _apply_preflight_outcome(self, outcome: CameraPreflightOutcome) -> None:
-        self._preflight_outcome = outcome
         self._motion_rtsp_url = outcome.motion_profile.input_url
+
+        if isinstance(self._live_publisher, RustWebRTCLivePublisher):
+            self._live_publisher.set_audio_available(
+                any(
+                    probe.url == self.rtsp_url and probe.probe_ok and probe.audio_codec is not None
+                    for probe in outcome.diagnostics.probes
+                )
+            )
 
         if self._owns_frame_pipeline and isinstance(self._frame_pipeline, FfmpegFramePipeline):
             self._frame_pipeline.set_motion_profile(outcome.motion_profile)
@@ -901,6 +971,8 @@ class RTSPSource(ThreadedClipSource):
             self._detect_fallback_active = False
             self._detect_next_probe_at = None
 
+        # Publish readiness only after discovery-dependent media configuration is applied.
+        self._preflight_outcome = outcome
         logger.info(
             "RTSP preflight complete: camera=%s motion_url=%s recording_url=%s profile=%s session_mode=%s",
             self.camera_name,
@@ -1172,6 +1244,17 @@ class RTSPSource(ThreadedClipSource):
             return NoopLivePublisher()
 
         hls_config = preview_config.config
+        if isinstance(hls_config, WebRTCPreviewConfig):
+            return RustWebRTCLivePublisher(
+                camera_name=camera_name,
+                rtsp_url=self.rtsp_url,
+                config=hls_config,
+                idle_timeout_s=preview_config.idle_timeout_s,
+                recording_policy=preview_config.recording_policy,
+                rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+                rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+                timeout_capabilities=self._timeout_capabilities,
+            )
         return HLSLivePublisher(
             camera_name=camera_name,
             rtsp_url=self.rtsp_url,

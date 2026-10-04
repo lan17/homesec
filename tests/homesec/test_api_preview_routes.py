@@ -47,7 +47,7 @@ class _StubPreviewApp:
         stop_error: Exception | None = None,
     ) -> None:
         resolved_server = ensure_stub_ui_dist(server_config or FastAPIServerConfig())
-        resolved_preview = preview_config or PreviewConfig(enabled=True)
+        resolved_preview = preview_config or PreviewConfig(enabled=True, backend="hls")
         self._bootstrap_mode = bootstrap_mode
         self._pipeline_running = pipeline_running
         self._status = status or CameraPreviewStatus(
@@ -289,7 +289,9 @@ def test_post_preview_returns_tokenized_playlist_when_auth_enabled(
             viewer_count=3,
         ),
         server_config=FastAPIServerConfig(auth_enabled=True, api_key_env="HOMESEC_API_KEY"),
-        preview_config=PreviewConfig(enabled=True, token_ttl_s=45, idle_timeout_s=30.0),
+        preview_config=PreviewConfig(
+            enabled=True, backend="hls", token_ttl_s=45, idle_timeout_s=30.0
+        ),
     )
     client = _client(app)
 
@@ -338,7 +340,7 @@ def test_post_preview_returns_direct_playlist_when_auth_disabled() -> None:
             state=PreviewState.READY,
             viewer_count=1,
         ),
-        preview_config=PreviewConfig(enabled=True, idle_timeout_s=12.5),
+        preview_config=PreviewConfig(enabled=True, backend="hls", idle_timeout_s=12.5),
     )
     client = _client(app)
 

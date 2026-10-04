@@ -17,7 +17,7 @@ from homesec.config import (
     validate_plugin_names,
 )
 from homesec.config.loader import ConfigErrorCode
-from homesec.models.config import Config
+from homesec.models.config import Config, HLSPreviewConfig, PreviewConfig, WebRTCPreviewConfig
 from homesec.plugins.registry import PluginType, plugin
 
 
@@ -602,7 +602,7 @@ def test_load_example_config() -> None:
     # When: loading the config
     config = load_config(example_path)
     # Then: expected fields are present
-    assert config.preview.backend == "hls"
+    assert config.preview.backend == "webrtc"
     assert config.filter.backend == "yolo"
     assert config.vlm.backend == "openai"
 
@@ -709,25 +709,84 @@ def test_server_config_rejects_legacy_serve_ui_field() -> None:
 
 
 def test_preview_defaults_apply_when_preview_block_is_absent() -> None:
-    """Preview config should default to the accepted v1 HLS contract surface."""
+    """Fresh configurations select WebRTC without starting unconfigured preview."""
     # Given: a valid config payload without a preview block
     data = minimal_config()
 
     # When: loading the config
     config = load_config_from_dict(data)
 
-    # Then: preview defaults match the v1 contract
+    # Then: WebRTC is the default transport and stays disabled until configured
     assert config.preview.enabled is False
-    assert config.preview.backend == "hls"
+    assert config.preview.backend == "webrtc"
     assert config.preview.token_ttl_s == 60
     assert config.preview.idle_timeout_s == 30.0
     assert config.preview.recording_policy == "stop_on_recording"
-    assert config.preview.config.segment_duration_ms == 1000
-    assert config.preview.config.live_window_segments == 4
-    assert config.preview.config.storage_dir == Path("/tmp/homesec-preview")
+    assert isinstance(config.preview.config, WebRTCPreviewConfig)
+    assert config.preview.config.advertised_ip is None
+    assert config.preview.config.helper_path == "homesec-webrtc"
     assert config.preview.config.audio_enabled is True
-    assert config.preview.config.audio_codec == "auto"
-    assert config.preview.config.video_codec == "auto"
+    assert config.preview.config.video_codec == "h264"
+
+
+def test_default_webrtc_preview_loads_and_round_trips_with_server_ip() -> None:
+    # Given: Enabled preview with the existing server IP setting and no backend override
+    data = minimal_config()
+    data["preview"] = {"enabled": True, "config": {"advertised_ip": "192.0.2.10"}}
+
+    # When: Loading and serializing the configuration
+    config = load_config_from_dict(data)
+    restored = PreviewConfig.model_validate(config.preview.model_dump(mode="json"))
+
+    # Then: Enabled WebRTC remains selected and retains the configured server address
+    assert restored == config.preview
+    assert restored.backend == "webrtc"
+    assert isinstance(restored.config, WebRTCPreviewConfig)
+    assert restored.config.advertised_ip == "192.0.2.10"
+
+
+@pytest.mark.parametrize("backend", [None, "webrtc"])
+def test_enabled_webrtc_preview_requires_server_ip(backend: str | None) -> None:
+    # Given: Enabled WebRTC preview without a configured server address
+    data = minimal_config()
+    preview: dict[str, object] = {"enabled": True}
+    if backend is not None:
+        preview["backend"] = backend
+    data["preview"] = preview
+
+    # When: Loading the incomplete preview configuration
+    with pytest.raises(ConfigError, match="advertised_ip is required") as exc_info:
+        load_config_from_dict(data)
+
+    # Then: Configuration fails clearly before an unusable media helper can start
+    assert exc_info.value.code is ConfigErrorCode.VALIDATION_FAILED
+
+
+@pytest.mark.parametrize(
+    "preview_settings",
+    [
+        {"segment_duration_ms": 1500},
+        {"live_window_segments": 6},
+        {"storage_dir": "/run/legacy-preview"},
+        {"audio_codec": "aac"},
+        {"video_codec": "auto"},
+        HLSPreviewConfig(storage_dir=Path("/run/legacy-preview")),
+    ],
+)
+def test_legacy_hls_preview_without_backend_is_preserved(
+    preview_settings: dict[str, object] | HLSPreviewConfig,
+) -> None:
+    # Given: An existing HLS configuration written before a backend was required
+    payload = {"enabled": True, "config": preview_settings}
+
+    # When: Loading the legacy settings and round-tripping their serialized form
+    preview = PreviewConfig.model_validate(payload)
+    restored = PreviewConfig.model_validate(preview.model_dump(mode="json"))
+
+    # Then: HLS settings retain their transport and values
+    assert preview.backend == "hls"
+    assert preview.config == HLSPreviewConfig.model_validate(preview_settings)
+    assert restored == preview
 
 
 def test_preview_hls_config_parses_explicit_values() -> None:
@@ -771,7 +830,7 @@ def test_preview_rejects_camera_names_that_alias_same_storage_path() -> None:
     """Preview config should reject camera names that collide after slug normalization."""
     # Given: Preview enabled with camera names that collapse to the same storage slug
     data = minimal_config()
-    data["preview"] = {"enabled": True}
+    data["preview"] = {"enabled": True, "backend": "hls"}
     data["cameras"] = [
         {
             "name": "front door",

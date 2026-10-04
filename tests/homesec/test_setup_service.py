@@ -11,7 +11,7 @@ import yaml
 
 from homesec.config.loader import ConfigError
 from homesec.config.manager import ConfigManager
-from homesec.models.config import FastAPIServerConfig
+from homesec.models.config import FastAPIServerConfig, PreviewConfig
 from homesec.models.setup import FinalizeRequest
 from homesec.services import setup as setup_service
 
@@ -80,7 +80,7 @@ class _StubApp:
         self._config = config
 
 
-def _write_existing_config(path: Path) -> ConfigManager:
+def _write_existing_config(path: Path, *, preview: PreviewConfig | None = None) -> ConfigManager:
     payload = {
         "version": 1,
         "cameras": [
@@ -113,6 +113,8 @@ def _write_existing_config(path: Path) -> ConfigManager:
         },
         "server": {"enabled": True, "host": "0.0.0.0", "port": 8081},
     }
+    if preview is not None:
+        payload["preview"] = preview.model_dump(mode="json")
     path.write_text(yaml.safe_dump(payload, sort_keys=False))
     return ConfigManager(path)
 
@@ -488,6 +490,7 @@ async def test_finalize_setup_writes_config_with_defaults_and_activates_runtime(
     assert persisted.storage.backend == "local"
     assert persisted.state_store.dsn_env == "DB_DSN"
     assert persisted.vlm.run_mode == "never"
+    assert persisted.preview == PreviewConfig()
 
 
 @pytest.mark.asyncio
@@ -571,14 +574,57 @@ async def test_finalize_setup_returns_validation_error_without_writing_config(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "preview",
+    [
+        pytest.param(
+            PreviewConfig.model_validate(
+                {
+                    "enabled": True,
+                    "backend": "hls",
+                    "token_ttl_s": 120,
+                    "idle_timeout_s": 19,
+                    "recording_policy": "allow_during_recording",
+                    "config": {
+                        "segment_duration_ms": 900,
+                        "live_window_segments": 6,
+                        "storage_dir": "/tmp/existing-preview",
+                        "audio_enabled": False,
+                        "video_codec": "h264",
+                    },
+                }
+            ),
+            id="hls",
+        ),
+        pytest.param(
+            PreviewConfig.model_validate(
+                {
+                    "enabled": True,
+                    "backend": "webrtc",
+                    "token_ttl_s": 120,
+                    "idle_timeout_s": 19,
+                    "recording_policy": "allow_during_recording",
+                    "config": {
+                        "advertised_ip": "192.0.2.30",
+                        "udp_port_start": 8300,
+                        "udp_port_end": 8302,
+                        "max_viewers": 3,
+                        "audio_enabled": False,
+                    },
+                }
+            ),
+            id="webrtc",
+        ),
+    ],
+)
 async def test_finalize_setup_reuses_existing_sections_when_payload_omits_them(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preview: PreviewConfig
 ) -> None:
     """Finalize should preserve existing config sections when request leaves them unset."""
     # Given: A bootstrap app with an existing config file and an empty finalize payload
     monkeypatch.setenv("DB_DSN", "postgresql://user:pass@localhost/homesec")
     config_path = tmp_path / "config.yaml"
-    manager = _write_existing_config(config_path)
+    manager = _write_existing_config(config_path, preview=preview)
     app = _StubApp(
         bootstrap_mode=True,
         pipeline_running=False,
@@ -601,6 +647,8 @@ async def test_finalize_setup_reuses_existing_sections_when_payload_omits_them(
     assert persisted.maintenance.postgres_backup.interval == "12h"
     assert persisted.maintenance.postgres_backup.keep_count == 7
     assert persisted.maintenance.postgres_backup.upload.enabled is False
+    assert persisted.preview == preview
+    assert app.config.preview == preview
 
 
 @pytest.mark.asyncio
