@@ -1,5 +1,7 @@
 import { hydrateRuntimeApiProviders, runtimeServerBaseUrlProvider } from './client'
 import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import { normalizeServerBaseUrl } from './serverBaseUrlProvider'
+import { clearPersistedRuntimeAuthSessionReady, runtimeAuthTokenProvider } from './tokenProvider'
 
 export interface ApiRuntimeConfig {
   serverBaseUrl?: string | null
@@ -37,6 +39,10 @@ export async function initializeApiRuntimeConfig({
   await hydrateRuntimeApiProviders()
   const config = await runtimeConfigSource.loadRuntimeConfig()
   if (Object.prototype.hasOwnProperty.call(config, 'serverBaseUrl')) {
+    if (normalizeServerBaseUrl(config.serverBaseUrl) !== serverBaseUrlProvider.getBaseUrlSync()) {
+      await runtimeAuthTokenProvider.clearToken()
+      await clearPersistedRuntimeAuthSessionReady()
+    }
     await serverBaseUrlProvider.setBaseUrl(config.serverBaseUrl ?? null)
   }
 }

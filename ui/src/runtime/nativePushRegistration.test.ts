@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import { createElement, StrictMode, type PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   PermissionStatus,
@@ -41,7 +42,10 @@ vi.mock('@capacitor/app', () => ({ App: nativeAppMock }))
 import {
   BROWSER_AUTH_TOKEN_STORAGE_KEY,
   BROWSER_SERVER_BASE_URL_STORAGE_KEY,
+  HomeSecApiClient,
 } from '../api/client'
+import { BrowserServerBaseUrlProvider } from '../api/serverBaseUrlProvider'
+import { InMemoryAuthTokenProvider } from '../api/tokenProvider'
 import type { MobileDeviceRegisterRequest } from '../api/generated/types'
 import type { HomeSecDevicePlugin } from './homeSecDevicePlugin'
 import {
@@ -203,6 +207,106 @@ describe('native push registration', () => {
     cleanup()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('cancels obsolete registration and registers again when returning to that server', async () => {
+    // Given: A real runtime client for A with a delayed native APNs token
+    const server = new BrowserServerBaseUrlProvider('https://a.example')
+    const auth = new InMemoryAuthTokenProvider()
+    auth.setTokenSync('server-a-secret')
+    const client = new HomeSecApiClient('', { serverBaseUrlProvider: server, authTokenProvider: auth })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(mobileDeviceResponse()), {
+        status: 201, headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const removals = [vi.fn(async () => {}), vi.fn(async () => {})]
+    let delayedToken: ((token: Token) => void) | undefined
+    const pendingPush = createPushAdapter()
+    pendingPush.register = vi.fn(async () => {})
+    pendingPush.addListener = vi.fn(async (eventName: string, listener: unknown) => {
+      if (eventName === 'registration') delayedToken = listener as (token: Token) => void
+      return { remove: removals[eventName === 'registration' ? 0 : 1]! }
+    })
+    const common = { client, devicePlugin: createDevicePlugin(), enabled: true }
+    const first = renderHook(() => useNativePushRegistration({
+      ...common, pushNotifications: pendingPush, registrationKey: 'https://a.example',
+    }))
+    await waitFor(() => expect(pendingPush.register).toHaveBeenCalledOnce())
+
+    // When: Setup unmounts registration, switches to B, then the old token arrives
+    first.unmount()
+    await auth.clearToken()
+    await server.setBaseUrl('https://b.example')
+    await auth.setToken('server-b-secret')
+    await act(async () => { delayedToken?.({ value: 'late-apns-token' }) })
+
+    // Then: Old work posts nowhere and both native listeners are removed
+    expect(fetchSpy).not.toHaveBeenCalled()
+    removals.forEach((remove) => expect(remove).toHaveBeenCalledOnce())
+
+    // When: B registers normally, then the app returns to A
+    const second = renderHook(() => useNativePushRegistration({
+      ...common, pushNotifications: createPushAdapter(), registrationKey: 'https://b.example',
+    }))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce())
+    second.unmount()
+    await auth.clearToken()
+    await server.setBaseUrl('https://a.example')
+    await auth.setToken('server-a-secret')
+    renderHook(() => useNativePushRegistration({
+      ...common, pushNotifications: createPushAdapter(), registrationKey: 'https://a.example',
+    }))
+
+    // Then: A is still eligible for registration, rather than cached as completed
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+      'https://b.example/api/v1/mobile/devices', 'https://a.example/api/v1/mobile/devices',
+    ])
+  })
+
+  it('retries a cancelled in-flight registration during StrictMode remount', async () => {
+    // Given: Native registration mounted with React development effect replay
+    const client = createRegistrationClient()
+    const pushNotifications = createPushAdapter()
+    const devicePlugin = createDevicePlugin()
+    const wrapper = ({ children }: PropsWithChildren) => createElement(StrictMode, null, children)
+
+    // When: The initial effect is cleaned up and remounted with the same key
+    renderHook(() => useNativePushRegistration({
+      client, devicePlugin, pushNotifications,
+      enabled: true, registrationKey: 'strict-remount',
+    }), { wrapper })
+
+    // Then: The cancelled attempt does not suppress or duplicate the live registration
+    await waitFor(() => expect(client.registerMobileDevice).toHaveBeenCalledOnce())
+    expect(pushNotifications.register).toHaveBeenCalledOnce()
+  })
+
+  it('removes a listener whose native installation completes after cancellation', async () => {
+    // Given: Native listener installation is still pending
+    let installListener: ((handle: PluginListenerHandle) => void) | undefined
+    const pushNotifications = createPushAdapter()
+    pushNotifications.addListener = vi.fn(() => new Promise<PluginListenerHandle>((resolve) => {
+      installListener = resolve
+    }))
+    const client = createRegistrationClient()
+    const controller = new AbortController()
+    const result = registerNativePushDevice({
+      client, pushNotifications, devicePlugin: createDevicePlugin(), signal: controller.signal,
+    })
+    await waitFor(() => expect(installListener).toBeDefined())
+
+    // When: Cancellation precedes the native listener's installation response
+    controller.abort()
+    const handle = listenerHandle()
+    installListener?.(handle)
+
+    // Then: The late handle is removed and no registration or backend POST starts
+    expect(await result).toMatchObject({ status: 'skipped', reason: 'registration_cancelled' })
+    await waitFor(() => expect(handle.remove).toHaveBeenCalledOnce())
+    expect(pushNotifications.register).not.toHaveBeenCalled()
+    expect(client.registerMobileDevice).not.toHaveBeenCalled()
   })
 
   it('skips registration outside iOS native mode', async () => {

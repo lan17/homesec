@@ -226,6 +226,41 @@ async def test_record_push_result_updates_last_push_status(
 
 
 @pytest.mark.asyncio
+async def test_out_of_order_push_result_preserves_newer_delivery_and_metadata(
+    postgres_dsn: str,
+    clean_test_db: None,
+) -> None:
+    # Given: A newer accepted push and a subsequent device metadata update
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    try:
+        repository = MobileDeviceRepository(state_store.engine)
+        started_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+        registered = await repository.register_device(_registration(), now=started_at)
+        accepted_at = started_at + timedelta(seconds=2)
+        await repository.record_push_result(registered.id, error=None, now=accepted_at)
+        metadata_at = started_at + timedelta(seconds=3)
+        await repository.update_device(
+            registered.id, MobileDeviceUpdate(device_name="Updated iPhone"), now=metadata_at
+        )
+
+        # When: An older send completes later with a failure
+        result = await repository.record_push_result(
+            registered.id, error="HTTP 503: ServiceUnavailable", now=started_at
+        )
+
+        # Then: Delivery status and metadata chronology remain at their newer values
+        assert result is not None
+        assert result.last_push_at == accepted_at
+        assert result.last_push_error is None
+        assert result.updated_at == metadata_at
+        assert result.device_name == "Updated iPhone"
+        assert await repository.get_device(registered.id) == result
+    finally:
+        await state_store.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_reregistering_disabled_device_preserves_disabled_state(
     postgres_dsn: str,
     clean_test_db: None,

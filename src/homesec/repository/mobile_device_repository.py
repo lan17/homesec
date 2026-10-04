@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from sqlalchemy import Table, select, update
+from sqlalchemy import Table, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -156,10 +156,13 @@ class MobileDeviceRepository:
         stmt = (
             update(MobileDevice)
             .where(MobileDevice.id == device_id)
+            .where(
+                or_(MobileDevice.last_push_at.is_(None), MobileDevice.last_push_at <= recorded_at)
+            )
             .values(
                 last_push_at=recorded_at,
                 last_push_error=_normalize_last_push_error(error),
-                updated_at=recorded_at,
+                updated_at=func.greatest(MobileDevice.updated_at, recorded_at),
             )
             .returning(*_device_record_columns())
         )
@@ -168,7 +171,7 @@ class MobileDeviceRepository:
                 Mapping[str, Any] | None, (await conn.execute(stmt)).mappings().one_or_none()
             )
         if row is None:
-            return None
+            return await self.get_device(device_id)
         return _device_record_from_mapping(row)
 
     async def update_device(
