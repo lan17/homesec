@@ -127,6 +127,11 @@ On first launch:
 3. Paste the HomeSec API token.
 4. Tap `Save and continue`.
 
+To change a saved server URL or API token, open **Settings → Connection → Change
+server** in the iOS app. This connection form remains reachable when the saved
+server is offline. **Cancel** returns to the app using the existing connection
+when one is saved; opening the form does not clear its credentials.
+
 Use HTTPS or VPN whenever possible. Plain HTTP is only acceptable for a trusted
 LAN/VPN development setup; the app allows local networking for LAN bootstrap but
 should not be treated as secure over untrusted networks.

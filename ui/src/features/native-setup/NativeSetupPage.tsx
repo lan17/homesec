@@ -11,7 +11,10 @@ import {
   runtimeServerBaseUrlProvider,
 } from '../../api/client'
 import type { AuthTokenProvider, ClientServerBaseUrlProvider } from '../../api/client'
-import { clearPersistedRuntimeAuthSessionReady } from '../../api/tokenProvider'
+import {
+  clearPersistedRuntimeAuthSessionReady,
+  isRuntimeAuthSessionReady,
+} from '../../api/tokenProvider'
 import { Button } from '../../components/ui/Button'
 import { validateNativeSetupServerUrl } from './nativeSetup'
 import './nativeSetup.css'
@@ -182,6 +185,7 @@ export function NativeSetupPage({
 
   const tokenInputDisabled = step !== 'token' || authDisabled || isSaving || isCheckingServer
   const canSave = step === 'token' && !isCheckingServer && !isSaving
+  const canCancel = Boolean(serverBaseUrlProvider.getBaseUrlSync()) && isRuntimeAuthSessionReady()
 
   return (
     <main className="native-setup-page">
@@ -253,9 +257,21 @@ export function NativeSetupPage({
             />
           </div>
           {tokenError ? <p className="error-text">{tokenError}</p> : null}
-          <Button type="submit" disabled={!canSave}>
-            {isSaving ? 'Saving...' : 'Save and continue'}
-          </Button>
+          <div className="inline-form__actions">
+            <Button type="submit" disabled={!canSave}>
+              {isSaving ? 'Saving...' : 'Save and continue'}
+            </Button>
+            {canCancel ? (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={isSaving || isCheckingServer}
+                onClick={() => navigate(nativeSetupReturnTo(location.state), { replace: true })}
+              >
+                Cancel
+              </Button>
+            ) : null}
+          </div>
         </form>
       </section>
     </main>
