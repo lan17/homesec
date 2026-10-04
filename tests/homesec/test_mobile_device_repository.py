@@ -275,6 +275,11 @@ async def test_stale_permanent_rejection_preserves_newer_device_state(
         registered_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
         registered = await repository.register_device(_registration(), now=registered_at)
         sent_at = registered_at + timedelta(seconds=1)
+        target = (
+            await repository.list_enabled_apns_targets(
+                environment="sandbox", bundle_id="com.levneiman.homesec"
+            )
+        )[0]
         changed_at = sent_at + timedelta(seconds=1)
         if newer_change == "registration":
             await repository.register_device(
@@ -292,7 +297,11 @@ async def test_stale_permanent_rejection_preserves_newer_device_state(
 
         # When: The earlier push finishes with a permanent token rejection
         result = await repository.record_push_result(
-            registered.id, error="HTTP 410: Unregistered", now=sent_at, disable=True
+            registered.id,
+            error="HTTP 410: Unregistered",
+            now=sent_at,
+            disable=True,
+            expected_revision=target.revision,
         )
 
         # Then: The newer device state survives and its chronology never moves backward
@@ -325,10 +334,19 @@ async def test_current_permanent_rejection_records_failure_and_disables_device(
         registered_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
         registered = await repository.register_device(_registration(), now=registered_at)
         sent_at = registered_at + timedelta(seconds=1)
+        target = (
+            await repository.list_enabled_apns_targets(
+                environment="sandbox", bundle_id="com.levneiman.homesec"
+            )
+        )[0]
 
         # When: Recording a permanent rejection from the current attempt
         result = await repository.record_push_result(
-            registered.id, error="HTTP 410: Unregistered", now=sent_at, disable=True
+            registered.id,
+            error="HTTP 410: Unregistered",
+            now=sent_at,
+            disable=True,
+            expected_revision=target.revision,
         )
 
         # Then: The outcome and automatic disable are committed together
@@ -423,3 +441,99 @@ async def test_update_device_ignores_null_enabled_patch(
     assert updated.app_version == "1.2.0"
 
     await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["registration", "reenable", "metadata"])
+@pytest.mark.parametrize("timestamp_offset", [-1, 0])
+async def test_permanent_rejection_preserves_changes_with_non_newer_timestamps(
+    postgres_dsn: str,
+    clean_test_db: None,
+    change: str,
+    timestamp_offset: int,
+) -> None:
+    # Given: APNs selected a row before a later committed write with an old/equal timestamp
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    try:
+        repository = MobileDeviceRepository(state_store.engine)
+        registered_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+        registered = await repository.register_device(_registration(), now=registered_at)
+        target = (
+            await repository.list_enabled_apns_targets(
+                environment="sandbox", bundle_id="com.levneiman.homesec"
+            )
+        )[0]
+        changed_at = registered_at + timedelta(seconds=timestamp_offset)
+        if change == "registration":
+            await repository.register_device(
+                _registration(apns_environment="production"), now=changed_at
+            )
+        else:
+            patch = (
+                MobileDeviceUpdate(enabled=True)
+                if change == "reenable"
+                else MobileDeviceUpdate(device_name="Updated iPhone")
+            )
+            await repository.update_device(registered.id, patch, now=changed_at)
+
+        # When: The old APNs target is rejected after the write commits
+        sent_at = registered_at + timedelta(seconds=1)
+        result = await repository.record_push_result(
+            registered.id,
+            error="HTTP 400: BadDeviceToken",
+            now=sent_at,
+            disable=True,
+            expected_revision=target.revision,
+        )
+
+        # Then: Row identity, rather than wall-clock ordering, protects the refreshed device
+        assert result is not None
+        assert result.enabled is True
+        assert result.last_push_at == sent_at
+        assert result.last_push_error == "HTTP 400: BadDeviceToken"
+        if change == "registration":
+            assert result.apns_environment == "production"
+        if change == "metadata":
+            assert result.device_name == "Updated iPhone"
+        assert await repository.get_device(registered.id) == result
+    finally:
+        await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["registration", "metadata"])
+async def test_queued_device_write_preserves_newer_chronology(
+    postgres_dsn: str,
+    clean_test_db: None,
+    change: str,
+) -> None:
+    # Given: A newer registration followed by push bookkeeping
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    try:
+        repository = MobileDeviceRepository(state_store.engine)
+        started_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+        seen_at = started_at + timedelta(seconds=2)
+        registered = await repository.register_device(_registration(), now=seen_at)
+        push_at = seen_at + timedelta(seconds=1)
+        await repository.record_push_result(registered.id, error=None, now=push_at)
+
+        # When: A previously queued write commits with its older start timestamp
+        if change == "registration":
+            result = await repository.register_device(
+                _registration(device_name="Updated iPhone"), now=started_at
+            )
+        else:
+            result = await repository.update_device(
+                registered.id, MobileDeviceUpdate(device_name="Updated iPhone"), now=started_at
+            )
+
+        # Then: Metadata changes while last-seen/update chronology stays monotonic
+        assert result is not None
+        assert result.device_name == "Updated iPhone"
+        assert result.updated_at == push_at
+        assert result.last_seen_at == seen_at
+        assert result.last_push_at == push_at
+    finally:
+        await state_store.shutdown()

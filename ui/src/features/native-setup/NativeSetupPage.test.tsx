@@ -13,6 +13,8 @@ import {
 import { BROWSER_SERVER_BASE_URL_STORAGE_KEY } from '../../api/serverBaseUrlProvider'
 import { BrowserServerBaseUrlProvider } from '../../api/serverBaseUrlProvider'
 import { HomeSecApiClient } from '../../api/client'
+import { WIZARD_STATE_STORAGE_KEY } from '../../runtime/setupWizardStorage'
+import { useSetupRedirect } from '../setup/useSetupRedirect'
 import { NativeSetupPage, type NativeSetupPageProps } from './NativeSetupPage'
 
 const HEALTH_PAYLOAD = {
@@ -85,15 +87,60 @@ function renderNativeSetup(
   return queryClient
 }
 
+function FreshServerLive() {
+  useSetupRedirect()
+  return <p>Live route</p>
+}
+
 describe('NativeSetupPage', () => {
   beforeEach(() => {
     window.sessionStorage.clear()
+    window.localStorage.clear()
   })
 
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
     window.sessionStorage.clear()
+    window.localStorage.clear()
+  })
+
+
+  it.each([false, true])('isolates unfinished server setup drafts, same server=%s', async (sameServer) => {
+    // Given: Server A has unfinished wizard progress and stored credentials
+    const user = userEvent.setup()
+    const draft = JSON.stringify({ schemaVersion: 1, currentStep: 5, stepData: { storage: { root: '/server-a-storage' } }, completedSteps: ['storage'], skippedSteps: [] })
+    window.localStorage.setItem(WIZARD_STATE_STORAGE_KEY, draft)
+    const authTokenProvider = new InMemoryAuthTokenProvider()
+    authTokenProvider.setTokenSync('server-a-token')
+    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('https://a.example')
+    const freshStatus = { ...SETUP_PAYLOAD, state: 'fresh', has_cameras: false, pipeline_running: false }
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+      .mockImplementation(async () => jsonResponse(freshStatus))
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={['/native-setup']}>
+          <Routes>
+            <Route path="/native-setup" element={<NativeSetupPage authTokenProvider={authTokenProvider} serverBaseUrlProvider={serverBaseUrlProvider} />} />
+            <Route path="/live" element={<FreshServerLive />} />
+            <Route path="/setup" element={<p>Fresh server onboarding</p>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    // When: A validated connection is saved, with normalized URL equality as the boundary
+    await user.type(screen.getByLabelText('Server URL'), sameServer ? ' https://a.example/ ' : 'https://b.example')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'replacement-token')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    // Then: A different fresh server starts onboarding without A's configuration; A retains its draft
+    await screen.findByText(sameServer ? 'Live route' : 'Fresh server onboarding')
+    expect(window.localStorage.getItem(WIZARD_STATE_STORAGE_KEY)).toBe(sameServer ? draft : null)
   })
 
   it.each([false, true])('prevents cancellation during credential persistence, saved connection=%s', async (savedConnection) => {
@@ -196,6 +243,7 @@ describe('NativeSetupPage', () => {
     const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('https://a.example')
     const queryClient = createTestQueryClient()
     queryClient.setQueryData(['private-server-a-data'], ['private-event'])
+    window.localStorage.setItem(WIZARD_STATE_STORAGE_KEY, 'server-a-draft')
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
       .mockResolvedValueOnce(unauthorizedResponse())
@@ -215,6 +263,7 @@ describe('NativeSetupPage', () => {
     expect(screen.queryByText('Live route')).toBeNull()
     expect(authTokenProvider.getTokenSync()).toBeNull()
     expect(queryClient.getQueryData(['private-server-a-data'])).toBeUndefined()
+    expect(window.localStorage.getItem(WIZARD_STATE_STORAGE_KEY)).toBeNull()
     const client = new HomeSecApiClient('', { authTokenProvider, serverBaseUrlProvider })
     await client.getCameras()
     expect(fetchSpy.mock.calls[3]?.[0]).toBe('https://b.example/api/v1/cameras')

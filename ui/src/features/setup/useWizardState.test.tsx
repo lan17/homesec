@@ -6,7 +6,8 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { WizardStepDef } from './types'
-import { WIZARD_STATE_STORAGE_KEY, useWizardState } from './useWizardState'
+import { WIZARD_STATE_STORAGE_KEY } from '../../runtime/setupWizardStorage'
+import { useWizardState } from './useWizardState'
 
 const STEPS: readonly WizardStepDef[] = [
   { id: 'welcome', title: 'Welcome', skippable: true },

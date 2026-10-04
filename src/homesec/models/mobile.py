@@ -70,6 +70,7 @@ class MobileDevicePushTarget(BaseModel):
     """Internal APNs send target containing token material."""
 
     id: str
+    revision: str = Field(min_length=1)
     apns_token: str = Field(min_length=1, repr=False)
     apns_environment: APNSEnvironment
     bundle_id: str

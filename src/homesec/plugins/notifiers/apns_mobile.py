@@ -56,6 +56,7 @@ class _MobileDevicePushRepository(Protocol):
         error: str | None,
         now: datetime | None = None,
         disable: bool = False,
+        expected_revision: str | None = None,
     ) -> object | None:
         """Record an APNs outcome and disable an unchanged rejected device atomically."""
         ...
@@ -267,7 +268,7 @@ class APNsMobileNotifier(Notifier):
             )
         except httpx.HTTPError as exc:
             error = type(exc).__name__
-            await self._record_target_result(target.id, error=error, sent_at=sent_at)
+            await self._record_target_result(target, error=error, sent_at=sent_at)
             logger.warning(
                 "APNs mobile send transport failed: device_id=%s error=%s",
                 target.id,
@@ -276,7 +277,7 @@ class APNsMobileNotifier(Notifier):
             return _DeliveryResult(delivered=False, retryable=True)
 
         if 200 <= response.status_code < 300:
-            await self._record_target_result(target.id, error=None, sent_at=sent_at)
+            await self._record_target_result(target, error=None, sent_at=sent_at)
             return _DeliveryResult(delivered=True, retryable=False)
 
         reason = _apns_response_reason(response)
@@ -287,7 +288,7 @@ class APNsMobileNotifier(Notifier):
         payload_too_large = response.status_code == 413 or reason == "PayloadTooLarge"
         retryable = not token_rejected and not payload_too_large and reason != "Forbidden"
         await self._record_target_result(
-            target.id,
+            target,
             error=error,
             sent_at=sent_at,
             disable=token_rejected,
@@ -306,7 +307,7 @@ class APNsMobileNotifier(Notifier):
 
     async def _record_target_result(
         self,
-        device_id: str,
+        target: MobileDevicePushTarget,
         *,
         error: str | None,
         sent_at: datetime,
@@ -316,12 +317,16 @@ class APNsMobileNotifier(Notifier):
         # APNs: retrying an accepted push would duplicate the notification.
         try:
             await self._repository.record_push_result(
-                device_id, error=error, now=sent_at, disable=disable
+                target.id,
+                error=error,
+                now=sent_at,
+                disable=disable,
+                expected_revision=target.revision,
             )
         except Exception as exc:
             logger.warning(
                 "APNs delivery result could not be recorded: device_id=%s error_type=%s",
-                device_id,
+                target.id,
                 type(exc).__name__,
             )
 

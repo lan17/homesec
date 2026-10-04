@@ -120,6 +120,11 @@ Debug unless you are intentionally validating a production APNs profile.
 The iOS shell stores the server URL and API token in the native Keychain bridge,
 not WebView storage.
 
+If the server sets an explicit `server.cors_origins` allowlist, include
+`capacitor://localhost` alongside the browser origins. The bundled iOS WebView
+uses this origin for API requests; reaching the server in Safari alone does not
+verify that the app's CORS preflight is allowed.
+
 On first launch:
 
 1. Enter the HomeSec server base URL.
@@ -133,6 +138,8 @@ server is offline. **Cancel** returns to the app using the existing connection
 when one is saved; opening the form does not clear its credentials.
 During first-time setup, **Cancel** aborts a pending server or token check and
 leaves the connection form editable. Credential persistence cannot be cancelled.
+Saving a different server clears the previous server's unfinished setup draft.
+Updating credentials for the same normalized server URL preserves that draft.
 
 Use HTTPS or VPN whenever possible. Plain HTTP is only acceptable for a trusted
 LAN/VPN development setup; the app allows local networking for LAN bootstrap but
@@ -231,7 +238,9 @@ TestFlight is not required for the first personal release. When it is needed:
   starts with `// swift-tools-version: 6.2`.
 - App installs but cannot connect to HomeSec: confirm the iPhone can reach the
   server URL in Safari over the same VPN/LAN, and confirm auth is enabled with
-  the expected bearer token.
+  the expected bearer token. If `server.cors_origins` is explicitly configured,
+  confirm it includes `capacitor://localhost`, including for bearer-token
+  preflight requests.
 - No APNs devices receive alerts: confirm the iOS app registered after setup,
   the device is enabled in the mobile device list, the APNs environment matches
   the build configuration, and `bundle_id` matches the app bundle identifier.

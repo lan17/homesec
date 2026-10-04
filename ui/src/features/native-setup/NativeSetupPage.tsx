@@ -17,6 +17,7 @@ import {
   type AuthTokenProvider,
 } from '../../api/tokenProvider'
 import { Button } from '../../components/ui/Button'
+import { clearPersistedSetupWizardState } from '../../runtime/setupWizardStorage'
 import { validateNativeSetupServerUrl } from './nativeSetup'
 import './nativeSetup.css'
 
@@ -213,6 +214,9 @@ export function NativeSetupPage({
       queryClient.clear()
       await authTokenProvider.clearToken()
       await clearPersistedRuntimeAuthSessionReady()
+      if (serverBaseUrlProvider.getBaseUrlSync() !== validatedServerUrl) {
+        clearPersistedSetupWizardState()
+      }
       await serverBaseUrlProvider.setBaseUrl(validatedServerUrl)
       await authTokenProvider.setToken(authDisabled ? null : apiKey || null)
       await persistRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })

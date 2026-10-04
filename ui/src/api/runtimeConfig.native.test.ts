@@ -30,6 +30,7 @@ vi.mock('./homeSecAuthPlugin', () => ({
   },
 }))
 
+import { WIZARD_STATE_STORAGE_KEY } from '../runtime/setupWizardStorage'
 import { apiClient } from './client'
 import { initializeApiRuntimeConfig } from './runtimeConfig'
 import {
@@ -45,6 +46,7 @@ describe('native runtime server overrides', () => {
     keychain.tokens.clear()
     keychain.ready.clear()
     window.sessionStorage.clear()
+    window.localStorage.clear()
     clearRuntimeAuthSessionReady()
   })
 
@@ -52,6 +54,7 @@ describe('native runtime server overrides', () => {
 
   it.each(['token', 'auth-disabled', 'webview-ready'])('clears %s auth when overriding the server', async (authMode) => {
     // Given: The old server has a token or an acknowledged auth-disabled session
+    window.localStorage.setItem(WIZARD_STATE_STORAGE_KEY, 'server-a-draft')
     if (authMode === 'token') keychain.tokens.set(keychain.server, 'server-a-secret')
     if (authMode === 'auth-disabled') keychain.ready.add(keychain.server)
     if (authMode === 'webview-ready') {
@@ -71,12 +74,14 @@ describe('native runtime server overrides', () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://b.example/api/v1/cameras')
     expect(fetchSpy.mock.calls[0]?.[1]?.headers).not.toHaveProperty('Authorization')
     expect(isRuntimeAuthSessionReady()).toBe(false)
+    expect(window.localStorage.getItem(WIZARD_STATE_STORAGE_KEY)).toBeNull()
     expect(window.sessionStorage.getItem(BROWSER_AUTH_DISABLED_SESSION_READY_STORAGE_KEY)).toBeNull()
   })
 
   it('preserves credentials when the configured URL names the same server', async () => {
     // Given: A stored token for the configured server
     keychain.tokens.set(keychain.server, 'server-a-secret')
+    window.localStorage.setItem(WIZARD_STATE_STORAGE_KEY, 'server-a-draft')
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('[]', { headers: { 'content-type': 'application/json' } }),
     )
@@ -90,5 +95,6 @@ describe('native runtime server overrides', () => {
     // Then: URL normalization preserves the valid token
     expect(fetchSpy.mock.calls[0]?.[1]?.headers).toHaveProperty('Authorization', 'Bearer server-a-secret')
     expect(isRuntimeAuthSessionReady()).toBe(true)
+    expect(window.localStorage.getItem(WIZARD_STATE_STORAGE_KEY)).toBe('server-a-draft')
   })
 })

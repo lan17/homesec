@@ -1,3 +1,4 @@
+import { clearPersistedSetupWizardState } from '../runtime/setupWizardStorage'
 import { hydrateRuntimeApiProviders, runtimeServerBaseUrlProvider } from './client'
 import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
 import { normalizeServerBaseUrl } from './serverBaseUrlProvider'
@@ -42,6 +43,7 @@ export async function initializeApiRuntimeConfig({
     if (normalizeServerBaseUrl(config.serverBaseUrl) !== serverBaseUrlProvider.getBaseUrlSync()) {
       await runtimeAuthTokenProvider.clearToken()
       await clearPersistedRuntimeAuthSessionReady()
+      clearPersistedSetupWizardState()
     }
     await serverBaseUrlProvider.setBaseUrl(config.serverBaseUrl ?? null)
   }

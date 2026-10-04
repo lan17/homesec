@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from sqlalchemy import Table, case, func, or_, select, update
+from sqlalchemy import Table, Text, case, func, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -72,8 +72,8 @@ class MobileDeviceRepository:
                 "device_name": insert_stmt.excluded.device_name,
                 "app_version": insert_stmt.excluded.app_version,
                 "capabilities": insert_stmt.excluded.capabilities,
-                "updated_at": recorded_at,
-                "last_seen_at": recorded_at,
+                "updated_at": func.greatest(table.c.updated_at, recorded_at),
+                "last_seen_at": func.greatest(table.c.last_seen_at, recorded_at),
             },
         )
         returning_stmt = upsert_stmt.returning(*_device_record_columns())
@@ -123,6 +123,7 @@ class MobileDeviceRepository:
                 MobileDevice.apns_token,
                 MobileDevice.apns_environment,
                 MobileDevice.bundle_id,
+                literal_column("xmin", type_=Text).cast(Text).label("revision"),
             )
             .where(MobileDevice.enabled.is_(True))
             .where(MobileDevice.platform == "ios")
@@ -137,6 +138,7 @@ class MobileDeviceRepository:
         return [
             MobileDevicePushTarget(
                 id=str(row["id"]),
+                revision=str(row["revision"]),
                 apns_token=str(row["apns_token"]),
                 apns_environment=row["apns_environment"],
                 bundle_id=str(row["bundle_id"]),
@@ -151,9 +153,12 @@ class MobileDeviceRepository:
         error: str | None,
         now: datetime | None = None,
         disable: bool = False,
+        expected_revision: str | None = None,
     ) -> MobileDeviceRecord | None:
         """Record the latest APNs attempt, preserving newer device changes."""
         recorded_at = _utc_now() if now is None else now
+        if disable and expected_revision is None:
+            raise ValueError("Automatic APNs disable requires the selected target revision")
         stmt = (
             update(MobileDevice)
             .where(MobileDevice.id == device_id)
@@ -166,7 +171,10 @@ class MobileDeviceRepository:
                 updated_at=func.greatest(MobileDevice.updated_at, recorded_at),
                 enabled=(
                     case(
-                        (MobileDevice.updated_at <= recorded_at, False),
+                        # Compare the selected row version inside the UPDATE so
+                        # even a queued registration with an older timestamp
+                        # cannot be disabled by a response for its predecessor.
+                        (literal_column("xmin").cast(Text) == expected_revision, False),
                         else_=MobileDevice.enabled,
                     )
                     if disable
@@ -199,7 +207,8 @@ class MobileDeviceRepository:
         if not changes:
             return await self.get_device(device_id)
 
-        changes["updated_at"] = _utc_now() if now is None else now
+        recorded_at = _utc_now() if now is None else now
+        changes["updated_at"] = func.greatest(MobileDevice.updated_at, recorded_at)
         stmt = (
             update(MobileDevice)
             .where(MobileDevice.id == device_id)
