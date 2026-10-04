@@ -258,10 +258,19 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   const startAbortRef = useRef<AbortController | null>(null)
   const pendingSessionIdRef = useRef<string | null>(null)
   const statusRequestGenerationRef = useRef(0)
+  const owningServerUrlRef = useRef(apiClient.resolvePath(''))
 
   useEffect(() => {
     nativeLifecycleRef.current = nativeLifecycle
   }, [nativeLifecycle])
+
+  const stopTalkSession = useCallback(async (sessionId: string): Promise<void> => {
+    if (apiClient.resolvePath('') !== owningServerUrlRef.current) {
+      // The original server's idle/max-session deadlines bound detached cleanup.
+      return
+    }
+    await apiClient.stopCameraTalkSession(cameraName, sessionId)
+  }, [cameraName])
 
   const cleanupSocketAndAudio = useCallback(async () => {
     const socket = socketRef.current
@@ -412,7 +421,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
           closeMediaStream(pendingStreamRef.current)
           pendingStreamRef.current = null
           if (!intentionalStopRef.current && event.code !== 1000) {
-            void apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+            void stopTalkSession(nextSession.session_id).catch(() => {})
           }
           if (mountedRef.current) {
             setIsStreaming(false)
@@ -427,7 +436,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         }
       })
     },
-    [cameraName],
+    [cameraName, stopTalkSession],
   )
 
   const start = useCallback(async () => {
@@ -497,7 +506,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         if (pendingSessionIdRef.current === nextSession.session_id) {
           pendingSessionIdRef.current = null
         }
-        await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+        await stopTalkSession(nextSession.session_id).catch(() => {})
         return
       }
       setSession(nextSession)
@@ -512,7 +521,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         if (pendingStreamRef.current === mediaStream) {
           pendingStreamRef.current = null
         }
-        await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+        await stopTalkSession(nextSession.session_id).catch(() => {})
       }
     } catch (nextError) {
       const startCancelled = isStartCancelled()
@@ -525,10 +534,10 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       const sessionIdToStop = preparedSession?.session_id ?? clientSessionId
       if (preparedSession && !intentionalStopRef.current) {
-        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop).catch(() => {})
+        await stopTalkSession(sessionIdToStop).catch(() => {})
       } else if (pendingSessionIdRef.current === sessionIdToStop) {
         pendingSessionIdRef.current = null
-        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop).catch(() => {})
+        await stopTalkSession(sessionIdToStop).catch(() => {})
       }
       if (mountedRef.current && !startCancelled) {
         setError(nextError)
@@ -553,6 +562,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
     isStopping,
     isStreaming,
     openTalkSocket,
+    stopTalkSession,
   ])
 
   const stop = useCallback(async () => {
@@ -581,7 +591,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       await cleanupSocketAndAudio()
       const sessionIdToStop = activeSession?.session_id ?? pendingSessionId
       if (sessionIdToStop) {
-        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop)
+        await stopTalkSession(sessionIdToStop)
         if (mountedRef.current) {
           setStatus((previous) => nextStatusFromState(cameraName, 'idle', null, previous))
           void refreshStatus()
@@ -601,7 +611,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       intentionalStopRef.current = false
     }
-  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming, refreshStatus])
+  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming, refreshStatus, stopTalkSession])
 
   useEffect(() => {
     mountedRef.current = true
@@ -626,12 +636,12 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       pendingSessionIdRef.current = null
       void cleanupSocketAndAudio()
       if (activeSession) {
-        void apiClient.stopCameraTalkSession(cameraName, activeSession.session_id).catch(() => {})
+        void stopTalkSession(activeSession.session_id).catch(() => {})
       } else if (pendingSessionId) {
-        void apiClient.stopCameraTalkSession(cameraName, pendingSessionId).catch(() => {})
+        void stopTalkSession(pendingSessionId).catch(() => {})
       }
     }
-  }, [cameraName, cleanupSocketAndAudio, refreshStatus])
+  }, [cameraName, cleanupSocketAndAudio, refreshStatus, stopTalkSession])
 
   useEffect(() => {
     const pausedSinceLastCleanup = nativeLifecycle.pauseCount > handledPauseCountRef.current

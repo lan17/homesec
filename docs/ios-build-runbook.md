@@ -131,6 +131,8 @@ To change a saved server URL or API token, open **Settings → Connection → Ch
 server** in the iOS app. This connection form remains reachable when the saved
 server is offline. **Cancel** returns to the app using the existing connection
 when one is saved; opening the form does not clear its credentials.
+During first-time setup, **Cancel** aborts a pending server or token check and
+leaves the connection form editable. Credential persistence cannot be cancelled.
 
 Use HTTPS or VPN whenever possible. Plain HTTP is only acceptable for a trusted
 LAN/VPN development setup; the app allows local networking for LAN bootstrap but

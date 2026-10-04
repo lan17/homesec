@@ -96,12 +96,12 @@ describe('NativeSetupPage', () => {
     window.sessionStorage.clear()
   })
 
-  it('prevents cancellation once replacement credentials are being persisted', async () => {
+  it.each([false, true])('prevents cancellation during credential persistence, saved connection=%s', async (savedConnection) => {
     // Given: Token validation succeeds but the secure credential write remains pending
     const user = userEvent.setup()
     const authTokenProvider = new InMemoryAuthTokenProvider()
-    authTokenProvider.setTokenSync('old-token')
-    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('https://old.example')
+    if (savedConnection) authTokenProvider.setTokenSync('old-token')
+    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider(savedConnection ? 'https://old.example' : '')
     let completeWrite: () => void = () => {}
     vi.spyOn(authTokenProvider, 'setToken').mockImplementation(async (token) => {
       await new Promise<void>((resolve) => { completeWrite = resolve })
@@ -128,6 +128,63 @@ describe('NativeSetupPage', () => {
     await screen.findByText('Live route')
     expect(authTokenProvider.getTokenSync()).toBe('replacement-token')
     expect(serverBaseUrlProvider.getBaseUrlSync()).toBe('https://replacement.example')
+  })
+
+  it.each(['health', 'status', 'token'])('cancels first-connection %s validation without bypassing setup', async (phase) => {
+    // Given: First connection setup has no saved credentials and a stalled read-only request.
+    const user = userEvent.setup()
+    const authTokenProvider = new InMemoryAuthTokenProvider()
+    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('')
+    let releaseResponse: (response: Response) => void = () => {}
+    const isPendingRequest = (url: unknown, options?: RequestInit) => {
+      const token = new Headers(options?.headers).get('authorization')
+      return String(url).startsWith('https://stalled.example/') && (
+        phase === 'health'
+          ? String(url).endsWith('/health')
+          : String(url).endsWith('/setup/status') && (phase !== 'token' || token != null)
+      )
+    }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (isPendingRequest(url, options)) {
+        // A late response must be ignored even when the transport does not honor abort.
+        return new Promise<Response>((resolve) => { releaseResponse = resolve })
+      }
+      if (String(url).endsWith('/health')) return jsonResponse(HEALTH_PAYLOAD)
+      return unauthorizedResponse()
+    })
+    renderNativeSetup({ authTokenProvider, serverBaseUrlProvider })
+    await user.type(screen.getByLabelText('Server URL'), 'https://stalled.example')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    if (phase === 'token') {
+      await screen.findByText('Server reachable')
+      await user.type(screen.getByLabelText('API token'), 'candidate-token')
+      await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+    }
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.some(([url, options]) => isPendingRequest(url, options))).toBe(true)
+    })
+    const signal = fetchSpy.mock.calls.find(([url, options]) => isPendingRequest(url, options))?.[1]?.signal
+
+    // When: Cancelling the pending check before the server responds.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    // Then: Inputs immediately recover, but no connection is saved and setup remains required.
+    expect(signal?.aborted).toBe(true)
+    expect((screen.getByLabelText('Server URL') as HTMLInputElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Check server' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByText('Live route')).toBeNull()
+    await act(async () => { releaseResponse(jsonResponse(phase === 'health' ? HEALTH_PAYLOAD : SETUP_PAYLOAD)) })
+    expect(authTokenProvider.getTokenSync()).toBeNull()
+    expect(serverBaseUrlProvider.getBaseUrlSync()).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Connect to HomeSec' })).toBeTruthy()
+    if (phase === 'health') {
+      expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/setup/status'))).toBe(false)
+    }
+    await user.clear(screen.getByLabelText('Server URL'))
+    await user.type(screen.getByLabelText('Server URL'), 'https://retry.example')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    expect(serverBaseUrlProvider.getBaseUrlSync()).toBeNull()
   })
 
   it('fails closed without old credentials or cached data when a server switch cannot save its token', async () => {

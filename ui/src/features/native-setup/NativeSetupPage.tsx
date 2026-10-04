@@ -10,10 +10,11 @@ import {
   runtimeAuthTokenProvider,
   runtimeServerBaseUrlProvider,
 } from '../../api/client'
-import type { AuthTokenProvider, ClientServerBaseUrlProvider } from '../../api/client'
+import type { ClientServerBaseUrlProvider } from '../../api/serverBaseUrlProvider'
 import {
   clearPersistedRuntimeAuthSessionReady,
   isRuntimeAuthSessionReady,
+  type AuthTokenProvider,
 } from '../../api/tokenProvider'
 import { Button } from '../../components/ui/Button'
 import { validateNativeSetupServerUrl } from './nativeSetup'
@@ -96,6 +97,7 @@ export function NativeSetupPage({
   } | null>(null)
   const isCheckingServer = operation === 'checking-server'
   const isSaving = operation === 'validating-token' || operation === 'persisting'
+  const canReturnToApp = Boolean(serverBaseUrlProvider.getBaseUrlSync()) && isRuntimeAuthSessionReady()
 
   useEffect(() => () => {
     operationControllerRef.current?.controller.abort()
@@ -107,7 +109,11 @@ export function NativeSetupPage({
     // Enforce the persistence boundary even before React updates the button.
     if (currentOperation?.phase === 'persisting') return
     currentOperation?.controller.abort()
-    navigate(nativeSetupReturnTo(location.state), { replace: true })
+    operationControllerRef.current = null
+    setOperation(null)
+    if (canReturnToApp) {
+      navigate(nativeSetupReturnTo(location.state), { replace: true })
+    }
   }
 
   function handleServerUrlChange(value: string): void {
@@ -228,7 +234,7 @@ export function NativeSetupPage({
 
   const tokenInputDisabled = step !== 'token' || authDisabled || isSaving || isCheckingServer
   const canSave = step === 'token' && !isCheckingServer && !isSaving
-  const canCancel = Boolean(serverBaseUrlProvider.getBaseUrlSync()) && isRuntimeAuthSessionReady()
+  const showCancel = canReturnToApp || operation !== null
 
   return (
     <main className="native-setup-page">
@@ -304,7 +310,7 @@ export function NativeSetupPage({
             <Button type="submit" disabled={!canSave}>
               {isSaving ? 'Saving...' : 'Save and continue'}
             </Button>
-            {canCancel ? (
+            {showCancel ? (
               <Button
                 type="button"
                 variant="ghost"
