@@ -55,17 +55,9 @@ class _MobileDevicePushRepository(Protocol):
         *,
         error: str | None,
         now: datetime | None = None,
+        disable: bool = False,
     ) -> object | None:
-        """Record the latest APNs send outcome for a device."""
-        ...
-
-    async def disable_device(
-        self,
-        device_id: str,
-        *,
-        now: datetime | None = None,
-    ) -> object | None:
-        """Disable a permanently invalid APNs target."""
+        """Record an APNs outcome and disable an unchanged rejected device atomically."""
         ...
 
 
@@ -129,6 +121,11 @@ class _APNsProviderTokenSigner:
         self._cached_issued_at = issued_at
         return token
 
+    def invalidate(self, rejected_token: str) -> None:
+        """Evict a rejected token without discarding a newer concurrent token."""
+        if self._cached_token == rejected_token:
+            self._cached_token = None
+
 
 @plugin(plugin_type=PluginType.NOTIFIER, name="apns_mobile")
 class APNsMobileNotifier(Notifier):
@@ -157,6 +154,9 @@ class APNsMobileNotifier(Notifier):
         if self._signer is None:
             raise RuntimeError("APNs provider credentials missing from environment")
 
+        # Capture the attempt boundary before the target snapshot, so later
+        # registrations cannot be disabled by a response for stale metadata.
+        sent_at = datetime.now(timezone.utc)
         targets = await self._repository.list_enabled_apns_targets(
             environment=self._environment,
             bundle_id=self._bundle_id,
@@ -174,7 +174,6 @@ class APNsMobileNotifier(Notifier):
 
         payload = _encode_apns_payload(build_apns_payload(alert))
         provider_token = self._signer.token()
-        sent_at = datetime.now(timezone.utc)
         results = await asyncio.gather(
             *(
                 self._send_to_target(
@@ -281,6 +280,8 @@ class APNsMobileNotifier(Notifier):
             return _DeliveryResult(delivered=True, retryable=False)
 
         reason = _apns_response_reason(response)
+        if reason == "ExpiredProviderToken" and self._signer is not None:
+            self._signer.invalidate(provider_token)
         error = f"HTTP {response.status_code}: {reason}"
         token_rejected = _is_permanent_token_rejection(response.status_code, reason)
         payload_too_large = response.status_code == 413 or reason == "PayloadTooLarge"
@@ -314,22 +315,15 @@ class APNsMobileNotifier(Notifier):
         # Database bookkeeping cannot change an outcome already received from
         # APNs: retrying an accepted push would duplicate the notification.
         try:
-            await self._repository.record_push_result(device_id, error=error, now=sent_at)
+            await self._repository.record_push_result(
+                device_id, error=error, now=sent_at, disable=disable
+            )
         except Exception as exc:
             logger.warning(
                 "APNs delivery result could not be recorded: device_id=%s error_type=%s",
                 device_id,
                 type(exc).__name__,
             )
-        if disable:
-            try:
-                await self._repository.disable_device(device_id, now=sent_at)
-            except Exception as exc:
-                logger.warning(
-                    "Rejected APNs device could not be disabled: device_id=%s error_type=%s",
-                    device_id,
-                    type(exc).__name__,
-                )
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -26,6 +27,7 @@ class _FakeMobileDeviceRepository:
         self.targets = targets
         self.disabled_devices: list[tuple[str, datetime | None]] = []
         self.list_calls: list[tuple[str, str]] = []
+        self.target_selection_times: list[datetime] = []
         self.recorded_results: list[tuple[str, str | None, datetime | None]] = []
 
     async def list_enabled_apns_targets(
@@ -35,6 +37,7 @@ class _FakeMobileDeviceRepository:
         bundle_id: str,
     ) -> list[MobileDevicePushTarget]:
         self.list_calls.append((environment, bundle_id))
+        self.target_selection_times.append(datetime.now(timezone.utc))
         return self.targets
 
     async def record_push_result(
@@ -43,16 +46,11 @@ class _FakeMobileDeviceRepository:
         *,
         error: str | None,
         now: datetime | None = None,
+        disable: bool = False,
     ) -> None:
         self.recorded_results.append((device_id, error, now))
-
-    async def disable_device(
-        self,
-        device_id: str,
-        *,
-        now: datetime | None = None,
-    ) -> None:
-        self.disabled_devices.append((device_id, now))
+        if disable:
+            self.disabled_devices.append((device_id, now))
 
 
 class _FakeAPNsClient:
@@ -191,9 +189,121 @@ async def test_apns_notifier_sends_payload_to_registered_targets(
     assert len(repository.recorded_results) == 1
     assert repository.recorded_results[0][0] == "dev_1"
     assert repository.recorded_results[0][1] is None
+    attempt_started_at = repository.recorded_results[0][2]
+    assert attempt_started_at is not None
+    assert attempt_started_at <= repository.target_selection_times[0]
 
     await notifier.shutdown()
     assert fake_client.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_expired_provider_token_is_refreshed_before_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: A cached provider token rejected before its normal local refresh deadline
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    clock = [2_000_000_000.0]
+    monkeypatch.setattr("homesec.plugins.notifiers.apns_mobile.time.time", lambda: clock[0])
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_1",
+                apns_token="synthetic-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            )
+        ]
+    )
+    fake_client = _FakeAPNsClient(
+        [
+            httpx.Response(200),
+            httpx.Response(403, json={"reason": "ExpiredProviderToken"}),
+            httpx.Response(200),
+            httpx.Response(200),
+        ]
+    )
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient", lambda **_kwargs: fake_client
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+    await notifier.send(_sample_alert())
+    clock[0] += 46 * 60
+
+    # When: APNs rejects the cached token and the caller retries the alert
+    with pytest.raises(APNsDeliveryError) as exc_info:
+        await notifier.send(_sample_alert())
+    assert exc_info.value.retryable is True
+    await notifier.send(_sample_alert())
+    await notifier.send(_sample_alert())
+
+    # Then: The retry uses a new token that remains cached for subsequent alerts
+    tokens = [request["headers"]["authorization"] for request in fake_client.requests]
+    assert tokens[0] == tokens[1]
+    assert tokens[2] != tokens[1]
+    assert tokens[3] == tokens[2]
+    assert repository.disabled_devices == []
+    await notifier.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_late_expired_provider_response_preserves_newer_cached_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: An old provider request stays in flight while another send refreshes its token
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    clock = [2_000_000_000.0]
+    monkeypatch.setattr("homesec.plugins.notifiers.apns_mobile.time.time", lambda: clock[0])
+    old_request_started = asyncio.Event()
+    release_old_response = asyncio.Event()
+    tokens: list[str] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        tokens.append(request.headers["authorization"])
+        if len(tokens) == 2:
+            old_request_started.set()
+            await release_old_response.wait()
+            return httpx.Response(403, json={"reason": "ExpiredProviderToken"})
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient", lambda **_kwargs: client
+    )
+    repository = _FakeMobileDeviceRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_1",
+                apns_token="synthetic-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            )
+        ]
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+    await notifier.send(_sample_alert())
+    clock[0] += 46 * 60
+    old_send = asyncio.create_task(notifier.send(_sample_alert()))
+    await asyncio.wait_for(old_request_started.wait(), timeout=1)
+    clock[0] += 5 * 60
+    await notifier.send(_sample_alert())
+
+    # When: The delayed expiry arrives after a new cached token has already been accepted
+    release_old_response.set()
+    with pytest.raises(APNsDeliveryError):
+        await old_send
+    await notifier.send(_sample_alert())
+
+    # Then: The old rejection does not evict the newer accepted provider token
+    assert tokens[0] == tokens[1]
+    assert tokens[2] != tokens[1]
+    assert tokens[3] == tokens[2]
+    assert repository.disabled_devices == []
+    await notifier.shutdown()
 
 
 @pytest.mark.asyncio
@@ -253,16 +363,17 @@ async def test_apns_outcome_survives_bookkeeping_failure(
     reason: str | None,
     retryable: bool,
 ) -> None:
-    # Given: APNs is reachable but both result recording and token disabling fail
+    # Given: APNs is reachable but atomic result bookkeeping fails
     class FailingRepository(_FakeMobileDeviceRepository):
         async def record_push_result(
-            self, device_id: str, *, error: str | None, now: datetime | None = None
+            self,
+            device_id: str,
+            *,
+            error: str | None,
+            now: datetime | None = None,
+            disable: bool = False,
         ) -> None:
-            await super().record_push_result(device_id, error=error, now=now)
-            raise ConnectionError("synthetic-sensitive-database-detail")
-
-        async def disable_device(self, device_id: str, *, now: datetime | None = None) -> None:
-            await super().disable_device(device_id, now=now)
+            await super().record_push_result(device_id, error=error, now=now, disable=disable)
             raise ConnectionError("synthetic-sensitive-database-detail")
 
     repository = FailingRepository(

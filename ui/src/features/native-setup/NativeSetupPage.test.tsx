@@ -23,6 +23,13 @@ const HEALTH_PAYLOAD = {
   bootstrap_mode: false,
 }
 
+const SETUP_PAYLOAD = {
+  state: 'complete',
+  has_cameras: true,
+  pipeline_running: true,
+  auth_configured: true,
+}
+
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     status,
@@ -101,7 +108,7 @@ describe('NativeSetupPage', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
       .mockResolvedValueOnce(unauthorizedResponse())
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
       .mockResolvedValueOnce(jsonResponse([]))
     renderNativeSetup({ authTokenProvider, serverBaseUrlProvider }, queryClient)
 
@@ -130,7 +137,7 @@ describe('NativeSetupPage', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
       .mockResolvedValueOnce(unauthorizedResponse())
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
     renderNativeSetup()
 
     // When: User checks the server URL and submits a valid token
@@ -146,7 +153,7 @@ describe('NativeSetupPage', () => {
       expect(screen.getByText('Live route')).toBeTruthy()
     })
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://192.168.1.10:8081/api/v1/health')
-    expect(fetchSpy.mock.calls[1]?.[0]).toBe('http://192.168.1.10:8081/api/v1/cameras')
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('http://192.168.1.10:8081/api/v1/setup/status')
     expect(authorizationHeader(fetchSpy.mock.calls[0]?.[1])).toBeUndefined()
     expect(authorizationHeader(fetchSpy.mock.calls[1]?.[1])).toBeUndefined()
     expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
@@ -164,6 +171,46 @@ describe('NativeSetupPage', () => {
       'http://192.168.1.10:8081',
     )
     expect(window.sessionStorage.getItem(BROWSER_AUTH_TOKEN_STORAGE_KEY)).toBe('token-123')
+  })
+
+  it.each([false, true])('connects to a bootstrap server with auth disabled=%s', async (authDisabled) => {
+    // Given: A fresh server whose camera API is unavailable until setup is complete
+    const user = userEvent.setup()
+    const authTokenProvider = new InMemoryAuthTokenProvider()
+    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (String(url).endsWith('/health')) {
+        return jsonResponse({ ...HEALTH_PAYLOAD, bootstrap_mode: true })
+      }
+      if (String(url).endsWith('/setup/status')) {
+        if (!authDisabled && authorizationHeader(options) !== 'Bearer bootstrap-token') {
+          return unauthorizedResponse()
+        }
+        return jsonResponse({
+          state: 'fresh',
+          has_cameras: false,
+          pipeline_running: false,
+          auth_configured: !authDisabled,
+        })
+      }
+      return jsonResponse({ error_code: 'SETUP_REQUIRED' }, 503)
+    })
+    renderNativeSetup({ authTokenProvider, serverBaseUrlProvider })
+
+    // When: Connecting to the fresh server with its configured authentication mode
+    await user.type(screen.getByLabelText('Server URL'), 'https://fresh.example.com')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    if (!authDisabled) {
+      await user.type(screen.getByLabelText('API token'), 'bootstrap-token')
+    }
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    // Then: Connection settings are saved so the app can reach server onboarding
+    await screen.findByText('Live route')
+    expect(serverBaseUrlProvider.getBaseUrlSync()).toBe('https://fresh.example.com')
+    expect(authTokenProvider.getTokenSync()).toBe(authDisabled ? null : 'bootstrap-token')
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/cameras'))).toBe(false)
   })
 
   it('shows actionable validation errors for bad server URLs and rejected tokens', async () => {
@@ -240,7 +287,7 @@ describe('NativeSetupPage', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
       .mockResolvedValueOnce(unauthorizedResponse())
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
     renderNativeSetup({ authTokenProvider })
 
     // When: User validates and saves a protected server
@@ -266,7 +313,7 @@ describe('NativeSetupPage', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
       .mockResolvedValueOnce(unauthorizedResponse())
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
     renderNativeSetup({}, queryClient)
 
     // When: User validates and saves a new server
@@ -289,7 +336,7 @@ describe('NativeSetupPage', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
       .mockResolvedValueOnce(unauthorizedResponse())
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
     renderNativeSetup(
       {},
       createTestQueryClient(),
@@ -310,18 +357,18 @@ describe('NativeSetupPage', () => {
   })
 
   it('warns and allows continuing when auth-disabled mode is detectable', async () => {
-    // Given: Camera list succeeds without an API token and an old token is stored
+    // Given: Setup status succeeds without an API token and an old token is stored
     const user = userEvent.setup()
     window.sessionStorage.setItem(BROWSER_AUTH_TOKEN_STORAGE_KEY, 'old-secret')
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
     renderNativeSetup()
 
     // When: User checks the server and continues without a token
     await user.type(screen.getByLabelText('Server URL'), 'https://homesec.example.com')
     await user.click(screen.getByRole('button', { name: 'Check server' }))
-    await screen.findByText(/accepted camera requests without an API token/)
+    await screen.findByText(/accepted setup requests without an API token/)
     expect((screen.getByLabelText('API token') as HTMLInputElement).disabled).toBe(true)
     await user.click(screen.getByRole('button', { name: 'Save and continue' }))
 

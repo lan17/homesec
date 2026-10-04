@@ -120,7 +120,7 @@ export function NativeSetupPage({
 
       let acceptsUnauthenticatedRequests = false
       try {
-        await client.getCameras({ apiKey: null })
+        await client.getSetupStatus({ apiKey: null })
         acceptsUnauthenticatedRequests = true
       } catch (error) {
         if (!isAuthFailure(error)) {
@@ -162,7 +162,7 @@ export function NativeSetupPage({
     setTokenError(null)
     try {
       if (!authDisabled && apiKey) {
-        await createClient(validatedServerUrl).getCameras({ apiKey })
+        await createClient(validatedServerUrl).getSetupStatus({ apiKey })
       }
       await queryClient.cancelQueries()
       queryClient.clear()
@@ -231,7 +231,7 @@ export function NativeSetupPage({
 
         {authDisabled ? (
           <div className="native-setup-warning native-setup-warning--strong" role="alert">
-            This server accepted camera requests without an API token. Authentication appears
+            This server accepted setup requests without an API token. Authentication appears
             disabled, so the token cannot be verified.
           </div>
         ) : null}

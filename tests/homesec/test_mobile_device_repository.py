@@ -261,6 +261,88 @@ async def test_out_of_order_push_result_preserves_newer_delivery_and_metadata(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("newer_change", ["registration", "reenable", "metadata", "accepted_push"])
+async def test_stale_permanent_rejection_preserves_newer_device_state(
+    postgres_dsn: str,
+    clean_test_db: None,
+    newer_change: str,
+) -> None:
+    # Given: A push starts before a newer registration, operator update, or accepted push
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    try:
+        repository = MobileDeviceRepository(state_store.engine)
+        registered_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+        registered = await repository.register_device(_registration(), now=registered_at)
+        sent_at = registered_at + timedelta(seconds=1)
+        changed_at = sent_at + timedelta(seconds=1)
+        if newer_change == "registration":
+            await repository.register_device(
+                _registration(apns_environment="production"), now=changed_at
+            )
+        elif newer_change == "accepted_push":
+            await repository.record_push_result(registered.id, error=None, now=changed_at)
+        else:
+            patch = (
+                MobileDeviceUpdate(enabled=True)
+                if newer_change == "reenable"
+                else MobileDeviceUpdate(device_name="Updated iPhone")
+            )
+            await repository.update_device(registered.id, patch, now=changed_at)
+
+        # When: The earlier push finishes with a permanent token rejection
+        result = await repository.record_push_result(
+            registered.id, error="HTTP 410: Unregistered", now=sent_at, disable=True
+        )
+
+        # Then: The newer device state survives and its chronology never moves backward
+        assert result is not None
+        assert result.enabled is True
+        assert result.updated_at == changed_at
+        if newer_change == "registration":
+            assert result.apns_environment == "production"
+        if newer_change == "accepted_push":
+            assert result.last_push_error is None
+            assert result.last_push_at == changed_at
+        else:
+            assert result.last_push_error == "HTTP 410: Unregistered"
+            assert result.last_push_at == sent_at
+        assert await repository.get_device(registered.id) == result
+    finally:
+        await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_current_permanent_rejection_records_failure_and_disables_device(
+    postgres_dsn: str,
+    clean_test_db: None,
+) -> None:
+    # Given: A registered device that remains unchanged during an APNs attempt
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    try:
+        repository = MobileDeviceRepository(state_store.engine)
+        registered_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+        registered = await repository.register_device(_registration(), now=registered_at)
+        sent_at = registered_at + timedelta(seconds=1)
+
+        # When: Recording a permanent rejection from the current attempt
+        result = await repository.record_push_result(
+            registered.id, error="HTTP 410: Unregistered", now=sent_at, disable=True
+        )
+
+        # Then: The outcome and automatic disable are committed together
+        assert result is not None
+        assert result.enabled is False
+        assert result.last_push_error == "HTTP 410: Unregistered"
+        assert result.last_push_at == sent_at
+        assert result.updated_at == sent_at
+        assert await repository.list_devices() == []
+    finally:
+        await state_store.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_reregistering_disabled_device_preserves_disabled_state(
     postgres_dsn: str,
     clean_test_db: None,

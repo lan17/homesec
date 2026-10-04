@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from sqlalchemy import Table, func, or_, select, update
+from sqlalchemy import Table, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -150,8 +150,9 @@ class MobileDeviceRepository:
         *,
         error: str | None,
         now: datetime | None = None,
+        disable: bool = False,
     ) -> MobileDeviceRecord | None:
-        """Record the latest APNs send attempt for a mobile device."""
+        """Record the latest APNs attempt, preserving newer device changes."""
         recorded_at = _utc_now() if now is None else now
         stmt = (
             update(MobileDevice)
@@ -163,6 +164,14 @@ class MobileDeviceRepository:
                 last_push_at=recorded_at,
                 last_push_error=_normalize_last_push_error(error),
                 updated_at=func.greatest(MobileDevice.updated_at, recorded_at),
+                enabled=(
+                    case(
+                        (MobileDevice.updated_at <= recorded_at, False),
+                        else_=MobileDevice.enabled,
+                    )
+                    if disable
+                    else MobileDevice.enabled
+                ),
             )
             .returning(*_device_record_columns())
         )
