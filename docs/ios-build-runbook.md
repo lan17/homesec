@@ -56,6 +56,11 @@ The `ios:sync` script builds the React app, copies web assets into
 Without it, Capacitor can regenerate `Package.swift` with Swift tools 5.9,
 which Xcode cannot resolve for the iOS 26 package platform enum.
 
+Keep `ios.loggingBehavior: 'none'` in the Capacitor config, including Debug
+builds: native bridge argument/result logs can expose API and APNs tokens.
+Foreground notifications present a banner and play sound, subject to the
+device's notification permissions and sound settings.
+
 To install and launch a simulator build manually:
 
 ```bash
@@ -183,8 +188,11 @@ Run the real-device QA matrix before treating a personal build as ready:
 - Event detail playback works.
 - Live HLS preview works.
 - Push-to-talk path works if enabled for the configured camera.
-- Backgrounding stops active preview and talk sessions.
+- Backgrounding detaches this app's preview player and stops push-to-talk,
+  including a rapid background/resume transition. Another viewer's preview
+  must continue; an unused publisher is reclaimed by the server's idle expiry.
 - Plain APNs push is received.
+- A foreground APNs alert displays a banner and plays sound when permitted.
 - Tapping a push opens the event detail route.
 - iPad layout is usable.
 

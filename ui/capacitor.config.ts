@@ -4,6 +4,14 @@ const config: CapacitorConfig = {
   appId: 'com.levneiman.homesec',
   appName: 'HomeSec',
   webDir: 'dist',
+  ios: {
+    loggingBehavior: 'none',
+  },
+  plugins: {
+    PushNotifications: {
+      presentationOptions: ['banner', 'list', 'sound'],
+    },
+  },
   experimental: {
     ios: {
       spm: {

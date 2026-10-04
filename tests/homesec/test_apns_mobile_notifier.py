@@ -237,6 +237,96 @@ async def test_apns_notifier_records_rejected_devices_and_raises_when_all_fail(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("status_code", "reason", "retryable"),
+    [
+        (200, None, False),
+        (410, "Unregistered", False),
+        (403, "Forbidden", False),
+        (413, "PayloadTooLarge", False),
+        (503, "ServiceUnavailable", True),
+    ],
+)
+async def test_apns_outcome_survives_bookkeeping_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    status_code: int,
+    reason: str | None,
+    retryable: bool,
+) -> None:
+    # Given: APNs is reachable but both result recording and token disabling fail
+    class FailingRepository(_FakeMobileDeviceRepository):
+        async def record_push_result(
+            self, device_id: str, *, error: str | None, now: datetime | None = None
+        ) -> None:
+            await super().record_push_result(device_id, error=error, now=now)
+            raise ConnectionError("synthetic-sensitive-database-detail")
+
+        async def disable_device(self, device_id: str, *, now: datetime | None = None) -> None:
+            await super().disable_device(device_id, now=now)
+            raise ConnectionError("synthetic-sensitive-database-detail")
+
+    repository = FailingRepository(
+        [
+            MobileDevicePushTarget(
+                id="dev_1",
+                apns_token="synthetic-token",
+                apns_environment="sandbox",
+                bundle_id="com.levneiman.homesec",
+            )
+        ]
+    )
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", _private_key_pem())
+    fake_client = _FakeAPNsClient([httpx.Response(status_code, json={"reason": reason})])
+    monkeypatch.setattr(
+        "homesec.plugins.notifiers.apns_mobile.httpx.AsyncClient", lambda **_kwargs: fake_client
+    )
+    notifier = APNsMobileNotifier(_config(repository))
+
+    # When: Sending an alert and APNs accepts or rejects it before the DB failure
+    if status_code == 200:
+        await notifier.send(_sample_alert())
+    else:
+        with pytest.raises(APNsDeliveryError) as exc_info:
+            await notifier.send(_sample_alert())
+        assert exc_info.value.retryable is retryable
+
+    # Then: Bookkeeping cannot turn accepted/permanent outcomes into retries or leak error data
+    assert len(fake_client.requests) == 1
+    assert len(repository.recorded_results) == 1
+    assert len(repository.disabled_devices) == (1 if status_code == 410 else 0)
+    assert "synthetic-sensitive-database-detail" not in caplog.text
+    await notifier.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("private_key", ["malformed-private-key", ""])
+async def test_apns_invalid_credentials_degrade_without_preventing_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    private_key: str,
+) -> None:
+    # Given: Optional APNs credentials are malformed or absent
+    monkeypatch.setenv("TEST_APNS_KEY_ID", "KEY1234567")
+    monkeypatch.setenv("TEST_APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("TEST_APNS_PRIVATE_KEY", private_key)
+
+    # When: Constructing the notifier during runtime startup
+    notifier = APNsMobileNotifier(_config(_FakeMobileDeviceRepository([])))
+
+    # Then: Startup succeeds, health is false, and failed delivery exposes no credential material
+    assert await notifier.ping() is False
+    with pytest.raises(RuntimeError, match="credentials missing"):
+        await notifier.send(_sample_alert())
+    assert "TEST_APNS_PRIVATE_KEY" in caplog.text
+    if private_key:
+        assert private_key not in caplog.text
+    await notifier.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "summary",
     ["A" * 6000, "人" * 1500, "🚪" * 1500, '"\n\\' * 1500],
     ids=["ascii", "cjk", "emoji", "json-escaped"],

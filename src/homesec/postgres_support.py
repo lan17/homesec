@@ -84,6 +84,7 @@ def create_scoped_async_engine(
     **engine_kwargs: Any,
 ) -> AsyncEngine:
     """Create an async engine scoped to the explicit schema when present."""
+    engine_kwargs.setdefault("hide_parameters", True)
     return create_async_engine(
         normalize_async_dsn(dsn),
         **build_async_engine_kwargs(schema=schema, engine_kwargs=engine_kwargs),

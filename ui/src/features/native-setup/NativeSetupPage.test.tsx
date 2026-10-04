@@ -11,6 +11,8 @@ import {
   InMemoryAuthTokenProvider,
 } from '../../api/tokenProvider'
 import { BROWSER_SERVER_BASE_URL_STORAGE_KEY } from '../../api/serverBaseUrlProvider'
+import { BrowserServerBaseUrlProvider } from '../../api/serverBaseUrlProvider'
+import { HomeSecApiClient } from '../../api/client'
 import { NativeSetupPage, type NativeSetupPageProps } from './NativeSetupPage'
 
 const HEALTH_PAYLOAD = {
@@ -85,6 +87,40 @@ describe('NativeSetupPage', () => {
     cleanup()
     vi.restoreAllMocks()
     window.sessionStorage.clear()
+  })
+
+  it('fails closed without old credentials or cached data when a server switch cannot save its token', async () => {
+    // Given: Server A auth/cache and server B whose token validates but cannot be persisted
+    const user = userEvent.setup()
+    const authTokenProvider = new InMemoryAuthTokenProvider()
+    authTokenProvider.setTokenSync('server-a-secret')
+    vi.spyOn(authTokenProvider, 'setToken').mockRejectedValue(new Error('Keychain write failed'))
+    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('https://a.example')
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(['private-server-a-data'], ['private-event'])
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]))
+    renderNativeSetup({ authTokenProvider, serverBaseUrlProvider }, queryClient)
+
+    // When: Switching to B fails after its URL is saved
+    await user.type(screen.getByLabelText('Server URL'), 'https://b.example')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'server-b-secret')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+    await screen.findByText('Unable to validate token: Keychain write failed')
+
+    // Then: Setup remains visible and neither the old token nor its data crosses into B
+    expect(screen.queryByText('Live route')).toBeNull()
+    expect(authTokenProvider.getTokenSync()).toBeNull()
+    expect(queryClient.getQueryData(['private-server-a-data'])).toBeUndefined()
+    const client = new HomeSecApiClient('', { authTokenProvider, serverBaseUrlProvider })
+    await client.getCameras()
+    expect(fetchSpy.mock.calls[3]?.[0]).toBe('https://b.example/api/v1/cameras')
+    expect(authorizationHeader(fetchSpy.mock.calls[3]?.[1])).toBeUndefined()
   })
 
   it('validates server and token before saving settings and routing to Live', async () => {

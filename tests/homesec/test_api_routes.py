@@ -2647,6 +2647,29 @@ def _mobile_device_payload(*, token: str = "raw-apns-token") -> dict[str, object
     }
 
 
+@pytest.mark.parametrize("blank_field", ["apns_token", "bundle_id"])
+def test_mobile_registration_rejects_blank_fields_without_echoing_secrets(
+    tmp_path, blank_field
+) -> None:
+    # Given: A configured app and a registration with a whitespace-only required field
+    manager = _write_config(tmp_path, cameras=[])
+    app = _StubApp(config_manager=manager, repository=_StubRepository(), storage=_StubStorage())
+    client = _client(app)
+    payload = _mobile_device_payload()
+    payload[blank_field] = " "
+
+    # When: Registering the invalid device
+    response = client.post("/api/v1/mobile/devices", json=payload)
+
+    # Then: It returns useful canonical validation details without raw inputs or exception context
+    assert response.status_code == 422
+    errors = response.json()["validation_errors"]
+    assert errors[0]["loc"] == ["body", blank_field]
+    assert "must not be blank" in errors[0]["msg"]
+    assert all("input" not in error and "ctx" not in error for error in errors)
+    assert "raw-apns-token" not in response.text
+
+
 def test_register_mobile_device_creates_or_updates_redacted_record(tmp_path) -> None:
     """POST /mobile/devices should upsert an iOS APNs registration."""
     # Given: A configured app with mobile device persistence

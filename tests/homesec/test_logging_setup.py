@@ -8,6 +8,7 @@ import sys
 import types
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from homesec.logging_setup import configure_logging, set_camera_name, set_recording_id
@@ -37,6 +38,8 @@ def reset_logging_root() -> None:
     original_disabled = root.disabled
     original_dropbox_level = logging.getLogger("dropbox").level
     original_urllib3_level = logging.getLogger("urllib3").level
+    original_httpx_level = logging.getLogger("httpx").level
+    original_httpcore_level = logging.getLogger("httpcore").level
 
     yield
 
@@ -55,6 +58,8 @@ def reset_logging_root() -> None:
     logging.captureWarnings(False)
     logging.getLogger("dropbox").setLevel(original_dropbox_level)
     logging.getLogger("urllib3").setLevel(original_urllib3_level)
+    logging.getLogger("httpx").setLevel(original_httpx_level)
+    logging.getLogger("httpcore").setLevel(original_httpcore_level)
 
 
 class TestLoggingInjection:
@@ -197,6 +202,26 @@ class TestConfigureLogging:
         # Then: Root logger has handlers
         root = logging.getLogger()
         assert len(root.handlers) > 0
+
+    @pytest.mark.asyncio
+    async def test_http_request_logs_do_not_expose_apns_device_tokens(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: HomeSec logging and an HTTP boundary returning an APNs rejection
+        monkeypatch.setenv("DB_DSN", "")
+        configure_logging(log_level="DEBUG")
+        transport = httpx.MockTransport(lambda _request: httpx.Response(403))
+
+        # When: HTTPX sends a request whose URL contains a synthetic raw device token
+        async with httpx.AsyncClient(transport=transport) as client:
+            response = await client.post("https://api.push.apple.com/3/device/synthetic-secret")
+        logging.getLogger("homesec.test").warning("APNs rejected status=%d", response.status_code)
+
+        # Then: Operational logs remain visible without the device token or HTTP request URL
+        output = capsys.readouterr().out
+        assert "APNs rejected status=403" in output
+        assert "synthetic-secret" not in output
+        assert "/3/device/" not in output
 
     def test_suppresses_third_party_loggers(self) -> None:
         """Sets third-party loggers to WARNING level."""

@@ -112,8 +112,11 @@ export class JsonHttpClient {
     { signal, apiKey, allowStatuses = [], query, method = 'GET', body }: RequestJsonOptions,
   ): Promise<JsonResponse> {
     const hasJsonBody = body !== undefined
-    const resolvedApiKey = await resolveAuthToken(apiKey, this.authTokenProvider)
     const resolvedBaseUrl = await this.resolveBaseUrl()
+    const resolvedApiKey = await resolveAuthToken(apiKey, this.authTokenProvider)
+    if (resolvedBaseUrl !== this.resolveBaseUrlSync()) {
+      throw new Error('HomeSec server changed while preparing the request. Try again.')
+    }
     const response = await fetch(joinUrl(resolvedBaseUrl, withQueryString(path, query)), {
       method,
       headers: buildHeaders(resolvedApiKey, hasJsonBody),

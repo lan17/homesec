@@ -1067,7 +1067,7 @@ describe('useCameraPreview', () => {
     expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
   })
 
-  it('stops active preview on native background and refreshes status on resume', async () => {
+  it('detaches active preview on native background without stopping other viewers', async () => {
     // Given: An active native app preview session
     freezePreviewClock()
     const getPreviewStatus = vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
@@ -1114,9 +1114,9 @@ describe('useCameraPreview', () => {
     setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
     rerender()
 
-    // Then: The hook stops preview and suppresses background status requests
+    // Then: The local viewer detaches without force-stopping the shared publisher
     await waitFor(() => {
-      expect(stopPreview).toHaveBeenCalledWith('front')
+      expect(stopPreview).not.toHaveBeenCalled()
       expect(result.current.session).toBeNull()
     })
     const statusCallsAfterPause = getPreviewStatus.mock.calls.length
@@ -1429,7 +1429,7 @@ describe('useCameraPreview', () => {
     })
   })
 
-  it('stops preview start that resolves after native background', async () => {
+  it('ignores preview start that resolves after native background', async () => {
     // Given: Preview start is still in flight when native iOS backgrounds the app
     const previewStart = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
     vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
@@ -1482,15 +1482,15 @@ describe('useCameraPreview', () => {
       await startPromise
     })
 
-    // Then: The late preview session is stopped instead of being stored while backgrounded
+    // Then: The late preview is ignored without stopping any other viewers
     await waitFor(() => {
-      expect(stopPreview).toHaveBeenCalledWith('front')
+      expect(stopPreview).not.toHaveBeenCalled()
       expect(result.current.session).toBeNull()
       expect(result.current.playlistUrl).toBeNull()
     })
   })
 
-  it('stops stale activation that resolves after native background stop', async () => {
+  it('ignores stale activation that resolves after native background detach', async () => {
     // Given: An active preview and a second activation request still in flight
     const lateActivation = deferred<Awaited<ReturnType<typeof apiClient.ensureCameraPreviewActive>>>()
     vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
@@ -1543,11 +1543,11 @@ describe('useCameraPreview', () => {
       expect(apiClient.ensureCameraPreviewActive).toHaveBeenCalledTimes(2)
     })
 
-    // When: iOS backgrounds, completes its normal stop, then the late activation resolves
+    // When: iOS backgrounds, detaches its local viewer, then the late activation resolves
     setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
     rerender()
     await waitFor(() => {
-      expect(stopPreview).toHaveBeenCalledTimes(1)
+      expect(stopPreview).not.toHaveBeenCalled()
       expect(result.current.session).toBeNull()
     })
 
@@ -1566,9 +1566,9 @@ describe('useCameraPreview', () => {
       await lateActivationPromise
     })
 
-    // Then: The late server activation is cleaned up while the app remains backgrounded
+    // Then: The late activation never attaches or force-stops the shared publisher
     await waitFor(() => {
-      expect(stopPreview).toHaveBeenCalledTimes(2)
+      expect(stopPreview).not.toHaveBeenCalled()
       expect(result.current.session).toBeNull()
       expect(result.current.playlistUrl).toBeNull()
     })
@@ -1654,100 +1654,44 @@ describe('useCameraPreview', () => {
     expect(result.current.playlistUrl).toContain('preview-token-new')
   })
 
-  it('does not start a resumed preview while a background stop is still pending', async () => {
-    // Given: A preview session is active and background stop has not completed yet
+  it('detaches preview across a batched pause/resume and allows a new viewer to attach', async () => {
+    // Given: An active preview on a publisher shared with a second viewer
     freezePreviewClock()
-    const backgroundStop = deferred<Awaited<ReturnType<typeof apiClient.stopCameraPreview>>>()
     vi.spyOn(apiClient, 'getCameraPreviewStatus').mockResolvedValue({
-      camera_name: 'front',
-      enabled: true,
-      state: 'ready',
-      viewer_count: 1,
-      degraded_reason: null,
-      last_error: null,
-      idle_shutdown_at: null,
-      httpStatus: 200,
+      camera_name: 'front', enabled: true, state: 'ready', viewer_count: 2,
+      degraded_reason: null, last_error: null, idle_shutdown_at: null, httpStatus: 200,
     })
-    const ensurePreviewActive = vi
-      .spyOn(apiClient, 'ensureCameraPreviewActive')
-      .mockResolvedValueOnce({
-        camera_name: 'front',
-        state: 'ready',
-        viewer_count: 1,
-        token: 'preview-token-old',
-        token_expires_at: '2026-04-23T12:00:10.000Z',
-        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-old',
-        idle_timeout_s: 30,
-        warning: null,
-        httpStatus: 200,
-      })
-      .mockResolvedValueOnce({
-        camera_name: 'front',
-        state: 'ready',
-        viewer_count: 1,
-        token: 'preview-token-new',
-        token_expires_at: '2026-04-23T12:00:10.000Z',
-        playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token-new',
-        idle_timeout_s: 30,
-        warning: null,
-        httpStatus: 200,
-      })
-    const stopPreview = vi.spyOn(apiClient, 'stopCameraPreview').mockReturnValue(backgroundStop.promise)
-
+    const ensurePreviewActive = vi.spyOn(apiClient, 'ensureCameraPreviewActive').mockResolvedValue({
+      camera_name: 'front', state: 'ready', viewer_count: 2,
+      token: 'preview-token', token_expires_at: null,
+      playlist_url: '/api/v1/preview/cameras/front/playlist.m3u8?token=preview-token',
+      idle_timeout_s: 30, warning: null, httpStatus: 200,
+    })
+    const stopPreview = vi.spyOn(apiClient, 'stopCameraPreview')
     const { result, rerender } = renderHook(() => useCameraPreview('front'), {
       wrapper: createWrapper(),
     })
-    await waitFor(() => {
-      expect(result.current.status?.state).toBe('ready')
-    })
-    await act(async () => {
-      await result.current.start()
-    })
-    await waitFor(() => {
-      expect(result.current.session?.token).toBe('preview-token-old')
-    })
+    await waitFor(() => expect(result.current.status?.state).toBe('ready'))
+    await act(async () => { await result.current.start() })
+    expect(result.current.playlistUrl).not.toBeNull()
 
-    setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
+    // When: A pause and resume arrive before a render, leaving the final state active
+    setNativeLifecycleState({ isActive: true, isBackgrounded: false, pauseCount: 1, resumeCount: 1 })
     rerender()
-    await waitFor(() => {
-      expect(stopPreview).toHaveBeenCalledWith('front')
-      expect(result.current.isStopping).toBe(true)
-    })
 
-    // When: The app resumes and a start is requested before the background stop resolves
-    setNativeLifecycleState({ isActive: true, isBackgrounded: false, resumeCount: 1 })
+    // Then: The local player detaches and other viewers keep their shared publisher
+    await waitFor(() => expect(result.current.playlistUrl).toBeNull())
+    expect(stopPreview).not.toHaveBeenCalled()
+    expect(result.current.status?.state).toBe('ready')
+
+    // When: The user starts a new preview after resume and the component renders again
+    await act(async () => { await result.current.start() })
     rerender()
-    await act(async () => {
-      await result.current.start()
-    })
 
-    // Then: The hook waits for the stop to settle instead of racing a new attach against it
-    expect(ensurePreviewActive).toHaveBeenCalledTimes(1)
-    expect(result.current.session).toBeNull()
-
-    await act(async () => {
-      backgroundStop.resolve({
-        accepted: true,
-        state: 'stopping',
-        httpStatus: 202,
-      })
-      await Promise.resolve()
-    })
-    await waitFor(() => {
-      expect(result.current.session).toBeNull()
-    })
-
-    // When: The user starts preview after the old background stop is settled
-    await act(async () => {
-      await result.current.start()
-    })
-
-    // Then: A new preview session can attach normally
-    await waitFor(() => {
-      expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
-      expect(result.current.session?.token).toBe('preview-token-new')
-      expect(result.current.playlistUrl).toContain('preview-token-new')
-    })
+    // Then: The handled pause does not repeatedly detach the new session
+    expect(ensurePreviewActive).toHaveBeenCalledTimes(2)
+    expect(result.current.playlistUrl).not.toBeNull()
+    expect(stopPreview).not.toHaveBeenCalled()
   })
 
   it('does not stop preview on transient native inactive transitions before background', async () => {

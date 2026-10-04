@@ -11,6 +11,7 @@ import {
   runtimeServerBaseUrlProvider,
 } from '../../api/client'
 import type { AuthTokenProvider, ClientServerBaseUrlProvider } from '../../api/client'
+import { clearPersistedRuntimeAuthSessionReady } from '../../api/tokenProvider'
 import { Button } from '../../components/ui/Button'
 import { validateNativeSetupServerUrl } from './nativeSetup'
 import './nativeSetup.css'
@@ -163,6 +164,10 @@ export function NativeSetupPage({
       if (!authDisabled && apiKey) {
         await createClient(validatedServerUrl).getCameras({ apiKey })
       }
+      await queryClient.cancelQueries()
+      queryClient.clear()
+      await authTokenProvider.clearToken()
+      await clearPersistedRuntimeAuthSessionReady()
       await serverBaseUrlProvider.setBaseUrl(validatedServerUrl)
       await authTokenProvider.setToken(authDisabled ? null : apiKey || null)
       await persistRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })

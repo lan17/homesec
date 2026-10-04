@@ -840,6 +840,36 @@ describe('usePushToTalk', () => {
     })
   })
 
+  it('stops the microphone across batched native pause and resume', async () => {
+    // Given: An active native app push-to-talk stream
+    const { stream, track } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result, rerender } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({ type: 'ready' }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // When: Pause and resume arrive before a render, leaving the final lifecycle state active
+    setNativeLifecycleState({ isActive: true, isBackgrounded: false, pauseCount: 1, resumeCount: 1 })
+    rerender()
+
+    // Then: The hook sends the stop frame, tears down media, and stops the backend session
+    await waitFor(() => {
+      expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
+    })
+    expect(sockets[0].sent).toContain(JSON.stringify({ type: 'stop' }))
+    expect(sockets[0].lastClose).toEqual({ code: 1000, reason: 'Talk stopped' })
+    expect(track.stop).toHaveBeenCalled()
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    rerender()
+    expect(track.stop).toHaveBeenCalledTimes(1)
+  })
+
   it('does not stop active talk on transient native inactive transitions before background', async () => {
     // Given: An active push-to-talk stream while iOS is active
     const { stream, track } = createMediaStream()

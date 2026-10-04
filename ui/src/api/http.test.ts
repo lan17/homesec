@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { JsonHttpClient } from './http'
 import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import { BrowserServerBaseUrlProvider } from './serverBaseUrlProvider'
 import type { AuthTokenProvider } from './tokenProvider'
+import { InMemoryAuthTokenProvider } from './tokenProvider'
 
 function installWindowSessionStorageMock(): void {
   const store = new Map<string, string>()
@@ -26,6 +28,30 @@ describe('JsonHttpClient.requestJson', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('does not send an old credential when the server changes during request preparation', async () => {
+    // Given: A client configured with server A and its token
+    installWindowSessionStorageMock()
+    const baseProvider = new BrowserServerBaseUrlProvider('https://a.example')
+    const tokenProvider = new InMemoryAuthTokenProvider()
+    tokenProvider.setTokenSync('server-a-secret')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('[]', { headers: { 'content-type': 'application/json' } }),
+    )
+    const client = new JsonHttpClient('', {
+      authTokenProvider: tokenProvider,
+      serverBaseUrlProvider: baseProvider,
+    })
+
+    // When: Setup clears auth and switches to B while a request is preparing
+    const request = client.requestJson('/api/v1/cameras', {})
+    tokenProvider.clearTokenSync()
+    await baseProvider.setBaseUrl('https://b.example')
+
+    // Then: The stale request is refused before any credential reaches the new server
+    await expect(request).rejects.toThrow('server changed')
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('serializes query params, auth header, and JSON body', async () => {

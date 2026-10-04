@@ -239,6 +239,7 @@ function nextStatusFromState(
 export function usePushToTalk(cameraName: string): PushToTalkState {
   const nativeLifecycle = useNativeAppLifecycleState()
   const nativeLifecycleRef = useRef(nativeLifecycle)
+  const handledPauseCountRef = useRef(nativeLifecycle.pauseCount)
   const [status, setStatus] = useState<TalkStatusResponse | null>(null)
   const [session, setSession] = useState<TalkSessionResponse | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -633,12 +634,14 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   }, [cameraName, cleanupSocketAndAudio, refreshStatus])
 
   useEffect(() => {
-    if (!nativeLifecycle.isBackgrounded) {
+    const pausedSinceLastCleanup = nativeLifecycle.pauseCount > handledPauseCountRef.current
+    handledPauseCountRef.current = nativeLifecycle.pauseCount
+    if (!nativeLifecycle.isBackgrounded && !pausedSinceLastCleanup) {
       return
     }
 
     void stop()
-  }, [nativeLifecycle.isBackgrounded, stop])
+  }, [nativeLifecycle.isBackgrounded, nativeLifecycle.pauseCount, stop])
 
   useEffect(() => {
     if (!nativeLifecycle.isActive || nativeLifecycle.resumeCount === 0) {

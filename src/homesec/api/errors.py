@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -190,7 +191,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_error_payload(
                 detail="Request validation failed",
                 error_code=APIErrorCode.REQUEST_VALIDATION_FAILED.value,
-                extra={"validation_errors": exc.errors()},
+                extra={
+                    "validation_errors": jsonable_encoder(exc.errors(), exclude={"input", "ctx"})
+                },
             ),
         )
 

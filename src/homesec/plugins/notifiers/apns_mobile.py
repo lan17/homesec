@@ -14,6 +14,7 @@ from typing import Any, Protocol, cast
 from urllib.parse import quote
 
 import httpx
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 from pydantic import BaseModel, Field, field_validator
@@ -267,7 +268,7 @@ class APNsMobileNotifier(Notifier):
             )
         except httpx.HTTPError as exc:
             error = type(exc).__name__
-            await self._repository.record_push_result(target.id, error=error, now=sent_at)
+            await self._record_target_result(target.id, error=error, sent_at=sent_at)
             logger.warning(
                 "APNs mobile send transport failed: device_id=%s error=%s",
                 target.id,
@@ -276,17 +277,20 @@ class APNsMobileNotifier(Notifier):
             return _DeliveryResult(delivered=False, retryable=True)
 
         if 200 <= response.status_code < 300:
-            await self._repository.record_push_result(target.id, error=None, now=sent_at)
+            await self._record_target_result(target.id, error=None, sent_at=sent_at)
             return _DeliveryResult(delivered=True, retryable=False)
 
         reason = _apns_response_reason(response)
         error = f"HTTP {response.status_code}: {reason}"
-        await self._repository.record_push_result(target.id, error=error, now=sent_at)
         token_rejected = _is_permanent_token_rejection(response.status_code, reason)
         payload_too_large = response.status_code == 413 or reason == "PayloadTooLarge"
-        retryable = not token_rejected and not payload_too_large
-        if token_rejected:
-            await self._repository.disable_device(target.id, now=sent_at)
+        retryable = not token_rejected and not payload_too_large and reason != "Forbidden"
+        await self._record_target_result(
+            target.id,
+            error=error,
+            sent_at=sent_at,
+            disable=token_rejected,
+        )
         logger.warning(
             "APNs mobile send rejected: device_id=%s status=%d reason=%s",
             target.id,
@@ -298,6 +302,34 @@ class APNsMobileNotifier(Notifier):
             retryable=retryable,
             payload_too_large=payload_too_large,
         )
+
+    async def _record_target_result(
+        self,
+        device_id: str,
+        *,
+        error: str | None,
+        sent_at: datetime,
+        disable: bool = False,
+    ) -> None:
+        # Database bookkeeping cannot change an outcome already received from
+        # APNs: retrying an accepted push would duplicate the notification.
+        try:
+            await self._repository.record_push_result(device_id, error=error, now=sent_at)
+        except Exception as exc:
+            logger.warning(
+                "APNs delivery result could not be recorded: device_id=%s error_type=%s",
+                device_id,
+                type(exc).__name__,
+            )
+        if disable:
+            try:
+                await self._repository.disable_device(device_id, now=sent_at)
+            except Exception as exc:
+                logger.warning(
+                    "Rejected APNs device could not be disabled: device_id=%s error_type=%s",
+                    device_id,
+                    type(exc).__name__,
+                )
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -422,11 +454,15 @@ def _build_provider_token_signer(config: APNsMobileConfig) -> _APNsProviderToken
         logger.warning("APNs private key not found in env: %s", config.private_key_env)
     if not (key_id and team_id and private_key):
         return None
-    return _APNsProviderTokenSigner(
-        key_id=key_id,
-        team_id=team_id,
-        private_key_pem=private_key,
-    )
+    try:
+        return _APNsProviderTokenSigner(
+            key_id=key_id,
+            team_id=team_id,
+            private_key_pem=private_key,
+        )
+    except (ValueError, TypeError, RuntimeError, UnsupportedAlgorithm):
+        logger.warning("APNs private key is invalid in env: %s", config.private_key_env)
+        return None
 
 
 def _resolve_env(env_name: str) -> str | None:

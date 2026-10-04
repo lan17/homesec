@@ -55,6 +55,7 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   const queryClient = useQueryClient()
   const nativeLifecycle = useNativeAppLifecycleState()
   const nativeLifecycleRef = useRef(nativeLifecycle)
+  const handledPauseCountRef = useRef(nativeLifecycle.pauseCount)
   const [sessionState, setSessionState] = useState<StoredPreviewSession | null>(null)
   const [startError, setStartError] = useState<Error | null>(null)
   const [refreshError, setRefreshError] = useState<Error | null>(null)
@@ -136,14 +137,12 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
       }
     }
 
-    if (currentLifecycle.isBackgrounded) {
-      await stopLateActivation()
-      return
-    }
-
-    if (currentLifecycle.pauseCount !== activation.pauseCountAtRequest) {
+    if (
+      currentLifecycle.isBackgrounded
+      || currentLifecycle.pauseCount !== activation.pauseCountAtRequest
+    ) {
       if (isLatestActivation) {
-        await stopLateActivation()
+        clearSession()
       }
       return
     }
@@ -259,12 +258,17 @@ export function useCameraPreview(cameraName: string): CameraPreviewState {
   }, [beginSessionRequest, cameraName, nativeLifecycle.isBackgrounded, storeActivationIfCurrent])
 
   useEffect(() => {
-    if (!nativeLifecycle.isBackgrounded || sessionStateRef.current === null) {
+    const pausedSinceLastCleanup = nativeLifecycle.pauseCount > handledPauseCountRef.current
+    handledPauseCountRef.current = nativeLifecycle.pauseCount
+    if (!nativeLifecycle.isBackgrounded && !pausedSinceLastCleanup) {
       return
     }
 
-    void stop()
-  }, [nativeLifecycle.isBackgrounded, stop])
+    // The publisher is shared. Detach this player and stop renewing its token;
+    // existing viewer activity and idle expiry reclaim unused server resources.
+    beginSessionRequest()
+    clearSession()
+  }, [beginSessionRequest, clearSession, nativeLifecycle.isBackgrounded, nativeLifecycle.pauseCount])
 
   useEffect(() => {
     if (!nativeLifecycle.isActive || nativeLifecycle.resumeCount === 0) {
