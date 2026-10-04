@@ -120,6 +120,11 @@ Debug unless you are intentionally validating a production APNs profile.
 The iOS shell stores the server URL and API token in the native Keychain bridge,
 not WebView storage.
 
+Before using mobile registration or APNs on an existing server, run the normal
+`make db-migrate` deployment step. The registry's successor migration adds an
+internal registration revision while preserving existing device records and
+their enabled state.
+
 If the server sets an explicit `server.cors_origins` allowlist, include
 `capacitor://localhost` alongside the browser origins. The bundled iOS WebView
 uses this origin for API requests; reaching the server in Safari alone does not

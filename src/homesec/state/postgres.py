@@ -173,6 +173,11 @@ class MobileDevice(Base):
         server_default=text("true"),
         nullable=False,
     )
+    registration_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        server_default=text("1"),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

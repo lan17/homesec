@@ -56,7 +56,7 @@ class _MobileDevicePushRepository(Protocol):
         error: str | None,
         now: datetime | None = None,
         disable: bool = False,
-        expected_revision: str | None = None,
+        expected_revision: int | None = None,
     ) -> object | None:
         """Record an APNs outcome and disable an unchanged rejected device atomically."""
         ...

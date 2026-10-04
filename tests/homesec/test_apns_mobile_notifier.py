@@ -47,11 +47,11 @@ class _FakeMobileDeviceRepository:
         error: str | None,
         now: datetime | None = None,
         disable: bool = False,
-        expected_revision: str | None = None,
+        expected_revision: int | None = None,
     ) -> None:
         self.recorded_results.append((device_id, error, now))
         if disable:
-            assert expected_revision == "test-revision"
+            assert expected_revision == 7
             self.disabled_devices.append((device_id, now))
 
 
@@ -155,7 +155,7 @@ async def test_apns_notifier_sends_payload_to_registered_targets(
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_1",
                 apns_token="apns-token-1",
                 apns_environment="sandbox",
@@ -213,7 +213,7 @@ async def test_expired_provider_token_is_refreshed_before_retry(
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_1",
                 apns_token="synthetic-token",
                 apns_environment="sandbox",
@@ -281,7 +281,7 @@ async def test_late_expired_provider_response_preserves_newer_cached_token(
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_1",
                 apns_token="synthetic-token",
                 apns_environment="sandbox",
@@ -322,7 +322,7 @@ async def test_apns_notifier_records_rejected_devices_and_raises_when_all_fail(
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_bad",
                 apns_token="bad-token",
                 apns_environment="sandbox",
@@ -378,7 +378,7 @@ async def test_apns_outcome_survives_bookkeeping_failure(
             error: str | None,
             now: datetime | None = None,
             disable: bool = False,
-            expected_revision: str | None = None,
+            expected_revision: int | None = None,
         ) -> None:
             await super().record_push_result(
                 device_id,
@@ -392,7 +392,7 @@ async def test_apns_outcome_survives_bookkeeping_failure(
     repository = FailingRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_1",
                 apns_token="synthetic-token",
                 apns_environment="sandbox",
@@ -467,7 +467,7 @@ async def test_apns_notifier_bounds_encoded_payload_without_changing_event_route
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_1",
                 apns_token="apns-token-1",
                 apns_environment="sandbox",
@@ -524,7 +524,7 @@ async def test_apns_notifier_rejects_oversized_event_metadata_without_sending(
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_1",
                 apns_token="apns-token-1",
                 apns_environment="sandbox",
@@ -563,7 +563,7 @@ async def test_apns_notifier_does_not_retry_payload_too_large_or_disable_valid_d
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id=f"dev_{index}",
                 apns_token=f"apns-token-{index}",
                 apns_environment="sandbox",
@@ -610,14 +610,14 @@ async def test_apns_notifier_disables_permanent_failures_without_retrying_succes
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_ok",
                 apns_token="good-token",
                 apns_environment="sandbox",
                 bundle_id="com.levneiman.homesec",
             ),
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_bad",
                 apns_token="bad-token",
                 apns_environment="sandbox",
@@ -663,14 +663,14 @@ async def test_apns_notifier_raises_on_partial_retryable_delivery_failure(
     repository = _FakeMobileDeviceRepository(
         [
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_ok",
                 apns_token="good-token",
                 apns_environment="sandbox",
                 bundle_id="com.levneiman.homesec",
             ),
             MobileDevicePushTarget(
-                revision="test-revision",
+                revision=7,
                 id="dev_retry",
                 apns_token="retry-token",
                 apns_environment="sandbox",

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from sqlalchemy import Table, Text, case, func, literal_column, or_, select, update
+from sqlalchemy import Table, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -74,6 +74,7 @@ class MobileDeviceRepository:
                 "capabilities": insert_stmt.excluded.capabilities,
                 "updated_at": func.greatest(table.c.updated_at, recorded_at),
                 "last_seen_at": func.greatest(table.c.last_seen_at, recorded_at),
+                "registration_revision": table.c.registration_revision + 1,
             },
         )
         returning_stmt = upsert_stmt.returning(*_device_record_columns())
@@ -123,7 +124,7 @@ class MobileDeviceRepository:
                 MobileDevice.apns_token,
                 MobileDevice.apns_environment,
                 MobileDevice.bundle_id,
-                literal_column("xmin", type_=Text).cast(Text).label("revision"),
+                MobileDevice.registration_revision.label("revision"),
             )
             .where(MobileDevice.enabled.is_(True))
             .where(MobileDevice.platform == "ios")
@@ -138,7 +139,7 @@ class MobileDeviceRepository:
         return [
             MobileDevicePushTarget(
                 id=str(row["id"]),
-                revision=str(row["revision"]),
+                revision=int(row["revision"]),
                 apns_token=str(row["apns_token"]),
                 apns_environment=row["apns_environment"],
                 bundle_id=str(row["bundle_id"]),
@@ -153,7 +154,7 @@ class MobileDeviceRepository:
         error: str | None,
         now: datetime | None = None,
         disable: bool = False,
-        expected_revision: str | None = None,
+        expected_revision: int | None = None,
     ) -> MobileDeviceRecord | None:
         """Record the latest APNs attempt, preserving newer device changes."""
         recorded_at = _utc_now() if now is None else now
@@ -171,10 +172,10 @@ class MobileDeviceRepository:
                 updated_at=func.greatest(MobileDevice.updated_at, recorded_at),
                 enabled=(
                     case(
-                        # Compare the selected row version inside the UPDATE so
+                        # Compare the selected registration inside the UPDATE so
                         # even a queued registration with an older timestamp
                         # cannot be disabled by a response for its predecessor.
-                        (literal_column("xmin").cast(Text) == expected_revision, False),
+                        (MobileDevice.registration_revision == expected_revision, False),
                         else_=MobileDevice.enabled,
                     )
                     if disable
@@ -209,6 +210,7 @@ class MobileDeviceRepository:
 
         recorded_at = _utc_now() if now is None else now
         changes["updated_at"] = func.greatest(MobileDevice.updated_at, recorded_at)
+        changes["registration_revision"] = MobileDevice.registration_revision + 1
         stmt = (
             update(MobileDevice)
             .where(MobileDevice.id == device_id)

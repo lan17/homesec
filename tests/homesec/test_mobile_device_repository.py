@@ -487,7 +487,7 @@ async def test_permanent_rejection_preserves_changes_with_non_newer_timestamps(
             expected_revision=target.revision,
         )
 
-        # Then: Row identity, rather than wall-clock ordering, protects the refreshed device
+        # Then: Registration identity, rather than wall-clock ordering, protects the refreshed device
         assert result is not None
         assert result.enabled is True
         assert result.last_push_at == sent_at
@@ -535,5 +535,47 @@ async def test_queued_device_write_preserves_newer_chronology(
         assert result.updated_at == push_at
         assert result.last_seen_at == seen_at
         assert result.last_push_at == push_at
+    finally:
+        await state_store.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("earlier_error", [None, "HTTP 503: ServiceUnavailable"])
+async def test_earlier_push_bookkeeping_does_not_prevent_current_permanent_disable(
+    postgres_dsn: str,
+    clean_test_db: None,
+    earlier_error: str | None,
+) -> None:
+    # Given: Concurrent attempts select one unchanged registration
+    state_store = PostgresStateStore(postgres_dsn)
+    await state_store.initialize()
+    try:
+        repository = MobileDeviceRepository(state_store.engine)
+        registered_at = datetime(2026, 6, 14, 8, 10, tzinfo=timezone.utc)
+        registered = await repository.register_device(_registration(), now=registered_at)
+        target = (
+            await repository.list_enabled_apns_targets(
+                environment="sandbox", bundle_id="com.levneiman.homesec"
+            )
+        )[0]
+        earlier_at = registered_at + timedelta(seconds=1)
+        current_at = earlier_at + timedelta(seconds=1)
+        await repository.record_push_result(registered.id, error=earlier_error, now=earlier_at)
+
+        # When: The later attempt returns a permanent rejection after the earlier result commits
+        result = await repository.record_push_result(
+            registered.id,
+            error="HTTP 410: Unregistered",
+            now=current_at,
+            disable=True,
+            expected_revision=target.revision,
+        )
+
+        # Then: Ordinary delivery history does not protect an invalid unchanged token
+        assert result is not None
+        assert result.enabled is False
+        assert result.last_push_at == current_at
+        assert result.last_push_error == "HTTP 410: Unregistered"
+        assert await repository.list_devices() == []
     finally:
         await state_store.shutdown()
