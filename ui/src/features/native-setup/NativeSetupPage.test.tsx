@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
@@ -94,6 +94,40 @@ describe('NativeSetupPage', () => {
     cleanup()
     vi.restoreAllMocks()
     window.sessionStorage.clear()
+  })
+
+  it('prevents cancellation once replacement credentials are being persisted', async () => {
+    // Given: Token validation succeeds but the secure credential write remains pending
+    const user = userEvent.setup()
+    const authTokenProvider = new InMemoryAuthTokenProvider()
+    authTokenProvider.setTokenSync('old-token')
+    const serverBaseUrlProvider = new BrowserServerBaseUrlProvider('https://old.example')
+    let completeWrite: () => void = () => {}
+    vi.spyOn(authTokenProvider, 'setToken').mockImplementation(async (token) => {
+      await new Promise<void>((resolve) => { completeWrite = resolve })
+      authTokenProvider.setTokenSync(token)
+    })
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(HEALTH_PAYLOAD))
+      .mockResolvedValueOnce(unauthorizedResponse())
+      .mockResolvedValueOnce(jsonResponse(SETUP_PAYLOAD))
+    renderNativeSetup({ authTokenProvider, serverBaseUrlProvider })
+
+    // When: Saving reaches the credential persistence boundary
+    await user.type(screen.getByLabelText('Server URL'), 'https://replacement.example')
+    await user.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Server reachable')
+    await user.type(screen.getByLabelText('API token'), 'replacement-token')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    // Then: Cancellation cannot interrupt the settings write
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    })
+    await act(async () => { completeWrite() })
+    await screen.findByText('Live route')
+    expect(authTokenProvider.getTokenSync()).toBe('replacement-token')
+    expect(serverBaseUrlProvider.getBaseUrlSync()).toBe('https://replacement.example')
   })
 
   it('fails closed without old credentials or cached data when a server switch cannot save its token', async () => {

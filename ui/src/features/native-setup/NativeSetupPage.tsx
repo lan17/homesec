@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -20,6 +20,7 @@ import { validateNativeSetupServerUrl } from './nativeSetup'
 import './nativeSetup.css'
 
 type NativeSetupStep = 'server' | 'token'
+type NativeSetupOperation = 'checking-server' | 'validating-token' | 'persisting'
 
 export interface NativeSetupPageProps {
   authTokenProvider?: AuthTokenProvider
@@ -88,8 +89,26 @@ export function NativeSetupPage({
   const [serverError, setServerError] = useState<string | null>(null)
   const [tokenError, setTokenError] = useState<string | null>(null)
   const [step, setStep] = useState<NativeSetupStep>('server')
-  const [isCheckingServer, setIsCheckingServer] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
+  const [operation, setOperation] = useState<NativeSetupOperation | null>(null)
+  const operationControllerRef = useRef<{
+    controller: AbortController
+    phase: NativeSetupOperation
+  } | null>(null)
+  const isCheckingServer = operation === 'checking-server'
+  const isSaving = operation === 'validating-token' || operation === 'persisting'
+
+  useEffect(() => () => {
+    operationControllerRef.current?.controller.abort()
+    operationControllerRef.current = null
+  }, [])
+
+  function cancelSetup(): void {
+    const currentOperation = operationControllerRef.current
+    // Enforce the persistence boundary even before React updates the button.
+    if (currentOperation?.phase === 'persisting') return
+    currentOperation?.controller.abort()
+    navigate(nativeSetupReturnTo(location.state), { replace: true })
+  }
 
   function handleServerUrlChange(value: string): void {
     setServerUrl(value)
@@ -112,24 +131,29 @@ export function NativeSetupPage({
       return
     }
 
-    setIsCheckingServer(true)
+    const controller = new AbortController()
+    operationControllerRef.current?.controller.abort()
+    operationControllerRef.current = { controller, phase: 'checking-server' }
+    setOperation('checking-server')
     setServerError(null)
     setTokenError(null)
     setIsPlainHttp(false)
     setAuthDisabled(false)
     try {
       const client = createClient(validation.value.serverBaseUrl)
-      await client.getHealth({ apiKey: null })
+      await client.getHealth({ apiKey: null, signal: controller.signal })
+      if (controller.signal.aborted) return
 
       let acceptsUnauthenticatedRequests = false
       try {
-        await client.getSetupStatus({ apiKey: null })
+        await client.getSetupStatus({ apiKey: null, signal: controller.signal })
         acceptsUnauthenticatedRequests = true
       } catch (error) {
         if (!isAuthFailure(error)) {
           acceptsUnauthenticatedRequests = false
         }
       }
+      if (controller.signal.aborted) return
 
       setValidatedServerUrl(validation.value.serverBaseUrl)
       setServerUrl(validation.value.serverBaseUrl)
@@ -140,12 +164,16 @@ export function NativeSetupPage({
       }
       setStep('token')
     } catch (error) {
+      if (controller.signal.aborted) return
       setValidatedServerUrl(null)
       setIsPlainHttp(false)
       setStep('server')
       setServerError(describeServerCheckError(error))
     } finally {
-      setIsCheckingServer(false)
+      if (operationControllerRef.current?.controller === controller) {
+        operationControllerRef.current = null
+        setOperation(null)
+      }
     }
   }
 
@@ -161,12 +189,20 @@ export function NativeSetupPage({
       return
     }
 
-    setIsSaving(true)
+    const controller = new AbortController()
+    operationControllerRef.current?.controller.abort()
+    operationControllerRef.current = { controller, phase: 'validating-token' }
+    setOperation('validating-token')
     setTokenError(null)
     try {
       if (!authDisabled && apiKey) {
-        await createClient(validatedServerUrl).getSetupStatus({ apiKey })
+        await createClient(validatedServerUrl).getSetupStatus({ apiKey, signal: controller.signal })
       }
+      if (controller.signal.aborted) return
+      const currentOperation = operationControllerRef.current
+      if (currentOperation?.controller !== controller) return
+      currentOperation.phase = 'persisting'
+      setOperation('persisting')
       await queryClient.cancelQueries()
       queryClient.clear()
       await authTokenProvider.clearToken()
@@ -175,11 +211,18 @@ export function NativeSetupPage({
       await authTokenProvider.setToken(authDisabled ? null : apiKey || null)
       await persistRuntimeAuthSessionReady({ persistAuthDisabled: authDisabled })
       queryClient.clear()
-      navigate(nativeSetupReturnTo(location.state), { replace: true })
+      if (!controller.signal.aborted) {
+        navigate(nativeSetupReturnTo(location.state), { replace: true })
+      }
     } catch (error) {
-      setTokenError(describeTokenError(error))
+      if (!controller.signal.aborted) {
+        setTokenError(describeTokenError(error))
+      }
     } finally {
-      setIsSaving(false)
+      if (operationControllerRef.current?.controller === controller) {
+        operationControllerRef.current = null
+        setOperation(null)
+      }
     }
   }
 
@@ -265,8 +308,8 @@ export function NativeSetupPage({
               <Button
                 type="button"
                 variant="ghost"
-                disabled={isSaving || isCheckingServer}
-                onClick={() => navigate(nativeSetupReturnTo(location.state), { replace: true })}
+                disabled={operation === 'persisting'}
+                onClick={cancelSetup}
               >
                 Cancel
               </Button>
