@@ -169,22 +169,30 @@ class RustMotionInput:
         helper = self._helper
         if helper is None or self._stopped:
             return None
-        if not math.isfinite(timeout_s) or not 0 <= timeout_s <= 120:
-            self._start_fallback("incompatible_deadline", expected_helper=helper)
-            return None
+        reason = "incompatible_deadline"
+        if math.isfinite(timeout_s) and 0 <= timeout_s <= 120:
+            reason = "motion_worker_failed"
+            try:
+                fields: dict[str, object] = {"wait_timeout_s": timeout_s}
+                if threshold is not None:
+                    fields["threshold"] = threshold
+                reply = helper.request(command, timeout_s=max(0.5, timeout_s + 0.5), **fields)
+                with self._lock:
+                    if helper is not self._helper or self._stopped:
+                        return None
+                    if reply.ok:
+                        return reply
+            except HelperError:
+                pass
         try:
-            fields: dict[str, object] = {"wait_timeout_s": timeout_s}
-            if threshold is not None:
-                fields["threshold"] = threshold
-            reply = helper.request(command, timeout_s=max(0.5, timeout_s + 0.5), **fields)
-            with self._lock:
-                if helper is not self._helper or self._stopped:
-                    return None
-                if reply.ok:
-                    return reply
-        except HelperError:
-            pass
-        self._start_fallback("motion_worker_failed", expected_helper=helper)
+            self._start_fallback(reason, expected_helper=helper)
+        except Exception:
+            # Runtime startup failure is missing input, handled by the source's reconnect
+            # policy. Diagnostics deliberately omit exception data from the media boundary.
+            logger.warning(
+                "Compatible motion input failed to start; source will reconnect",
+                extra={"event_type": "motion_backend_fallback", "reason": "fallback_start_failed"},
+            )
         return None
 
     def read_motion(self, timeout_s: float, threshold: float) -> MotionObservation | None:

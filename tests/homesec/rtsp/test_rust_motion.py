@@ -57,7 +57,10 @@ for line in sys.stdin:
                 "changed_pct": 25.0,
             }
     elif command == "discard_frame":
-        reply["frame_available"] = True
+        if mode == "refuse_read":
+            reply.update(ok=False, error_code="decode_failed")
+        else:
+            reply["frame_available"] = True
     elif command == "stop":
         if pending is not None:
             emit({"request_id": pending, "ok": False, "error_code": "cancelled"})
@@ -217,6 +220,45 @@ def test_unsupported_or_failed_native_motion_uses_legacy_input(tmp_path: Path, m
     assert observation == fallback.observation
     assert running
     assert not motion_input.is_running()
+
+
+@pytest.mark.parametrize("consume", ["read_motion", "discard_frame", "incompatible_deadline"])
+def test_runtime_fallback_start_failure_allows_source_restart(
+    tmp_path: Path, consume: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Given: A failing native input and a transiently unavailable compatibility camera.
+    helper = helper_script(tmp_path, "refuse_read")
+    fallback = LegacyInput(fail_start=True)
+    motion_input = selected_input(helper, fallback)
+    url = "rtsp://synthetic-camera/detect"
+
+    # When: Runtime fallback fails once, then the source restarts the selected input.
+    try:
+        motion_input.start(url)
+        with caplog.at_level(logging.WARNING):
+            if consume == "read_motion":
+                assert motion_input.read_motion(0.2, threshold=30.0) is None
+            elif consume == "discard_frame":
+                assert not motion_input.discard_frame(0.2)
+            else:
+                assert not motion_input.discard_frame(121.0)
+        assert not motion_input.is_running()
+        fallback.fail_start = False
+        motion_input.start(url)
+        recovered = motion_input.read_motion(0.2, threshold=30.0)
+    finally:
+        motion_input.stop()
+
+    # Then: Missing input permits retry, and the recovered legacy detector supplies motion.
+    assert recovered == fallback.observation
+    assert [call for call in fallback.calls if call[0] == "start"] == [
+        ("start", url),
+        ("start", url),
+    ]
+    assert sum(record["request"]["command"] == "start" for record in trace_requests(helper)) == 1
+    failures = [record for record in caplog.records if "source will reconnect" in record.msg]
+    assert len(failures) == 1
+    assert failures[0].exc_info is None
 
 
 @pytest.mark.parametrize(
