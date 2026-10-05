@@ -2,16 +2,22 @@
 name = "homesec-webrtc"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 license = "Apache-2.0"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+futures-util = "0.3"
+h264-reader = "0.8"
 mio = { version = "1", features = ["net", "os-poll"] }
+percent-encoding = "2"
+retina = { version = "=0.4.20", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 str0m = { version = "0.24", default-features = false, features = ["rust-crypto"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

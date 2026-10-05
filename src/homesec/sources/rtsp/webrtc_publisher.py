@@ -73,6 +73,7 @@ class _HelperRequest(BaseModel):
     request_id: str
     command: Literal["start", "offer", "renew", "close", "status", "stop"]
     ffmpeg_args: list[str] | None = None
+    rtsp_url: str | None = Field(default=None, min_length=1)
     session_id: str | None = None
     sdp: str | None = Field(default=None, max_length=48_000)
     lease_seconds: float | None = Field(default=None, gt=0.0, le=86400.0)
@@ -80,8 +81,11 @@ class _HelperRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_command_fields(self) -> _HelperRequest:
-        if self.command == "start" and not self.ffmpeg_args:
-            raise ValueError("Media startup requires arguments")
+        if self.command == "start":
+            if (self.ffmpeg_args is None) == (self.rtsp_url is None):
+                raise ValueError("Media startup requires exactly one input")
+            if self.ffmpeg_args is not None and not self.ffmpeg_args:
+                raise ValueError("Media startup requires arguments")
         if self.command in ("offer", "renew", "close") and not self.session_id:
             raise ValueError("Peer commands require a session")
         if self.command == "offer" and not self.sdp:
@@ -223,7 +227,17 @@ class _HelperClient:
                 self._ready.put_nowait(None)
 
     def stop(self) -> None:
-        """Terminate the helper and its FFmpeg child as one bounded process group."""
+        """Allow camera teardown, then bound helper and child process cleanup."""
+        if self.process.poll() is None:
+            try:
+                self.request("stop", timeout_s=0.5)
+            except _HelperError:
+                pass
+            # The reply precedes Rust destruction, including RTSP TEARDOWN.
+            try:
+                self.process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
@@ -355,7 +369,10 @@ class RustWebRTCLivePublisher:
                         )
                     self._helper = helper
                 ready = helper.wait_ready(timeout_s=5.0)
-                response = helper.request("start", ffmpeg_args=self._ffmpeg_args(ready))
+                if self._config.video_codec == "copy" and not self._config.audio_enabled:
+                    response = helper.request("start", rtsp_url=self._rtsp_url, timeout_s=10.0)
+                else:
+                    response = helper.request("start", ffmpeg_args=self._ffmpeg_args(ready))
                 if not response.ok:
                     raise _HelperError("Preview media startup failed")
                 with self._lock:

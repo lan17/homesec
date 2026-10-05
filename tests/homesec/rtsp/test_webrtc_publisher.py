@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -73,6 +74,8 @@ for raw in sys.stdin:
     result['viewer_count'] = len(peers)
     result['active_session_count'] = len(peers)
     reply(result)
+    if command['command'] == 'stop':
+        break
 """
     )
     script.chmod(0o700)
@@ -85,6 +88,8 @@ def publisher(
     idle: float = 5.0,
     concurrent: bool = False,
     negotiation_timeout_s: float = 0.2,
+    video_codec: Literal["h264", "copy"] = "h264",
+    audio_enabled: bool = True,
 ) -> RustWebRTCLivePublisher:
     return RustWebRTCLivePublisher(
         camera_name="front",
@@ -93,6 +98,8 @@ def publisher(
             helper_path=str(helper[0]),
             advertised_ip="127.0.0.1",
             negotiation_timeout_s=negotiation_timeout_s,
+            video_codec=video_codec,
+            audio_enabled=audio_enabled,
         ),
         idle_timeout_s=idle,
         recording_policy="allow_during_recording" if concurrent else "stop_on_recording",
@@ -154,6 +161,127 @@ def test_audio_rtp_transcodes_when_startup_discovered_audio(helper: tuple[Path, 
         assert "rtp://127.0.0.1:20003?pkt_size=1200" in args
     finally:
         preview.shutdown()
+
+
+def test_video_only_copy_starts_native_rtsp_over_helper_stdin(helper: tuple[Path, Path]) -> None:
+    # Given: Audio is explicitly disabled even though the camera has an audio track.
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace(
+            "peers = {}", "assert not any('rtsp://' in arg for arg in sys.argv)\npeers = {}", 1
+        )
+    )
+    preview = publisher(helper, video_codec="copy", audio_enabled=False)
+    preview.set_audio_available(True)
+    try:
+        # When: Two viewers attach to the same camera.
+        first = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        second = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        starts = [command for command in commands if command["command"] == "start"]
+
+        # Then: One native input receives its URL privately, without an FFmpeg command.
+        assert isinstance(first, PreviewAnswer)
+        assert isinstance(second, PreviewAnswer)
+        assert len(starts) == 1
+        assert starts[0]["rtsp_url"] == "rtsp://user:private-password@camera/main"
+        assert "ffmpeg_args" not in starts[0]
+        assert preview.status().state == LivePublisherState.READY
+    finally:
+        preview.shutdown()
+
+
+def test_native_rtsp_start_waits_for_camera_negotiation(helper: tuple[Path, Path]) -> None:
+    # Given: Native camera startup needs longer than the ordinary control request deadline.
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace(
+            "    if command['command'] == 'offer':",
+            "    if command['command'] == 'start':\n"
+            "        time.sleep(2.2)\n"
+            "    elif command['command'] == 'offer':",
+            1,
+        )
+    )
+    preview = publisher(helper, video_codec="copy", audio_enabled=False)
+    try:
+        # When: A viewer starts preview while the helper negotiates with the camera.
+        result = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 15)
+
+        # Then: The dedicated startup deadline allows negotiation to finish successfully.
+        assert isinstance(result, PreviewAnswer)
+        assert preview.status().state == LivePublisherState.READY
+    finally:
+        preview.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("video_codec", "audio_enabled", "audio_available"),
+    [
+        ("copy", True, False),
+        ("copy", True, True),
+        ("h264", False, True),
+        ("h264", True, False),
+        ("h264", True, True),
+    ],
+)
+def test_transcoding_or_enabled_audio_keeps_ffmpeg_input(
+    helper: tuple[Path, Path],
+    video_codec: Literal["h264", "copy"],
+    audio_enabled: bool,
+    audio_available: bool,
+) -> None:
+    # Given: The requested mode requires transcoding or has audio enabled in config.
+    preview = publisher(helper, video_codec=video_codec, audio_enabled=audio_enabled)
+    preview.set_audio_available(audio_available)
+    try:
+        # When: Preview starts using the camera discovery result.
+        result = preview.ensure_active()
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        start = next(command for command in commands if command["command"] == "start")
+
+        # Then: Existing FFmpeg video/audio selection is preserved without native ingest.
+        assert not isinstance(result, LivePublisherStartRefusal)
+        assert "rtsp_url" not in start
+        args = start["ffmpeg_args"]
+        assert args.count("-i") == 1
+        assert args[args.index("-c:v") + 1] == ("copy" if video_codec == "copy" else "libx264")
+        assert ("libopus" in args) == (audio_enabled and audio_available)
+    finally:
+        preview.shutdown()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"ffmpeg_args": []},
+        {"rtsp_url": ""},
+        {"ffmpeg_args": ["-i", "input"], "rtsp_url": "rtsp://camera/main"},
+        {"ffmpeg_args": [], "rtsp_url": "rtsp://camera/main"},
+    ],
+)
+def test_start_rejects_missing_or_ambiguous_input_before_sending(
+    helper: tuple[Path, Path], fields: dict[str, object]
+) -> None:
+    # Given: An available helper and a malformed media input selection.
+    client = _HelperClient([str(helper[0])])
+    try:
+        client.wait_ready(timeout_s=2)
+
+        # When: The client rejects startup, then sends a valid status request.
+        with pytest.raises(_HelperError, match="Invalid preview helper command"):
+            client.request("start", **fields)
+        response = client.request("status")
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+
+        # Then: Invalid input never reaches the process and the connection stays usable.
+        assert response.ok
+        assert [command["command"] for command in commands] == ["status"]
+    finally:
+        client.stop()
 
 
 def test_recording_stops_all_peers_and_refuses_new_preview(helper: tuple[Path, Path]) -> None:
@@ -317,8 +445,9 @@ def test_helper_disconnect_is_cleaned_up_without_breaking_source(helper: tuple[P
 
 
 @pytest.mark.parametrize("failure", ["missing_executable", "rejected_start"])
+@pytest.mark.parametrize("native", [False, True])
 def test_failed_helper_startup_is_redacted_and_later_activation_recovers(
-    helper: tuple[Path, Path], failure: str, caplog: pytest.LogCaptureFixture
+    helper: tuple[Path, Path], failure: str, native: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     # Given: The helper is missing or refuses media startup.
     original = helper[0].read_text()
@@ -334,7 +463,7 @@ def test_failed_helper_startup_is_redacted_and_later_activation_recovers(
                 1,
             )
         )
-    preview = publisher(helper)
+    preview = publisher(helper, video_codec="copy" if native else "h264", audio_enabled=not native)
     try:
         # When: A viewer attempts to attach, then the executable is repaired.
         failed = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
@@ -543,6 +672,42 @@ def test_expired_authorization_does_not_start_camera_input(helper: tuple[Path, P
         # Then: No helper or media input starts
         assert isinstance(result, PreviewSessionRefusal)
         assert not helper[1].exists()
+        assert preview.status().state == LivePublisherState.IDLE
+    finally:
+        preview.shutdown()
+
+
+@pytest.mark.parametrize("stop_reason", ["explicit", "recording", "shutdown", "idle"])
+def test_publisher_waits_for_camera_cleanup_after_stop_reply(
+    helper: tuple[Path, Path], tmp_path: Path, stop_reason: str
+) -> None:
+    # Given: A camera helper that acknowledges stop before finishing its teardown.
+    cleaned = tmp_path / "camera-teardown-finished"
+    helper[0].write_text(
+        helper[0]
+        .read_text()
+        .replace(
+            "        break",
+            f"        time.sleep(0.1)\n        open({str(cleaned)!r}, 'w').close()\n        break",
+        )
+    )
+    preview = publisher(helper, idle=0.1 if stop_reason == "idle" else 5)
+    try:
+        assert not isinstance(preview.ensure_active(), LivePublisherStartRefusal)
+
+        # When: The publisher releases its input through each ordinary stop path.
+        if stop_reason == "explicit":
+            preview.request_stop()
+        elif stop_reason == "recording":
+            preview.sync_recording_active(True)
+        elif stop_reason == "shutdown":
+            preview.shutdown()
+        wait_until(cleaned.exists)
+        wait_until(lambda: preview.status().state == LivePublisherState.IDLE)
+
+        # Then: Cleanup after the reply completes instead of being killed by SIGTERM.
+        commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
+        assert [command["command"] for command in commands].count("stop") == 1
         assert preview.status().state == LivePublisherState.IDLE
     finally:
         preview.shutdown()

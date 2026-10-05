@@ -1,7 +1,11 @@
-//! Bounded, camera-local media worker. str0m owns the WebRTC protocols.
+//! Camera-local media worker with bounded media buffers. str0m owns the WebRTC protocols.
 mod engine;
 mod protocol;
 mod rtp;
+mod rtsp;
+#[cfg(test)]
+#[path = "../tests/support/rtsp_camera.rs"]
+mod rtsp_camera;
 
 use clap::Parser;
 use std::net::IpAddr;
