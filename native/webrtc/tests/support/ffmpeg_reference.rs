@@ -12,7 +12,9 @@ pub(crate) fn prepare_gray(path: &Path, fps: u32, frames: usize) -> Vec<u8> {
     // on FFmpeg 5.1. Cap output at the known synthetic fixture duration.
     let expected_bytes = frames * 320 * 240;
     let mut output = tempfile::tempfile().expect("temporary reference output");
-    let mut child = Command::new("ffmpeg")
+    let executable =
+        std::env::var_os("HOMESEC_FFMPEG_REFERENCE").unwrap_or_else(|| "ffmpeg".into());
+    let mut child = Command::new(executable)
         .args([
             "-hide_banner",
             "-nostdin",

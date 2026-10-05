@@ -42,20 +42,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             native/webrtc/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.lock') }}
+            /tmp/homesec-ffmpeg-*
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.lock', 'native/webrtc/build_ffmpeg.py') }}
 
       - name: Rust check
-        # Build linked FFmpeg bindings; integration tests exercise real media.
+        # The shared recipe builds bundled FFmpeg; media tests also use the CLI.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ffmpeg clang libclang-dev pkg-config \
-            libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev
+            build-essential python3 ffmpeg clang libclang-dev pkg-config nasm
           make rust-check
 
       - name: Build WebRTC helper
         run: |
           make rust-build
+          dependencies="$(ldd native/webrtc/target/release/homesec-webrtc)"
+          if printf '%s\n' "$dependencies" | grep -E 'lib(avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'; then
+            echo "The native helper must use the bundled FFmpeg libraries." >&2
+            exit 1
+          fi
           echo "$GITHUB_WORKSPACE/native/webrtc/target/release" >> "$GITHUB_PATH"
 
       - name: Setup uv and Python

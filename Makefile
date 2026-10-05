@@ -44,8 +44,11 @@ DOCKER_TAG ?= latest
 DOCKERHUB_USER ?= $(shell echo $${DOCKERHUB_USER:-})
 UV_RUN ?= uv run --locked
 CARGO ?= cargo
+PYTHON ?= python3
+FFMPEG_JOBS ?=
 PNPM ?= pnpm
 WEBRTC_MANIFEST := native/webrtc/Cargo.toml
+FFMPEG_BUILD := $(PYTHON) native/webrtc/build_ffmpeg.py $(if $(FFMPEG_JOBS),--jobs $(FFMPEG_JOBS)) --
 WEBRTC_RELEASE_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/native/webrtc/target)/release
 
 # Docker
@@ -70,7 +73,7 @@ docker-push: docker-build
 
 # Local dev
 dev-setup:
-	@for tool in uv node ffmpeg ffprobe clang pkg-config; do \
+	@for tool in uv node ffmpeg ffprobe clang pkg-config make; do \
 		if ! command -v "$$tool" >/dev/null 2>&1; then \
 			echo "Missing $$tool. See docs/webrtc-preview.md for developer prerequisites."; \
 			exit 1; \
@@ -88,13 +91,7 @@ dev-setup:
 		echo "A C compiler/linker is required. See docs/webrtc-preview.md for Linux/macOS prerequisites."; \
 		exit 1; \
 	}
-	@for library in libavcodec libavformat libavfilter libavutil; do \
-		if ! pkg-config --exists "$$library"; then \
-			echo "Missing FFmpeg development library $$library. Install the native prerequisites in docs/webrtc-preview.md; use PKG_CONFIG_PATH for a custom installation."; \
-			pkg-config --print-errors --exists "$$library"; \
-			exit 1; \
-		fi; \
-	done
+	@$(PYTHON) --version >/dev/null || { echo "Python 3 is required to build bundled FFmpeg."; exit 1; }
 	uv sync --locked
 	$(MAKE) rust-build
 	$(MAKE) ui-install
@@ -118,25 +115,26 @@ coverage:
 
 typecheck:
 	$(UV_RUN) mypy --package homesec --strict
+	$(UV_RUN) mypy native/webrtc/build_ffmpeg.py --strict
 
 lint:
-	$(UV_RUN) ruff check src tests
-	$(UV_RUN) ruff format --check src tests
+	$(UV_RUN) ruff check src tests native/webrtc/build_ffmpeg.py
+	$(UV_RUN) ruff format --check src tests native/webrtc/build_ffmpeg.py
 
 lint-fix:
-	$(UV_RUN) ruff check --fix src tests
-	$(UV_RUN) ruff format src tests
+	$(UV_RUN) ruff check --fix src tests native/webrtc/build_ffmpeg.py
+	$(UV_RUN) ruff format src tests native/webrtc/build_ffmpeg.py
 
 lock-check:
 	uv lock --check
 
 rust-build:
-	$(CARGO) build --manifest-path $(WEBRTC_MANIFEST) --release --locked
+	$(FFMPEG_BUILD) $(CARGO) build --manifest-path $(WEBRTC_MANIFEST) --release --locked
 
 rust-check:
 	$(CARGO) fmt --manifest-path $(WEBRTC_MANIFEST) --all -- --check
-	$(CARGO) clippy --manifest-path $(WEBRTC_MANIFEST) --all-targets --locked -- -D warnings
-	$(CARGO) test --manifest-path $(WEBRTC_MANIFEST) --locked
+	$(FFMPEG_BUILD) $(CARGO) clippy --manifest-path $(WEBRTC_MANIFEST) --all-targets --locked -- -D warnings
+	$(FFMPEG_BUILD) $(CARGO) test --manifest-path $(WEBRTC_MANIFEST) --locked
 
 check: lock-check rust-check lint typecheck test ui-check
 

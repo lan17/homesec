@@ -487,17 +487,22 @@ def test_failed_helper_startup_is_redacted_and_later_activation_recovers(
 
 def test_authorization_expiring_during_startup_never_creates_peer(
     helper: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: Helper startup takes longer than the caller's remaining authorization.
-    helper[0].write_text(
-        helper[0]
-        .read_text()
-        .replace("reply({'event':'ready'", "time.sleep(0.2)\nreply({'event':'ready'", 1)
-    )
-    preview = publisher(helper, idle=0.1)
+    # Given: Authorization expires once the real helper has received media startup.
+    def wall_clock() -> float:
+        if helper[1].exists():
+            # A maintenance request may append concurrently; read complete records only.
+            commands = [json.loads(raw) for raw in helper[1].read_text().split("\n")[:-1]]
+            if any(command["command"] == "start" for command in commands):
+                return 1002.0
+        return 1000.0
+
+    monkeypatch.setattr(time, "time", wall_clock)
+    preview = publisher(helper, idle=1.0)
     try:
         # When: A queued viewer reaches signaling after startup completes.
-        result = preview.negotiate(PreviewOffer(sdp="v=0"), time.time() + 0.05)
+        result = preview.negotiate(PreviewOffer(sdp="v=0"), 1001.0)
 
         # Then: Media startup emits no unauthorized offer and unused input is cleaned up.
         assert isinstance(result, PreviewSessionRefusal)

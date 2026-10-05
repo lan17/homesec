@@ -15,22 +15,25 @@
 # =============================================================================
 FROM rust:1.99.0-slim-bookworm AS webrtc-builder
 
-# FFmpeg is linked from the same Debian release used by the runtime image.
+# Build the pinned FFmpeg libraries privately and link them into the helper.
 # bindgen needs libclang while generating the native FFmpeg bindings.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    python3 \
     clang \
     libclang-dev \
     pkg-config \
-    libavcodec-dev \
-    libavformat-dev \
-    libavfilter-dev \
-    libavutil-dev \
+    nasm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+COPY Makefile ./
 COPY rust-toolchain.toml ./
 COPY native/webrtc/ ./native/webrtc/
-RUN cargo build --manifest-path native/webrtc/Cargo.toml --release --locked
+RUN make rust-build \
+    && install -D -m 0644 /tmp/homesec-ffmpeg-0/*/COPYING.LGPLv2.1 \
+        /app/ffmpeg-license/COPYING.LGPLv2.1
 
 # =============================================================================
 # Stage 2: Python Builder
@@ -90,7 +93,7 @@ RUN pnpm build
 FROM python:3.14-slim-bookworm AS runtime
 
 # Install runtime dependencies
-# - ffmpeg: CLI recording/transcoding and shared libraries for Rust motion decoding
+# - ffmpeg: CLI recording/transcoding and compatibility motion
 # - libgl1: required by OpenCV
 # - libglib2.0-0: required by OpenCV
 # - postgresql-client-16: pg_dump/pg_restore version compatible with docker-compose postgres:16
@@ -122,8 +125,13 @@ COPY --from=builder /app/alembic /app/alembic
 COPY --from=builder /app/alembic.ini /app/alembic.ini
 COPY --from=ui-builder /app/ui/dist /app/ui/dist
 COPY --from=webrtc-builder /app/native/webrtc/target/release/homesec-webrtc /usr/local/bin/homesec-webrtc
-# Confirm the runtime's FFmpeg shared libraries can load the built helper.
-RUN homesec-webrtc --help > /dev/null
+COPY --from=webrtc-builder /app/ffmpeg-license/ /usr/share/licenses/homesec-ffmpeg/
+COPY native/webrtc/FFMPEG-NOTICE.md /usr/share/licenses/homesec-ffmpeg/NOTICE.md
+# Check loading and ensure native motion does not use the runtime's libav libraries.
+RUN homesec-webrtc --help > /dev/null \
+    && dependencies="$(ldd /usr/local/bin/homesec-webrtc)" \
+    && ! printf '%s\n' "$dependencies" \
+        | grep -E 'lib(avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

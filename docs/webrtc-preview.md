@@ -138,8 +138,8 @@ Runtime replacement also invalidates old sessions.
 ## Native motion detection
 
 HomeSec prefers Rust motion detection for compatible H.264 CPU inputs when the
-helper and its shared libraries are available. Rust calls FFmpeg's native decode
-and filter libraries directly, then runs the existing motion algorithm in Rust.
+helper is available. Rust calls the bundled FFmpeg decode and filter libraries
+directly, then runs the existing motion algorithm in Rust.
 It prepares the same 320x240 grayscale frames at 10 fps and uses the existing
 motion settings, including blur normalization and recording sensitivity.
 
@@ -158,11 +158,17 @@ reasons without exposing camera credentials or media.
 ## Docker
 
 The Docker image builds the helper with the pinned Rust toolchain and installs it
-at `/usr/local/bin/homesec-webrtc`. Rust, FFmpeg headers, and libclang are confined
-to the build stage. The helper links to the runtime's FFmpeg shared libraries;
-both stages use Debian Bookworm, and the image build checks that the runtime can
-load the helper. FFmpeg's command-line tools remain in the image for recording and
-compatibility paths.
+at `/usr/local/bin/homesec-webrtc`. The same `make rust-build` recipe used locally
+builds verified FFmpeg 8.1.3 source and links its libraries into the helper. Rust,
+FFmpeg headers, and libclang are confined to the build stage. The image checks
+that the runtime can load the helper and that it has no dynamic libav dependency.
+The system FFmpeg command-line tools remain in the image for recording, preview
+transcoding/audio, and compatibility motion.
+
+The bundled FFmpeg license and source/build notice are installed in
+`/usr/share/licenses/homesec-ffmpeg/`. The
+[notice](../native/webrtc/FFMPEG-NOTICE.md) identifies the exact source archive,
+checksum, and recipe for rebuilding the helper.
 
 The bundled Compose file publishes UDP `8189-8199` alongside HTTP `8081`. The UDP
 ports are used only by the WebRTC backend. Remove that mapping for HLS-only
@@ -187,21 +193,23 @@ For a source checkout on Linux or macOS, install these developer tools first:
 
 - Rust via [rustup](https://rust-lang.org/tools/install/). The repository's
   `rust-toolchain.toml` selects the compiler and required components.
-- A C compiler/linker, Clang, and the libclang shared library for native bindings.
+- Python 3, Make, a C compiler/linker, Clang, and the libclang shared library for
+  native bindings.
   On macOS, use Xcode Command Line Tools (`xcode-select --install`).
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+
   or 22.12+, and pnpm 10.15.1 (the version in `ui/package.json`).
-- FFmpeg, including `ffprobe`, on `PATH`, plus its development headers and shared
-  libraries for `libavcodec`, `libavformat`, `libavfilter`, and `libavutil`.
-- `pkg-config` so the Rust build can find those libraries.
+- FFmpeg, including `ffprobe`, on `PATH` for recording, preview transcoding/audio,
+  and compatibility motion.
+- `pkg-config` so the Rust build can find the privately built libraries.
+- Optional NASM on x86 hosts for FFmpeg assembly optimizations. The build disables
+  x86 assembly when NASM is unavailable.
 
 On Debian/Ubuntu, install the compiler tools, FFmpeg, and libraries required by
 the existing OpenCV dependency with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential clang libclang-dev pkg-config ffmpeg \
-  libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
+sudo apt-get install build-essential python3 clang libclang-dev pkg-config ffmpeg nasm \
   libgl1 libglib2.0-0
 ```
 
@@ -210,19 +218,33 @@ On Ubuntu 24.04, use `libglib2.0-0t64` in place of `libglib2.0-0`.
 On macOS with Xcode Command Line Tools installed:
 
 ```bash
-brew install ffmpeg pkg-config
+brew install python ffmpeg pkg-config
 ```
 
-The Rust dependency is pinned `ffmpeg-next`; it uses the installed FFmpeg library
-version, rather than requiring FFmpeg 9 or downloading a codec build. Debian
-Bookworm supplies FFmpeg 5.1. Keep the same FFmpeg shared-library major versions
-available when running a built helper; rebuild after an incompatible FFmpeg
-upgrade. Preparation tests compare sampled bytes against the installed FFmpeg
-CLI; native decoding and motion have been checked with Bookworm's FFmpeg 5.1.9.
-Run `make rust-check` when changing the native FFmpeg installation.
-For a custom installation, set `PKG_CONFIG_PATH` to its pkg-config
-directory. If bindgen cannot locate libclang, set `LIBCLANG_PATH` to the directory
-containing `libclang.so` or `libclang.dylib`; on a standard macOS Command Line Tools
+`make rust-build` and `make rust-check` download the exact
+[FFmpeg 8.1.3 release archive](https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz),
+verify its pinned SHA-256, and build the required native libraries privately.
+System FFmpeg development packages are unnecessary, and the helper does not
+depend on system libav shared-library versions. The build keeps the verified
+download and compiled libraries under the operating system's temporary directory
+in `homesec-ffmpeg-<uid>/`; it reuses a matching platform, compiler, and build
+recipe on later runs. Clearing that temporary cache causes a fresh download and
+build. No libraries are installed globally.
+
+Each private FFmpeg installation retains `COPYING.LGPLv2.1`. The
+[bundled-component notice](../native/webrtc/FFMPEG-NOTICE.md) records its source
+and rebuild recipe; keep the license and notice with a separately packaged helper.
+
+The first build needs internet access and compiles FFmpeg using the available CPU
+count. Limit CPU and memory use on a shared host with:
+
+```bash
+FFMPEG_JOBS=4 make rust-build
+```
+
+The same setting applies to `make rust-check` and `make dev-setup`. If bindgen
+cannot locate libclang, set `LIBCLANG_PATH` to the directory containing
+`libclang.so` or `libclang.dylib`; on a standard macOS Command Line Tools
 installation this is `/Library/Developer/CommandLineTools/usr/lib`.
 
 Then prepare the checkout:
@@ -231,10 +253,10 @@ Then prepare the checkout:
 make dev-setup
 ```
 
-This checks tools and FFmpeg development-library metadata before syncing Python
-and UI dependencies from their lockfiles, building the Rust helper, and building
-the UI. The native build also verifies that libclang can generate bindings and
-that the FFmpeg headers and libraries can link. It does not install
+This checks tools before syncing Python and UI dependencies from their lockfiles,
+building the bundled FFmpeg libraries and Rust helper, and building the UI. The
+native build also verifies that libclang can generate bindings and that the
+private FFmpeg headers and libraries can link. It does not install
 global tools or OS packages, start services, or run database migrations.
 Rustup may download the repository's pinned toolchain on its first use.
 
@@ -252,11 +274,17 @@ and UI changes do not require a Rust rebuild. For UI hot reload,
 use `make ui-run-local VITE_API_PROXY_TARGET=http://127.0.0.1:8081`, replacing
 the proxy URL with the backend's address.
 
-For Python installations outside a source checkout, `cargo install --path
-native/webrtc --locked` builds and installs the helper, normally in
-`~/.cargo/bin`. Add that directory to the HomeSec service's `PATH`, or configure
-an absolute helper path. An absent or incompatible helper makes WebRTC preview
-unavailable and selects compatible legacy motion; it does not affect the HLS backend.
+For Python installations outside a source checkout, use the same bundled-library
+build wrapper from a matching HomeSec checkout to install the helper:
+
+```bash
+python3 native/webrtc/build_ffmpeg.py -- cargo install --path native/webrtc --locked
+```
+
+This normally installs it in `~/.cargo/bin`. Add that directory to the HomeSec
+service's `PATH`, or configure an absolute helper path. An absent or incompatible
+helper makes WebRTC preview unavailable and selects compatible legacy motion;
+it does not affect the HLS backend.
 
 ```bash
 make rust-check # Formatting, Clippy, and Rust tests.
