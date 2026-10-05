@@ -24,6 +24,7 @@ invalid = INVALID
 trace = Path(__file__).with_suffix(".calls")
 pending = None
 url = ""
+consumed = 0
 
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -49,7 +50,8 @@ for line in sys.stdin:
             reply.update(ok=False, error_code="decode_failed")
         elif mode == "invalid":
             reply["observation"] = invalid
-        elif mode != "empty":
+        elif mode != "empty" and not (mode == "empty_after_first" and consumed):
+            consumed += 1
             emit({"event": "frame"})
             reply["observation"] = {
                 "motion": 25.0 >= request["threshold"],
@@ -60,7 +62,8 @@ for line in sys.stdin:
         if mode == "refuse_read":
             reply.update(ok=False, error_code="decode_failed")
         else:
-            reply["frame_available"] = True
+            reply["frame_available"] = mode != "empty"
+            consumed += int(reply["frame_available"])
     elif command == "stop":
         if pending is not None:
             emit({"request_id": pending, "ok": False, "error_code": "cancelled"})
@@ -319,15 +322,22 @@ def test_custom_input_profile_retains_legacy_ffmpeg_semantics(tmp_path: Path) ->
     assert trace_requests(helper) == []
 
 
-def test_native_empty_read_is_missing_input_without_immediate_fallback(tmp_path: Path) -> None:
-    # Given: A live helper whose bounded wait finds no available prepared frame.
-    helper = helper_script(tmp_path, "empty")
+@pytest.mark.parametrize("first_consume", ["read_motion", "discard_frame"])
+def test_established_native_input_empty_read_retains_stall_policy(
+    tmp_path: Path, first_consume: str
+) -> None:
+    # Given: Native input has supplied a frame, then its bounded wait finds no new frame.
+    helper = helper_script(tmp_path, "empty_after_first")
     fallback = LegacyInput()
     motion_input = selected_input(helper, fallback)
 
     # When: Waiting for an observation without a decoder or protocol failure.
     try:
         motion_input.start("rtsp://synthetic-camera/detect")
+        if first_consume == "read_motion":
+            assert motion_input.read_motion(0.2, threshold=30.0) is not None
+        else:
+            assert motion_input.discard_frame(0.2)
         result = motion_input.read_motion(0.2, threshold=30.0)
         running = motion_input.is_running()
     finally:
@@ -337,6 +347,83 @@ def test_native_empty_read_is_missing_input_without_immediate_fallback(tmp_path:
     assert result is None
     assert running
     assert not [call for call in fallback.calls if call[0] == "start"]
+
+
+@pytest.mark.parametrize("consume", ["read_motion", "discard_frame"])
+def test_native_first_frame_timeout_selects_compatibility_before_reconnect(
+    tmp_path: Path, consume: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Given: Native input starts but cannot prepare a keyframe within the source's deadline.
+    helper = helper_script(tmp_path, "empty")
+    fallback = LegacyInput()
+    motion_input = selected_input(helper, fallback)
+    url = "rtsp://synthetic-camera/slow-keyframe"
+
+    # When: Initial observation or reconnect readiness exhausts its bounded wait.
+    with caplog.at_level(logging.INFO):
+        try:
+            motion_input.start(url)
+            if consume == "read_motion":
+                assert motion_input.read_motion(0.2, threshold=30.0) == fallback.observation
+            else:
+                assert motion_input.discard_frame(0.2)
+            motion_input.start(url)
+            assert motion_input.read_motion(0.2, threshold=30.0) == fallback.observation
+        finally:
+            motion_input.stop()
+
+    # Then: Native input is reaped before fallback and the same URL never loops through native.
+    requests = [entry["request"]["command"] for entry in trace_requests(helper)]
+    assert requests == ["start", consume, "stop"]
+    assert [call for call in fallback.calls if call[0] == "start"] == [
+        ("start", url),
+        ("start", url),
+    ]
+    assert any(
+        getattr(record, "reason", None) == "motion_startup_timeout" for record in caplog.records
+    )
+
+
+def test_native_nonblocking_poll_does_not_exhaust_first_frame_budget(tmp_path: Path) -> None:
+    # Given: Native startup has not supplied a prepared frame yet.
+    helper = helper_script(tmp_path, "empty")
+    fallback = LegacyInput()
+    motion_input = selected_input(helper, fallback)
+
+    # When: Polling without a positive wait budget.
+    try:
+        motion_input.start("rtsp://synthetic-camera/detect")
+        result = motion_input.read_motion(0.0, threshold=30.0)
+        running = motion_input.is_running()
+    finally:
+        motion_input.stop()
+
+    # Then: It returns missing input without declaring startup failure.
+    assert result is None
+    assert running
+    assert not [call for call in fallback.calls if call[0] == "start"]
+
+
+def test_native_first_frame_readiness_does_not_leak_across_generation(tmp_path: Path) -> None:
+    # Given: An old native generation supplied a frame.
+    helper = helper_script(tmp_path)
+    fallback = LegacyInput()
+    motion_input = selected_input(helper, fallback)
+    try:
+        motion_input.start("rtsp://synthetic-camera/old")
+        assert motion_input.read_motion(0.2, threshold=30.0) is not None
+        motion_input.stop()
+
+        # When: A new URL's native startup exhausts its first-frame deadline.
+        helper_script(tmp_path, "empty")
+        motion_input.start("rtsp://synthetic-camera/new")
+        result = motion_input.read_motion(0.2, threshold=30.0)
+    finally:
+        motion_input.stop()
+
+    # Then: The new generation uses compatibility input despite the old frame.
+    assert result == fallback.observation
+    assert ("start", "rtsp://synthetic-camera/new") in fallback.calls
 
 
 def test_stop_cancels_pending_read_without_restarting_legacy(tmp_path: Path) -> None:

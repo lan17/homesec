@@ -92,6 +92,7 @@ class RustMotionInput:
         self._legacy_active = False
         self._stopped = True
         self._generation = 0
+        self._frame_generation: int | None = None
 
     def _message(self, reply: _MotionReply, generation: int) -> None:
         if reply.event == "frame" and generation == self._generation and not self._stopped:
@@ -181,7 +182,20 @@ class RustMotionInput:
                     if helper is not self._helper or self._stopped:
                         return None
                     if reply.ok:
-                        return reply
+                        frame_received = (
+                            reply.observation is not None
+                            if command == "read_motion"
+                            else reply.frame_available
+                        )
+                        if frame_received:
+                            self._frame_generation = self._generation
+                            return reply
+                        if timeout_s == 0 or self._frame_generation == self._generation:
+                            return reply
+                        # Native ingest may need a later keyframe. Reconnecting it at
+                        # every first-frame deadline can prevent readiness indefinitely.
+                        # Use the existing compatibility path before the source restarts.
+                        reason = "motion_startup_timeout"
             except HelperError:
                 pass
         try:

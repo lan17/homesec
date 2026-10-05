@@ -142,6 +142,11 @@ helper is available. Rust calls the bundled FFmpeg decode and filter libraries
 directly, then runs the existing motion algorithm in Rust.
 It prepares the same 320x240 grayscale frames at 10 fps and uses the existing
 motion settings, including blur normalization and recording sensitivity.
+If startup cannot supply its first frame within the source's existing read or
+readiness deadline, HomeSec releases the native helper and selects compatibility
+motion. This avoids repeated native restarts for cameras with longer keyframe
+intervals. Once native input supplies a frame, missing frames continue through
+the existing source stall and reconnect policy.
 
 The RTSP source supervises the motion helper using the selected motion stream,
 independent of preview viewers. Python receives typed motion observations rather
