@@ -51,11 +51,22 @@ flowchart TD
 - One input per selected stream serves concurrent consumers with measured session counts.
 - Recording retains original compressed video and remains healthy when preview/Python is slow or absent.
 - Motion behavior is validated against current fixtures; codec changes and real cameras are explicitly tested.
+- The existing motion configuration and prepared grayscale frames produce the same Python and Rust observations and decisions. Preserve defaults, normalization, blur rounding/borders, threshold boundaries, reset behavior, and recording sensitivity.
 - No claim of a fully FFmpeg-free stack or universal hardware acceleration without separate validation.
+
+## Rust motion parity checkpoint
+The private `native/webrtc/src/motion.rs` implementation ports the existing grayscale detector without adding a codec or OpenCV dependency. It takes explicit values for `pixel_threshold`, `min_changed_pct`, `blur_kernel`, and `recording_sensitivity_factor`; it introduces no operator settings or Rust defaults. Positive even kernels normalize to the next odd size, as in the RTSP source. The recording percentage override uses the existing division and zero-clamping behavior.
+
+The blur preserves OpenCV 4.12's unsigned-byte behavior: symmetric Q8 coefficients with error-diffusion quantization, `BORDER_REFLECT_101`, unrounded horizontal intermediates, and one final rounding after the vertical pass. Nonzero coefficient storage stays bounded by the Q8 sum rather than growing with the configured kernel. Arbitrary smaller kernel limits are not introduced; the implementation retains OpenCV's signed-32-bit kernel-size representation.
+
+`native/webrtc/tests/motion_parity.rs` compiles the private module directly and replays the committed corpus without regenerating expectations. It compares every blurred byte, changed count, percentage, motion decision, threshold override, and reset. Additional behavioral checks cover configuration constraints, even-kernel normalization, recording sensitivity, malformed frames, and shape changes. Malformed input preserves the previous baseline and observations; a stream shape change requires an explicit reset.
+
+This checkpoint is offline algorithm validation. The active helper and Python runtime do not select the new detector yet. Decoder integration must preserve input stream selection, grayscale conversion, resolution, sampling cadence, reconnect/stall behavior, and source ownership independent of preview viewers. Python continues to own recording lifecycle and validate the existing configuration at the runtime boundary.
 
 ## Implementation Log
 - 2026-10-03: Leonidas authorized this architecture and staged implementation in a new PR. Inspected existing source, motion, recording, WebRTC, build, tests, and prior Notion tickets. Created branch codex/shared-rust-media from current main after verifying the WebRTC PR is merged. First milestone is native H.264 video-only preview ingestion; later milestones remain planned.
 - 2026-10-03: Implemented native RTSP/TCP ingest behind the existing copy/video-only selector, shared with WebRTC viewers through bounded media assembly and queues. Reviewed startup/cancellation and source-profile negotiation; a mixed receiver-level regression now verifies selection of the compatible offered codec. Added real fake-camera delivery, stall, cleanup, and media-loss coverage.
+- 2026-10-04: Native preview ingest and motion characterization merged into main in https://github.com/lan17/homesec/pull/110 and https://github.com/lan17/homesec/pull/111. Leonidas confirmed that Rust motion must preserve the existing algorithm and configuration. Implemented the private grayscale port and frozen-corpus replay on `codex/rust-motion-parity`; decoder/runtime integration and shared recording remain subsequent deliveries.
 
 ## Validation
 `make check` covers Python tests, UI tests, Rust unit and encrypted-media integration tests, strict typing, formatting, lint, lockfile validation, and the UI build. Tests use synthetic camera media and an isolated disposable local Postgres instance. Real-camera rollout and shared motion/recording validation remain later milestones; production Lenovo and its database were not changed.

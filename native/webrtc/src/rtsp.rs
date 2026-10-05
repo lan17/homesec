@@ -493,16 +493,18 @@ mod tests {
         let camera = crate::rtsp_camera::RtspCamera::start("H264");
         let poll = mio::Poll::new().unwrap();
         let waker = Arc::new(Waker::new(poll.registry(), mio::Token(0)).unwrap());
+        let connect_timeout = Duration::from_secs(5);
         let source = RtspSource::start(
             camera.url.clone(),
-            Duration::from_secs(5),
+            connect_timeout,
             Duration::from_secs(10),
             waker,
         )
         .unwrap();
 
-        // When: The camera keeps streaming until the bounded queue fills and teardown completes.
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        // When: After the permitted handshake, the camera fills the bounded queue and closes.
+        // The media/recovery/teardown budget starts after startup, not at source creation.
+        let deadline = std::time::Instant::now() + connect_timeout + Duration::from_secs(3);
         while camera.count("DISCONNECTED") == 0 {
             assert!(
                 std::time::Instant::now() < deadline,

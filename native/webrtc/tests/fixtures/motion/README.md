@@ -1,9 +1,9 @@
 # Motion characterization corpus
 
 These synthetic fixtures capture the current grayscale `MotionDetector` behavior
-in `src/homesec/sources/rtsp/motion.py`. They can be replayed by Python and a future
-Rust implementation without decoding video or opening a camera. No real camera
-frames are included.
+in `src/homesec/sources/rtsp/motion.py`. Python and the private Rust implementation
+in `native/webrtc/src/motion.rs` replay them without decoding video or opening a
+camera. No real camera frames are included.
 
 `corpus.json` contains detector settings and ordered operations. Each case starts
 with a fresh detector. A `frame` operation supplies an optional percentage
@@ -42,6 +42,7 @@ From the repository root, regenerate or check reproducibility with locked depend
 PYTHONPATH=src uv run --locked python native/webrtc/tests/fixtures/motion/generate.py
 PYTHONPATH=src uv run --locked python native/webrtc/tests/fixtures/motion/generate.py --check
 uv run --locked pytest tests/homesec/rtsp/test_motion.py
+cargo test --manifest-path native/webrtc/Cargo.toml --locked --test motion_parity
 ```
 
 Replay tests read the committed expectations; they never regenerate them. Review
