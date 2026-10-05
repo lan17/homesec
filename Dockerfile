@@ -15,6 +15,18 @@
 # =============================================================================
 FROM rust:1.99.0-slim-bookworm AS webrtc-builder
 
+# FFmpeg is linked from the same Debian release used by the runtime image.
+# bindgen needs libclang while generating the native FFmpeg bindings.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang \
+    libclang-dev \
+    pkg-config \
+    libavcodec-dev \
+    libavformat-dev \
+    libavfilter-dev \
+    libavutil-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY rust-toolchain.toml ./
 COPY native/webrtc/ ./native/webrtc/
@@ -78,7 +90,7 @@ RUN pnpm build
 FROM python:3.14-slim-bookworm AS runtime
 
 # Install runtime dependencies
-# - ffmpeg: required for RTSP source video processing
+# - ffmpeg: CLI recording/transcoding and shared libraries for Rust motion decoding
 # - libgl1: required by OpenCV
 # - libglib2.0-0: required by OpenCV
 # - postgresql-client-16: pg_dump/pg_restore version compatible with docker-compose postgres:16
@@ -110,6 +122,8 @@ COPY --from=builder /app/alembic /app/alembic
 COPY --from=builder /app/alembic.ini /app/alembic.ini
 COPY --from=ui-builder /app/ui/dist /app/ui/dist
 COPY --from=webrtc-builder /app/native/webrtc/target/release/homesec-webrtc /usr/local/bin/homesec-webrtc
+# Confirm the runtime's FFmpeg shared libraries can load the built helper.
+RUN homesec-webrtc --help > /dev/null
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

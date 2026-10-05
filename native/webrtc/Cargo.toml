@@ -8,6 +8,7 @@ license = "Apache-2.0"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["codec", "filter", "format"] }
 futures-util = "0.3"
 h264-reader = "0.8"
 mio = { version = "1", features = ["net", "os-poll"] }

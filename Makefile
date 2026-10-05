@@ -70,7 +70,7 @@ docker-push: docker-build
 
 # Local dev
 dev-setup:
-	@for tool in uv node ffmpeg ffprobe; do \
+	@for tool in uv node ffmpeg ffprobe clang pkg-config; do \
 		if ! command -v "$$tool" >/dev/null 2>&1; then \
 			echo "Missing $$tool. See docs/webrtc-preview.md for developer prerequisites."; \
 			exit 1; \
@@ -88,6 +88,13 @@ dev-setup:
 		echo "A C compiler/linker is required. See docs/webrtc-preview.md for Linux/macOS prerequisites."; \
 		exit 1; \
 	}
+	@for library in libavcodec libavformat libavfilter libavutil; do \
+		if ! pkg-config --exists "$$library"; then \
+			echo "Missing FFmpeg development library $$library. Install the native prerequisites in docs/webrtc-preview.md; use PKG_CONFIG_PATH for a custom installation."; \
+			pkg-config --print-errors --exists "$$library"; \
+			exit 1; \
+		fi; \
+	done
 	uv sync --locked
 	$(MAKE) rust-build
 	$(MAKE) ui-install

@@ -113,6 +113,8 @@ impl MotionDetector {
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)] // The frozen corpus compiles this module in a separate test target.
 pub(crate) fn blur_gray(
     frame: &[u8],
     width: usize,

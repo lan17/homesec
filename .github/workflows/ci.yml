@@ -45,10 +45,12 @@ jobs:
           key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.lock') }}
 
       - name: Rust check
-        # Native integration tests exercise real H.264/Opus RTP input.
+        # Build linked FFmpeg bindings; integration tests exercise real media.
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg clang libclang-dev pkg-config \
+            libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev
           make rust-check
 
       - name: Build WebRTC helper

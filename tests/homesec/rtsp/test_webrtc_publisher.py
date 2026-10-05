@@ -24,6 +24,7 @@ from homesec.models.preview import (
     PreviewSessionRefusalReason,
 )
 from homesec.sources.rtsp.capabilities import RTSPTimeoutCapabilities
+from homesec.sources.rtsp.helper_client import HelperError
 from homesec.sources.rtsp.live_publisher import (
     LivePublisherRefusalReason,
     LivePublisherStartRefusal,
@@ -32,7 +33,6 @@ from homesec.sources.rtsp.live_publisher import (
 from homesec.sources.rtsp.webrtc_publisher import (
     RustWebRTCLivePublisher,
     _HelperClient,
-    _HelperError,
 )
 
 
@@ -43,6 +43,9 @@ def helper(tmp_path: Path) -> tuple[Path, Path]:
     script.write_text(
         f"#!{sys.executable}\n"
         + """import json,sys,time,os
+# This executable boundary implements preview only, like an older installed helper.
+if "--motion" in sys.argv:
+    sys.exit(2)
 peers = {}
 def reply(payload):
     print(json.dumps(payload), flush=True)
@@ -272,7 +275,7 @@ def test_start_rejects_missing_or_ambiguous_input_before_sending(
         client.wait_ready(timeout_s=2)
 
         # When: The client rejects startup, then sends a valid status request.
-        with pytest.raises(_HelperError, match="Invalid preview helper command"):
+        with pytest.raises(HelperError, match="Invalid preview helper command"):
             client.request("start", **fields)
         response = client.request("status")
         commands = [json.loads(raw) for raw in helper[1].read_text().splitlines()]
@@ -742,7 +745,7 @@ def test_frozen_helper_requests_and_shutdown_remain_bounded(tmp_path: Path) -> N
                 for index in range(4)
             ]
             for request in requests:
-                with pytest.raises(_HelperError, match="timed out"):
+                with pytest.raises(HelperError, match="timed out"):
                     request.result(timeout=1)
 
         # Then: Both pipe backpressure and lock contention respect the request deadline

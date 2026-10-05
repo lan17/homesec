@@ -64,6 +64,7 @@ from homesec.sources.rtsp.live_publisher import (
     NoopLivePublisher,
 )
 from homesec.sources.rtsp.motion import MotionDetector
+from homesec.sources.rtsp.motion_input import FfmpegMotionInput, MotionInput, MotionObservation
 from homesec.sources.rtsp.preflight import (
     CameraPreflightDiagnostics,
     CameraPreflightOutcome,
@@ -72,6 +73,7 @@ from homesec.sources.rtsp.preflight import (
 )
 from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
+from homesec.sources.rtsp.rust_motion import build_motion_input
 from homesec.sources.rtsp.talk.backend import validate_rtsp_talk_backend_config
 from homesec.sources.rtsp.talk.manager import TalkManager, TalkManagerError, TalkSession
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
@@ -522,8 +524,12 @@ class RTSPSource(ThreadedClipSource):
             pixel_threshold=self.pixel_threshold,
             min_changed_pct=self.min_changed_pct,
             blur_kernel=self.blur_kernel,
-            debug=self.debug_motion,
+            debug=False,
         )
+        self._last_motion_observation = MotionObservation(
+            motion=False, changed_pixels=0, changed_pct=0.0
+        )
+        self._motion_debug_frame_count = 0
         self._owns_frame_pipeline = frame_pipeline is None
         self._live_publisher: LivePublisher = live_publisher or self._build_live_publisher(
             config,
@@ -554,6 +560,27 @@ class RTSPSource(ThreadedClipSource):
             clock=self._clock,
             timeout_capabilities=self._timeout_capabilities,
         )
+        fallback = FfmpegMotionInput(self._frame_pipeline, self._motion_detector)
+        self._motion_input: MotionInput = fallback
+        if self._owns_frame_pipeline:
+            helper_path = "homesec-webrtc"
+            if config.runtime_preview is not None and isinstance(
+                config.runtime_preview.config, WebRTCPreviewConfig
+            ):
+                helper_path = config.runtime_preview.config.helper_path
+            self._motion_input = build_motion_input(
+                fallback=fallback,
+                pixel_threshold=self.pixel_threshold,
+                min_changed_pct=self.min_changed_pct,
+                blur_kernel=self.blur_kernel,
+                recording_sensitivity_factor=self.recording_sensitivity_factor,
+                frame_queue_size=self.frame_queue_size,
+                rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+                rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+                hwaccel_active=self.hwaccel_config.is_available and not self._hwaccel_failed,
+                helper_path=helper_path,
+                on_frame=self._touch_heartbeat,
+            )
         self._recorder: Recorder = recorder or FfmpegRecorder(
             rtsp_url=self.rtsp_url,
             ffmpeg_flags=[],
@@ -939,8 +966,8 @@ class RTSPSource(ThreadedClipSource):
                 )
             )
 
-        if self._owns_frame_pipeline and isinstance(self._frame_pipeline, FfmpegFramePipeline):
-            self._frame_pipeline.set_motion_profile(outcome.motion_profile)
+        if self._owns_frame_pipeline:
+            self._motion_input.set_motion_profile(outcome.motion_profile)
         if self._owns_recorder and isinstance(self._recorder, FfmpegRecorder):
             self._recorder.configure_profile(outcome.recording_profile)
 
@@ -1497,8 +1524,8 @@ class RTSPSource(ThreadedClipSource):
                     recording_id=output_file.name,
                     recording_path=str(output_file),
                     duration_s=duration_s,
-                    last_changed_pct=self._motion_detector.last_changed_pct,
-                    last_changed_pixels=self._motion_detector.last_changed_pixels,
+                    last_changed_pct=self._last_motion_observation.changed_pct,
+                    last_changed_pixels=self._last_motion_observation.changed_pixels,
                 ),
             )
 
@@ -1574,18 +1601,26 @@ class RTSPSource(ThreadedClipSource):
 
     def _start_frame_pipeline(self) -> None:
         try:
-            self._frame_pipeline.stop()
+            self._motion_input.stop()
         except Exception:
             logger.exception("Error stopping frame pipeline before start")
-        self._frame_pipeline.start(self._motion_rtsp_url)
+        self._motion_input.start(self._motion_rtsp_url)
         self._motion_detector.reset()
+        self._last_motion_observation = MotionObservation(
+            motion=False, changed_pixels=0, changed_pct=0.0
+        )
+        self._motion_debug_frame_count = 0
 
     def _stop_frame_pipeline(self) -> None:
-        self._frame_pipeline.stop()
+        self._motion_input.stop()
         self._motion_detector.reset()
+        self._last_motion_observation = MotionObservation(
+            motion=False, changed_pixels=0, changed_pct=0.0
+        )
+        self._motion_debug_frame_count = 0
 
     def _wait_for_first_frame(self, timeout_s: float) -> bool:
-        return self._frame_pipeline.read_frame(timeout_s) is not None
+        return self._motion_input.discard_frame(timeout_s)
 
     def _on_reconnect_attempt_failed(self, attempted_url: str) -> None:
         if not self._detect_fallback_active:
@@ -2128,7 +2163,7 @@ class RTSPSource(ThreadedClipSource):
         logger.warning("Preflight outcome missing at startup; using runtime defaults")
 
     def _handle_frame_timeout(self) -> bool:
-        pipe_status = self._frame_pipeline.exit_code()
+        pipe_status = self._motion_input.exit_code()
         if pipe_status is not None:
             logger.error(
                 "Frame pipeline exited (code: %s). Check logs: %s/frame_pipeline.log",
@@ -2189,10 +2224,10 @@ class RTSPSource(ThreadedClipSource):
             frame_count,
             self.recording_process is not None,
         )
-        if not self._frame_pipeline.is_running():
+        if not self._motion_input.is_running():
             logger.error(
                 "Frame pipeline died! Exit code: %s",
-                self._frame_pipeline.exit_code(),
+                self._motion_input.exit_code(),
             )
             ok, stalled = self._handle_reconnect_needed(now)
             if not ok:
@@ -2200,11 +2235,6 @@ class RTSPSource(ThreadedClipSource):
             return True, stalled, now
 
         return True, False, now
-
-    def _handle_missing_dimensions(self, now: float) -> bool:
-        logger.warning("Frame pipeline missing dimensions; reconnecting")
-        ok, _ = self._handle_reconnect_needed(now)
-        return ok
 
     def _handle_missing_frame(self, now: float) -> bool:
         if self._handle_stalled_wait(now):
@@ -2216,7 +2246,7 @@ class RTSPSource(ThreadedClipSource):
         logger.debug(
             "[MOTION DETECTED at frame %s] changed_pct=%.3f%%",
             frame_count,
-            self._motion_detector.last_changed_pct,
+            self._last_motion_observation.changed_pct,
         )
         self.last_motion_time = now
         if not self.recording_process:
@@ -2232,7 +2262,7 @@ class RTSPSource(ThreadedClipSource):
                     "No motion for %.1fs > stop_delay=%.1fs (last changed_pct=%.3f%%), stopping",
                     now - self.last_motion_time,
                     self.motion_stop_delay,
-                    self._motion_detector.last_changed_pct,
+                    self._last_motion_observation.changed_pct,
                 )
                 self.stop_recording()
                 self.last_motion_time = None
@@ -2251,14 +2281,40 @@ class RTSPSource(ThreadedClipSource):
         now: float,
         frame_count: int,
     ) -> None:
-        threshold = (
+        motion_detected = self.detect_motion(frame, threshold=self._motion_threshold())
+        self._process_motion_observation(
+            MotionObservation(
+                motion=motion_detected,
+                changed_pixels=self._motion_detector.last_changed_pixels,
+                changed_pct=self._motion_detector.last_changed_pct,
+            ),
+            now,
+            frame_count,
+        )
+
+    def _motion_threshold(self) -> float:
+        return (
             self._recording_threshold()
             if self.recording_process is not None
             else self.min_changed_pct
         )
-        motion_detected = self.detect_motion(frame, threshold=threshold)
 
-        if motion_detected:
+    def _process_motion_observation(
+        self, observation: MotionObservation, now: float, frame_count: int
+    ) -> None:
+        self._last_motion_observation = observation
+        if self.debug_motion:
+            self._motion_debug_frame_count += 1
+            if self._motion_debug_frame_count % 100 == 0:
+                logger.debug(
+                    "Motion check: changed_pct=%.3f%% changed_px=%s pixel_threshold=%s min_changed_pct=%.3f%% blur=%s",
+                    observation.changed_pct,
+                    observation.changed_pixels,
+                    self.pixel_threshold,
+                    self.min_changed_pct,
+                    self.blur_kernel,
+                )
+        if observation.motion:
             self._handle_motion_detected(now, frame_count)
 
         if self.recording_process or self.last_motion_time is not None:
@@ -2312,26 +2368,18 @@ class RTSPSource(ThreadedClipSource):
 
                 frame_count += 1
 
-                raw_frame = self._frame_pipeline.read_frame(timeout_s=self.frame_timeout_s)
-                if raw_frame is None:
+                observation = self._motion_input.read_motion(
+                    timeout_s=self.frame_timeout_s, threshold=self._motion_threshold()
+                )
+                if observation is None:
                     now = self._clock.now()
                     if self._handle_missing_frame(now):
                         continue
                     break
 
                 self._stall_grace_until = None
-                frame_width = self._frame_pipeline.frame_width
-                frame_height = self._frame_pipeline.frame_height
-                if frame_width is None or frame_height is None:
-                    if not self._handle_missing_dimensions(now):
-                        break
-                    continue
-
-                frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
-                    (frame_height, frame_width)
-                )
                 now = self._clock.now()
-                self._process_frame(frame, now, frame_count)
+                self._process_motion_observation(observation, now, frame_count)
 
         except Exception as e:
             logger.exception("Unexpected error: %s", e)

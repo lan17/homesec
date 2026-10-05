@@ -7,13 +7,8 @@ helper loopback sockets; media and camera credentials never enter logs or files.
 from __future__ import annotations
 
 import logging
-import os
-import selectors
-import signal
-import subprocess
 import time
 import uuid
-from queue import Empty, Queue
 from threading import Event, Lock, RLock, Thread
 from typing import Literal, Protocol, runtime_checkable
 
@@ -28,6 +23,7 @@ from homesec.models.preview import (
     PreviewSessionRefusalReason,
 )
 from homesec.sources.rtsp.capabilities import RTSPTimeoutCapabilities
+from homesec.sources.rtsp.helper_client import HelperClient, HelperError, HelperMessage
 from homesec.sources.rtsp.live_publisher import (
     LivePublisherRefusalReason,
     LivePublisherStartRefusal,
@@ -36,7 +32,6 @@ from homesec.sources.rtsp.live_publisher import (
 )
 
 logger = logging.getLogger(__name__)
-_MAX_MESSAGE_BYTES = 128_000
 
 
 @runtime_checkable
@@ -52,11 +47,7 @@ class WebRTCPreviewPublisher(Protocol):
     def close(self, session_id: str) -> PreviewSessionAction | PreviewSessionRefusal: ...
 
 
-class _HelperMessage(BaseModel):
-    request_id: str | None = None
-    event: str | None = None
-    ok: bool = False
-    error_code: str | None = None
+class _HelperMessage(HelperMessage):
     sdp: str | None = Field(default=None, max_length=48_000)
     viewer_count: int = Field(default=0, ge=0, le=32)
     active_session_count: int = Field(default=0, ge=0, le=32)
@@ -95,171 +86,17 @@ class _HelperRequest(BaseModel):
         return self
 
 
-class _HelperError(RuntimeError):
-    """Bounded transport failure; messages deliberately contain no input data."""
-
-
-class _HelperClient:
+class _HelperClient(HelperClient[_HelperRequest, _HelperMessage]):
     def __init__(self, args: list[str]) -> None:
-        self.process = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            bufsize=0,
+        super().__init__(
+            args, request_model=_HelperRequest, reply_model=_HelperMessage, context="Preview"
         )
-        if self.process.stdin is not None:
-            os.set_blocking(self.process.stdin.fileno(), False)
-        self._pending: dict[str, Queue[_HelperMessage | None]] = {}
-        self._pending_lock = Lock()
-        self._write_lock = Lock()
-        self._ready: Queue[_HelperMessage | None] = Queue(maxsize=1)
-        self._reader = Thread(target=self._read, name="webrtc-helper-replies", daemon=True)
-        self._reader.start()
 
     def wait_ready(self, timeout_s: float) -> _HelperMessage:
-        try:
-            result = self._ready.get(timeout=timeout_s)
-        except Empty as exc:
-            raise _HelperError("Preview helper startup timed out") from exc
-        if (
-            result is None
-            or result.event != "ready"
-            or result.video_port is None
-            or result.audio_port is None
-        ):
-            raise _HelperError("Preview helper did not become ready")
+        result = super().wait_ready(timeout_s)
+        if result.video_port is None or result.audio_port is None:
+            raise HelperError("Preview helper did not become ready")
         return result
-
-    def request(self, command: str, *, timeout_s: float = 2.0, **fields: object) -> _HelperMessage:
-        deadline = time.monotonic() + timeout_s
-        request_id = str(uuid.uuid4())
-        waiter: Queue[_HelperMessage | None] = Queue(maxsize=1)
-        with self._pending_lock:
-            if self.process.poll() is not None:
-                raise _HelperError("Preview helper exited")
-            if len(self._pending) >= 64:
-                raise _HelperError("Preview helper command limit reached")
-            self._pending[request_id] = waiter
-        try:
-            try:
-                request = _HelperRequest.model_validate(
-                    {"command": command, "request_id": request_id, **fields}
-                )
-            except ValueError as exc:
-                raise _HelperError("Invalid preview helper command") from exc
-            payload = request.model_dump_json(exclude_none=True).encode() + b"\n"
-            if len(payload) > _MAX_MESSAGE_BYTES:
-                raise _HelperError("Preview helper request exceeds limit")
-            self._write(payload, deadline)
-            try:
-                result = waiter.get(timeout=max(0.0, deadline - time.monotonic()))
-            except Empty as exc:
-                raise _HelperError("Preview helper command timed out") from exc
-            if result is None:
-                raise _HelperError("Preview helper disconnected")
-            return result
-        finally:
-            with self._pending_lock:
-                self._pending.pop(request_id, None)
-
-    def _write(self, payload: bytes, deadline: float) -> None:
-        if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
-            raise _HelperError("Preview helper command timed out")
-        try:
-            stdin = self.process.stdin
-            if stdin is None:
-                raise _HelperError("Preview helper input unavailable")
-            with selectors.DefaultSelector() as selector:
-                descriptor = stdin.fileno()
-                selector.register(descriptor, selectors.EVENT_WRITE)
-                remaining = memoryview(payload)
-                while remaining:
-                    timeout = deadline - time.monotonic()
-                    if timeout <= 0:
-                        raise _HelperError("Preview helper command timed out")
-                    try:
-                        written = os.write(descriptor, remaining)
-                    except BlockingIOError:
-                        if not selector.select(timeout):
-                            raise _HelperError("Preview helper command timed out") from None
-                        continue
-                    except InterruptedError:
-                        continue
-                    if written == 0:
-                        raise _HelperError("Preview helper disconnected")
-                    remaining = remaining[written:]
-        except (OSError, ValueError) as exc:
-            raise _HelperError("Preview helper disconnected") from exc
-        finally:
-            self._write_lock.release()
-
-    def _read(self) -> None:
-        stdout = self.process.stdout
-        try:
-            if stdout is None:
-                return
-            while True:
-                raw = stdout.readline(_MAX_MESSAGE_BYTES + 1)
-                if not raw:
-                    return
-                if len(raw) > _MAX_MESSAGE_BYTES or not raw.endswith(b"\n"):
-                    return
-                message = _HelperMessage.model_validate_json(raw)
-                if message.event == "ready":
-                    if self._ready.empty():
-                        self._ready.put_nowait(message)
-                elif message.request_id is not None:
-                    with self._pending_lock:
-                        waiter = self._pending.get(message.request_id)
-                        if waiter is not None and waiter.empty():
-                            waiter.put_nowait(message)
-        except (OSError, ValueError):
-            # Protocol failures can contain SDP or transport details: never log them.
-            return
-        finally:
-            with self._pending_lock:
-                for waiter in self._pending.values():
-                    if waiter.empty():
-                        waiter.put_nowait(None)
-            if self._ready.empty():
-                self._ready.put_nowait(None)
-
-    def stop(self) -> None:
-        """Allow camera teardown, then bound helper and child process cleanup."""
-        if self.process.poll() is None:
-            try:
-                self.request("stop", timeout_s=0.5)
-            except _HelperError:
-                pass
-            # The reply precedes Rust destruction, including RTSP TEARDOWN.
-            try:
-                self.process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
-        if self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                self.process.wait(timeout=2.0)
-        # A helper could have exited while leaving its FFmpeg child in the group.
-        try:
-            os.killpg(self.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        for stream in (self.process.stdin, self.process.stdout):
-            if stream is not None:
-                stream.close()
-        self._reader.join(timeout=1.0)
 
 
 class RustWebRTCLivePublisher:
@@ -374,7 +211,7 @@ class RustWebRTCLivePublisher:
                 else:
                     response = helper.request("start", ffmpeg_args=self._ffmpeg_args(ready))
                 if not response.ok:
-                    raise _HelperError("Preview media startup failed")
+                    raise HelperError("Preview media startup failed")
                 with self._lock:
                     if self._helper is not helper or generation != self._generation:
                         return (
@@ -385,7 +222,7 @@ class RustWebRTCLivePublisher:
                     self._last_viewer_at = time.monotonic()
                     self._status = self._running_status(response)
                     return self._status
-            except (OSError, _HelperError) as exc:
+            except (OSError, HelperError) as exc:
                 if helper is not None:
                     helper.stop()
                 with self._lock:
@@ -478,12 +315,12 @@ class RustWebRTCLivePublisher:
         response: _HelperMessage | None
         try:
             response = helper.request(command, timeout_s=timeout_s, **fields)
-        except _HelperError:
+        except HelperError:
             # Negotiation timeout must not leave an untracked viewer behind.
             if command == "offer":
                 try:
                     helper.request("close", session_id=fields.get("session_id"))
-                except _HelperError:
+                except HelperError:
                     self._stop_owned_helper(
                         expected=helper, error="WebRTC preview helper disconnected"
                     )
@@ -579,7 +416,7 @@ class RustWebRTCLivePublisher:
                 continue
             try:
                 response = helper.request("status")
-            except _HelperError:
+            except HelperError:
                 self._stop_owned_helper(expected=helper, error="WebRTC preview helper exited")
                 continue
             if (

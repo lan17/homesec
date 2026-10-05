@@ -1,16 +1,16 @@
 use crate::Options;
-use crate::protocol::{MAX_CONTROL_BYTES, MAX_SDP_BYTES, Operation, Reply, Request};
+use crate::protocol::{
+    Control, MAX_CONTROL_BYTES, MAX_SDP_BYTES, Operation, Reply, Request, controls, output,
+};
 use crate::rtp::{H264Assembler, Packet, TimestampClock};
 use crate::rtsp::{Event as SourceEvent, RtspSource};
 use mio::net::UdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
-use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{self, BufRead, Read, Write};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use str0m::change::{SdpAnswer, SdpOffer};
 use str0m::format::{Codec, CodecConfig};
@@ -145,42 +145,6 @@ enum MediaInput {
     Rtsp(RtspSource),
 }
 
-enum Control {
-    Request(Request),
-    End,
-}
-
-fn controls(waker: Arc<Waker>) -> Receiver<Control> {
-    let (sender, receiver) = mpsc::sync_channel(16);
-    std::thread::spawn(move || {
-        let mut input = io::stdin().lock();
-        loop {
-            let mut bytes = Vec::new();
-            // take() bounds allocation even if the sender forgets a newline.
-            let read = (&mut input)
-                .take((MAX_CONTROL_BYTES + 1) as u64)
-                .read_until(b'\n', &mut bytes);
-            let Ok(size) = read else { break };
-            if size == 0 || size > MAX_CONTROL_BYTES || bytes.last() != Some(&b'\n') {
-                break;
-            }
-            let Ok(request) = serde_json::from_slice::<Request>(&bytes) else {
-                break;
-            };
-            if request.request_id.len() > 128 {
-                break;
-            }
-            if sender.send(Control::Request(request)).is_err() {
-                return;
-            }
-            let _ = waker.wake();
-        }
-        let _ = sender.send(Control::End);
-        let _ = waker.wake();
-    });
-    receiver
-}
-
 // Passthrough cannot lower the camera's encoder level to match a receiver.
 // str0m matches profiles but permits level differences, so check the selected
 // payload against the original offer before promising to send camera bytes.
@@ -243,14 +207,6 @@ fn source_level_supported(offer: &SdpOffer, answer: &SdpAnswer, source: u32) -> 
         })
 }
 
-fn output(value: &impl Serialize) -> Result<()> {
-    let mut stdout = io::stdout().lock();
-    serde_json::to_writer(&mut stdout, value)?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()?;
-    Ok(())
-}
-
 fn lease(value: f64, expires_at: Option<f64>, now: Instant, limit: Duration) -> Option<Instant> {
     if !value.is_finite() || value <= 0.0 {
         return None;
@@ -284,14 +240,15 @@ pub fn run(options: Options) -> Result<()> {
     }
     let negotiation_timeout = Duration::from_secs_f64(options.negotiation_timeout_s);
     let session_limit = Duration::from_secs_f64(options.max_session_duration_s);
-    let bind_ip = match options.advertised_ip {
+    let advertised_ip = options.advertised_ip.ok_or("invalid_options")?;
+    let bind_ip = match advertised_ip {
         IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
     };
     let mut media = (options.udp_port_start..=options.udp_port_end)
         .find_map(|port| UdpSocket::bind(SocketAddr::new(bind_ip, port)).ok())
         .ok_or("media_port_unavailable")?;
-    let candidate_addr = SocketAddr::new(options.advertised_ip, media.local_addr()?.port());
+    let candidate_addr = SocketAddr::new(advertised_ip, media.local_addr()?.port());
     let mut video = UdpSocket::bind("127.0.0.1:0".parse()?)?;
     let mut audio = UdpSocket::bind("127.0.0.1:0".parse()?)?;
     let mut poll = Poll::new()?;
@@ -304,7 +261,10 @@ pub fn run(options: Options) -> Result<()> {
             .register(socket, token, Interest::READABLE)?;
     }
     let waker = Arc::new(Waker::new(poll.registry(), CONTROL)?);
-    let controls = controls(Arc::clone(&waker));
+    let controls = controls(Arc::clone(&waker), |bytes| {
+        let request: Request = serde_json::from_slice(bytes).ok()?;
+        (request.request_id.len() <= 128).then_some(request)
+    });
     output(
         &serde_json::json!({"event":"ready", "video_port":video.local_addr()?.port(),
         "audio_port":audio.local_addr()?.port(), "media_port":candidate_addr.port()}),
