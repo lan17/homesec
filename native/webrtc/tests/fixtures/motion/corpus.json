@@ -1,0 +1,1304 @@
+{
+  "schema_version": 1,
+  "reference_opencv": "4.12.0",
+  "pixel_format": "gray8",
+  "data_file": "frames.gray",
+  "cases": [
+    {
+      "name": "strict_pixel_threshold_and_inclusive_percentage",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 45,
+      "min_changed_pct": 25.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 4,
+          "blurred_offset": 4,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 8,
+          "blurred_offset": 8,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "threshold_overrides_and_zero_first_frame",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 45,
+      "min_changed_pct": 30.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": 0.0,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 12,
+          "blurred_offset": 12,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": 15.0,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 12,
+          "blurred_offset": 12,
+          "threshold": 25.0,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": 25.00001,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": 0.0,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": -1.0,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        }
+      ]
+    },
+    {
+      "name": "zero_configured_threshold",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 45,
+      "min_changed_pct": 0.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "previous_frame_baseline",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 45,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 12,
+          "blurred_offset": 12,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 12,
+          "blurred_offset": 12,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "reset_after_motion",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 45,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 12,
+          "blurred_offset": 12,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        },
+        {
+          "operation": "reset"
+        },
+        {
+          "operation": "frame",
+          "input_offset": 12,
+          "blurred_offset": 12,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "pixel_threshold_255",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 255,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 16,
+          "blurred_offset": 16,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        }
+      ]
+    },
+    {
+      "name": "pixel_threshold_above_255",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 256,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 16,
+          "blurred_offset": 16,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        }
+      ]
+    },
+    {
+      "name": "zero_pixel_threshold",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 0,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 20,
+          "blurred_offset": 20,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 25.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "percentage_above_100",
+      "width": 2,
+      "height": 2,
+      "pixel_threshold": 45,
+      "min_changed_pct": 100.1,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 0,
+          "blurred_offset": 0,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 16,
+          "blurred_offset": 16,
+          "threshold": null,
+          "changed_pixels": 4,
+          "changed_pct": 100.0,
+          "motion": false
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_0",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 0,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 101,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 1.2987012987012987,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 178,
+          "threshold": null,
+          "changed_pixels": 2,
+          "changed_pct": 2.5974025974025974,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 255,
+          "threshold": null,
+          "changed_pixels": 43,
+          "changed_pct": 55.84415584415584,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 332,
+          "threshold": null,
+          "changed_pixels": 38,
+          "changed_pct": 49.35064935064935,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 409,
+          "threshold": null,
+          "changed_pixels": 74,
+          "changed_pct": 96.1038961038961,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_1",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 1,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 101,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 1.2987012987012987,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 178,
+          "threshold": null,
+          "changed_pixels": 2,
+          "changed_pct": 2.5974025974025974,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 255,
+          "threshold": null,
+          "changed_pixels": 43,
+          "changed_pct": 55.84415584415584,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 332,
+          "threshold": null,
+          "changed_pixels": 38,
+          "changed_pct": 49.35064935064935,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 409,
+          "threshold": null,
+          "changed_pixels": 74,
+          "changed_pct": 96.1038961038961,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_3",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 3,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 486,
+          "threshold": null,
+          "changed_pixels": 9,
+          "changed_pct": 11.688311688311687,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 563,
+          "threshold": null,
+          "changed_pixels": 13,
+          "changed_pct": 16.883116883116884,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 640,
+          "threshold": null,
+          "changed_pixels": 53,
+          "changed_pct": 68.83116883116884,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 717,
+          "threshold": null,
+          "changed_pixels": 77,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 794,
+          "threshold": null,
+          "changed_pixels": 66,
+          "changed_pct": 85.71428571428571,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_5",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 5,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 871,
+          "threshold": null,
+          "changed_pixels": 13,
+          "changed_pct": 16.883116883116884,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 948,
+          "threshold": null,
+          "changed_pixels": 19,
+          "changed_pct": 24.675324675324674,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 1025,
+          "threshold": null,
+          "changed_pixels": 62,
+          "changed_pct": 80.51948051948052,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 717,
+          "threshold": null,
+          "changed_pixels": 77,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 1102,
+          "threshold": null,
+          "changed_pixels": 62,
+          "changed_pct": 80.51948051948052,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_7",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 7,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 1179,
+          "threshold": null,
+          "changed_pixels": 21,
+          "changed_pct": 27.27272727272727,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 1256,
+          "threshold": null,
+          "changed_pixels": 27,
+          "changed_pct": 35.064935064935064,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 1333,
+          "threshold": null,
+          "changed_pixels": 66,
+          "changed_pct": 85.71428571428571,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 717,
+          "threshold": null,
+          "changed_pixels": 77,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 1410,
+          "threshold": null,
+          "changed_pixels": 57,
+          "changed_pct": 74.02597402597402,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_9",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 9,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 1487,
+          "threshold": null,
+          "changed_pixels": 23,
+          "changed_pct": 29.87012987012987,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 1564,
+          "threshold": null,
+          "changed_pixels": 28,
+          "changed_pct": 36.36363636363637,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 1641,
+          "threshold": null,
+          "changed_pixels": 68,
+          "changed_pct": 88.31168831168831,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 717,
+          "threshold": null,
+          "changed_pixels": 77,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 1718,
+          "threshold": null,
+          "changed_pixels": 54,
+          "changed_pct": 70.12987012987013,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_11",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 11,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 1795,
+          "threshold": null,
+          "changed_pixels": 27,
+          "changed_pct": 35.064935064935064,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 1872,
+          "threshold": null,
+          "changed_pixels": 28,
+          "changed_pct": 36.36363636363637,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 1949,
+          "threshold": null,
+          "changed_pixels": 68,
+          "changed_pct": 88.31168831168831,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 717,
+          "threshold": null,
+          "changed_pixels": 77,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 2026,
+          "threshold": null,
+          "changed_pixels": 47,
+          "changed_pct": 61.038961038961034,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "patterns_kernel_31",
+      "width": 11,
+      "height": 7,
+      "pixel_threshold": 5,
+      "min_changed_pct": 2.0,
+      "blur_kernel": 31,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 24,
+          "blurred_offset": 24,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 101,
+          "blurred_offset": 2103,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 178,
+          "blurred_offset": 2180,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 255,
+          "blurred_offset": 2257,
+          "threshold": null,
+          "changed_pixels": 77,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 332,
+          "blurred_offset": 2334,
+          "threshold": null,
+          "changed_pixels": 70,
+          "changed_pct": 90.9090909090909,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 409,
+          "blurred_offset": 2411,
+          "threshold": null,
+          "changed_pixels": 32,
+          "changed_pct": 41.55844155844156,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "small_shape_1x1_kernel_5",
+      "width": 1,
+      "height": 1,
+      "pixel_threshold": 5,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 5,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2488,
+          "blurred_offset": 2488,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2489,
+          "blurred_offset": 2489,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2489,
+          "blurred_offset": 2489,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2489,
+          "blurred_offset": 2489,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2488,
+          "blurred_offset": 2488,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2490,
+          "blurred_offset": 2490,
+          "threshold": null,
+          "changed_pixels": 1,
+          "changed_pct": 100.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "small_shape_1x9_kernel_5",
+      "width": 9,
+      "height": 1,
+      "pixel_threshold": 5,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 5,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2491,
+          "blurred_offset": 2491,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2500,
+          "blurred_offset": 2509,
+          "threshold": null,
+          "changed_pixels": 5,
+          "changed_pct": 55.55555555555556,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2518,
+          "blurred_offset": 2527,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 66.66666666666666,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2536,
+          "blurred_offset": 2545,
+          "threshold": null,
+          "changed_pixels": 8,
+          "changed_pct": 88.88888888888889,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2554,
+          "blurred_offset": 2563,
+          "threshold": null,
+          "changed_pixels": 9,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2572,
+          "blurred_offset": 2581,
+          "threshold": null,
+          "changed_pixels": 8,
+          "changed_pct": 88.88888888888889,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "small_shape_9x1_kernel_5",
+      "width": 1,
+      "height": 9,
+      "pixel_threshold": 5,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 5,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2491,
+          "blurred_offset": 2491,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2500,
+          "blurred_offset": 2509,
+          "threshold": null,
+          "changed_pixels": 5,
+          "changed_pct": 55.55555555555556,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2518,
+          "blurred_offset": 2527,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 66.66666666666666,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2590,
+          "blurred_offset": 2590,
+          "threshold": null,
+          "changed_pixels": 9,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2554,
+          "blurred_offset": 2563,
+          "threshold": null,
+          "changed_pixels": 9,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2599,
+          "blurred_offset": 2608,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 66.66666666666666,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "small_shape_2x3_kernel_11",
+      "width": 3,
+      "height": 2,
+      "pixel_threshold": 5,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 11,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2617,
+          "blurred_offset": 2617,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2623,
+          "blurred_offset": 2629,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2635,
+          "blurred_offset": 2641,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2647,
+          "blurred_offset": 2653,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2659,
+          "blurred_offset": 2665,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2671,
+          "blurred_offset": 2677,
+          "threshold": null,
+          "changed_pixels": 6,
+          "changed_pct": 100.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "large_kernel_255_on_3x5",
+      "width": 5,
+      "height": 3,
+      "pixel_threshold": 5,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 255,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2683,
+          "blurred_offset": 2683,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2698,
+          "blurred_offset": 2713,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2728,
+          "blurred_offset": 2743,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2758,
+          "blurred_offset": 2773,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2788,
+          "blurred_offset": 2803,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2818,
+          "blurred_offset": 2833,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "large_kernel_1001_on_3x5",
+      "width": 5,
+      "height": 3,
+      "pixel_threshold": 5,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 1001,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2683,
+          "blurred_offset": 2683,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2698,
+          "blurred_offset": 2848,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2728,
+          "blurred_offset": 2863,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2758,
+          "blurred_offset": 2878,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2788,
+          "blurred_offset": 2893,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2818,
+          "blurred_offset": 2908,
+          "threshold": null,
+          "changed_pixels": 15,
+          "changed_pct": 100.0,
+          "motion": true
+        }
+      ]
+    },
+    {
+      "name": "production_320x240_default_settings",
+      "width": 320,
+      "height": 240,
+      "pixel_threshold": 45,
+      "min_changed_pct": 1.0,
+      "blur_kernel": 5,
+      "steps": [
+        {
+          "operation": "frame",
+          "input_offset": 2923,
+          "blurred_offset": 79723,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 156523,
+          "blurred_offset": 233323,
+          "threshold": null,
+          "changed_pixels": 9712,
+          "changed_pct": 12.645833333333334,
+          "motion": true
+        },
+        {
+          "operation": "frame",
+          "input_offset": 156523,
+          "blurred_offset": 233323,
+          "threshold": null,
+          "changed_pixels": 0,
+          "changed_pct": 0.0,
+          "motion": false
+        },
+        {
+          "operation": "frame",
+          "input_offset": 2923,
+          "blurred_offset": 79723,
+          "threshold": null,
+          "changed_pixels": 9712,
+          "changed_pct": 12.645833333333334,
+          "motion": true
+        }
+      ]
+    }
+  ]
+}
