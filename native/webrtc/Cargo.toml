@@ -6,12 +6,19 @@ rust-version = "1.88"
 publish = false
 license = "Apache-2.0"
 
+[package.metadata.native-dependencies.opencv]
+version = "4.12.0"
+sha256 = "44c106d5bb47efec04e531fd93008b3fcd1d27138985c5baf4eafac0e1ec9e9d"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["codec", "filter", "format"] }
 futures-util = "0.3"
 h264-reader = "0.8"
 mio = { version = "1", features = ["net", "os-poll"] }
+# FFmpeg's bindgen enables clang-sys runtime loading; the OpenCV generator must
+# use the same mode when Cargo unifies their build dependencies.
+opencv = { version = "=0.101.0", default-features = false, features = ["imgproc", "clang-runtime"] }
 percent-encoding = "2"
 retina = { version = "=0.4.20", default-features = false }
 serde = { version = "1", features = ["derive"] }

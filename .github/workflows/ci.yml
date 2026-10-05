@@ -42,23 +42,23 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             native/webrtc/target
-            /tmp/homesec-ffmpeg-*
-          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.lock', 'native/webrtc/build_ffmpeg.py') }}
+            /tmp/homesec-native-*
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.toml', 'native/webrtc/Cargo.lock', 'native/webrtc/build_native.py') }}
 
       - name: Rust check
-        # The shared recipe builds bundled FFmpeg; media tests also use the CLI.
+        # The shared recipe builds static FFmpeg/OpenCV; media tests also use the CLI.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential python3 ffmpeg clang libclang-dev pkg-config nasm
+            build-essential python3 cmake ffmpeg clang libclang-dev pkg-config nasm
           make rust-check
 
       - name: Build WebRTC helper
         run: |
           make rust-build
           dependencies="$(ldd native/webrtc/target/release/homesec-webrtc)"
-          if printf '%s\n' "$dependencies" | grep -E 'lib(avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'; then
-            echo "The native helper must use the bundled FFmpeg libraries." >&2
+          if printf '%s\n' "$dependencies" | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'; then
+            echo "The native helper must use bundled static FFmpeg and OpenCV libraries." >&2
             exit 1
           fi
           echo "$GITHUB_WORKSPACE/native/webrtc/target/release" >> "$GITHUB_PATH"

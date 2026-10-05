@@ -10,7 +10,7 @@ Source archive: [ffmpeg-8.1.3.tar.xz](https://ffmpeg.org/releases/ffmpeg-8.1.3.t
 
 SHA-256: `7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3`
 
-The build recipe and configuration are in `native/webrtc/build_ffmpeg.py` in the
+The build recipe and configuration are in `native/webrtc/build_native.py` in the
 corresponding [HomeSec source revision](https://github.com/lan17/homesec). From that
 checkout, run `make rust-build` to verify the source archive, build the private
 FFmpeg libraries, and rebuild the helper. The script retains `COPYING.LGPLv2.1`

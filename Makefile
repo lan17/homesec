@@ -48,7 +48,7 @@ PYTHON ?= python3
 FFMPEG_JOBS ?=
 PNPM ?= pnpm
 WEBRTC_MANIFEST := native/webrtc/Cargo.toml
-FFMPEG_BUILD := $(PYTHON) native/webrtc/build_ffmpeg.py $(if $(FFMPEG_JOBS),--jobs $(FFMPEG_JOBS)) --
+NATIVE_BUILD := $(PYTHON) native/webrtc/build_native.py $(if $(FFMPEG_JOBS),--jobs $(FFMPEG_JOBS)) --
 WEBRTC_RELEASE_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/native/webrtc/target)/release
 
 # Docker
@@ -73,7 +73,7 @@ docker-push: docker-build
 
 # Local dev
 dev-setup:
-	@for tool in uv node ffmpeg ffprobe clang pkg-config make; do \
+	@for tool in uv node ffmpeg ffprobe clang pkg-config make cmake; do \
 		if ! command -v "$$tool" >/dev/null 2>&1; then \
 			echo "Missing $$tool. See docs/webrtc-preview.md for developer prerequisites."; \
 			exit 1; \
@@ -91,7 +91,11 @@ dev-setup:
 		echo "A C compiler/linker is required. See docs/webrtc-preview.md for Linux/macOS prerequisites."; \
 		exit 1; \
 	}
-	@$(PYTHON) --version >/dev/null || { echo "Python 3 is required to build bundled FFmpeg."; exit 1; }
+	@$(CXX) --version >/dev/null || { \
+		echo "A C++ compiler/linker is required to build bundled OpenCV. See docs/webrtc-preview.md."; \
+		exit 1; \
+	}
+	@$(PYTHON) --version >/dev/null || { echo "Python 3 is required to build bundled native libraries."; exit 1; }
 	uv sync --locked
 	$(MAKE) rust-build
 	$(MAKE) ui-install
@@ -115,26 +119,26 @@ coverage:
 
 typecheck:
 	$(UV_RUN) mypy --package homesec --strict
-	$(UV_RUN) mypy native/webrtc/build_ffmpeg.py --strict
+	$(UV_RUN) mypy native/webrtc/build_native.py --strict
 
 lint:
-	$(UV_RUN) ruff check src tests native/webrtc/build_ffmpeg.py
-	$(UV_RUN) ruff format --check src tests native/webrtc/build_ffmpeg.py
+	$(UV_RUN) ruff check src tests native/webrtc/build_native.py
+	$(UV_RUN) ruff format --check src tests native/webrtc/build_native.py
 
 lint-fix:
-	$(UV_RUN) ruff check --fix src tests native/webrtc/build_ffmpeg.py
-	$(UV_RUN) ruff format src tests native/webrtc/build_ffmpeg.py
+	$(UV_RUN) ruff check --fix src tests native/webrtc/build_native.py
+	$(UV_RUN) ruff format src tests native/webrtc/build_native.py
 
 lock-check:
 	uv lock --check
 
 rust-build:
-	$(FFMPEG_BUILD) $(CARGO) build --manifest-path $(WEBRTC_MANIFEST) --release --locked
+	$(NATIVE_BUILD) $(CARGO) build --manifest-path $(WEBRTC_MANIFEST) --release --locked
 
 rust-check:
 	$(CARGO) fmt --manifest-path $(WEBRTC_MANIFEST) --all -- --check
-	$(FFMPEG_BUILD) $(CARGO) clippy --manifest-path $(WEBRTC_MANIFEST) --all-targets --locked -- -D warnings
-	$(FFMPEG_BUILD) $(CARGO) test --manifest-path $(WEBRTC_MANIFEST) --locked
+	$(NATIVE_BUILD) $(CARGO) clippy --manifest-path $(WEBRTC_MANIFEST) --all-targets --locked -- -D warnings
+	$(NATIVE_BUILD) $(CARGO) test --manifest-path $(WEBRTC_MANIFEST) --locked
 
 check: lock-check rust-check lint typecheck test ui-check
 

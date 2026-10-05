@@ -15,12 +15,13 @@
 # =============================================================================
 FROM rust:1.99.0-slim-bookworm AS webrtc-builder
 
-# Build the pinned FFmpeg libraries privately and link them into the helper.
-# bindgen needs libclang while generating the native FFmpeg bindings.
+# Build pinned FFmpeg and OpenCV libraries privately and link them into the helper.
+# Both native binding generators need libclang during the build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     python3 \
+    cmake \
     clang \
     libclang-dev \
     pkg-config \
@@ -32,8 +33,12 @@ COPY Makefile ./
 COPY rust-toolchain.toml ./
 COPY native/webrtc/ ./native/webrtc/
 RUN make rust-build \
-    && install -D -m 0644 /tmp/homesec-ffmpeg-0/*/COPYING.LGPLv2.1 \
-        /app/ffmpeg-license/COPYING.LGPLv2.1
+    && install -D -m 0644 /tmp/homesec-native-0/ffmpeg-*/COPYING.LGPLv2.1 \
+        /app/ffmpeg-license/COPYING.LGPLv2.1 \
+    && install -D -m 0644 /tmp/homesec-native-0/opencv-*/LICENSE \
+        /app/opencv-license/LICENSE \
+    && install -D -m 0644 /tmp/homesec-native-0/opencv-*/ZLIB-LICENSE \
+        /app/opencv-license/ZLIB-LICENSE
 
 # =============================================================================
 # Stage 2: Python Builder
@@ -110,6 +115,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    libstdc++6 \
     postgresql-client-16 \
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
@@ -127,11 +133,14 @@ COPY --from=ui-builder /app/ui/dist /app/ui/dist
 COPY --from=webrtc-builder /app/native/webrtc/target/release/homesec-webrtc /usr/local/bin/homesec-webrtc
 COPY --from=webrtc-builder /app/ffmpeg-license/ /usr/share/licenses/homesec-ffmpeg/
 COPY native/webrtc/FFMPEG-NOTICE.md /usr/share/licenses/homesec-ffmpeg/NOTICE.md
-# Check loading and ensure native motion does not use the runtime's libav libraries.
+COPY --from=webrtc-builder /app/opencv-license/ /usr/share/licenses/homesec-opencv/
+COPY native/webrtc/OPENCV-NOTICE.md /usr/share/licenses/homesec-opencv/NOTICE.md
+COPY native/webrtc/OPENCV-BINDINGS-LICENSE /usr/share/licenses/homesec-opencv/OPENCV-BINDINGS-LICENSE
+# Check loading and reject shared OpenCV or libav dependencies.
 RUN homesec-webrtc --help > /dev/null \
     && dependencies="$(ldd /usr/local/bin/homesec-webrtc)" \
     && ! printf '%s\n' "$dependencies" \
-        | grep -E 'lib(avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'
+        | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
