@@ -130,7 +130,13 @@ has its own 16-packet queue; a slow or overflowing preview consumer fails withou
 blocking a healthy recording consumer. The FFmpeg transcoding/audio fallback
 drains its loopback RTP sockets on an independent receiver thread, so WebRTC
 encryption or a slow viewer cannot delay receiving the rest of a fragmented
-picture. These limits bound individual buffers and queues, not the entire process.
+picture. Only complete H.264 access units cross that receiver boundary: its video
+queue holds at most eight units, each limited to 2 MiB plus parameter sets, and
+its audio queue holds at most 64 Opus packets of 4000 bytes each. Both queues are
+drained fairly; overflow stops preview rather than forwarding compressed frames
+with missing dependencies. Stop, parent disconnect, source failure, and timeout
+cancel the receiver and reap FFmpeg without requiring global socket-buffer tuning.
+These limits bound individual buffers and queues, not the entire process.
 Cameras remain operator-configured sources on a trusted LAN/VPN.
 
 See the [shared Rust media plan](shared-rust-media.md) for ingestion, recording,
