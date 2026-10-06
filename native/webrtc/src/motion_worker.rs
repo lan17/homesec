@@ -2,7 +2,8 @@
 use crate::decode::{GrayDecoder, GrayFrame};
 use crate::motion::{MotionConfig, MotionDetector};
 use crate::protocol::{Control, controls, output};
-use crate::rtsp::{Event, RtspSource};
+use crate::rtp::Event;
+use crate::rtsp::RtspSource;
 use mio::{Events, Poll, Token, Waker};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -281,7 +282,7 @@ fn prepare(
                         return Err("motion_worker_failed");
                     }
                 }
-                Some(Event::Info { .. }) => {}
+                Some(Event::Info { .. } | Event::Audio { .. }) => {}
                 None => break,
             }
         }

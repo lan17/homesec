@@ -11,7 +11,7 @@
 //! those reads have deadlines, but an oversized response can allocate as its
 //! bytes arrive. Resolve that upstream before sharing this process with recording.
 
-use crate::rtp::{H264Assembler, Packet};
+use crate::rtp::{EncodedFrame, Event, H264Assembler, Packet};
 use futures_util::StreamExt;
 use h264_reader::nal::{Nal, RefNal};
 use h264_reader::rbsp::BitRead;
@@ -34,18 +34,6 @@ const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const TEARDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 const DROP_TIMEOUT: Duration = Duration::from_millis(300);
 type Result<T> = std::result::Result<T, &'static str>;
-
-pub struct EncodedFrame {
-    pub timestamp: u32,
-    pub keyframe: bool,
-    /// Annex B access unit, including current SPS/PPS before each keyframe.
-    pub data: Arc<[u8]>,
-}
-
-pub enum Event {
-    Info { profile_level_id: u32 },
-    Frame(EncodedFrame),
-}
 
 /// An overflowing consumer fails closed instead of receiving broken interframes.
 /// Terminal failures have a separate slot so a full media queue cannot hide them.

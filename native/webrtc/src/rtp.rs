@@ -2,6 +2,21 @@
 //! FFmpeg additionally supplies Opus packets through its local RTP handoff.
 //! WebRTC packetization, encryption and retransmission belong to str0m.
 
+use std::sync::Arc;
+
+pub struct EncodedFrame {
+    pub timestamp: u32,
+    pub keyframe: bool,
+    /// Annex B access unit, including current SPS/PPS before each keyframe.
+    pub data: Arc<[u8]>,
+}
+
+pub enum Event {
+    Info { profile_level_id: u32 },
+    Frame(EncodedFrame),
+    Audio { timestamp: u32, data: Arc<[u8]> },
+}
+
 const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PARAMETER_BYTES: usize = 4096;
 
