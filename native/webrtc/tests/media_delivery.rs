@@ -3,12 +3,18 @@
 #[path = "support/rtsp_camera.rs"]
 mod rtsp_camera;
 use rtsp_camera::{RtspCamera, annex_b_nals};
+#[path = "support/burst_rtp.rs"]
+mod burst_rtp;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::UdpSocket;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -449,6 +455,120 @@ fn encrypted_media_reaches_two_viewers_and_survives_one_closing() {
 }
 
 #[test]
+fn bursty_large_access_units_reach_two_encrypted_viewers_with_audio() {
+    // Given: Real encrypted peers and valid keyframes larger than a UDP socket
+    // buffer, fragmented into the same 1200-byte packets used by FFmpeg.
+    let (mut helper, ready) = Helper::start();
+    let audio_port = ready["audio_port"].as_u64().unwrap();
+    let audio_args = [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-c:a",
+        "libopus",
+        "-threads",
+        "1",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-payload_type",
+        "97",
+        "-f",
+        "rtp",
+        &format!("rtp://127.0.0.1:{audio_port}?pkt_size=1200"),
+    ]
+    .map(str::to_owned);
+    helper.successful_request(json!({"command": "start", "ffmpeg_args": audio_args}));
+    let mut first = Viewer::attach(&mut helper, "large-first");
+    let mut second = Viewer::attach(&mut helper, "large-second");
+    // Bound the test peers' buffers too, but keep them large enough that this
+    // input-side regression does not become an outgoing-SRTP-loss experiment.
+    for viewer in [&first, &second] {
+        socket2::SockRef::from(&viewer.socket)
+            .set_recv_buffer_size(1024 * 1024)
+            .unwrap();
+    }
+    let video = BurstVideo::start(ready["video_port"].as_u64().unwrap());
+
+    // When: Both viewers join the same bursty loopback source.
+    progress_until(&mut [&mut first, &mut second], |viewers| {
+        viewers.iter().all(|viewer| viewer.has_media())
+    });
+
+    // Then: Both decrypt complete, decodable access units and receive Opus.
+    first.assert_video_decodes();
+    second.assert_video_decodes();
+    assert!(first.video_sample.len() > 3 * 192 * 1024);
+    assert!(second.video_sample.len() > 3 * 192 * 1024);
+    assert_eq!(
+        helper.successful_request(json!({"command": "status"}))["viewer_count"],
+        2
+    );
+
+    // When: One viewer closes while the bursty input remains live.
+    helper.successful_request(json!({"command": "close", "session_id": "large-first"}));
+    let previous_video = second.video_frames;
+    let previous_audio = second.audio_packets;
+    progress_until(&mut [&mut second], |viewers| {
+        viewers[0].video_frames >= previous_video + 3
+            && viewers[0].audio_packets >= previous_audio + 5
+    });
+
+    // Then: The survivor continues receiving both tracks and stop releases input.
+    assert_eq!(
+        helper.successful_request(json!({"command": "status"}))["viewer_count"],
+        1
+    );
+    drop(video);
+    helper.successful_request(json!({"command": "stop"}));
+}
+
+struct BurstVideo {
+    cancel: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl BurstVideo {
+    fn start(port: u64) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker = thread::spawn(move || {
+            let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let destination = format!("127.0.0.1:{port}").parse().unwrap();
+            let nals = burst_rtp::keyframe();
+            let mut sequence = 1;
+            let mut timestamp = 0_u32;
+            while !worker_cancel.load(Ordering::Acquire) {
+                let next = Instant::now() + Duration::from_millis(100);
+                burst_rtp::send(&socket, destination, &nals, &mut sequence, timestamp);
+                timestamp = timestamp.wrapping_add(9000);
+                thread::sleep(next.saturating_duration_since(Instant::now()));
+            }
+        });
+        Self {
+            cancel,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for BurstVideo {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[test]
 fn malformed_offers_and_negotiation_timeout_release_admission_capacity() {
     // Given: One viewer slot and a short negotiation deadline on a live input.
     let (mut helper, ready) = Helper::start_with(1, 0.2, None);
@@ -675,6 +795,10 @@ fn parent_eof_reaps_the_ffmpeg_process_and_releases_the_media_socket() {
     );
     let media_port = ready["media_port"].as_u64().unwrap();
     assert!(UdpSocket::bind(format!("127.0.0.1:{media_port}")).is_ok());
+    for key in ["video_port", "audio_port"] {
+        let port = ready[key].as_u64().unwrap();
+        assert!(UdpSocket::bind(format!("127.0.0.1:{port}")).is_ok());
+    }
 }
 
 #[cfg(unix)]

@@ -64,6 +64,15 @@ network before enabling public access.
 The UDP range is shared by active camera helpers. Match the configured range to
 firewall rules and Docker port mappings. The helper's FFmpeg ingestion uses
 separate loopback RTP sockets, which should not be published externally.
+Their receive/assembly worker runs independently of WebRTC packetization and
+encryption, so viewer fanout cannot leave a camera keyframe burst undrained.
+Only complete H.264 access units cross to the media loop: video queues retain at
+most eight units (each assembled unit is limited to 2 MiB plus parameter sets),
+and audio queues retain at most 64 Opus packets of 4000 bytes each. Both queues
+are drained fairly. An overflowing queue stops preview instead of forwarding
+compressed frames with missing dependencies; the existing timeout and restart
+policy still applies. Stop, parent disconnect, source failure, and timeout cancel
+the receiver and reap FFmpeg. No global socket-buffer tuning is required.
 
 `max_viewers` limits peers for each camera, including sessions negotiating a
 connection. Authentication leases are renewed by the UI. Expired leases and

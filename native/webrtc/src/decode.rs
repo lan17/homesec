@@ -3,7 +3,7 @@
 //! FFmpeg's filter graph preserves timestamp sampling, bicubic scaling, color
 //! conversion and gray8 rounding. No codec error text or media bytes are logged.
 
-use crate::rtsp::EncodedFrame;
+use crate::rtp::EncodedFrame;
 use ffmpeg::{Error, Rational, codec, color, filter, format::Pixel, frame::Video};
 use ffmpeg_next as ffmpeg;
 

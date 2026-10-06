@@ -5,7 +5,7 @@ mod decode;
 #[path = "support/ffmpeg_reference.rs"]
 mod ffmpeg_reference;
 
-mod rtsp {
+mod rtp {
     use std::sync::Arc;
 
     pub struct EncodedFrame {
@@ -70,7 +70,7 @@ fn native_preparation_matches_cli_cadence_and_color_conversion() {
                 let timestamp = initial_timestamp.wrapping_add((index as u32 * 90_000) / fps);
                 decoder
                     .push(
-                        &rtsp::EncodedFrame {
+                        &rtp::EncodedFrame {
                             timestamp,
                             data: Arc::from(*data),
                         },
@@ -102,7 +102,7 @@ fn timestamp_regression_refuses_without_emitting_media() {
         let mut decoder = GrayDecoder::new().unwrap();
         decoder
             .push(
-                &rtsp::EncodedFrame {
+                &rtp::EncodedFrame {
                     timestamp: 10_000,
                     data: Arc::from(units[0]),
                 },
@@ -112,7 +112,7 @@ fn timestamp_regression_refuses_without_emitting_media() {
         let mut emitted = 0;
         // When: The next access unit repeats or regresses the timestamp.
         let result = decoder.push(
-            &rtsp::EncodedFrame {
+            &rtp::EncodedFrame {
                 timestamp: next_timestamp,
                 data: Arc::from(units[1]),
             },
@@ -132,7 +132,7 @@ fn changing_decoded_parameters_refuses_with_stable_reason() {
     let mut decoder = GrayDecoder::new().unwrap();
     decoder
         .push(
-            &rtsp::EncodedFrame {
+            &rtp::EncodedFrame {
                 timestamp: 0,
                 data: Arc::from(access_units(&first)[0]),
             },
@@ -141,7 +141,7 @@ fn changing_decoded_parameters_refuses_with_stable_reason() {
         .unwrap();
     // When: New parameter sets change the decoded frame preparation contract.
     let result = decoder.push(
-        &rtsp::EncodedFrame {
+        &rtp::EncodedFrame {
             timestamp: 9_000,
             data: Arc::from(access_units(&changed)[0]),
         },
@@ -159,7 +159,7 @@ fn timestamp_gap_cannot_generate_unbounded_duplicate_frames() {
     let mut decoder = GrayDecoder::new().unwrap();
     decoder
         .push(
-            &rtsp::EncodedFrame {
+            &rtp::EncodedFrame {
                 timestamp: 0,
                 data: Arc::from(units[0]),
             },
@@ -169,7 +169,7 @@ fn timestamp_gap_cannot_generate_unbounded_duplicate_frames() {
     let mut emitted = 0;
     // When: A source discontinuity would duplicate many seconds of stale video.
     let result = decoder.push(
-        &rtsp::EncodedFrame {
+        &rtp::EncodedFrame {
             timestamp: 900_000,
             data: Arc::from(units[1]),
         },
@@ -186,7 +186,7 @@ fn empty_access_unit_is_refused_before_decoder_allocation() {
     let mut decoder = GrayDecoder::new().unwrap();
     // When: An empty encoded access unit is submitted.
     let result = decoder.push(
-        &rtsp::EncodedFrame {
+        &rtp::EncodedFrame {
             timestamp: 0,
             data: Arc::from([]),
         },

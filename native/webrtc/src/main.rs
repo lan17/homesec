@@ -1,10 +1,14 @@
 //! Camera-local media worker with bounded media buffers. str0m owns the WebRTC protocols.
+#[cfg(test)]
+#[path = "../tests/support/burst_rtp.rs"]
+mod burst_rtp;
 mod decode;
 mod engine;
 mod motion;
 mod motion_worker;
 mod protocol;
 mod rtp;
+mod rtp_receiver;
 mod rtsp;
 #[cfg(test)]
 #[path = "../tests/support/rtsp_camera.rs"]
