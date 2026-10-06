@@ -1,8 +1,19 @@
 //! Grayscale motion parity with the existing Python/OpenCV detector.
 //!
-//! The parity suite compiles this private module before decoder/runtime rollout.
 //! Config values come from the existing RTSP motion settings; there are no Rust
 //! defaults or separate operator settings. Input preparation remains upstream.
+
+use opencv::{
+    core::{self, Mat, Size},
+    imgproc,
+    prelude::*,
+};
+
+// The frozen Python oracle fixes the native implementation as well as the
+// bindings version. Refuse headers from another OpenCV build at compile time.
+const _: () = assert!(
+    core::CV_VERSION_MAJOR == 4 && core::CV_VERSION_MINOR == 12 && core::CV_VERSION_REVISION == 0
+);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MotionConfig {
@@ -33,16 +44,14 @@ pub(crate) enum MotionError {
     FrameDimensionsChanged,
 }
 
-struct GrayFrame {
-    pixels: Vec<u8>,
-    width: usize,
-    height: usize,
-}
-
 pub(crate) struct MotionDetector {
     config: MotionConfig,
-    kernel: GaussianKernel,
-    previous: Option<GrayFrame>,
+    kernel_size: i32,
+    previous: Mat,
+    current: Mat,
+    diff: Mat,
+    mask: Mat,
+    dimensions: Option<(usize, usize)>,
     observation: MotionObservation,
 }
 
@@ -53,14 +62,18 @@ impl MotionDetector {
         }
         Ok(Self {
             config,
-            kernel: GaussianKernel::new(config.blur_kernel)?,
-            previous: None,
+            kernel_size: kernel_size(config.blur_kernel)?,
+            previous: Mat::default(),
+            current: Mat::default(),
+            diff: Mat::default(),
+            mask: Mat::default(),
+            dimensions: None,
             observation: MotionObservation::default(),
         })
     }
 
     pub(crate) fn reset(&mut self) {
-        self.previous = None;
+        self.dimensions = None;
         self.observation = MotionObservation::default();
     }
 
@@ -75,193 +88,153 @@ impl MotionDetector {
         height: usize,
         threshold: Option<f64>,
     ) -> Result<MotionObservation, MotionError> {
-        validate_frame(frame, width, height)?;
-        if let Some(previous) = &self.previous
-            && (previous.width != width || previous.height != height)
+        validate_frame_size(frame.len(), width, height)?;
+        if let Some(dimensions) = self.dimensions
+            && dimensions != (width, height)
         {
             return Err(MotionError::FrameDimensionsChanged);
         }
-        let pixels = self.kernel.blur(frame, width, height);
-        let observation = match &self.previous {
-            None => MotionObservation::default(),
-            Some(previous) => {
-                let changed_pixels = pixels
-                    .iter()
-                    .zip(&previous.pixels)
-                    .filter(|(current, prior)| {
-                        u64::from(current.abs_diff(**prior)) > self.config.pixel_threshold
-                    })
-                    .count();
-                let changed_pct = changed_pixels as f64 / pixels.len() as f64 * 100.0;
-                let threshold = threshold.unwrap_or(self.config.min_changed_pct);
-                // Preserve Python comparisons, including NaN and +/- infinity.
-                let threshold = if threshold < 0.0 { 0.0 } else { threshold };
-                MotionObservation {
-                    changed_pixels,
-                    changed_pct,
-                    motion: changed_pct >= threshold,
-                }
+        // This borrowed Mat cannot outlive the input slice. The detector only
+        // retains owned output buffers, reused by OpenCV for subsequent frames.
+        let input = opencv_result(Mat::new_rows_cols_with_data(
+            height as i32,
+            width as i32,
+            frame,
+        ))?;
+        if self.kernel_size == 1 {
+            opencv_result(input.copy_to(&mut self.current))?;
+        } else {
+            opencv_result(imgproc::gaussian_blur(
+                &input,
+                &mut self.current,
+                Size::new(self.kernel_size, self.kernel_size),
+                0.0,
+                0.0,
+                core::BORDER_REFLECT_101,
+                core::AlgorithmHint::ALGO_HINT_ACCURATE,
+            ))?;
+        }
+        let observation = if self.dimensions.is_none() {
+            MotionObservation::default()
+        } else {
+            let changed_pixels = if self.config.pixel_threshold >= 255 {
+                0
+            } else {
+                opencv_result(core::absdiff(&self.current, &self.previous, &mut self.diff))?;
+                opencv_result(imgproc::threshold(
+                    &self.diff,
+                    &mut self.mask,
+                    self.config.pixel_threshold as f64,
+                    255.0,
+                    imgproc::THRESH_BINARY,
+                ))?;
+                opencv_result(core::count_non_zero(&self.mask))? as usize
+            };
+            let changed_pct = changed_pixels as f64 / frame.len() as f64 * 100.0;
+            let threshold = threshold.unwrap_or(self.config.min_changed_pct);
+            // Preserve Python comparisons, including NaN and +/- infinity.
+            let threshold = if threshold < 0.0 { 0.0 } else { threshold };
+            MotionObservation {
+                changed_pixels,
+                changed_pct,
+                motion: changed_pct >= threshold,
             }
         };
-        self.previous = Some(GrayFrame {
-            pixels,
-            width,
-            height,
-        });
+        // Commit the baseline only after all processing succeeds. Rejected
+        // frames leave both the last observation and previous frame intact.
+        std::mem::swap(&mut self.current, &mut self.previous);
+        self.dimensions = Some((width, height));
         self.observation = observation;
         Ok(observation)
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)] // The frozen corpus compiles this module in a separate test target.
 pub(crate) fn blur_gray(
     frame: &[u8],
     width: usize,
     height: usize,
     blur_kernel: usize,
 ) -> Result<Vec<u8>, MotionError> {
-    validate_frame(frame, width, height)?;
-    Ok(GaussianKernel::new(blur_kernel)?.blur(frame, width, height))
+    validate_frame_size(frame.len(), width, height)?;
+    let kernel = kernel_size(blur_kernel)?;
+    if kernel == 1 {
+        return Ok(frame.to_vec());
+    }
+    let input = opencv_result(Mat::new_rows_cols_with_data(
+        height as i32,
+        width as i32,
+        frame,
+    ))?;
+    let mut output = Mat::default();
+    opencv_result(imgproc::gaussian_blur(
+        &input,
+        &mut output,
+        Size::new(kernel, kernel),
+        0.0,
+        0.0,
+        core::BORDER_REFLECT_101,
+        core::AlgorithmHint::ALGO_HINT_ACCURATE,
+    ))?;
+    Ok(opencv_result(output.data_bytes())?.to_vec())
 }
 
-fn validate_frame(frame: &[u8], width: usize, height: usize) -> Result<(), MotionError> {
+fn kernel_size(size: usize) -> Result<i32, MotionError> {
+    // Match RTSPSource's even-to-odd normalization and OpenCV's i32 Size.
+    let normalized = if size <= 1 {
+        1
+    } else if size.is_multiple_of(2) {
+        size.checked_add(1).ok_or(MotionError::InvalidConfig)?
+    } else {
+        size
+    };
+    i32::try_from(normalized).map_err(|_| MotionError::InvalidConfig)
+}
+
+fn validate_frame_size(size: usize, width: usize, height: usize) -> Result<(), MotionError> {
+    // Mat dimensions and countNonZero's result use signed 32-bit integers.
+    // Bound their product too, so a fully changed frame cannot overflow.
     if width == 0
         || height == 0
-        || width > isize::MAX as usize / 2
-        || height > isize::MAX as usize / 2
-        || width.checked_mul(height) != Some(frame.len())
+        || width > i32::MAX as usize
+        || height > i32::MAX as usize
+        || size > i32::MAX as usize
+        || width.checked_mul(height) != Some(size)
     {
         return Err(MotionError::InvalidFrame);
     }
     Ok(())
 }
 
-struct GaussianKernel {
-    // Q8 weights sum to 256, so there are at most 256 nonzero taps even for
-    // large accepted kernels. Omit zero weights without changing convolution.
-    taps: Vec<(isize, u32)>,
+fn opencv_result<T>(result: opencv::Result<T>) -> Result<T, MotionError> {
+    // Preserve the runtime's existing stable invalid_motion_frame refusal;
+    // native exception text must not cross the protocol/logging boundary.
+    result.map_err(|_| MotionError::InvalidFrame)
 }
 
-impl GaussianKernel {
-    fn new(size: usize) -> Result<Self, MotionError> {
-        // Match RTSPSource's even-to-odd normalization and OpenCV's i32 Size.
-        let size = if size <= 1 {
-            1
-        } else if size.is_multiple_of(2) {
-            size.checked_add(1).ok_or(MotionError::InvalidConfig)?
-        } else {
-            size
-        };
-        if size > i32::MAX as usize {
-            return Err(MotionError::InvalidConfig);
-        }
-        let exact: &[u32] = match size {
-            1 => &[256],
-            3 => &[64, 128, 64],
-            5 => &[16, 64, 96, 64, 16],
-            7 => &[8, 28, 56, 72, 56, 28, 8],
-            9 => &[4, 13, 30, 51, 60, 51, 30, 13, 4],
-            _ => &[],
-        };
-        let half = (size / 2) as isize;
-        if !exact.is_empty() {
-            return Ok(Self {
-                taps: exact
-                    .iter()
-                    .enumerate()
-                    .map(|(i, weight)| (i as isize - half, *weight))
-                    .collect(),
-            });
-        }
+#[cfg(test)]
+mod tests {
+    use super::{MotionError, validate_frame_size};
 
-        // OpenCV 4.12 getGaussianKernelBitExact / getGaussianKernelFixedPoint_ED:
-        // https://github.com/opencv/opencv/blob/4.12.0/modules/imgproc/src/smooth.dispatch.cpp
-        // Normalize symmetrically, diffuse quantization error along the left
-        // half, mirror it, and choose the center to retain an exact Q8 sum.
-        let sigma = (size as f64).mul_add(0.15, 0.35);
-        let exponent_scale = -0.125 / (sigma * sigma);
-        let weight_at = |offset: isize| {
-            let x = (2 * offset) as f64;
-            (x * x * exponent_scale).exp()
-        };
-        let mut left_sum = 0.0;
-        for offset in -half..0 {
-            left_sum += weight_at(offset);
-        }
-        let scale = 1.0 / (left_sum * 2.0 + 1.0);
-        let mut error = 0.0;
-        let mut integer_sum = 0;
-        let mut taps = Vec::new();
-        for offset in -half..0 {
-            let adjusted = weight_at(offset) * scale * 256.0 + error;
-            let rounded = adjusted.round_ties_even();
-            error = adjusted - rounded;
-            let weight = rounded as u32;
-            integer_sum += weight;
-            if weight != 0 {
-                taps.push((offset, weight));
-                taps.push((-offset, weight));
-            }
-        }
-        if integer_sum > 128 {
-            return Err(MotionError::InvalidConfig);
-        }
-        let center = 256 - integer_sum * 2;
-        if center != 0 {
-            taps.push((0, center));
-        }
-        Ok(Self { taps })
-    }
+    #[test]
+    fn frames_exceeding_opencv_dimension_or_count_limits_are_refused() {
+        // Given: Logical gray-frame sizes without allocating multi-GB buffers.
+        let limit = i32::MAX as usize;
+        let shapes = [
+            (limit + 1, limit + 1, 1),
+            (limit + 1, 1, limit + 1),
+            (46_341 * 46_341, 46_341, 46_341),
+        ];
 
-    fn blur(&self, frame: &[u8], width: usize, height: usize) -> Vec<u8> {
-        if self.taps == [(0, 256)] {
-            return frame.to_vec();
-        }
-        // Keep the horizontal result in Q8. Round only after the vertical Q8
-        // pass, as OpenCV's uint8 bit-exact separable Gaussian filter does.
-        let mut horizontal = vec![0_u16; frame.len()];
-        for y in 0..height {
-            for x in 0..width {
-                let value = if width == 1 {
-                    u32::from(frame[y]) * 256
-                } else {
-                    self.taps
-                        .iter()
-                        .map(|(offset, weight)| {
-                            let column = reflect_101(x as isize + offset, width);
-                            u32::from(frame[y * width + column]) * weight
-                        })
-                        .sum()
-                };
-                horizontal[y * width + x] = value as u16;
-            }
-        }
-        let mut output = vec![0_u8; frame.len()];
-        for y in 0..height {
-            for x in 0..width {
-                let value = if height == 1 {
-                    u32::from(horizontal[x]) * 256
-                } else {
-                    self.taps
-                        .iter()
-                        .map(|(offset, weight)| {
-                            let row = reflect_101(y as isize + offset, height);
-                            u32::from(horizontal[row * width + x]) * weight
-                        })
-                        .sum()
-                };
-                output[y * width + x] = ((value + (1 << 15)) >> 16) as u8;
-            }
-        }
-        output
-    }
-}
+        for (size, width, height) in shapes {
+            // When: Validating a matching shape that exceeds an OpenCV i32 limit.
+            let result = validate_frame_size(size, width, height);
 
-fn reflect_101(position: isize, length: usize) -> usize {
-    let period = 2 * (length as isize - 1);
-    let folded = position.rem_euclid(period) as usize;
-    if folded < length {
-        folded
-    } else {
-        period as usize - folded
+            // Then: It is refused before any native allocation or pixel counting.
+            assert_eq!(result, Err(MotionError::InvalidFrame));
+        }
+        assert_eq!(validate_frame_size(limit, limit, 1), Ok(()));
+        assert_eq!(validate_frame_size(limit, 1, limit), Ok(()));
     }
 }

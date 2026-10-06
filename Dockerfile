@@ -15,10 +15,30 @@
 # =============================================================================
 FROM rust:1.99.0-slim-bookworm AS webrtc-builder
 
+# Build pinned FFmpeg and OpenCV libraries privately and link them into the helper.
+# Both native binding generators need libclang during the build.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    python3 \
+    cmake \
+    clang \
+    libclang-dev \
+    pkg-config \
+    nasm \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+COPY Makefile ./
 COPY rust-toolchain.toml ./
 COPY native/webrtc/ ./native/webrtc/
-RUN cargo build --manifest-path native/webrtc/Cargo.toml --release --locked
+RUN make rust-build \
+    && install -D -m 0644 /tmp/homesec-native-0/ffmpeg-*/COPYING.LGPLv2.1 \
+        /app/ffmpeg-license/COPYING.LGPLv2.1 \
+    && install -D -m 0644 /tmp/homesec-native-0/opencv-*/LICENSE \
+        /app/opencv-license/LICENSE \
+    && install -D -m 0644 /tmp/homesec-native-0/opencv-*/ZLIB-LICENSE \
+        /app/opencv-license/ZLIB-LICENSE
 
 # =============================================================================
 # Stage 2: Python Builder
@@ -78,7 +98,7 @@ RUN pnpm build
 FROM python:3.14-slim-bookworm AS runtime
 
 # Install runtime dependencies
-# - ffmpeg: required for RTSP source video processing
+# - ffmpeg: CLI recording/transcoding and compatibility motion
 # - libgl1: required by OpenCV
 # - libglib2.0-0: required by OpenCV
 # - postgresql-client-16: pg_dump/pg_restore version compatible with docker-compose postgres:16
@@ -95,6 +115,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    libstdc++6 \
     postgresql-client-16 \
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
@@ -110,6 +131,16 @@ COPY --from=builder /app/alembic /app/alembic
 COPY --from=builder /app/alembic.ini /app/alembic.ini
 COPY --from=ui-builder /app/ui/dist /app/ui/dist
 COPY --from=webrtc-builder /app/native/webrtc/target/release/homesec-webrtc /usr/local/bin/homesec-webrtc
+COPY --from=webrtc-builder /app/ffmpeg-license/ /usr/share/licenses/homesec-ffmpeg/
+COPY native/webrtc/FFMPEG-NOTICE.md /usr/share/licenses/homesec-ffmpeg/NOTICE.md
+COPY --from=webrtc-builder /app/opencv-license/ /usr/share/licenses/homesec-opencv/
+COPY native/webrtc/OPENCV-NOTICE.md /usr/share/licenses/homesec-opencv/NOTICE.md
+COPY native/webrtc/OPENCV-BINDINGS-LICENSE /usr/share/licenses/homesec-opencv/OPENCV-BINDINGS-LICENSE
+# Check loading and reject shared OpenCV or libav dependencies.
+RUN homesec-webrtc --help > /dev/null \
+    && dependencies="$(ldd /usr/local/bin/homesec-webrtc)" \
+    && ! printf '%s\n' "$dependencies" \
+        | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

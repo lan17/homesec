@@ -78,7 +78,8 @@ fn every_frozen_python_case_matches_exact_blur_and_motion_observations() {
     // Given: A language-neutral corpus frozen from the production Python/OpenCV detector.
     let corpus: MotionCorpus = serde_json::from_str(CORPUS).expect("valid motion corpus");
     assert_eq!(corpus.schema_version, 1);
-    assert!(!corpus.reference_opencv.is_empty());
+    assert_eq!(corpus.reference_opencv, "4.12.0");
+    assert_eq!(opencv::core::get_version_string().unwrap(), "4.12.0");
     assert_eq!(corpus.pixel_format, "gray8");
     assert_eq!(corpus.data_file, "frames.gray");
     assert!(!corpus.cases.is_empty());
@@ -255,6 +256,26 @@ fn invalid_frame_buffers_do_not_replace_the_last_valid_baseline() {
 
     let next = detector.detect(&[46, 0, 0, 0], 2, 2, None).unwrap();
     assert_observation(next, 0, 0.0, false, "baseline survives invalid frame");
+}
+
+#[test]
+fn reusing_the_input_buffer_does_not_mutate_the_previous_baseline() {
+    // Given: A source that reuses one buffer for successive prepared frames.
+    let mut frame = [0_u8; 4];
+    let mut detector = MotionDetector::new(config()).unwrap();
+    detector.detect(&frame, 2, 2, None).unwrap();
+
+    // When: The source overwrites its buffer after the first observation.
+    frame[0] = 46;
+    let changed = detector.detect(&frame, 2, 2, None).unwrap();
+    frame[0] = 0;
+    let changed_back = detector.detect(&frame, 2, 2, None).unwrap();
+    let repeated = detector.detect(&frame, 2, 2, None).unwrap();
+
+    // Then: Each comparison uses an owned baseline, and reusable outputs remain independent.
+    assert_observation(changed, 1, 25.0, true, "overwritten input");
+    assert_observation(changed_back, 1, 25.0, true, "overwritten input again");
+    assert_observation(repeated, 0, 0.0, false, "repeated reused input");
 }
 
 #[test]

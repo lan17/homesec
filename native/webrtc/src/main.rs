@@ -1,5 +1,8 @@
 //! Camera-local media worker with bounded media buffers. str0m owns the WebRTC protocols.
+mod decode;
 mod engine;
+mod motion;
+mod motion_worker;
 mod protocol;
 mod rtp;
 mod rtsp;
@@ -12,8 +15,10 @@ use std::net::IpAddr;
 
 #[derive(Parser)]
 struct Options {
+    #[arg(long, required_unless_present = "motion")]
+    advertised_ip: Option<IpAddr>,
     #[arg(long)]
-    advertised_ip: IpAddr,
+    motion: bool,
     #[arg(long, default_value_t = 8189)]
     udp_port_start: u16,
     #[arg(long, default_value_t = 8199)]
@@ -29,7 +34,13 @@ struct Options {
 fn main() {
     // Do not install tracing: SDP, candidates and camera command lines are private.
     str0m::crypto::from_feature_flags().install_process_default();
-    if engine::run(Options::parse()).is_err() {
+    let options = Options::parse();
+    let result = if options.motion {
+        motion_worker::run()
+    } else {
+        engine::run(options)
+    };
+    if result.is_err() {
         eprintln!("homesec-webrtc: worker_failed");
         std::process::exit(1);
     }

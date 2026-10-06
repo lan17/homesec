@@ -248,18 +248,25 @@ impl Viewer {
     fn assert_video_decodes(&self) {
         let mut sample = tempfile::NamedTempFile::new().unwrap();
         sample.write_all(&self.video_sample).unwrap();
+        // Bound FFmpeg thread pools when media tests run in parallel.
         let output = Command::new("ffmpeg")
             .args([
                 "-hide_banner",
                 "-loglevel",
                 "error",
                 "-xerror",
+                "-filter_threads",
+                "1",
+                "-threads",
+                "1",
                 "-f",
                 "h264",
                 "-i",
             ])
             .arg(sample.path())
             .args([
+                "-threads",
+                "1",
                 "-frames:v",
                 "1",
                 "-pix_fmt",
@@ -270,7 +277,11 @@ impl Viewer {
             ])
             .output()
             .unwrap();
-        assert!(output.status.success(), "received H.264 did not decode");
+        assert!(
+            output.status.success(),
+            "received H.264 did not decode: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(output.stdout.len(), 160 * 120 * 3);
     }
 }

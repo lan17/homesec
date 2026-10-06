@@ -69,3 +69,83 @@ impl Reply {
         }
     }
 }
+
+pub enum Control<T> {
+    Request(T),
+    End,
+}
+
+/// Shared bounded stdin transport. A malformed or unfinished message ends the worker.
+pub fn controls<T: Send + 'static>(
+    waker: std::sync::Arc<mio::Waker>,
+    decode: fn(&[u8]) -> Option<T>,
+) -> std::sync::mpsc::Receiver<Control<T>> {
+    use std::io::{self, BufRead, Read};
+    let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+    std::thread::spawn(move || {
+        let mut input = io::stdin().lock();
+        loop {
+            let mut bytes = Vec::new();
+            let read = (&mut input)
+                .take((MAX_CONTROL_BYTES + 1) as u64)
+                .read_until(b'\n', &mut bytes);
+            let Ok(size) = read else { break };
+            if size == 0 || size > MAX_CONTROL_BYTES || bytes.last() != Some(&b'\n') {
+                break;
+            }
+            let Some(request) = decode(&bytes) else { break };
+            if sender.send(Control::Request(request)).is_err() {
+                return;
+            }
+            let _ = waker.wake();
+        }
+        let _ = sender.send(Control::End);
+        let _ = waker.wake();
+    });
+    receiver
+}
+
+struct Output {
+    bytes: Vec<u8>,
+    completed: std::sync::mpsc::SyncSender<bool>,
+}
+
+/// An abandoned parent cannot block the camera lifecycle on a full stdout pipe.
+/// A single writer preserves reply order; both queueing and completion are bounded.
+pub fn output(value: &impl Serialize) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, Write};
+    use std::sync::{OnceLock, mpsc};
+    use std::time::Duration;
+    static WRITER: OnceLock<mpsc::SyncSender<Output>> = OnceLock::new();
+    let writer = WRITER.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel::<Output>(1);
+        std::thread::spawn(move || {
+            let mut stdout = io::stdout().lock();
+            while let Ok(message) = receiver.recv() {
+                let written = stdout
+                    .write_all(&message.bytes)
+                    .and_then(|_| stdout.flush())
+                    .is_ok();
+                let _ = message.completed.try_send(written);
+                if !written {
+                    return;
+                }
+            }
+        });
+        sender
+    });
+    let mut bytes = serde_json::to_vec(value)?;
+    // SDP escaping can expand otherwise bounded signaling strings.
+    if bytes.len() > MAX_CONTROL_BYTES * 4 {
+        return Err("control_output_overflow".into());
+    }
+    bytes.push(b'\n');
+    let (completed, acknowledgement) = mpsc::sync_channel(1);
+    writer
+        .try_send(Output { bytes, completed })
+        .map_err(|_| "control_output_failed")?;
+    match acknowledgement.recv_timeout(Duration::from_millis(500)) {
+        Ok(true) => Ok(()),
+        _ => Err("control_output_failed".into()),
+    }
+}

@@ -5,8 +5,9 @@ until enabled in config. HomeSec supervises a `homesec-webrtc` Rust helper for
 each active camera. Viewers share one preview RTSP input per camera. Video-only
 H.264 copy mode uses native Rust RTSP ingestion; transcoding and audio-enabled
 configurations use FFmpeg for H.264 video and optional Opus audio. Recording,
-motion detection, and push-to-talk retain their existing paths and camera
-session requirements.
+motion detection, and push-to-talk retain separate camera inputs. Eligible CPU
+H.264 motion detection now uses the Rust helper and linked FFmpeg/OpenCV libraries;
+recording still uses the existing FFmpeg process and Python recording policy.
 
 The initial deployment scope is direct UDP connectivity over LAN or VPN. HTTP
 signaling uses the existing HomeSec server and authentication. Media travels
@@ -110,15 +111,15 @@ the WebRTC control loop. Python requests graceful stop and allows camera teardow
 to finish before falling back to bounded process-group termination.
 
 Native media assembly and delivery queues have byte/count limits. Retina's RTSP
-control-response parser currently exposes no response-size limit, so oversized
+client options currently expose no response-size limit, so oversized
 camera responses can consume memory before the I/O deadline. This first mode
 is intended for operator-configured cameras on a trusted LAN/VPN; it does not
 provide a total memory bound against a malicious RTSP server. A library-level
 response cap is required before migrating shared recording into this process.
 
 This is the first step of the [shared Rust media plan](shared-rust-media.md).
-Recording and motion still use their existing independent inputs. FFmpeg and
-ffprobe remain required for those paths and for preview transcoding/audio.
+Recording and motion still own independent inputs. FFmpeg and ffprobe remain
+required for recording, compatible motion fallback, and preview transcoding/audio.
 
 The preview input decoder uses slice threading rather than frame threading.
 Frame threading queues future frames and can add about a second of delay at
@@ -134,11 +135,51 @@ Closing a viewer detaches only that peer. The camera-level force-stop operation
 and recording-priority shedding stop the shared preview and all its peers.
 Runtime replacement also invalidates old sessions.
 
+## Native motion detection
+
+HomeSec prefers Rust motion detection for compatible H.264 CPU inputs when the
+helper is available. Rust calls the bundled FFmpeg decode and filter libraries
+directly, then calls statically linked OpenCV 4.12.0 for Gaussian blur, absolute
+difference, thresholding, and changed-pixel counting. The detector borrows each
+prepared input frame for one call and reuses its owned image buffers.
+It prepares the same 320x240 grayscale frames at 10 fps and uses the existing
+motion settings, including blur normalization and recording sensitivity.
+If startup cannot supply its first frame within the source's existing read or
+readiness deadline, HomeSec releases the native helper and selects compatibility
+motion. This avoids repeated native restarts for cameras with longer keyframe
+intervals. Once native input supplies a frame, missing frames continue through
+the existing source stall and reconnect policy.
+
+The RTSP source supervises the motion helper using the selected motion stream,
+independent of preview viewers. Python receives typed motion observations rather
+than raw pixels in JSON and retains recording, reconnect, stall, and upload policy.
+Rust does not record video or audio in this stage.
+
+Hardware decoding, custom FFmpeg input flags, unsupported camera inputs, or an
+unavailable native helper use the existing FFmpeg/OpenCV path. This compatibility
+fallback preserves the existing configuration; it does not require a second set
+of motion settings. A helper failure must release its camera input before fallback
+opens another one. Operational logs identify the selected path and stable failure
+reasons without exposing camera credentials or media.
+
 ## Docker
 
 The Docker image builds the helper with the pinned Rust toolchain and installs it
-at `/usr/local/bin/homesec-webrtc`. Rust tooling is confined to the build stage;
-FFmpeg is already part of the runtime image.
+at `/usr/local/bin/homesec-webrtc`. The same `make rust-build` recipe used locally
+builds verified FFmpeg 8.1.3 and OpenCV 4.12.0 source and statically links their
+libraries into the helper. Rust, native headers, CMake, and libclang are confined
+to the build stage. The image checks that the runtime can load the helper and
+that it has no shared OpenCV or libav dependency. Standard C/C++ runtime libraries
+remain OS dependencies.
+The system FFmpeg command-line tools remain in the image for recording, preview
+transcoding/audio, and compatibility motion.
+
+The bundled FFmpeg license and source/build notice are installed in
+`/usr/share/licenses/homesec-ffmpeg/`. The
+[notice](../native/webrtc/FFMPEG-NOTICE.md) identifies the exact source archive,
+checksum, and recipe for rebuilding the helper. OpenCV, its bundled zlib, and the
+Rust binding license/notice are installed in `/usr/share/licenses/homesec-opencv/`;
+the [OpenCV notice](../native/webrtc/OPENCV-NOTICE.md) identifies their sources.
 
 The bundled Compose file publishes UDP `8189-8199` alongside HTTP `8081`. The UDP
 ports are used only by the WebRTC backend. Remove that mapping for HLS-only
@@ -163,21 +204,71 @@ For a source checkout on Linux or macOS, install these developer tools first:
 
 - Rust via [rustup](https://rust-lang.org/tools/install/). The repository's
   `rust-toolchain.toml` selects the compiler and required components.
-- A C compiler/linker for the bundled native crypto dependency. On macOS, use
-  Xcode Command Line Tools (`xcode-select --install`).
+- Python 3, Make, C and C++ compilers/linkers, Clang, and the libclang shared library for
+  native bindings.
+  On macOS, use Xcode Command Line Tools (`xcode-select --install`).
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+
   or 22.12+, and pnpm 10.15.1 (the version in `ui/package.json`).
-- FFmpeg, including `ffprobe`, on `PATH`.
+- FFmpeg, including `ffprobe`, on `PATH` for recording, preview transcoding/audio,
+  and compatibility motion.
+- `pkg-config` so the Rust build can find the privately built libraries.
+- CMake to compile the private OpenCV libraries.
+- Optional NASM on x86 hosts for FFmpeg assembly optimizations. The build disables
+  x86 assembly when NASM is unavailable.
 
 On Debian/Ubuntu, install the compiler tools, FFmpeg, and libraries required by
 the existing OpenCV dependency with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential ffmpeg libgl1 libglib2.0-0
+sudo apt-get install build-essential python3 cmake clang libclang-dev pkg-config ffmpeg nasm \
+  libgl1 libglib2.0-0
 ```
 
 On Ubuntu 24.04, use `libglib2.0-0t64` in place of `libglib2.0-0`.
+
+On macOS with Xcode Command Line Tools installed:
+
+```bash
+brew install python cmake ffmpeg pkg-config
+```
+
+`make rust-build` and `make rust-check` download exact
+[FFmpeg 8.1.3](https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz) and
+[OpenCV 4.12.0](https://github.com/opencv/opencv/tree/4.12.0) source archives,
+verify their pinned SHA-256 checksums, and build the required libraries privately.
+OpenCV builds only `core` and `imgproc`, with bundled static zlib. Cargo pins the
+Rust bindings to `opencv = "=0.101.0"`; the native version and archive checksum
+are recorded in `native/webrtc/Cargo.toml` metadata and enforced by the build.
+System FFmpeg/OpenCV development packages are unnecessary. The helper links
+private static archives and does not load system OpenCV or libav shared libraries.
+Use the Make targets or build wrapper; direct Cargo builds without the pinned
+private build environment are refused.
+
+Verified downloads and compiled libraries remain under the operating system's
+temporary directory in `homesec-native-<uid>/`.
+Matching platform, compiler, and build recipes reuse the caches. Clearing them
+causes a fresh download and build. No libraries are installed globally.
+
+Each private FFmpeg installation retains `COPYING.LGPLv2.1`. The
+[bundled-component notice](../native/webrtc/FFMPEG-NOTICE.md) records its source
+and rebuild recipe; keep the license and notice with a separately packaged helper.
+The OpenCV installation retains `LICENSE` and `ZLIB-LICENSE`; distribute these,
+`native/webrtc/OPENCV-BINDINGS-LICENSE`, and the
+[OpenCV notice](../native/webrtc/OPENCV-NOTICE.md) with the helper too.
+
+The first build needs internet access and compiles both libraries using the available CPU
+count. Limit CPU and memory use on a shared host with:
+
+```bash
+FFMPEG_JOBS=4 make rust-build
+```
+
+The existing `FFMPEG_JOBS` setting limits both native builds and also applies to
+`make rust-check` and `make dev-setup`. If bindgen
+cannot locate libclang, set `LIBCLANG_PATH` to the directory containing
+`libclang.so` or `libclang.dylib`; on a standard macOS Command Line Tools
+installation this is `/Library/Developer/CommandLineTools/usr/lib`.
 
 Then prepare the checkout:
 
@@ -185,8 +276,10 @@ Then prepare the checkout:
 make dev-setup
 ```
 
-This checks the tools before syncing Python and UI dependencies from their
-lockfiles, building the Rust helper, and building the UI. It does not install
+This checks tools before syncing Python and UI dependencies from their lockfiles,
+building the bundled native libraries and Rust helper, and building the UI. The
+native build also verifies that libclang can generate bindings and that the
+private FFmpeg/OpenCV headers and static libraries can link. It does not install
 global tools or OS packages, start services, or run database migrations.
 Rustup may download the repository's pinned toolchain on its first use.
 
@@ -198,16 +291,23 @@ Python CLI directly, set `preview.config.helper_path` to the absolute
 `native/webrtc/target/release/homesec-webrtc` path, or add its directory to `PATH`.
 `CARGO_TARGET_DIR` is respected when choosing the release-helper directory.
 
-After Rust edits, run `make rust-build` and stop/start preview to launch the new
-helper. Python and UI changes do not require a Rust rebuild. For UI hot reload,
+After Rust edits, run `make rust-build` and restart HomeSec to launch the new
+motion helper. Stop/start preview also launches a rebuilt preview helper. Python
+and UI changes do not require a Rust rebuild. For UI hot reload,
 use `make ui-run-local VITE_API_PROXY_TARGET=http://127.0.0.1:8081`, replacing
 the proxy URL with the backend's address.
 
-For Python installations outside a source checkout, `cargo install --path
-native/webrtc --locked` builds and installs the helper, normally in
-`~/.cargo/bin`. Add that directory to the HomeSec service's `PATH`, or configure
-an absolute helper path. An absent or incompatible helper makes WebRTC preview
-unavailable; it does not affect the HLS backend.
+For Python installations outside a source checkout, use the same bundled-library
+build wrapper from a matching HomeSec checkout to install the helper:
+
+```bash
+python3 native/webrtc/build_native.py -- cargo install --path native/webrtc --locked
+```
+
+This normally installs it in `~/.cargo/bin`. Add that directory to the HomeSec
+service's `PATH`, or configure an absolute helper path. An absent or incompatible
+helper makes WebRTC preview unavailable and selects compatible legacy motion;
+it does not affect the HLS backend.
 
 ```bash
 make rust-check # Formatting, Clippy, and Rust tests.
