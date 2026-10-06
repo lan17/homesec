@@ -28,4 +28,10 @@ tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
 url = "2"
 
 [dev-dependencies]
+socket2 = "0.5"
 tempfile = "3"
+
+# Retina 0.4.20's connection has no incremental RTSP control-message bound.
+# Keep its authentication/session stack with the narrow patch described here.
+[patch.crates-io]
+retina = { path = "vendor/retina" }

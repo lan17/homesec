@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,6 +15,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from homesec.models.clip import Clip
 from homesec.models.config import CameraTalkConfig, TalkConfig
 from homesec.models.talk import (
     TalkCapabilityProbeResult,
@@ -36,7 +39,7 @@ from homesec.sources.rtsp.preflight import (
     CameraPreflightOutcome,
     PreflightError,
 )
-from homesec.sources.rtsp.recorder import FfmpegRecorder
+from homesec.sources.rtsp.recorder import FfmpegRecorder, RecordingHandle
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 from homesec.sources.rtsp.talk.errors import RTSPAuthenticationError
 from homesec.sources.rtsp.talk.manager import TalkManagerError
@@ -112,16 +115,22 @@ class DummyProc:
 
 
 class FakeRecorder:
-    def __init__(self) -> None:
+    def __init__(
+        self, *, finalized: bool | None = None, stop_error: Exception | None = None
+    ) -> None:
         self.started: list[Path] = []
-        self.stopped: list[DummyProc] = []
-        self.dead: set[DummyProc] = set()
+        self.stopped: list[RecordingHandle] = []
+        self.dead: set[RecordingHandle] = set()
+        self.calls: list[str] = []
+        self.finalized = finalized
+        self.stop_error = stop_error
         self.fail_start = False
         self.start_calls = 0
         self._pid = 1000
 
     def start(self, output_file: Path, stderr_log: Path) -> DummyProc | None:
         _ = stderr_log
+        self.calls.append("start")
         self.start_calls += 1
         if self.fail_start:
             return None
@@ -130,11 +139,15 @@ class FakeRecorder:
         self.started.append(output_file)
         return proc
 
-    def stop(self, proc: DummyProc, output_file: Path | None) -> None:
+    def stop(self, proc: RecordingHandle, output_file: Path | None) -> bool | None:
         _ = output_file
+        self.calls.append("stop")
         self.stopped.append(proc)
+        if self.stop_error is not None:
+            raise self.stop_error
+        return self.finalized
 
-    def is_alive(self, proc: DummyProc) -> bool:
+    def is_alive(self, proc: RecordingHandle) -> bool:
         return proc not in self.dead
 
 
@@ -1961,6 +1974,39 @@ def test_stop_delay_resets_on_motion(tmp_path: Path) -> None:
     assert source.last_motion_time is None
 
 
+def test_rotation_duration_starts_after_the_new_recorder_is_ready(tmp_path: Path) -> None:
+    # Given: A recorder whose second startup waits three seconds for a usable keyframe.
+    clock = FakeClock()
+
+    class KeyframeRecorder(FakeRecorder):
+        def start(self, output_file: Path, stderr_log: Path) -> DummyProc | None:
+            proc = super().start(output_file, stderr_log)
+            if self.start_calls == 2:
+                clock.sleep(3.0)
+            return proc
+
+    recorder = KeyframeRecorder()
+    source = RTSPSource(
+        _make_config(tmp_path, recording={"max_recording_s": 5.0}),
+        camera_name="cam",
+        recorder=recorder,
+        clock=clock,
+    )
+    source.start_recording()
+    clock.sleep(5.0)
+    source.last_motion_time = clock.now()
+    source._rotate_recording_if_needed()
+
+    # When: Four seconds of the new usable clip elapse while motion continues.
+    clock.sleep(4.0)
+    source.last_motion_time = clock.now()
+    source._rotate_recording_if_needed()
+
+    # Then: Startup waiting does not prematurely rotate the new clip.
+    assert recorder.calls == ["start", "start", "stop"]
+    source.stop_recording()
+
+
 def test_recording_rotates_after_max_duration(tmp_path: Path) -> None:
     """Recording should rotate when max duration is exceeded during motion."""
     # Given: a recording that has exceeded max_recording_s with recent motion
@@ -1990,6 +2036,99 @@ def test_recording_rotates_after_max_duration(tmp_path: Path) -> None:
     assert source.recording_process is not old_proc
     assert source.recording_start_time == clock.now()
     assert source.last_motion_time == clock.now()
+
+
+@pytest.mark.parametrize("finalized", [True, False, None])
+@pytest.mark.parametrize("finish", ["stop", "health_failure", "rotation", "rotation_start_failure"])
+def test_recording_handoff_requires_successful_finalization(
+    tmp_path: Path, finalized: bool | None, finish: str
+) -> None:
+    # Given: a recorder-owned handle and nonempty bytes that may still lack a finalized container
+    recorder = FakeRecorder(finalized=finalized)
+    clock = FakeClock(start=1.0)
+    config = _make_config(tmp_path, recording={"max_recording_s": 5.0, "stop_delay": 10.0})
+    source = RTSPSource(config, camera_name="cam", recorder=recorder, clock=clock)
+    clips: list[Clip] = []
+    source.register_callback(clips.append)
+    source.start_recording()
+    output = recorder.started[0]
+    output.write_bytes(b"container bytes awaiting the recorder's finalization decision")
+    handle = source.recording_process
+    assert handle is not None
+
+    # When: each recording completion path stops the owner and receives its finalization result
+    if finish == "stop":
+        source.stop_recording()
+    elif finish == "health_failure":
+        recorder.dead.add(handle)
+        assert not source.check_recording_health()
+    else:
+        source.last_motion_time = clock.now()
+        clock.sleep(6.0)
+        recorder.fail_start = finish == "rotation_start_failure"
+        source._rotate_recording_if_needed()
+
+    # Then: only successful or legacy finalization reaches the pipeline callback
+    assert [clip.local_path for clip in clips] == ([output] if finalized is not False else [])
+    assert recorder.stopped == [handle]
+    if finish == "rotation":
+        assert recorder.calls == ["start", "start", "stop"]
+        assert len(recorder.started) == 2
+    elif finish == "rotation_start_failure":
+        assert recorder.calls == ["start", "start", "stop", "start"]
+    else:
+        assert recorder.calls == ["start", "stop"]
+
+
+def test_recording_finalization_exception_refuses_clip_handoff(tmp_path: Path) -> None:
+    # Given: a recorder that raises before it can confirm a nonempty container was finalized
+    recorder = FakeRecorder(stop_error=OSError("cannot flush recording trailer"))
+    source = RTSPSource(_make_config(tmp_path), camera_name="cam", recorder=recorder)
+    clips: list[Clip] = []
+    source.register_callback(clips.append)
+    source.start_recording()
+    output = recorder.started[0]
+    output.write_bytes(b"unfinished container")
+
+    # When: recording stops after the finalization error
+    source.stop_recording()
+
+    # Then: the source releases the recording lifetime without delivering unfinished bytes
+    assert clips == []
+    assert recorder.calls == ["start", "stop"]
+    source.start_recording()
+    assert recorder.calls == ["start", "stop", "start"]
+
+
+def test_ffmpeg_recorder_retains_subprocess_stop_contract(tmp_path: Path) -> None:
+    # Given: a live subprocess owned by the legacy recorder
+    recorder = FfmpegRecorder(
+        rtsp_url="rtsp://host/stream",
+        ffmpeg_flags=[],
+        rtsp_connect_timeout_s=1.0,
+        rtsp_io_timeout_s=1.0,
+        clock=FakeClock(),
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    handle: RecordingHandle = process
+    try:
+        # When: the recorder checks and stops it through the generalized handle boundary
+        assert recorder.is_alive(handle)
+        outcome = recorder.stop(handle, tmp_path / "clip.mp4")
+
+        # Then: legacy stopping reaps its process and preserves the None finalization result
+        assert outcome is None
+        assert not recorder.is_alive(handle)
+        assert handle.returncode is not None
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
 
 
 def test_stall_grace_applies_while_recording(tmp_path: Path) -> None:

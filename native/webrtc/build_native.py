@@ -58,7 +58,7 @@ FFMPEG = NativeDependency(
 FFMPEG_CONFIGURE = (
     "--disable-everything",
     "--disable-autodetect",
-    "--disable-network",
+    "--enable-network",
     "--disable-shared",
     "--enable-static",
     "--enable-pic",
@@ -69,13 +69,14 @@ FFMPEG_CONFIGURE = (
     "--disable-ffplay",
     "--disable-ffprobe",
     "--enable-ffmpeg",
-    "--enable-decoder=h264",
-    "--enable-parser=h264",
-    "--enable-demuxer=h264",
-    "--enable-protocol=file,pipe",
+    "--enable-decoder=h264,aac",
+    "--enable-parser=h264,aac",
+    "--enable-demuxer=h264,mov,rtsp,rtp",
+    "--enable-protocol=file,pipe,tcp,udp,rtp",
+    "--enable-bsf=extract_extradata",
     "--enable-filter=fps,scale,format",
     "--enable-encoder=rawvideo",
-    "--enable-muxer=rawvideo",
+    "--enable-muxer=rawvideo,mp4",
 )
 OPENCV_CONFIGURE = (
     "-DCMAKE_BUILD_TYPE=Release",
@@ -262,6 +263,7 @@ def private_environment(
 def build_ffmpeg(
     source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
 ) -> None:
+    patch_ffmpeg_rtsp(source)
     for command in (
         ["./configure", f"--prefix={prefix}", *options],
         ["make", f"-j{jobs}"],
@@ -271,6 +273,77 @@ def build_ffmpeg(
             command, cwd=source, env=private_environment(prefix), stdout=log, stderr=log, check=True
         )
     shutil.copyfile(source / "COPYING.LGPLv2.1", prefix / "COPYING.LGPLv2.1")
+
+
+FFMPEG_RTSP_PATCH: tuple[tuple[str, str], ...] = (
+    (
+        "        reply->content_length = strtol(p, NULL, 10);",
+        "        long content_length = strtol(p, NULL, 10);\n"
+        "        reply->content_length = content_length < 0 || content_length > 262144\n"
+        "                              ? -1 : content_length;",
+    ),
+    (
+        "    int ret, content_length, line_count, request;",
+        "    int ret, content_length, line_count, request;\n    int control_bytes;",
+    ),
+    (
+        "start:\n    line_count = 0;",
+        "start:\n    control_bytes = 0;\n    line_count = 0;",
+    ),
+    (
+        "            ret = ffurl_read_complete(rt->rtsp_hd, &ch, 1);",
+        "            if (control_bytes >= 262144)\n"
+        "                return AVERROR_INVALIDDATA;\n"
+        "            ret = ffurl_read_complete(rt->rtsp_hd, &ch, 1);",
+    ),
+    (
+        '            av_log(s, AV_LOG_TRACE, "ret=%d c=%02x [%c]\\n", ret, ch, ch);',
+        "            control_bytes++;\n"
+        '            av_log(s, AV_LOG_TRACE, "ret=%d c=%02x [%c]\\n", ret, ch, ch);',
+    ),
+    (
+        "            if (ch == '$' && q == buf) {",
+        "            if (ch == '$' && q == buf) {\n"
+        "                control_bytes--; /* Interleaved media has its own u16 bound. */",
+    ),
+    (
+        "    content_length = reply->content_length;\n    if (content_length > 0) {",
+        "    content_length = reply->content_length;\n"
+        "    if (content_length < 0 || content_length > 262144 - control_bytes)\n"
+        "        return AVERROR_INVALIDDATA;\n"
+        "    if (content_length > 0) {",
+    ),
+)
+
+
+def patch_ffmpeg_rtsp(source: Path) -> None:
+    """Apply the narrow control-message guard to the verified pinned source."""
+    path = source / "libavformat/rtsp.c"
+    text = path.read_text()
+    for original, replacement in FFMPEG_RTSP_PATCH:
+        if text.count(original) != 1:
+            raise RuntimeError("Pinned FFmpeg RTSP patch context differs from verified source")
+        text = text.replace(original, replacement)
+    path.write_text(text)
+    parser = source / "libavcodec/h264_parser.c"
+    text = parser.read_text()
+    original = "        if (ff_combine_frame(pc, next, &buf, &buf_size) < 0) {"
+    replacement = (
+        "        /* HomeSec bounds incomplete access units before parser allocation. */\n"
+        "        if (buf_size > 2097152 || pc->index > 2097152 - buf_size) {\n"
+        "            av_freep(&pc->buffer);\n"
+        "            pc->buffer_size = 0;\n"
+        "            pc->index = pc->last_index = pc->overread = pc->overread_index = 0;\n"
+        "            pc->frame_start_found = 0;\n"
+        "            pc->state = -1;\n"
+        "            *poutbuf = NULL;\n"
+        "            *poutbuf_size = 0;\n"
+        "            return buf_size;\n"
+        "        }\n\n" + original
+    )
+    if text.count(original) != 1:
+        raise RuntimeError("Pinned FFmpeg H.264 patch context differs from verified source")
+    parser.write_text(text.replace(original, replacement))
 
 
 def build_opencv(
