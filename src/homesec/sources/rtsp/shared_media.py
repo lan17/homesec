@@ -29,6 +29,7 @@ from homesec.sources.rtsp.webrtc_publisher import (
     _HelperClient,
     _HelperMessage,
     _PreviewHelper,
+    _PreviewSettings,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,8 @@ class _SharedRequest(BaseModel):
         "recording_status",
     ]
     rtsp_url: str | None = Field(default=None, min_length=1, max_length=16 * 1024)
+    ffmpeg_args: list[str] | None = None
+    preview_settings: _PreviewSettings | None = None
     session_id: str | None = Field(default=None, max_length=128)
     sdp: str | None = Field(default=None, max_length=48_000)
     lease_seconds: float | None = Field(default=None, gt=0, le=86400)
@@ -72,7 +75,14 @@ class _SharedRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_fields(self) -> _SharedRequest:
-        if self.command in ("start", "start_motion", "start_recording") and not self.rtsp_url:
+        if self.command == "start":
+            if (self.ffmpeg_args is None) == (self.rtsp_url is None):
+                raise ValueError("Preview startup requires exactly one input")
+            if self.ffmpeg_args is not None and not self.ffmpeg_args:
+                raise ValueError("Preview startup requires arguments")
+        if self.preview_settings is not None and (self.command != "start" or self.rtsp_url is None):
+            raise ValueError("Native preview settings require an RTSP input")
+        if self.command in ("start_motion", "start_recording") and not self.rtsp_url:
             raise ValueError("Media startup requires an input")
         if self.command == "start_motion" and any(
             value is None
@@ -358,7 +368,7 @@ class _SharedPreviewClient:
         with self.owner._preview_lock:
             if self.stopped or self.owner._preview is not self:
                 raise HelperError("Preview consumer has stopped")
-            if command == "start":
+            if command == "start" and "rtsp_url" in fields:
                 fields.setdefault("connect_timeout_s", self.owner._connect_timeout_s)
                 fields.setdefault("io_timeout_s", self.owner._io_timeout_s)
             return self.helper.request(command, timeout_s=timeout_s, **fields)

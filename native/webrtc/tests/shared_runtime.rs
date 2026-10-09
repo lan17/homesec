@@ -181,6 +181,8 @@ struct Viewer {
     frames: usize,
     keyframes: usize,
     sample: Vec<u8>,
+    audio_samples: Vec<Vec<u8>>,
+    clock_origins: [Option<f64>; 2],
 }
 
 impl Viewer {
@@ -209,6 +211,8 @@ impl Viewer {
             frames: 0,
             keyframes: 0,
             sample: Vec::new(),
+            audio_samples: Vec::new(),
+            clock_origins: [None, None],
         }
     }
 
@@ -244,11 +248,25 @@ impl Viewer {
                 }
                 Output::Event(Event::Connected) => self.connected = true,
                 Output::Event(Event::MediaData(data)) => {
-                    assert_eq!(data.params.spec().codec, Codec::H264);
-                    self.frames += 1;
-                    self.keyframes += usize::from(data.is_keyframe());
-                    if self.frames <= 3 {
-                        self.sample.extend_from_slice(&data.data);
+                    let video = data.params.spec().codec == Codec::H264;
+                    assert!(video || data.params.spec().codec == Codec::Opus);
+                    if let Some(info) = data.last_sender_info {
+                        let origin = info
+                            .ntp_time
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64()
+                            - info.rtp_time.as_seconds();
+                        self.clock_origins[usize::from(!video)] = Some(origin);
+                    }
+                    if video {
+                        self.frames += 1;
+                        self.keyframes += usize::from(data.is_keyframe());
+                        if self.frames <= 3 {
+                            self.sample.extend_from_slice(&data.data);
+                        }
+                    } else if self.audio_samples.len() < 8 {
+                        self.audio_samples.push(data.data.to_vec());
                     }
                 }
                 Output::Timeout(_) => break,
@@ -266,6 +284,38 @@ impl Viewer {
         sample.write_all(&self.sample).unwrap();
         assert_decode(sample.path(), true);
     }
+}
+
+fn assert_opus_decodes(viewer: &Viewer) {
+    use ffmpeg_next::{codec, ffi, frame};
+    let mut parameters = codec::Parameters::new();
+    // SAFETY: Own this fresh parameter object; set the negotiated browser codec.
+    unsafe {
+        let raw = &mut *parameters.as_mut_ptr();
+        raw.codec_type = ffi::AVMediaType::AVMEDIA_TYPE_AUDIO;
+        raw.codec_id = ffi::AVCodecID::AV_CODEC_ID_OPUS;
+        raw.sample_rate = 48_000;
+        ffi::av_channel_layout_default(&mut raw.ch_layout, 2);
+    }
+    let mut decoder = codec::Context::from_parameters(parameters)
+        .unwrap()
+        .decoder()
+        .audio()
+        .unwrap();
+    let mut count = 0;
+    for bytes in &viewer.audio_samples {
+        decoder
+            .send_packet(&ffmpeg_next::Packet::copy(bytes))
+            .unwrap();
+        let mut audio = frame::Audio::empty();
+        while decoder.receive_frame(&mut audio).is_ok() {
+            assert_eq!(audio.rate(), 48_000);
+            assert_eq!(audio.channels(), 2);
+            assert!(audio.samples() > 0);
+            count += 1;
+        }
+    }
+    assert!(count >= 3, "received Opus must actually decode");
 }
 
 fn progress_until(viewers: &mut [&mut Viewer], complete: impl Fn(&[&mut Viewer]) -> bool) {
@@ -721,4 +771,111 @@ fn parent_eof_finalizes_owned_recording_and_releases_every_source_and_socket() {
         let port = helper.ready[key].as_u64().unwrap();
         assert!(UdpSocket::bind(format!("127.0.0.1:{port}")).is_ok());
     }
+}
+
+#[test]
+fn native_preview_audio_and_transcoding_share_input_with_recording_and_two_viewers() {
+    for video_codec in ["h264", "copy"] {
+        // Given: One H.264/AAC camera serves native motion and copied recording.
+        let camera = RtspCamera::start("H264_AAC");
+        let directory = tempfile::tempdir().unwrap();
+        let first_clip = directory.path().join("first.mp4");
+        let next_clip = directory.path().join("next.mp4");
+        let mut helper = Helper::start(true);
+        assert_eq!(helper.ready["native_preview"], true);
+        helper.start_motion(&camera, 5.0);
+        helper.success(json!({"command": "read_motion", "threshold": 0.1, "wait_timeout_s": 5.0}));
+        helper.success(json!({"command":"start_recording", "recording_id":"first", "rtsp_url":camera.url,
+            "output_path":first_clip, "audio_mode":"copy", "connect_timeout_s":5.0,"io_timeout_s":5.0}));
+
+        // When: Configured native preview converts audio, with shared two-viewer output.
+        helper.success(json!({"command":"start", "rtsp_url":camera.url,
+            "preview_settings":{"video_codec":video_codec,"audio_enabled":true},
+            "connect_timeout_s":5.0,"io_timeout_s":5.0}));
+        let mut first = Viewer::attach(&mut helper, "first-viewer");
+        let mut second = Viewer::attach(&mut helper, "second-viewer");
+        progress_until(&mut [&mut first, &mut second], |viewers| {
+            viewers.iter().all(|v| {
+                v.ready()
+                    && v.audio_samples.len() >= 3
+                    && v.clock_origins.iter().all(Option::is_some)
+            })
+        });
+
+        // Then: Video and Opus decode, source media clocks align, and no extra PLAY occurs.
+        for viewer in [&first, &second] {
+            viewer.assert_decodes();
+            assert_opus_decodes(viewer);
+            let clock_delta = viewer.clock_origins[0].unwrap() - viewer.clock_origins[1].unwrap();
+            assert!(
+                clock_delta.abs() < 0.010,
+                "source A/V timeline drifted by {clock_delta}s in {video_codec}"
+            );
+        }
+        assert_eq!(camera.count("PLAY"), 1);
+        helper.success(json!({"command":"start_recording", "recording_id":"next", "rtsp_url":camera.url,
+            "output_path":next_clip, "audio_mode":"copy", "connect_timeout_s":5.0,"io_timeout_s":5.0}));
+        helper.stop_recording("first");
+        helper.recording_active("next");
+
+        // When: Preview and motion stop, then preview restarts on the still-active input.
+        helper.success(json!({"command":"stop_preview"}));
+        helper.success(json!({"command":"stop_motion"}));
+        helper.recording_active("next");
+        helper.success(json!({"command":"start", "rtsp_url":camera.url,
+            "preview_settings":{"video_codec":video_codec,"audio_enabled":true},
+            "connect_timeout_s":5.0,"io_timeout_s":5.0}));
+        let mut late = Viewer::attach(&mut helper, "late-viewer");
+        progress_until(&mut [&mut late], |viewers| {
+            viewers[0].ready() && viewers[0].audio_samples.len() >= 3
+        });
+        late.assert_decodes();
+        assert_opus_decodes(&late);
+        helper.success(json!({"command":"stop_preview"}));
+        helper.stop_recording("next");
+
+        // Then: Both finalized AAC clips decode and retain original compressed audio.
+        for clip in [&first_clip, &next_clip] {
+            assert_decode(clip, false);
+            let mut input = ffmpeg_next::format::input(clip).unwrap();
+            let index = input
+                .streams()
+                .find(|s| s.parameters().medium() == ffmpeg_next::media::Type::Audio)
+                .unwrap()
+                .index();
+            let source = rtsp_camera::aac_access_units();
+            let packets: Vec<_> = input
+                .packets()
+                .filter(|(s, _)| s.index() == index)
+                .map(|(_, p)| p.data().unwrap().to_vec())
+                .collect();
+            assert!(!packets.is_empty());
+            assert!(packets.iter().all(|packet| source.contains(packet)));
+        }
+        assert_eq!(camera.count("PLAY"), 1);
+        helper.success(json!({"command":"stop"}));
+        helper.wait_exit();
+        assert_eq!(camera.count("TEARDOWN"), 1);
+    }
+}
+
+#[test]
+fn native_audio_enabled_preview_without_camera_audio_still_delivers_video() {
+    // Given: The default audio-enabled preview configuration and a video-only camera.
+    let camera = RtspCamera::start("H264");
+    let mut helper = Helper::start(true);
+    // When: The native path discovers no audio stream.
+    helper.success(json!({"command":"start", "rtsp_url":camera.url,
+        "preview_settings":{"video_codec":"h264","audio_enabled":true},
+        "connect_timeout_s":5.0,"io_timeout_s":5.0}));
+    let mut viewer = Viewer::attach(&mut helper, "video-only-source");
+    progress_until(&mut [&mut viewer], |viewers| viewers[0].ready());
+    // Then: Video decodes and no invented/silent audio packets appear.
+    viewer.assert_decodes();
+    assert!(viewer.audio_samples.is_empty());
+    helper.success(json!({"command":"stop_preview"}));
+    helper.success(json!({"command":"stop"}));
+    helper.wait_exit();
+    assert_eq!(camera.count("PLAY"), 1);
+    assert_eq!(camera.count("TEARDOWN"), 1);
 }

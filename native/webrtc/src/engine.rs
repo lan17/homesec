@@ -106,7 +106,15 @@ impl Peer {
             || (!self.connected && now >= self.negotiation_deadline)
     }
 
-    fn write(&mut self, video: bool, keyframe: bool, time: u64, data: Arc<[u8]>, now: Instant) {
+    fn write(
+        &mut self,
+        video: bool,
+        keyframe: bool,
+        time: u64,
+        data: Arc<[u8]>,
+        wallclock: Instant,
+        now: Instant,
+    ) {
         if !self.connected || self.expired(now) || (video && self.wait_keyframe && !keyframe) {
             return;
         }
@@ -120,7 +128,7 @@ impl Peer {
         };
         if let Some(writer) = self.rtc.writer(mid) {
             if writer
-                .write(pt, now, MediaTime::new(time, frequency), data)
+                .write(pt, wallclock, MediaTime::new(time, frequency), data)
                 .is_err()
             {
                 self.failed = true;
@@ -280,7 +288,8 @@ pub fn run(options: Options) -> Result<()> {
     });
     output(
         &serde_json::json!({"event":"ready", "video_port":video.local_addr()?.port(),
-        "audio_port":audio.local_addr()?.port(), "media_port":candidate_addr.port()}),
+        "audio_port":audio.local_addr()?.port(), "media_port":candidate_addr.port(),
+        "native_preview":options.shared}),
     )?;
     let mut peers: HashMap<String, Peer> = HashMap::new();
     let mut input: Option<MediaInput> = None;
@@ -334,13 +343,20 @@ pub fn run(options: Options) -> Result<()> {
         // Source reads run outside this loop. A bounded batch preserves control
         // and peer deadlines even if the camera produces frames continuously.
         for _ in 0..16 {
+            let mut wallclock = None;
             let event = match &mut input {
                 Some(MediaInput::Rtsp(source)) => source.try_recv(),
                 Some(MediaInput::Ffmpeg { source, .. }) => source.try_recv(),
                 Some(MediaInput::Shared) => shared
                     .as_mut()
                     .ok_or("preview_temporarily_unavailable")
-                    .and_then(SharedRuntime::try_recv_preview),
+                    .and_then(SharedRuntime::try_recv_preview)
+                    .map(|event| {
+                        event.map(|event| {
+                            wallclock = event.wallclock;
+                            event.event
+                        })
+                    }),
                 None => break,
             };
             match event {
@@ -354,7 +370,14 @@ pub fn run(options: Options) -> Result<()> {
                     last_video = Some(now);
                     if let Some(time) = video_clock.extend(frame.timestamp) {
                         for peer in peers.values_mut() {
-                            peer.write(true, frame.keyframe, time, Arc::clone(&frame.data), now);
+                            peer.write(
+                                true,
+                                frame.keyframe,
+                                time,
+                                Arc::clone(&frame.data),
+                                wallclock.unwrap_or(now),
+                                now,
+                            );
                             if peer.pump(&media, now).is_err() {
                                 peer.failed = true;
                             }
@@ -364,7 +387,14 @@ pub fn run(options: Options) -> Result<()> {
                 Ok(Some(SourceEvent::Audio { timestamp, data })) => {
                     if let Some(time) = audio_clock.extend(timestamp) {
                         for peer in peers.values_mut() {
-                            peer.write(false, false, time, Arc::clone(&data), now);
+                            peer.write(
+                                false,
+                                false,
+                                time,
+                                Arc::clone(&data),
+                                wallclock.unwrap_or(now),
+                                now,
+                            );
                             if peer.pump(&media, now).is_err() {
                                 peer.failed = true;
                             }
@@ -413,6 +443,7 @@ pub fn run(options: Options) -> Result<()> {
                     rtsp_url,
                     connect_timeout_s,
                     io_timeout_s,
+                    preview_settings,
                 } => {
                     if started.is_some() {
                         reply = Reply::error(request.request_id, "preview_temporarily_unavailable");
@@ -420,6 +451,7 @@ pub fn run(options: Options) -> Result<()> {
                         match (ffmpeg_args, rtsp_url) {
                             (Some(ffmpeg_args), None)
                                 if !ffmpeg_args.is_empty()
+                                    && preview_settings.is_none()
                                     && ffmpeg_args.iter().map(String::len).sum::<usize>()
                                         <= MAX_CONTROL_BYTES / 2 =>
                             {
@@ -469,11 +501,18 @@ pub fn run(options: Options) -> Result<()> {
                                 };
                                 let source = if let Some(shared) = &mut shared {
                                     shared
-                                        .start_preview(url, connect, io)
+                                        .start_preview(
+                                            url,
+                                            connect,
+                                            io,
+                                            preview_settings.unwrap_or_default(),
+                                        )
                                         .map(|()| MediaInput::Shared)
-                                } else {
+                                } else if preview_settings.is_none() {
                                     RtspSource::start(url, connect, io, Arc::clone(&waker))
                                         .map(MediaInput::Rtsp)
+                                } else {
+                                    Err("unsupported_preview_settings")
                                 };
                                 match source {
                                     Ok(source) => {

@@ -3,7 +3,8 @@
 use crate::camera_input::{CameraInput, Event as CameraEvent, Metadata};
 use crate::decode::{GrayDecoder, GrayFrame};
 use crate::motion::{MotionConfig, MotionDetector};
-use crate::protocol::{Operation, Reply, Request};
+use crate::preview::{AudioTranscoder, VideoTranscoder};
+use crate::protocol::{Operation, PreviewSettings, PreviewVideoCodec, Reply, Request};
 use crate::recording::{EncodedPacket, Mp4Recorder, StreamConfig, Track};
 use crate::rtp::{EncodedFrame, Event};
 use ffmpeg::Rescale;
@@ -119,10 +120,58 @@ struct Recording {
 }
 struct Preview {
     url: String,
-    receiver: mpsc::Receiver<Event>,
+    video: mpsc::Receiver<PreviewEvent>,
+    audio: mpsc::Receiver<PreviewEvent>,
+    audio_turn: bool,
     failure: Failure,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+/// Native output retains source presentation time across independent encoders.
+/// Legacy input paths keep their established arrival-time mapping in the engine.
+pub struct PreviewEvent {
+    pub event: Event,
+    pub wallclock: Option<Instant>,
+}
+
+struct PreviewClock {
+    source_us: i64,
+    wallclock: Instant,
+    max_delay: Duration,
+}
+
+impl PreviewClock {
+    fn new(timestamp: i64, time_base: ffmpeg::Rational, max_delay: Duration) -> Self {
+        Self {
+            source_us: timestamp.rescale(time_base, ffmpeg::Rational(1, 1_000_000)),
+            wallclock: Instant::now(),
+            max_delay,
+        }
+    }
+
+    fn at(&self, timestamp: i64, time_base: ffmpeg::Rational) -> Result<Instant> {
+        let source_us = timestamp.rescale(time_base, ffmpeg::Rational(1, 1_000_000));
+        let delta = source_us
+            .checked_sub(self.source_us)
+            .ok_or("media_timestamp_invalid")?;
+        let distance = Duration::from_micros(delta.unsigned_abs());
+        let wallclock = if delta >= 0 {
+            self.wallclock.checked_add(distance)
+        } else {
+            self.wallclock.checked_sub(distance)
+        }
+        .ok_or("media_timestamp_invalid")?;
+        let now = Instant::now();
+        if now
+            .duration_since(wallclock)
+            .max(wallclock.duration_since(now))
+            > self.max_delay
+        {
+            return Err("media_timestamp_invalid");
+        }
+        Ok(wallclock)
+    }
 }
 
 pub struct SharedRuntime {
@@ -758,13 +807,22 @@ impl SharedRuntime {
         }
         std::mem::take(&mut self.replies)
     }
-    pub fn start_preview(&mut self, url: String, connect: Duration, io: Duration) -> Result<()> {
+    pub fn start_preview(
+        &mut self,
+        url: String,
+        connect: Duration,
+        io: Duration,
+        settings: PreviewSettings,
+    ) -> Result<()> {
         reap_worker(&mut self.retired_preview);
         if self.preview.is_some() || self.retired_preview.is_some() {
             return Err("preview_already_started");
         }
-        let (packets, hub, failure) = self.subscribe(&url, "preview", connect, io, false)?;
-        let (sender, receiver) = mpsc::sync_channel(8);
+        let (packets, hub, failure) =
+            self.subscribe(&url, "preview", connect, io, settings.audio_enabled)?;
+        // Independent complete-video and Opus queues preserve fair draining.
+        let (video_sender, video) = mpsc::sync_channel(8);
+        let (audio_sender, audio) = mpsc::sync_channel(64);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread_failure = Arc::clone(&failure);
@@ -772,58 +830,18 @@ impl SharedRuntime {
         let thread = thread::Builder::new()
             .name("shared-preview".into())
             .spawn(move || {
-                let outcome = (|| {
-                    let metadata = wait_metadata(&hub, &thread_stop, &thread_failure, connect)?;
-                    let mut framing = VideoFraming::new(&metadata.video.parameters)?;
-                    sender
-                        .try_send(Event::Info {
-                            profile_level_id: framing.profile,
-                        })
-                        .map_err(|_| "media_queue_overflow")?;
-                    let _ = waker.wake();
-                    let mut wait_keyframe = true;
-                    let mut previous_timestamp = None;
-                    while !thread_stop.load(Ordering::Acquire) {
-                        if let Some(code) = failure_code(&thread_failure) {
-                            return Err(code);
-                        }
-                        let Some(packet) = receive(&packets, &thread_stop)? else {
-                            continue;
-                        };
-                        if packet.track != Track::Video {
-                            continue;
-                        }
-                        let (data, parameters_changed) = framing.annex_b(
-                            packet.packet.data().ok_or("media_frame_invalid")?,
-                            packet.packet.is_key(),
-                        )?;
-                        // Passthrough preserves the existing no-B-frame browser contract.
-                        if !crate::rtsp::validate_access_unit(&data)? {
-                            continue;
-                        }
-                        let pts = packet.packet.pts().ok_or("media_timestamp_invalid")?;
-                        let timestamp =
-                            pts.rescale(metadata.video.time_base, ffmpeg::Rational(1, 90_000));
-                        if previous_timestamp.is_some_and(|previous| timestamp <= previous) {
-                            return Err("unsupported_frame_reordering");
-                        }
-                        previous_timestamp = Some(timestamp);
-                        wait_keyframe |= parameters_changed;
-                        if wait_keyframe && !packet.packet.is_key() {
-                            continue;
-                        }
-                        wait_keyframe = false;
-                        sender
-                            .try_send(Event::Frame(EncodedFrame {
-                                timestamp: timestamp as u32,
-                                keyframe: packet.packet.is_key(),
-                                data: data.into(),
-                            }))
-                            .map_err(|_| "media_queue_overflow")?;
-                        let _ = waker.wake();
-                    }
-                    Ok(())
-                })();
+                let outcome = preview(
+                    packets,
+                    hub,
+                    settings,
+                    connect,
+                    io,
+                    &thread_stop,
+                    &thread_failure,
+                    &video_sender,
+                    &audio_sender,
+                    &waker,
+                );
                 if let Err(code) = outcome {
                     fail(&thread_failure, code);
                 }
@@ -835,22 +853,41 @@ impl SharedRuntime {
             })?;
         self.preview = Some(Preview {
             url,
-            receiver,
+            video,
+            audio,
+            audio_turn: false,
             failure,
             stop,
             thread: Some(thread),
         });
         Ok(())
     }
-    pub fn try_recv_preview(&mut self) -> Result<Option<Event>> {
-        let preview = self.preview.as_ref().ok_or("preview_not_started")?;
+    pub fn try_recv_preview(&mut self) -> Result<Option<PreviewEvent>> {
+        let preview = self.preview.as_mut().ok_or("preview_not_started")?;
         if let Some(code) = failure_code(&preview.failure) {
             return Err(code);
         }
-        match preview.receiver.try_recv() {
-            Ok(event) => Ok(Some(event)),
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => Err("preview_worker_failed"),
+        let channels = if preview.audio_turn {
+            [&preview.audio, &preview.video]
+        } else {
+            [&preview.video, &preview.audio]
+        };
+        let mut disconnected = false;
+        for channel in channels {
+            match channel.try_recv() {
+                Ok(event) => {
+                    preview.audio_turn =
+                        matches!(event.event, Event::Frame(_) | Event::Info { .. });
+                    return Ok(Some(event));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
+            }
+        }
+        if disconnected {
+            Err("preview_worker_failed")
+        } else {
+            Ok(None)
         }
     }
     pub fn stop_preview(&mut self) {
@@ -1113,6 +1150,172 @@ fn record(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn preview(
+    packets: mpsc::Receiver<Packet>,
+    hub: Arc<Mutex<Hub>>,
+    settings: PreviewSettings,
+    connect: Duration,
+    io: Duration,
+    stop: &AtomicBool,
+    failure: &Failure,
+    video: &mpsc::SyncSender<PreviewEvent>,
+    audio: &mpsc::SyncSender<PreviewEvent>,
+    waker: &Waker,
+) -> Result<()> {
+    let metadata = wait_metadata(&hub, stop, failure, connect)?;
+    let mut framing = (settings.video_codec == PreviewVideoCodec::Copy)
+        .then(|| VideoFraming::new(&metadata.video.parameters))
+        .transpose()?;
+    let mut encoder = (settings.video_codec == PreviewVideoCodec::H264)
+        .then(|| VideoTranscoder::new(metadata.video.parameters.clone(), metadata.video.time_base))
+        .transpose()?;
+    let mut audio_encoder = if settings.audio_enabled {
+        metadata
+            .audio
+            .as_ref()
+            .map(|track| AudioTranscoder::new(track.parameters.clone(), track.time_base))
+            .transpose()?
+    } else {
+        None
+    };
+    let mut clock = None;
+    let mut wait_keyframe = true;
+    let mut profile = None;
+    let mut previous_video = None;
+    let mut previous_audio = None;
+    while !stop.load(Ordering::Acquire) {
+        if let Some(code) = failure_code(failure) {
+            return Err(code);
+        }
+        let Some(packet) = receive(&packets, stop)? else {
+            continue;
+        };
+        match packet.track {
+            Track::Video => {
+                let pts = packet.packet.pts().ok_or("media_timestamp_invalid")?;
+                let copied = if let Some(framing) = &mut framing {
+                    // Even while waiting for an IDR, non-IDR packets may update
+                    // cached SPS/PPS used to initialize the next complete frame.
+                    let (data, changed) = framing.annex_b(
+                        packet.packet.data().ok_or("media_frame_invalid")?,
+                        packet.packet.is_key(),
+                    )?;
+                    wait_keyframe |= changed;
+                    if !crate::rtsp::validate_access_unit(&data)? {
+                        continue;
+                    }
+                    if wait_keyframe && !packet.packet.is_key() {
+                        continue;
+                    }
+                    wait_keyframe = false;
+                    Some(data)
+                } else {
+                    if wait_keyframe && !packet.packet.is_key() {
+                        continue;
+                    }
+                    wait_keyframe = false;
+                    None
+                };
+                let clock = clock
+                    .get_or_insert_with(|| PreviewClock::new(pts, metadata.video.time_base, io));
+                let frames = if let Some(data) = copied {
+                    vec![crate::preview::EncodedVideo {
+                        timestamp: pts
+                            .rescale(metadata.video.time_base, ffmpeg::Rational(1, 90_000)),
+                        keyframe: packet.packet.is_key(),
+                        data: data.into(),
+                    }]
+                } else {
+                    encoder
+                        .as_mut()
+                        .ok_or("preview_encoder_unavailable")?
+                        .push(&packet.packet)?
+                };
+                for frame in frames {
+                    if previous_video.is_some_and(|previous| frame.timestamp <= previous) {
+                        return Err("unsupported_frame_reordering");
+                    }
+                    previous_video = Some(frame.timestamp);
+                    if frame.keyframe {
+                        let nals = annex_nals(&frame.data);
+                        let sps = nals
+                            .iter()
+                            .find(|nal| nal.first().is_some_and(|b| b & 31 == 7))
+                            .ok_or("media_frame_invalid")?;
+                        let pps = nals
+                            .iter()
+                            .find(|nal| nal.first().is_some_and(|b| b & 31 == 8))
+                            .ok_or("media_frame_invalid")?;
+                        let parameters = retina::codec::h264::parameters_from_sps_and_pps(
+                            sps,
+                            pps,
+                            retina::codec::h26x::Framing::AnnexB,
+                        )
+                        .map_err(|_| "unsupported_codec")?;
+                        let next = crate::rtsp::profile_level_id(&parameters)?;
+                        if profile.is_some_and(|old| old != next) {
+                            return Err("unsupported_codec_change");
+                        }
+                        if profile.is_none() {
+                            video
+                                .try_send(PreviewEvent {
+                                    event: Event::Info {
+                                        profile_level_id: next,
+                                    },
+                                    wallclock: None,
+                                })
+                                .map_err(|_| "media_queue_overflow")?;
+                            profile = Some(next);
+                        }
+                    }
+                    if profile.is_none() {
+                        return Err("media_frame_invalid");
+                    }
+                    let wallclock = clock.at(frame.timestamp, ffmpeg::Rational(1, 90_000))?;
+                    video
+                        .try_send(PreviewEvent {
+                            event: Event::Frame(EncodedFrame {
+                                timestamp: frame.timestamp as u32,
+                                keyframe: frame.keyframe,
+                                data: frame.data,
+                            }),
+                            wallclock: Some(wallclock),
+                        })
+                        .map_err(|_| "media_queue_overflow")?;
+                    let _ = waker.wake();
+                }
+            }
+            Track::Audio => {
+                let (Some(encoder), Some(clock)) = (&mut audio_encoder, &clock) else {
+                    continue;
+                };
+                for packet in encoder.push(&packet.packet)? {
+                    if packet.data.is_empty()
+                        || packet.data.len() > 4000
+                        || previous_audio.is_some_and(|previous| packet.timestamp <= previous)
+                    {
+                        return Err("media_audio_invalid");
+                    }
+                    previous_audio = Some(packet.timestamp);
+                    let wallclock = clock.at(packet.timestamp, ffmpeg::Rational(1, 48_000))?;
+                    audio
+                        .try_send(PreviewEvent {
+                            event: Event::Audio {
+                                timestamp: packet.timestamp as u32,
+                                data: packet.data,
+                            },
+                            wallclock: Some(wallclock),
+                        })
+                        .map_err(|_| "media_queue_overflow")?;
+                    let _ = waker.wake();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 struct VideoFraming {
     prefix: Vec<u8>,
     sps: Vec<u8>,
@@ -1355,6 +1558,128 @@ mod tests {
         let waker = Arc::new(Waker::new(poll.registry(), mio::Token(0)).unwrap());
         let runtime = SharedRuntime::new(waker);
         (poll, runtime)
+    }
+
+    #[test]
+    fn copy_preview_retains_parameter_updates_before_startup_and_recovery_idr() {
+        // Given: A real H.264 camera advertises an old PPS or updates it before a new IDR.
+        ffmpeg::init().unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/baseline-160x120.h264");
+        let mut input = ffmpeg::format::input(&fixture).unwrap();
+        let parameters = input.streams().next().unwrap().parameters();
+        let keyframe = input
+            .packets()
+            .find(|(_, packet)| packet.is_key())
+            .unwrap()
+            .1;
+        let nals = annex_nals(keyframe.data().unwrap());
+        let pps = nals.iter().find(|nal| nal[0] & 31 == 8).unwrap();
+        assert_eq!(*pps, &[0x68, 0xce, 0x0f, 0xc8]);
+        let stale_pps = [0x68, 0xce, 0x0b, 0xc8];
+        let mut idr = Vec::new();
+        for nal in nals.iter().filter(|nal| nal[0] & 31 == 5) {
+            idr.extend_from_slice(&[0, 0, 0, 1]);
+            idr.extend_from_slice(nal);
+        }
+        assert!(!idr.is_empty());
+
+        for recovering in [false, true] {
+            let (_poll, runtime) = runtime();
+            let mut parameters = parameters.clone();
+            if !recovering {
+                // SAFETY: This cloned parameter object owns its extradata. Only
+                // replace the same-length PPS bytes; no pointer escapes the borrow.
+                unsafe {
+                    let raw = &mut *parameters.as_mut_ptr();
+                    let extra =
+                        std::slice::from_raw_parts_mut(raw.extradata, raw.extradata_size as usize);
+                    let offset = extra
+                        .windows(pps.len())
+                        .position(|bytes| bytes == *pps)
+                        .unwrap();
+                    extra[offset..offset + pps.len()].copy_from_slice(&stale_pps);
+                }
+            }
+            let hub = Arc::new(Mutex::new(Hub {
+                metadata: Some(Metadata {
+                    video: crate::camera_input::TrackInfo {
+                        parameters,
+                        time_base: ffmpeg::Rational(1, 90_000),
+                    },
+                    audio: None,
+                }),
+                ..Hub::default()
+            }));
+            let (sender, packets) = mpsc::sync_channel(PACKETS);
+            let send = |bytes: &[u8], timestamp, keyframe| {
+                let mut packet = ffmpeg::Packet::copy(bytes);
+                packet.set_pts(Some(timestamp));
+                packet.set_dts(Some(timestamp));
+                if keyframe {
+                    packet.set_flags(ffmpeg::codec::packet::Flags::KEY);
+                }
+                sender
+                    .send(Packet {
+                        track: Track::Video,
+                        packet,
+                    })
+                    .unwrap();
+            };
+            if recovering {
+                send(&idr, 90_000, true);
+                let mut changed = vec![0, 0, 0, 1];
+                changed.extend_from_slice(&stale_pps);
+                send(&changed, 93_000, false);
+                // A parameter-only update must enter recovery before the next
+                // dependent picture, even when preview was already running.
+                send(&[0, 0, 0, 1, 0x61, 0xe0], 94_500, false);
+            }
+            let mut updated = vec![0, 0, 0, 1];
+            updated.extend_from_slice(pps);
+            send(&updated, 96_000, false);
+            send(&idr, 99_000, true);
+            let (video_sender, video) = mpsc::sync_channel(8);
+            let (audio_sender, _audio) = mpsc::sync_channel(64);
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = Arc::clone(&stop);
+            let failure = Arc::new(Mutex::new(None));
+            let worker = thread::spawn(move || {
+                preview(
+                    packets,
+                    hub,
+                    PreviewSettings::default(),
+                    Duration::from_secs(1),
+                    Duration::from_secs(5),
+                    &worker_stop,
+                    &failure,
+                    &video_sender,
+                    &audio_sender,
+                    &runtime.waker,
+                )
+            });
+
+            // When: Copy preview waits for a complete IDR while parameter-only packets arrive.
+            let expected_frames = if recovering { 2 } else { 1 };
+            let mut frames = Vec::new();
+            while frames.len() < expected_frames {
+                let event = video.recv_timeout(Duration::from_secs(2)).unwrap();
+                if let Event::Frame(frame) = event.event {
+                    frames.push(frame);
+                }
+            }
+            stop.store(true, Ordering::Release);
+            worker.join().unwrap().unwrap();
+
+            // Then: Dependent pictures stay suppressed until the accepted IDR
+            // initializes browsers with the most recent in-band PPS.
+            let last = frames.last().unwrap();
+            let output = annex_nals(&last.data);
+            let delivered_pps = output.iter().find(|nal| nal[0] & 31 == 8).unwrap();
+            assert_eq!(last.timestamp, 99_000);
+            assert!(last.keyframe);
+            assert_eq!(delivered_pps, pps);
+        }
     }
 
     fn test_motion(
@@ -1859,6 +2184,100 @@ mod tests {
         assert_eq!(canceled.error_code, Some("motion_stopped"));
         assert_eq!(timed_out.error_code, Some("motion_restart_timeout"));
         release.send(()).unwrap();
+    }
+
+    #[test]
+    fn preview_clock_retains_source_offsets_and_encoder_lookahead_after_processing_delay() {
+        // Given: One source anchor at one second, shared by independent preview codecs.
+        let clock = PreviewClock::new(90_000, ffmpeg::Rational(1, 90_000), Duration::from_secs(5));
+        let video = clock.at(90_000, ffmpeg::Rational(1, 90_000)).unwrap();
+        // When: Audio output arrives later but retains its source offset and Opus delay.
+        thread::sleep(Duration::from_millis(20));
+        let audio = clock.at(60_000, ffmpeg::Rational(1, 48_000)).unwrap();
+        let lookahead = clock.at(47_880, ffmpeg::Rational(1, 48_000)).unwrap();
+        // Then: Codec completion time never changes presentation time or signed offsets.
+        assert_eq!(audio.duration_since(video), Duration::from_millis(250));
+        assert_eq!(video.duration_since(lookahead), Duration::from_micros(2500));
+        assert_eq!(
+            clock.at(900_000, ffmpeg::Rational(1, 90_000)),
+            Err("media_timestamp_invalid")
+        );
+    }
+
+    #[test]
+    fn queued_audio_does_not_starve_complete_preview_video() {
+        // Given: An audio-filled queue and independent queued video startup/frame events.
+        let (_poll, mut runtime) = runtime();
+        let (video_tx, video) = mpsc::sync_channel(8);
+        let (audio_tx, audio) = mpsc::sync_channel(64);
+        video_tx
+            .send(PreviewEvent {
+                event: Event::Info {
+                    profile_level_id: 0x42e01f,
+                },
+                wallclock: None,
+            })
+            .unwrap();
+        video_tx
+            .send(PreviewEvent {
+                event: Event::Frame(EncodedFrame {
+                    timestamp: 90_000,
+                    keyframe: true,
+                    data: Arc::from([1_u8]),
+                }),
+                wallclock: Some(Instant::now()),
+            })
+            .unwrap();
+        for timestamp in 0..64 {
+            audio_tx
+                .send(PreviewEvent {
+                    event: Event::Audio {
+                        timestamp,
+                        data: Arc::from([2_u8]),
+                    },
+                    wallclock: Some(Instant::now()),
+                })
+                .unwrap();
+        }
+        runtime.preview = Some(Preview {
+            url: "queued-output".into(),
+            video,
+            audio,
+            audio_turn: false,
+            failure: Arc::new(Mutex::new(None)),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        });
+        // When: Draining through the runtime's media boundary.
+        let info = runtime.try_recv_preview().unwrap().unwrap();
+        let audio = runtime.try_recv_preview().unwrap().unwrap();
+        let frame = runtime.try_recv_preview().unwrap().unwrap();
+        // Then: Video delivery stays fair while audio retains its own bounded budget.
+        assert!(matches!(info.event, Event::Info { .. }));
+        assert!(matches!(audio.event, Event::Audio { timestamp: 0, .. }));
+        assert!(matches!(frame.event, Event::Frame(_)));
+        assert!(
+            audio_tx
+                .try_send(PreviewEvent {
+                    event: Event::Audio {
+                        timestamp: 64,
+                        data: Arc::from([2_u8])
+                    },
+                    wallclock: Some(Instant::now())
+                })
+                .is_ok()
+        );
+        assert!(
+            audio_tx
+                .try_send(PreviewEvent {
+                    event: Event::Audio {
+                        timestamp: 65,
+                        data: Arc::from([2_u8])
+                    },
+                    wallclock: Some(Instant::now())
+                })
+                .is_err()
+        );
     }
 
     #[test]

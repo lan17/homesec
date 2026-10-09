@@ -264,6 +264,18 @@ def test_transcoding_or_enabled_audio_keeps_ffmpeg_input(
         {"rtsp_url": ""},
         {"ffmpeg_args": ["-i", "input"], "rtsp_url": "rtsp://camera/main"},
         {"ffmpeg_args": [], "rtsp_url": "rtsp://camera/main"},
+        {
+            "rtsp_url": "rtsp://camera/main",
+            "preview_settings": {"video_codec": "hevc", "audio_enabled": True},
+        },
+        {
+            "ffmpeg_args": ["-i", "input"],
+            "preview_settings": {"video_codec": "h264", "audio_enabled": True},
+        },
+        {
+            "rtsp_url": "rtsp://camera/main",
+            "preview_settings": {"video_codec": "h264", "audio_enabled": True, "codec_flag": "x"},
+        },
     ],
 )
 def test_start_rejects_missing_or_ambiguous_input_before_sending(

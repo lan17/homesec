@@ -23,3 +23,7 @@ dynamically linked; OpenCV and its bundled zlib are compiled into the helper.
 
 Docker installs this notice and the three licenses under
 `/usr/share/licenses/homesec-opencv/`. Keep them with separately packaged helpers.
+The exact upstream archive, including its bundled zlib source, is also included
+as `/usr/share/homesec-native/source/opencv.tar.gz` in the image. The native
+source bundle in that directory contains the locked Rust OpenCV binding sources
+and the remaining registry dependencies alongside the helper build recipe.
