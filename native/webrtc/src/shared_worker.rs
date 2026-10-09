@@ -122,6 +122,8 @@ struct Preview {
     url: String,
     video: mpsc::Receiver<PreviewEvent>,
     audio: mpsc::Receiver<PreviewEvent>,
+    pending_video: Option<PreviewEvent>,
+    pending_audio: Option<PreviewEvent>,
     audio_turn: bool,
     failure: Failure,
     stop: Arc<AtomicBool>,
@@ -855,6 +857,8 @@ impl SharedRuntime {
             url,
             video,
             audio,
+            pending_video: None,
+            pending_audio: None,
             audio_turn: false,
             failure,
             stop,
@@ -862,26 +866,41 @@ impl SharedRuntime {
         });
         Ok(())
     }
-    pub fn try_recv_preview(&mut self) -> Result<Option<PreviewEvent>> {
+    pub fn try_recv_preview(&mut self, now: Instant) -> Result<Option<PreviewEvent>> {
         let preview = self.preview.as_mut().ok_or("preview_not_started")?;
         if let Some(code) = failure_code(&preview.failure) {
             return Err(code);
         }
-        let channels = if preview.audio_turn {
-            [&preview.audio, &preview.video]
+        let tracks = if preview.audio_turn {
+            [
+                (&preview.audio, &mut preview.pending_audio),
+                (&preview.video, &mut preview.pending_video),
+            ]
         } else {
-            [&preview.video, &preview.audio]
+            [
+                (&preview.video, &mut preview.pending_video),
+                (&preview.audio, &mut preview.pending_audio),
+            ]
         };
         let mut disconnected = false;
-        for channel in channels {
-            match channel.try_recv() {
-                Ok(event) => {
-                    preview.audio_turn =
-                        matches!(event.event, Event::Frame(_) | Event::Info { .. });
-                    return Ok(Some(event));
+        for (channel, pending) in tracks {
+            if pending.is_none() {
+                match channel.try_recv() {
+                    Ok(event) => *pending = Some(event),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
+            }
+            // str0m derives sender reports from the last submitted RTP/wallclock
+            // pair. A future wallclock cannot produce a valid report. Hold one
+            // event per track until due, without blocking the other track.
+            if pending
+                .as_ref()
+                .is_some_and(|event| event.wallclock.is_none_or(|deadline| deadline <= now))
+            {
+                let event = pending.take().unwrap();
+                preview.audio_turn = matches!(event.event, Event::Frame(_) | Event::Info { .. });
+                return Ok(Some(event));
             }
         }
         if disconnected {
@@ -889,6 +908,17 @@ impl SharedRuntime {
         } else {
             Ok(None)
         }
+    }
+    pub fn preview_deadline(&self) -> Option<Instant> {
+        let preview = self.preview.as_ref()?;
+        [
+            preview.pending_video.as_ref(),
+            preview.pending_audio.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|event| event.wallclock)
+        .min()
     }
     pub fn stop_preview(&mut self) {
         if let Some(mut preview) = self.preview.take() {
@@ -2243,15 +2273,18 @@ mod tests {
             url: "queued-output".into(),
             video,
             audio,
+            pending_video: None,
+            pending_audio: None,
             audio_turn: false,
             failure: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
         });
         // When: Draining through the runtime's media boundary.
-        let info = runtime.try_recv_preview().unwrap().unwrap();
-        let audio = runtime.try_recv_preview().unwrap().unwrap();
-        let frame = runtime.try_recv_preview().unwrap().unwrap();
+        let now = Instant::now();
+        let info = runtime.try_recv_preview(now).unwrap().unwrap();
+        let audio = runtime.try_recv_preview(now).unwrap().unwrap();
+        let frame = runtime.try_recv_preview(now).unwrap().unwrap();
         // Then: Video delivery stays fair while audio retains its own bounded budget.
         assert!(matches!(info.event, Event::Info { .. }));
         assert!(matches!(audio.event, Event::Audio { timestamp: 0, .. }));
@@ -2278,6 +2311,142 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn early_preview_tracks_wait_independently_and_preserve_presentation_offsets() {
+        // Given: Audio arrives first, ahead of both its presentation time and queued video.
+        let (_poll, mut runtime) = runtime();
+        let (video_tx, video) = mpsc::sync_channel(8);
+        let (audio_tx, audio) = mpsc::sync_channel(64);
+        let now = Instant::now();
+        let video_due = now + Duration::from_millis(100);
+        let audio_due = now + Duration::from_millis(350);
+        video_tx
+            .send(PreviewEvent {
+                event: Event::Frame(EncodedFrame {
+                    timestamp: 9_000,
+                    keyframe: true,
+                    data: Arc::from([1_u8]),
+                }),
+                wallclock: Some(video_due),
+            })
+            .unwrap();
+        audio_tx
+            .send(PreviewEvent {
+                event: Event::Audio {
+                    timestamp: 16_800,
+                    data: Arc::from([2_u8]),
+                },
+                wallclock: Some(audio_due),
+            })
+            .unwrap();
+        runtime.preview = Some(Preview {
+            url: "early-output".into(),
+            video,
+            audio,
+            pending_video: None,
+            pending_audio: None,
+            audio_turn: true,
+            failure: Arc::new(Mutex::new(None)),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        });
+        // When: Polling before and at the video deadline, with early audio still queued.
+        assert!(runtime.try_recv_preview(now).unwrap().is_none());
+        assert_eq!(runtime.preview_deadline(), Some(video_due));
+        assert!(
+            runtime
+                .try_recv_preview(video_due - Duration::from_nanos(1))
+                .unwrap()
+                .is_none()
+        );
+        let video = runtime.try_recv_preview(video_due).unwrap().unwrap();
+        // Then: Video is delivered on time without waiting for audio or rewriting its clock.
+        assert!(matches!(video.event, Event::Frame(_)));
+        assert_eq!(video.wallclock, Some(video_due));
+        assert_eq!(runtime.preview_deadline(), Some(audio_due));
+        assert!(
+            runtime
+                .try_recv_preview(audio_due - Duration::from_nanos(1))
+                .unwrap()
+                .is_none()
+        );
+        let audio = runtime.try_recv_preview(audio_due).unwrap().unwrap();
+        assert!(matches!(
+            audio.event,
+            Event::Audio {
+                timestamp: 16_800,
+                ..
+            }
+        ));
+        assert_eq!(audio.wallclock, Some(audio_due));
+        assert_eq!(
+            audio
+                .wallclock
+                .unwrap()
+                .duration_since(video.wallclock.unwrap()),
+            Duration::from_millis(250)
+        );
+        assert_eq!(runtime.preview_deadline(), None);
+    }
+
+    #[test]
+    fn stopping_preview_discards_early_media_without_waiting_for_its_deadline() {
+        // Given: A full audio queue with source timestamps ahead of the engine clock.
+        let (_poll, mut runtime) = runtime();
+        let (_video_tx, video) = mpsc::sync_channel(8);
+        let (audio_tx, audio) = mpsc::sync_channel(64);
+        let now = Instant::now();
+        let stop = Arc::new(AtomicBool::new(false));
+        for timestamp in 0..64 {
+            audio_tx
+                .send(PreviewEvent {
+                    event: Event::Audio {
+                        timestamp,
+                        data: Arc::from([2_u8]),
+                    },
+                    wallclock: Some(now + Duration::from_secs(5)),
+                })
+                .unwrap();
+        }
+        runtime.preview = Some(Preview {
+            url: "early-output".into(),
+            video,
+            audio,
+            pending_video: None,
+            pending_audio: None,
+            audio_turn: false,
+            failure: Arc::new(Mutex::new(None)),
+            stop: Arc::clone(&stop),
+            thread: None,
+        });
+        // When: Polling parks only one early packet, then an explicit stop cancels preview.
+        assert!(runtime.try_recv_preview(now).unwrap().is_none());
+        let event = |timestamp| PreviewEvent {
+            event: Event::Audio {
+                timestamp,
+                data: Arc::from([2_u8]),
+            },
+            wallclock: Some(now + Duration::from_secs(5)),
+        };
+        assert!(audio_tx.try_send(event(64)).is_ok());
+        assert!(matches!(
+            audio_tx.try_send(event(65)),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        runtime.stop_preview();
+        // Then: Media remains bounded and cancellation drops the pending packet and wakeup.
+        assert!(stop.load(Ordering::Acquire));
+        assert_eq!(runtime.preview_deadline(), None);
+        assert!(matches!(
+            audio_tx.try_send(event(66)),
+            Err(mpsc::TrySendError::Disconnected(_))
+        ));
+        assert!(matches!(
+            runtime.try_recv_preview(now),
+            Err("preview_not_started")
+        ));
     }
 
     #[test]

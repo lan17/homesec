@@ -17,6 +17,7 @@ use str0m::change::SdpAnswer;
 use str0m::format::Codec;
 use str0m::media::{Direction, MediaKind};
 use str0m::net::{Protocol, Receive};
+use str0m::rtp::rtcp::SenderInfo;
 use str0m::{Candidate, Event, Input, Output, Rtc};
 
 const CONTROL_WAIT: Duration = Duration::from_secs(8);
@@ -182,7 +183,7 @@ struct Viewer {
     keyframes: usize,
     sample: Vec<u8>,
     audio_samples: Vec<Vec<u8>>,
-    clock_origins: [Option<f64>; 2],
+    sender_reports: [Option<SenderInfo>; 2],
 }
 
 impl Viewer {
@@ -212,7 +213,7 @@ impl Viewer {
             keyframes: 0,
             sample: Vec::new(),
             audio_samples: Vec::new(),
-            clock_origins: [None, None],
+            sender_reports: [None, None],
         }
     }
 
@@ -250,14 +251,13 @@ impl Viewer {
                 Output::Event(Event::MediaData(data)) => {
                     let video = data.params.spec().codec == Codec::H264;
                     assert!(video || data.params.spec().codec == Codec::Opus);
-                    if let Some(info) = data.last_sender_info {
-                        let origin = info
-                            .ntp_time
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs_f64()
-                            - info.rtp_time.as_seconds();
-                        self.clock_origins[usize::from(!video)] = Some(origin);
+                    // str0m can emit a startup report before this track has sent
+                    // media. Its placeholder RTP zero is not a clock mapping.
+                    if let Some(info) = data
+                        .last_sender_info
+                        .filter(|info| info.sender_packet_count > 0)
+                    {
+                        self.sender_reports[usize::from(!video)] = Some(info);
                     }
                     if video {
                         self.frames += 1;
@@ -798,7 +798,7 @@ fn native_preview_audio_and_transcoding_share_input_with_recording_and_two_viewe
             viewers.iter().all(|v| {
                 v.ready()
                     && v.audio_samples.len() >= 3
-                    && v.clock_origins.iter().all(Option::is_some)
+                    && v.sender_reports.iter().all(Option::is_some)
             })
         });
 
@@ -806,10 +806,20 @@ fn native_preview_audio_and_transcoding_share_input_with_recording_and_two_viewe
         for viewer in [&first, &second] {
             viewer.assert_decodes();
             assert_opus_decodes(viewer);
-            let clock_delta = viewer.clock_origins[0].unwrap() - viewer.clock_origins[1].unwrap();
+            let [video_report, audio_report] = viewer.sender_reports.map(Option::unwrap);
+            let origin = |report: SenderInfo| {
+                report
+                    .ntp_time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64()
+                    - report.rtp_time.as_seconds()
+            };
+            let clock_delta = origin(video_report) - origin(audio_report);
             assert!(
                 clock_delta.abs() < 0.010,
-                "source A/V timeline drifted by {clock_delta}s in {video_codec}"
+                "source A/V timeline drifted by {clock_delta}s in {video_codec}; \
+                 video SR={video_report:?}; audio SR={audio_report:?}"
             );
         }
         assert_eq!(camera.count("PLAY"), 1);

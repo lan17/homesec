@@ -172,7 +172,9 @@ When `audio_enabled` is true and the camera supplies AAC, G.711 A-law/mu-law, or
 Opus, native preview converts it to 48 kHz stereo Opus at 64 kbps with 20 ms
 frames. Unsupported audio selects compatibility preview. A camera without audio
 still supplies video. Source timestamps, including encoder lookahead, map to a
-common wallclock for WebRTC audio/video synchronization. Camera AAC is not passed
+common wallclock for WebRTC audio/video synchronization. Media that arrives early
+waits until its presentation time in a bounded slot per track, while the other
+track and control requests continue. Camera AAC is not passed
 directly to WebRTC. The UI preserves its existing
 mute behavior and push-to-talk coordination; changing the preview transport does
 not change microphone-to-camera transport.

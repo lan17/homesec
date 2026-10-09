@@ -350,7 +350,7 @@ pub fn run(options: Options) -> Result<()> {
                 Some(MediaInput::Shared) => shared
                     .as_mut()
                     .ok_or("preview_temporarily_unavailable")
-                    .and_then(SharedRuntime::try_recv_preview)
+                    .and_then(|runtime| runtime.try_recv_preview(now))
                     .map(|event| {
                         event.map(|event| {
                             wallclock = event.wallclock;
@@ -753,6 +753,10 @@ pub fn run(options: Options) -> Result<()> {
             })
             .min()
             .unwrap_or(now + Duration::from_millis(100));
+        let wake = shared
+            .as_ref()
+            .and_then(SharedRuntime::preview_deadline)
+            .map_or(wake, |deadline| wake.min(deadline));
         poll.poll(
             &mut events,
             Some(if readable {
