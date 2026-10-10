@@ -43,6 +43,11 @@ change directory. Specs own behavioral semantics; the existing OpenAPI exporter
 owns exact API shapes, and operator guides own procedures. No additional document
 generator or copied schema inventory is required.
 
+Archive completed work promptly. Transfer unfinished documentation or verification
+follow-ups to a separate change instead of keeping promoted ADDED deltas active.
+A follow-up that preserves specified behavior can declare `skip_specs: true` in
+its `.openspec.yaml` and carry no delta spec files.
+
 ## Regenerating tooling
 
 When regenerating this project's integrations, explicitly select the same

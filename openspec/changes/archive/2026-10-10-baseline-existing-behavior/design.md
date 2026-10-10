@@ -10,9 +10,9 @@ The important product boundary is between recording/storage work and best-effort
 
 ## Review and promotion status
 
-The corrected baseline received [LGTM on PR118](https://github.com/lan17/homesec/pull/118#pullrequestreview-5481056106), and Leonidas approved promotion to the long-term inventory. All eight capabilities now live in `openspec/specs/`, with unchanged reviewed Purpose, requirement, and scenario text. [The behavior reference](../../../docs/reference.md) preserves the known limitations and evidence limits, and each maintained spec links to its capability notes there.
+The corrected baseline received [LGTM on PR118](https://github.com/lan17/homesec/pull/118#pullrequestreview-5481056106), and Leonidas approved promotion to the long-term inventory. All eight capabilities now live in `openspec/specs/`, with unchanged reviewed Purpose, requirement, and scenario text. [The behavior reference](../../../../docs/reference.md) preserves the known limitations and evidence limits, and each maintained spec links to its capability notes there.
 
-A fresh comparison found no relevant source/config/test changes on `origin/main` since the researched snapshot. Promotion is documentation-only and uses the explicitly approved PR118 docs-only validation scope. The unchecked tasks retain deeper coverage and guide-reconciliation follow-ups; no new application tests or device certification are implied, and no runtime fix is included. The change stays active until its remaining tasks are completed and it can be archived honestly.
+A fresh comparison found no relevant source/config/test changes on `origin/main` since the researched snapshot. Promotion is documentation-only and uses the explicitly approved PR118 docs-only validation scope. Leonidas approved archiving the completed bootstrap and transferring its eleven unfinished deeper-coverage/guide tasks to [baseline-reference-follow-up](../../baseline-reference-follow-up/tasks.md). Those tasks retain their original IDs and wording and remain unchecked there. No new application tests or device certification are implied, and no runtime fix is included. The archived deltas and evidence/gap tables are historical review snapshots; `docs/reference.md` remains the current limitation reference. The bootstrap must not be synced again after subsequent behavior changes.
 
 ## Goals / Non-Goals
 

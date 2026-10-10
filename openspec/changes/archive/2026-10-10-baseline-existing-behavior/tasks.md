@@ -1,6 +1,6 @@
 # Tasks
 
-The reviewed baseline has been synced to `openspec/specs/` and connected through [the behavior reference](../../../docs/reference.md). Completed review tasks reflect source and representative-test inspection, not execution of application/device tests. Unchecked tasks retain deeper verification and guide-reconciliation follow-ups; they do not imply that the maintained baseline is still unreviewed. Use [design.md](design.md) for evidence and bounded gaps. Keep corrective runtime changes in separate approved changes. Any added tests must follow `TESTING.md`, use Given/When/Then comments, and verify behavior at existing boundaries.
+The reviewed bootstrap is complete and archived. All eight capabilities are maintained in `openspec/specs/` and connected through [the behavior reference](../../../../docs/reference.md). Completed review tasks reflect source and representative-test inspection, not execution of application/device tests. Eleven unfinished deeper-verification and guide tasks were transferred to [baseline-reference-follow-up](../../baseline-reference-follow-up/tasks.md); they were not marked complete. Corrective runtime changes remain separate approved work.
 
 ## 1. Confirm the baseline snapshot and review scope
 
@@ -10,46 +10,35 @@ The reviewed baseline has been synced to `openspec/specs/` and connected through
 ## 2. Review setup and configuration
 
 - [x] 2.1 Review `setup-configuration` scenarios against the setup, ONVIF, camera mutation, redaction, and runtime-manager evidence; verify first-run validation, saved-versus-active state, reload acceptance/completion, save-before-reload rejection and create-retry outcomes, and candidate rollback each have a supported contract. Assess a focused persisted-mutation/retry test or retain the explicit source-only limit.
-- [ ] 2.2 Reconcile setup and camera-editing guidance in README/DESIGN with bootstrap-only finalization and the saved-file rollback limit; verify the updated guidance does not describe a general configuration editor or transactional file/runtime rollback. Record remaining coverage limits beside the evidence.
 
 ## 3. Review capture and recording
 
 - [x] 3.1 Review `capture-recording` against local-folder, FTP, RTSP, and native publication tests; verify ready-file conditions, repeat suppression, platform-dependent filename case matching, finite-exhaustion loss of camera monitoring until reload/restart, rotation, and failed-finalization scenarios match source behavior.
-- [ ] 3.2 Assess manifest-restart and unfinished-file coverage and add a focused source-boundary test only where the existing suite leaves a critical gap; verify the selected check and update README/DESIGN recording guidance to avoid durable replay or universal playable-file promises and obsolete startup-flag examples.
 
 ## 4. Review storage, retention, and deletion
 
 - [x] 4.1 Review `storage-retention` and the eligible-byte versus total-usage disagreement with Leonidas; verify the reviewed contract preserves eligibility, oldest-first pruning, protected files, and truthful over-limit results without adopting an unconfirmed hard disk-budget policy. Review how deleted originals, filter-error clips, and discovered stateless MP4s can remain ineligible indefinitely; keep recovery/deletion policy changes separate and retain explicit limits where coverage is missing.
-- [ ] 4.2 Review API deletion and cleanup separately using their existing route and cleanup tests; verify mark-before-storage failure, original-local-file handling, non-atomic media deletion, deleted-record addressability/conditional media failures, and best-effort cleanup persistence are correctly documented. Confirm any requested change to Delete semantics separately; no new all-copies deletion policy is established by this baseline. Add focused boundary coverage for default dry-run preservation of original media and workflow writes if existing tests do not establish it.
-- [ ] 4.3 Reconcile storage/retention/cleanup reference guidance with the reviewed specs; verify examples distinguish retention, API deletion, and cleanup and promise only the destination syntax checks actually implemented, including the filesystem-confinement limit.
 
 ## 5. Review analysis and alerts
 
 - [x] 5.1 Review `analysis-alerts` against pipeline, analyzer, filter, and policy evidence; verify stage overlap, run modes, retry limits, failed-analysis fallback, notification eligibility, and completed-status meaning remain distinct.
-- [ ] 5.2 Review detector setting/class discrepancies and the intentional-`never` fallback reason with Leonidas; verify the baseline either remains explicitly bounded or reflects a confirmed current contract. Correct inaccurate README/DESIGN examples; put any requested behavior fix in a separate change.
-- [ ] 5.3 Assess critical gaps for disabled-policy suppression, threshold equality, and event-append failure containment; verify each is supported by an existing test, a justified new boundary test, or an explicit retained evidence limit in the design. Update analysis/alert reference guidance in the same group.
 
 ## 6. Review events and playback
 
 - [x] 6.1 Review `events-playback` against API/store and UI tests; verify query filters/cursors, URL context, detail navigation, scoped authorization, default deleted-record exclusion and explicit status filtering, unavailable media, conditional deleted-media retrieval errors, and bounded refresh all describe current behavior. Bound identity guarantees to successful lookup and retain the query-failure-to-404 gap.
-- [ ] 6.2 Assess mounted playback-token refresh coverage and add a timer-boundary UI test if needed; verify refresh behavior with the focused UI check and update playback reference guidance without importing activation-only loading or requiring current eager acquisition timing.
 
 ## 7. Review preview and talk
 
 - [x] 7.1 Review `preview-talk` against API, source, native, and UI evidence; verify recording priority, HLS compatibility, token/lease expiry, peer cleanup, exclusive talk reservation, separate reservation/active duration timers, the WebSocket first-message deadline, PCM framing, release cancellation, microphone denial, and backpressure.
-- [ ] 7.2 Assess focused native viewer-cap coverage and add a boundary test if the existing suite does not establish it; verify the selected native check and reconcile `docs/webrtc-preview.md`, `docs/push-to-talk.md`, and relevant deployment guidance. Preserve explicit hardware/codec/browser QA limits.
 
 ## 8. Review integration contracts
 
 - [x] 8.1 Review `integration-contracts` against authentication, error-envelope, OpenAPI, browser key-storage/redirect, alert payload, MQTT, and SendGrid evidence; verify exact generated shapes remain authoritative and no delivery deduplication, timestamp timezone, or general HTML-escaping guarantee is invented.
-- [ ] 8.2 Assess production per-entry mixed-success notifier fan-out, installed-entry-point discovery, and validate-before-factory/no-construction coverage; add only justified plugin-boundary tests and verify the selected checks. Reconcile `PLUGIN_DEVELOPMENT.md` and obsolete AGENTS examples with the existing unified registry and correct decorator arguments.
 - [x] 8.3 Verify the existing OpenAPI export and UI generated-contract check with the repository's existing commands; record the result and update integration reference links rather than introduce another hand-maintained schema inventory.
 
 ## 9. Review operations and maintenance
 
 - [x] 9.1 Review `operations-maintenance` against CLI, health, diagnostics, stats, shutdown, and backup evidence; verify summary versus component-health meaning, UTC-day clip-level counts, count-failure limits, and bounded worker/backup shutdown behavior. Exclude the unreachable mocked CLI restart branch from public contracts; dead-code removal is a separate change.
-- [ ] 9.2 Assess missing-executable startup degradation, private dump permissions, and critical backup recovery coverage; add focused process/filesystem tests where justified and verify them using fake dump boundaries. Reconcile `docs/postgres-backups.md` with durable local-directory/manifest mounting, upload outcomes, retention limits, and operator restore responsibilities without claiming a real restore was tested.
-- [ ] 9.3 Update operator reference guidance for CLI validation/cleanup and health/statistics interpretation; verify documented options against current CLI/config models and existing tests. Keep applied cleanup semantics owned by `storage-retention`.
 
 ## 10. Promote reviewed specs and connect reference documentation
 
@@ -67,7 +56,10 @@ The reviewed baseline has been synced to `openspec/specs/` and connected through
 
 Leonidas approved docs-only validation for PR118. Promotion checks preserve the reviewed Purpose and all 77 requirements/222 scenarios, validate the active change and eight maintained specs strictly, resolve evidence/reference links, verify workflow guidance injection, and run `make typecheck lint lock-check`. The existing OpenAPI exporter and UI generated-contract consistency check also passed with `UV_LOCKED=1 pnpm --dir ui api:check`. Existing tests remain inspected evidence; full `make check` and application/device tests were not executed locally. No database writes were performed.
 
-## Workflow follow-up
+## Transferred follow-up work
 
-- Archive this change through the existing OpenSpec archive workflow after tracked tasks and project review requirements are satisfied.
-- Verify the archived result preserves all eight maintained specs, retained current limitations, and reference links; none may depend on the old active-change path.
+The following original task IDs remain unfinished in [baseline-reference-follow-up](../../baseline-reference-follow-up/tasks.md): `2.2`, `3.2`, `4.2`, `4.3`, `5.2`, `5.3`, `6.2`, `7.2`, `8.2`, `9.2`, `9.3`. Their checkbox descriptions were transferred verbatim. The bootstrap retains its seventeen completed tasks; this transfer does not claim the follow-up work was performed.
+
+## Archive status
+
+Leonidas approved archiving the promoted baseline and transferring its remaining work. The eight deltas were already synced; archive skips spec writes to preserve maintained files byte-for-byte. Archived delta limitations and design evidence are historical snapshots. Use `docs/reference.md` for current limitations and the follow-up change for remaining work.
