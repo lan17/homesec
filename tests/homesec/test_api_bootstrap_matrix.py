@@ -78,7 +78,7 @@ class _MatrixStubApp(_StubApp):
 @dataclass(frozen=True)
 class _MatrixCase:
     name: str
-    method: Literal["GET", "POST", "DELETE"]
+    method: Literal["GET", "POST", "PATCH", "DELETE"]
     path: str
     auth_enabled: bool
     db_ok: bool
@@ -141,6 +141,9 @@ def _build_client(tmp_path: Path, case: _MatrixCase) -> tuple[TestClient, _StubR
 def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]):
     if case.method == "GET":
         return client.get(case.path, headers=headers)
+    if case.method == "PATCH":
+        request_json = case.request_json if case.request_json is not None else {}
+        return client.patch(case.path, headers=headers, json=request_json)
     if case.method == "DELETE":
         return client.delete(case.path, headers=headers)
     request_json = case.request_json if case.request_json is not None else {}
@@ -621,6 +624,86 @@ def _send_request(client: TestClient, case: _MatrixCase, headers: dict[str, str]
             name="stats_route_is_blocked_in_bootstrap_mode",
             method="GET",
             path="/api/v1/stats",
+            auth_enabled=False,
+            db_ok=False,
+            pipeline_running=False,
+            auth_header=None,
+            include_clip=False,
+            expected_status=503,
+            bootstrap_mode=True,
+            expected_error_code="SETUP_REQUIRED",
+        ),
+        _MatrixCase(
+            name="mobile_device_register_requires_api_key_when_auth_enabled",
+            method="POST",
+            path="/api/v1/mobile/devices",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+            request_json={
+                "platform": "ios",
+                "apns_token": "token",
+                "environment": "sandbox",
+                "bundle_id": "com.levneiman.homesec",
+            },
+        ),
+        _MatrixCase(
+            name="mobile_device_list_requires_api_key_when_auth_enabled",
+            method="GET",
+            path="/api/v1/mobile/devices",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="mobile_device_patch_requires_api_key_when_auth_enabled",
+            method="PATCH",
+            path="/api/v1/mobile/devices/dev_1",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+            request_json={"enabled": False},
+        ),
+        _MatrixCase(
+            name="mobile_device_delete_requires_api_key_when_auth_enabled",
+            method="DELETE",
+            path="/api/v1/mobile/devices/dev_1",
+            auth_enabled=True,
+            db_ok=True,
+            pipeline_running=True,
+            auth_header=None,
+            include_clip=False,
+            expected_status=401,
+            expected_error_code="UNAUTHORIZED",
+        ),
+        _MatrixCase(
+            name="mobile_device_list_requires_db_when_repository_unavailable",
+            method="GET",
+            path="/api/v1/mobile/devices",
+            auth_enabled=True,
+            db_ok=False,
+            pipeline_running=True,
+            auth_header="Bearer secret",
+            include_clip=False,
+            expected_status=503,
+            expected_error_code="DB_UNAVAILABLE",
+        ),
+        _MatrixCase(
+            name="mobile_device_list_is_blocked_in_bootstrap_mode",
+            method="GET",
+            path="/api/v1/mobile/devices",
             auth_enabled=False,
             db_ok=False,
             pipeline_running=False,

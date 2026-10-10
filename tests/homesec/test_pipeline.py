@@ -823,6 +823,51 @@ class TestClipPipelineRetries:
         assert len(notifier.sent_alerts) == 1
 
     @pytest.mark.asyncio
+    async def test_non_retryable_notify_failure_does_not_retry(
+        self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
+    ) -> None:
+        """Non-retryable notifier failures should be recorded without duplicate sends."""
+        # Given retry config with multiple attempts and a non-retryable notifier failure
+        base_config.retry = RetryConfig(max_attempts=3, backoff_s=0.0)
+
+        class NonRetryableNotifierError(RuntimeError):
+            retryable = False
+
+        class NonRetryableNotifier(MockNotifier):
+            def __init__(self) -> None:
+                super().__init__(simulate_failure=False)
+                self.send_calls = 0
+
+            async def send(self, alert) -> None:
+                self.send_calls += 1
+                raise NonRetryableNotifierError("Partial APNs fanout already delivered")
+
+        notifier = NonRetryableNotifier()
+        pipeline = ClipPipeline(
+            config=base_config,
+            storage=mocks.storage,
+            repository=make_repository(base_config, mocks),
+            filter_plugin=mocks.filter,
+            vlm_plugin=mocks.vlm,
+            notifier=notifier,
+            alert_policy=make_alert_policy(base_config),
+            retention_pruner=MockRetentionPruner(),
+        )
+
+        # When a clip is processed
+        pipeline.on_new_clip(sample_clip)
+        await pipeline.shutdown()
+
+        # Then the notifier is not retried and the failure event is final
+        assert notifier.send_calls == 1
+        notify_failed_events = [
+            event for event in mocks.event_store.events if event.event_type == "notification_failed"
+        ]
+        assert len(notify_failed_events) == 1
+        assert notify_failed_events[0].attempt == 1
+        assert notify_failed_events[0].will_retry is False
+
+    @pytest.mark.asyncio
     async def test_state_store_upsert_retries(
         self, base_config: Config, sample_clip: Clip, mocks: PipelineMocks
     ) -> None:

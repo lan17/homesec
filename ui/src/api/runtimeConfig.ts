@@ -1,0 +1,50 @@
+import { clearPersistedSetupWizardState } from '../runtime/setupWizardStorage'
+import { hydrateRuntimeApiProviders, runtimeServerBaseUrlProvider } from './client'
+import type { ClientServerBaseUrlProvider } from './serverBaseUrlProvider'
+import { normalizeServerBaseUrl } from './serverBaseUrlProvider'
+import { clearPersistedRuntimeAuthSessionReady, runtimeAuthTokenProvider } from './tokenProvider'
+
+export interface ApiRuntimeConfig {
+  serverBaseUrl?: string | null
+}
+
+export interface ApiRuntimeConfigSource {
+  loadRuntimeConfig(): ApiRuntimeConfig | Promise<ApiRuntimeConfig>
+}
+
+declare global {
+  interface Window {
+    __HOMESEC_RUNTIME_CONFIG__?: ApiRuntimeConfig
+  }
+}
+
+export class WindowApiRuntimeConfigSource implements ApiRuntimeConfigSource {
+  loadRuntimeConfig(): ApiRuntimeConfig {
+    if (typeof window === 'undefined') {
+      return {}
+    }
+
+    return window.__HOMESEC_RUNTIME_CONFIG__ ?? {}
+  }
+}
+
+export interface InitializeApiRuntimeConfigOptions {
+  runtimeConfigSource?: ApiRuntimeConfigSource
+  serverBaseUrlProvider?: ClientServerBaseUrlProvider
+}
+
+export async function initializeApiRuntimeConfig({
+  runtimeConfigSource = new WindowApiRuntimeConfigSource(),
+  serverBaseUrlProvider = runtimeServerBaseUrlProvider,
+}: InitializeApiRuntimeConfigOptions = {}): Promise<void> {
+  await hydrateRuntimeApiProviders()
+  const config = await runtimeConfigSource.loadRuntimeConfig()
+  if (Object.prototype.hasOwnProperty.call(config, 'serverBaseUrl')) {
+    if (normalizeServerBaseUrl(config.serverBaseUrl) !== serverBaseUrlProvider.getBaseUrlSync()) {
+      await runtimeAuthTokenProvider.clearToken()
+      await clearPersistedRuntimeAuthSessionReady()
+      clearPersistedSetupWizardState()
+    }
+    await serverBaseUrlProvider.setBaseUrl(config.serverBaseUrl ?? null)
+  }
+}

@@ -3,15 +3,38 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from homesec.postgres_support import (
     TEST_DB_SCHEMA_ENABLE_ENV,
     TEST_DB_SCHEMA_ENV,
     build_async_engine_kwargs,
+    create_scoped_async_engine,
     is_test_db_schema_enabled,
     resolve_test_db_schema,
     validate_schema_name,
 )
+
+
+@pytest.mark.asyncio
+async def test_query_failure_does_not_expose_bound_registration_tokens(postgres_dsn: str) -> None:
+    # Given: A scoped engine and a query binding synthetic secret registration material
+    engine = create_scoped_async_engine(postgres_dsn)
+    try:
+        # When: Postgres rejects the query before registration succeeds
+        with pytest.raises(DBAPIError) as exc_info:
+            async with engine.connect() as connection:
+                await connection.execute(
+                    text("SELECT * FROM nonexistent_mobile_devices WHERE apns_token = :token"),
+                    {"token": "synthetic-secret-apns-token"},
+                )
+
+        # Then: The exception retains useful SQL context without bound secret values
+        assert "nonexistent_mobile_devices" in str(exc_info.value)
+        assert "synthetic-secret-apns-token" not in str(exc_info.value)
+    finally:
+        await engine.dispose()
 
 
 def test_validate_schema_name_accepts_lowercase_max_length() -> None:

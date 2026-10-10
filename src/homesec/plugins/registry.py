@@ -83,11 +83,12 @@ class PluginRegistry(Generic[ConfigT, PluginInterfaceT]):
 
         plugin_cls = self._plugins[name]
 
-        # 1. Inject runtime context into config (if the config model supports those fields)
-        # We merge it into the raw dict so Pydantic can validate it.
+        # 1. Inject runtime context into config when the config model declares those fields.
+        # We merge supported values into the raw dict so Pydantic can validate them without
+        # leaking unrelated runtime-only dependencies into plugins that forbid extras.
         # This allows injecting "camera_name" into SourceConfig, etc.
         merged_config = config_dict.copy()
-        merged_config.update(runtime_context)
+        merged_config.update(self._filter_runtime_context(plugin_cls, runtime_context))
 
         # 2. Validate configuration
         validated_config = plugin_cls.config_cls.model_validate(merged_config)
@@ -104,13 +105,28 @@ class PluginRegistry(Generic[ConfigT, PluginInterfaceT]):
         plugin_cls = self._plugins[name]
 
         merged_config = config_dict.copy()
-        merged_config.update(runtime_context)
+        merged_config.update(self._filter_runtime_context(plugin_cls, runtime_context))
 
         return plugin_cls.config_cls.model_validate(merged_config)
 
     def get_all(self) -> dict[str, type[PluginProtocol[ConfigT, PluginInterfaceT]]]:
         """Return all registered plugins."""
         return self._plugins.copy()
+
+    def _filter_runtime_context(
+        self,
+        plugin_cls: type[PluginProtocol[ConfigT, PluginInterfaceT]],
+        runtime_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        supported_context_keys = set(plugin_cls.config_cls.model_fields)
+        supported_context_keys.update(
+            field.alias
+            for field in plugin_cls.config_cls.model_fields.values()
+            if field.alias is not None
+        )
+        return {
+            key: value for key, value in runtime_context.items() if key in supported_context_keys
+        }
 
 
 # Global Registry Storage

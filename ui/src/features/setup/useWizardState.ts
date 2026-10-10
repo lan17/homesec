@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
+import { clearPersistedSetupWizardState, WIZARD_STATE_STORAGE_KEY } from '../../runtime/setupWizardStorage'
 import type { WizardState, WizardStepDef } from './types'
 
 export interface UpdateStepDataOptions {
@@ -34,8 +35,6 @@ interface InternalWizardState {
 }
 
 const WIZARD_STATE_SCHEMA_VERSION = 1
-
-export const WIZARD_STATE_STORAGE_KEY = 'homesec.setup.wizard'
 
 function clampStepIndex(value: number, maxStepIndex: number): number {
   if (!Number.isFinite(value)) {
@@ -317,9 +316,7 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
     nonPersistentStepIdsRef.current.clear()
     skipNextPersistenceRef.current = true
     persistencePausedRef.current = true
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(WIZARD_STATE_STORAGE_KEY)
-    }
+    clearPersistedSetupWizardState()
     setFallbackCurrentStep(0)
     setState({
       stepData: {},
@@ -330,12 +327,6 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
     nextParams.set('step', '0')
     setSearchParams(nextParams, { replace: true })
   }, [searchParams, setSearchParams])
-
-  const clearPersistedState = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(WIZARD_STATE_STORAGE_KEY)
-    }
-  }, [])
 
   return {
     state: {
@@ -350,7 +341,7 @@ export function useWizardState(steps: readonly WizardStepDef[]): UseWizardStateR
     skipStep,
     updateStepData,
     markComplete,
-    clearPersistedState,
+    clearPersistedState: clearPersistedSetupWizardState,
     reset,
   }
 }

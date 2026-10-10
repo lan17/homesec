@@ -19,7 +19,9 @@ def test_build_openapi_schema_includes_health_route() -> None:
 
     # Then: Versioned health route and response schema should be present
     assert "/api/v1/health" in schema["paths"]
+    assert "/api/v1/mobile/devices" in schema["paths"]
     assert "HealthResponse" in schema["components"]["schemas"]
+    assert "MobileDeviceResponse" in schema["components"]["schemas"]
 
 
 def test_write_openapi_schema_writes_deterministic_json(tmp_path: Path) -> None:
@@ -34,6 +36,7 @@ def test_write_openapi_schema_writes_deterministic_json(tmp_path: Path) -> None:
     assert text.endswith("\n")
     payload = json.loads(text)
     assert "/api/v1/health" in payload["paths"]
+    assert "/api/v1/mobile/devices" in payload["paths"]
 
 
 def test_openapi_export_parser_requires_output() -> None:
@@ -67,3 +70,4 @@ def test_openapi_export_main_writes_requested_output(
     # Then: output file is created with expected API paths
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert "/api/v1/health" in payload["paths"]
+    assert "/api/v1/mobile/devices" in payload["paths"]

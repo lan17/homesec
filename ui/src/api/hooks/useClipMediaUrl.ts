@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { apiClient, hasStoredApiKey } from '../client'
+import { apiClient, hasConfiguredApiToken } from '../client'
 import type { ClipMediaTokenSnapshot } from '../client'
 import { QUERY_KEYS } from './queryKeys'
 
@@ -45,7 +45,7 @@ export function computeTokenRefreshDelayMs(
 
 export function useClipMediaUrl(clipId: string | undefined): ClipMediaUrlState {
   const directMediaUrl = clipId ? apiClient.resolvePath(buildDirectMediaPath(clipId)) : null
-  const shouldRequestToken = Boolean(clipId) && hasStoredApiKey()
+  const shouldRequestToken = Boolean(clipId) && hasConfiguredApiToken()
 
   const tokenQuery = useQuery<ClipMediaTokenSnapshot>({
     queryKey: QUERY_KEYS.clipMediaToken(clipId),

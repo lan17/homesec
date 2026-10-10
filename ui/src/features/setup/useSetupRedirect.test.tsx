@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SetupStatusSnapshot } from '../../api/client'
-import { WIZARD_STATE_STORAGE_KEY } from './useWizardState'
+import { WIZARD_STATE_STORAGE_KEY } from '../../runtime/setupWizardStorage'
 import { useSetupRedirect } from './useSetupRedirect'
 
 const useSetupStatusQueryMock = vi.fn()

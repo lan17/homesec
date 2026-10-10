@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -59,6 +60,7 @@ class APIErrorCode(StrEnum):
     CLIPS_CURSOR_INVALID = "CLIPS_CURSOR_INVALID"
     CLIPS_TIME_RANGE_INVALID = "CLIPS_TIME_RANGE_INVALID"
     CLIPS_TIMESTAMP_TZ_REQUIRED = "CLIPS_TIMESTAMP_TZ_REQUIRED"
+    MOBILE_DEVICE_NOT_FOUND = "MOBILE_DEVICE_NOT_FOUND"
     RELOAD_IN_PROGRESS = "RELOAD_IN_PROGRESS"
     BACKUP_DISABLED = "BACKUP_DISABLED"
     BACKUP_UNAVAILABLE = "BACKUP_UNAVAILABLE"
@@ -189,7 +191,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_error_payload(
                 detail="Request validation failed",
                 error_code=APIErrorCode.REQUEST_VALIDATION_FAILED.value,
-                extra={"validation_errors": exc.errors()},
+                extra={
+                    "validation_errors": jsonable_encoder(exc.errors(), exclude={"input", "ctx"})
+                },
             ),
         )
 

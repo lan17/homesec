@@ -1,6 +1,16 @@
 import { Link } from 'react-router-dom'
 
 import { Card } from '../../components/ui/Card'
+import { isIOSNativeApp } from '../../runtime/nativeRuntime'
+
+const NATIVE_CONNECTION_SECTION = {
+  title: 'Connection',
+  subtitle: 'HomeSec server',
+  description: 'Change the server this app connects to or update its API token.',
+  to: '/native-setup',
+  action: 'Change server',
+  primary: false,
+} as const
 
 const SETTINGS_SECTIONS = [
   {
@@ -46,6 +56,10 @@ const SETTINGS_SECTIONS = [
 ] as const
 
 export function SettingsPage() {
+  const sections = isIOSNativeApp()
+    ? [NATIVE_CONNECTION_SECTION, ...SETTINGS_SECTIONS]
+    : SETTINGS_SECTIONS
+
   return (
     <section className="page fade-in-up">
       <header className="page__header">
@@ -58,7 +72,7 @@ export function SettingsPage() {
       </header>
 
       <div className="settings-grid">
-        {SETTINGS_SECTIONS.map((section) => (
+        {sections.map((section) => (
           <Card key={section.title} title={section.title} subtitle={section.subtitle}>
             <p className="muted">{section.description}</p>
             <div className="inline-form__actions">

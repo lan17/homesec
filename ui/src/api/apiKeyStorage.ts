@@ -1,38 +1,37 @@
 import type { ApiRequestOptions } from './generated/client'
+import {
+  BROWSER_AUTH_TOKEN_STORAGE_KEY,
+  clearPersistedRuntimeAuthSessionReady,
+  normalizeAuthToken,
+  persistRuntimeAuthSessionReady,
+  runtimeAuthTokenProvider,
+} from './tokenProvider'
 
-const API_KEY_STORAGE_KEY = 'homesec.apiKey'
+export const API_KEY_STORAGE_KEY = BROWSER_AUTH_TOKEN_STORAGE_KEY
 
-export function saveApiKey(apiKey: string): void {
-  if (typeof window === 'undefined') {
-    return
+export async function saveApiKey(apiKey: string): Promise<void> {
+  await runtimeAuthTokenProvider.setToken(apiKey)
+  if (getStoredApiKey()) {
+    await persistRuntimeAuthSessionReady()
   }
-
-  window.sessionStorage.setItem(API_KEY_STORAGE_KEY, apiKey)
 }
 
 export function getStoredApiKey(): string | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-  return window.sessionStorage.getItem(API_KEY_STORAGE_KEY)
+  return runtimeAuthTokenProvider.getTokenSync()
 }
 
 export function hasStoredApiKey(): boolean {
-  const value = getStoredApiKey()
-  return Boolean(value && value.trim().length > 0)
+  return getStoredApiKey() !== null
 }
 
-export function clearApiKey(): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.sessionStorage.removeItem(API_KEY_STORAGE_KEY)
+export async function clearApiKey(): Promise<void> {
+  await runtimeAuthTokenProvider.clearToken()
+  await clearPersistedRuntimeAuthSessionReady()
 }
 
 export function resolveApiKey(explicitApiKey: ApiRequestOptions['apiKey']): string | null {
   if (explicitApiKey !== undefined) {
-    return explicitApiKey
+    return normalizeAuthToken(explicitApiKey)
   }
 
   return getStoredApiKey()

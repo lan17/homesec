@@ -13,6 +13,7 @@ import type {
   TalkState,
   TalkStatusResponse,
 } from '../../../api/generated/types'
+import { useNativeAppLifecycleState } from '../../../runtime/nativeAppLifecycle'
 
 const DEFAULT_TALK_INPUT: TalkInputFormat = {
   codec: 'pcm_s16le',
@@ -236,6 +237,9 @@ function nextStatusFromState(
 }
 
 export function usePushToTalk(cameraName: string): PushToTalkState {
+  const nativeLifecycle = useNativeAppLifecycleState()
+  const nativeLifecycleRef = useRef(nativeLifecycle)
+  const handledPauseCountRef = useRef(nativeLifecycle.pauseCount)
   const [status, setStatus] = useState<TalkStatusResponse | null>(null)
   const [session, setSession] = useState<TalkSessionResponse | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -254,6 +258,19 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   const startAbortRef = useRef<AbortController | null>(null)
   const pendingSessionIdRef = useRef<string | null>(null)
   const statusRequestGenerationRef = useRef(0)
+  const owningServerUrlRef = useRef(apiClient.resolvePath(''))
+
+  useEffect(() => {
+    nativeLifecycleRef.current = nativeLifecycle
+  }, [nativeLifecycle])
+
+  const stopTalkSession = useCallback(async (sessionId: string): Promise<void> => {
+    if (apiClient.resolvePath('') !== owningServerUrlRef.current) {
+      // The original server's idle/max-session deadlines bound detached cleanup.
+      return
+    }
+    await apiClient.stopCameraTalkSession(cameraName, sessionId)
+  }, [cameraName])
 
   const cleanupSocketAndAudio = useCallback(async () => {
     const socket = socketRef.current
@@ -269,6 +286,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
   }, [])
 
   const refreshStatus = useCallback(async () => {
+    if (nativeLifecycleRef.current.isBackgrounded) {
+      return
+    }
     const generation = statusRequestGenerationRef.current + 1
     statusRequestGenerationRef.current = generation
     setIsPending(true)
@@ -401,7 +421,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
           closeMediaStream(pendingStreamRef.current)
           pendingStreamRef.current = null
           if (!intentionalStopRef.current && event.code !== 1000) {
-            void apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+            void stopTalkSession(nextSession.session_id).catch(() => {})
           }
           if (mountedRef.current) {
             setIsStreaming(false)
@@ -416,11 +436,17 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         }
       })
     },
-    [cameraName],
+    [cameraName, stopTalkSession],
   )
 
   const start = useCallback(async () => {
-    if (startInFlightRef.current || isStreaming || isStopping) {
+    if (
+      !nativeLifecycleRef.current.isActive
+      || nativeLifecycleRef.current.isBackgrounded
+      || startInFlightRef.current
+      || isStreaming
+      || isStopping
+    ) {
       return
     }
     const generation = startGenerationRef.current + 1
@@ -480,7 +506,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         if (pendingSessionIdRef.current === nextSession.session_id) {
           pendingSessionIdRef.current = null
         }
-        await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+        await stopTalkSession(nextSession.session_id).catch(() => {})
         return
       }
       setSession(nextSession)
@@ -495,7 +521,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         if (pendingStreamRef.current === mediaStream) {
           pendingStreamRef.current = null
         }
-        await apiClient.stopCameraTalkSession(cameraName, nextSession.session_id).catch(() => {})
+        await stopTalkSession(nextSession.session_id).catch(() => {})
       }
     } catch (nextError) {
       const startCancelled = isStartCancelled()
@@ -508,10 +534,10 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       const sessionIdToStop = preparedSession?.session_id ?? clientSessionId
       if (preparedSession && !intentionalStopRef.current) {
-        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop).catch(() => {})
+        await stopTalkSession(sessionIdToStop).catch(() => {})
       } else if (pendingSessionIdRef.current === sessionIdToStop) {
         pendingSessionIdRef.current = null
-        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop).catch(() => {})
+        await stopTalkSession(sessionIdToStop).catch(() => {})
       }
       if (mountedRef.current && !startCancelled) {
         setError(nextError)
@@ -530,7 +556,14 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
         setIsStarting(false)
       }
     }
-  }, [cameraName, cleanupSocketAndAudio, isStopping, isStreaming, openTalkSocket])
+  }, [
+    cameraName,
+    cleanupSocketAndAudio,
+    isStopping,
+    isStreaming,
+    openTalkSocket,
+    stopTalkSession,
+  ])
 
   const stop = useCallback(async () => {
     const activeSession = sessionRef.current
@@ -558,7 +591,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       await cleanupSocketAndAudio()
       const sessionIdToStop = activeSession?.session_id ?? pendingSessionId
       if (sessionIdToStop) {
-        await apiClient.stopCameraTalkSession(cameraName, sessionIdToStop)
+        await stopTalkSession(sessionIdToStop)
         if (mountedRef.current) {
           setStatus((previous) => nextStatusFromState(cameraName, 'idle', null, previous))
           void refreshStatus()
@@ -578,7 +611,7 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       }
       intentionalStopRef.current = false
     }
-  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming, refreshStatus])
+  }, [cameraName, cleanupSocketAndAudio, isStarting, isStopping, isStreaming, refreshStatus, stopTalkSession])
 
   useEffect(() => {
     mountedRef.current = true
@@ -588,7 +621,9 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
     setIsStreaming(false)
     setIsStarting(false)
     setIsStopping(false)
-    void refreshStatus()
+    if (!nativeLifecycleRef.current.isBackgrounded) {
+      void refreshStatus()
+    }
     return () => {
       mountedRef.current = false
       statusRequestGenerationRef.current += 1
@@ -601,16 +636,51 @@ export function usePushToTalk(cameraName: string): PushToTalkState {
       pendingSessionIdRef.current = null
       void cleanupSocketAndAudio()
       if (activeSession) {
-        void apiClient.stopCameraTalkSession(cameraName, activeSession.session_id).catch(() => {})
+        void stopTalkSession(activeSession.session_id).catch(() => {})
       } else if (pendingSessionId) {
-        void apiClient.stopCameraTalkSession(cameraName, pendingSessionId).catch(() => {})
+        void stopTalkSession(pendingSessionId).catch(() => {})
       }
     }
-  }, [cameraName, cleanupSocketAndAudio, refreshStatus])
+  }, [cameraName, cleanupSocketAndAudio, refreshStatus, stopTalkSession])
+
+  useEffect(() => {
+    const pausedSinceLastCleanup = nativeLifecycle.pauseCount > handledPauseCountRef.current
+    handledPauseCountRef.current = nativeLifecycle.pauseCount
+    if (!nativeLifecycle.isBackgrounded && !pausedSinceLastCleanup) {
+      return
+    }
+
+    void stop()
+  }, [nativeLifecycle.isBackgrounded, nativeLifecycle.pauseCount, stop])
+
+  useEffect(() => {
+    if (!nativeLifecycle.isActive || nativeLifecycle.resumeCount === 0) {
+      return
+    }
+
+    void refreshStatus()
+  }, [nativeLifecycle.isActive, nativeLifecycle.resumeCount, refreshStatus])
 
   const canStart = useMemo(
-    () => !isPending && !isStarting && !isStopping && !isStreaming && statusAllowsStart(status, cameraName),
-    [cameraName, isPending, isStarting, isStopping, isStreaming, status],
+    () => (
+      nativeLifecycle.isActive
+      && !nativeLifecycle.isBackgrounded
+      && !isPending
+      && !isStarting
+      && !isStopping
+      && !isStreaming
+      && statusAllowsStart(status, cameraName)
+    ),
+    [
+      cameraName,
+      isPending,
+      isStarting,
+      isStopping,
+      isStreaming,
+      nativeLifecycle.isActive,
+      nativeLifecycle.isBackgrounded,
+      status,
+    ],
   )
 
   return {

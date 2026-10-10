@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -13,7 +13,11 @@ from homesec.plugins.registry import PluginType, load_plugin
 logger = logging.getLogger(__name__)
 
 
-def load_notifier_plugin(backend: str, config: dict[str, object] | BaseModel) -> Notifier:
+def load_notifier_plugin(
+    backend: str,
+    config: dict[str, object] | BaseModel,
+    **runtime_context: Any,
+) -> Notifier:
     """Load and instantiate a notifier plugin.
 
     Args:
@@ -33,6 +37,7 @@ def load_notifier_plugin(backend: str, config: dict[str, object] | BaseModel) ->
             PluginType.NOTIFIER,
             backend,
             config,
+            **runtime_context,
         ),
     )
 
