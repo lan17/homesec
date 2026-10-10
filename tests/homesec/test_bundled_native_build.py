@@ -153,6 +153,14 @@ def test_parallel_builds_share_cache_and_repair_incomplete_install(tmp_path: Pat
         source.mkdir()
         if dependency.name == "FFmpeg":
             (source / "COPYING.LGPLv2.1").write_text("fixture FFmpeg license")
+            (source / "libavformat").mkdir()
+            (source / "libavformat/rtsp.c").write_text(
+                "\n".join(original for original, _ in build_native.FFMPEG_RTSP_PATCH)
+            )
+            (source / "libavcodec").mkdir()
+            (source / "libavcodec/h264_parser.c").write_text(
+                "        if (ff_combine_frame(pc, next, &buf, &buf_size) < 0) {"
+            )
             _executable(
                 source / "configure",
                 "import pathlib, sys\npathlib.Path('.prefix').write_text(sys.argv[1].removeprefix('--prefix='))\n",

@@ -6,10 +6,9 @@
 //! Its current-thread runtime lives off the WebRTC loop. No URLs, credentials,
 //! library errors or frame bytes cross the diagnostic boundary.
 //!
-//! Media access units and delivery queues have byte/count limits. Retina's RTSP
-//! control-response parser currently exposes no byte cap through SessionOptions:
-//! those reads have deadlines, but an oversized response can allocate as its
-//! bytes arrive. Resolve that upstream before sharing this process with recording.
+//! Media access units and delivery queues have byte/count limits. The vendored
+//! Retina connection also caps each RTSP control message at 256 KiB (head and
+//! body combined), including incremental header parsing and socket reads.
 
 use crate::rtp::{EncodedFrame, Event, H264Assembler, Packet};
 use futures_util::StreamExt;
@@ -335,7 +334,7 @@ async fn ingest(
     }
 }
 
-fn profile_level_id(parameters: &VideoParameters) -> Result<u32> {
+pub(crate) fn profile_level_id(parameters: &VideoParameters) -> Result<u32> {
     let profile = parameters
         .rfc6381_codec()
         .strip_prefix("avc1.")
@@ -391,12 +390,13 @@ fn validate_level(
     Ok(())
 }
 
-fn validate_access_unit(data: &[u8]) -> Result<bool> {
+pub(crate) fn validate_access_unit(data: &[u8]) -> Result<bool> {
     if data.len() > MAX_FRAME_BYTES || !data.starts_with(&[0, 0, 0, 1]) {
         return Err("invalid_video_frame");
     }
     let mut remaining = &data[4..];
     let mut has_slice = false;
+    let mut has_primary_slice = false;
     while !remaining.is_empty() {
         let end = remaining
             .windows(4)
@@ -410,8 +410,10 @@ fn validate_access_unit(data: &[u8]) -> Result<bool> {
             has_slice = true;
             let unit = RefNal::new(nal, &[], true);
             let mut bits = unit.rbsp_bits();
-            bits.read_ue("first_mb_in_slice")
-                .map_err(|_| "invalid_video_frame")?;
+            has_primary_slice |= bits
+                .read_ue("first_mb_in_slice")
+                .map_err(|_| "invalid_video_frame")?
+                == 0;
             let slice_type = bits
                 .read_ue("slice_type")
                 .map_err(|_| "invalid_video_frame")?;
@@ -426,6 +428,9 @@ fn validate_access_unit(data: &[u8]) -> Result<bool> {
             break;
         }
         remaining = &remaining[end + 4..];
+    }
+    if has_slice && !has_primary_slice {
+        return Err("invalid_video_frame");
     }
     Ok(has_slice)
 }

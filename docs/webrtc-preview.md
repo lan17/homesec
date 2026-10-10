@@ -2,12 +2,13 @@
 
 WebRTC is the default backend for live camera viewing. Preview remains disabled
 until enabled in config. HomeSec supervises a `homesec-webrtc` Rust helper for
-each active camera. Viewers share one preview RTSP input per camera. Video-only
-H.264 copy mode uses native Rust RTSP ingestion; transcoding and audio-enabled
-configurations use FFmpeg for H.264 video and optional Opus audio. Recording,
-motion detection, and push-to-talk retain separate camera inputs. Eligible CPU
-H.264 motion detection now uses the Rust helper and linked FFmpeg/OpenCV libraries;
-recording still uses the existing FFmpeg process and Python recording policy.
+each eligible RTSP source. On compatible CPU H.264 sources, native motion,
+copied MP4 recording with optional AAC-LC audio, and video-only copy preview
+share one pinned FFmpeg library RTSP input per selected URL. All preview viewers
+share that input. Transcoding and audio-enabled preview retain a separate FFmpeg
+input for H.264 video and optional Opus audio. Hardware motion, unsupported or
+custom recording profiles, and push-to-talk retain their established paths.
+Python continues to own recording policy, supervision, and finalized clip delivery.
 
 The initial deployment scope is direct UDP connectivity over LAN or VPN. HTTP
 signaling uses the existing HomeSec server and authentication. Media travels
@@ -62,27 +63,24 @@ give the server its own TURN allocation. Validate the relay path from the target
 network before enabling public access.
 
 The UDP range is shared by active camera helpers. Match the configured range to
-firewall rules and Docker port mappings. The helper's FFmpeg ingestion uses
-separate loopback RTP sockets, which should not be published externally.
-Their receive/assembly worker runs independently of WebRTC packetization and
-encryption, so viewer fanout cannot leave a camera keyframe burst undrained.
-Only complete H.264 access units cross to the media loop: video queues retain at
-most eight units (each assembled unit is limited to 2 MiB plus parameter sets),
-and audio queues retain at most 64 Opus packets of 4000 bytes each. Both queues
-are drained fairly. An overflowing queue stops preview instead of forwarding
-compressed frames with missing dependencies; the existing timeout and restart
-policy still applies. Stop, parent disconnect, source failure, and timeout cancel
-the receiver and reap FFmpeg. No global socket-buffer tuning is required.
+firewall rules and Docker port mappings. FFmpeg preview transcoding/audio uses
+separate loopback RTP sockets, which should not be published externally. Shared
+motion and recording can run with preview disabled and do not require an
+advertised IP or an externally published WebRTC port.
 
 `max_viewers` limits peers for each camera, including sessions negotiating a
 connection. Authentication leases are renewed by the UI. Expired leases and
 failed connections close the associated peer; `max_session_duration_s` also caps
 the lifetime of a session. After the final viewer leaves, `idle_timeout_s` bounds
-how long the preview input and helper remain active.
+how long the preview consumer remains active. A shared helper/input stays active
+while motion or recording still needs it; RTSP source cleanup owns helper shutdown.
 
 The default `stop_on_recording` policy yields preview resources to recording.
 `allow_during_recording` is best-effort and can consume another direct camera
-session. Existing camera preflight and concurrency refusal behavior still apply.
+session for separate selected streams, preview transcoding/audio, or compatibility
+paths. Compatible native consumers using the same selected URL share one RTSP
+PLAY. Existing camera preflight and concurrency refusal behavior still apply;
+sharing does not override a preflight downgrade or the selected recording policy.
 A preview failure must not prevent recording or upload.
 WebRTC preview temporarily refuses activation until background camera discovery
 finishes, so discovered audio and camera session policy are applied before it
@@ -97,11 +95,14 @@ packetization, and keyframe cadence; validate new viewer joins and loss recovery
 with the actual camera and browser before using it. H.265 and H.264 with B-frames
 require transcoding for this path.
 
-With `video_codec: copy` and `audio_enabled: false`, the helper connects directly
-to the camera over RTSP/TCP using Retina. It does not launch FFmpeg for preview.
-The same camera input feeds every preview viewer. Camera credentials travel only
-through the private Python-to-helper control pipe. RTSP authentication, keepalive,
-and teardown are handled by the client library.
+With `video_codec: copy` and `audio_enabled: false`, eligible CPU RTSP sources use
+the shared helper's pinned FFmpeg library demuxer over RTSP/TCP. This path does not
+launch an FFmpeg command-line process for preview. Matching motion and recording
+URLs reuse the same input, and the same encoded video feeds every preview viewer.
+When the source cannot use shared mode, standalone native copy preview retains
+the Retina adapter. Camera credentials travel only through private
+Python-to-helper control pipes. RTSP authentication, keepalive, and teardown are
+handled by the client libraries.
 
 Native copy supports H.264 Baseline, Main, and High profiles through level 3.1,
 without B-frames. Negotiation checks the actual source profile and selects a
@@ -110,25 +111,37 @@ payload types are honored. Damaged or oversized RTP access units are discarded,
 with delivery resuming at a valid keyframe. Unsupported video, changed profiles,
 reversed video timestamps, or an overflowing source queue stop preview; select
 the default `video_codec: h264` to transcode an incompatible camera.
-On initial connection, the first observed picture is discarded because the
-camera may have started sending midway through it. Playback waits for the next
-complete keyframe; startup can therefore take one camera GOP. Use a short camera
-keyframe interval that fits within the ten-second media deadline.
-Native connection setup is bounded to five seconds, media reads to ten seconds,
-and stop/parent disconnect cancels the source. It never waits on camera I/O in
+Shared input preparation waits for a complete timestamped IDR and uses actual
+in-band SPS/PPS when initial SDP values are stale. A late consumer also waits for
+a complete keyframe. The standalone Retina adapter discards its first observed
+picture because the camera may have started midway through it. Startup can
+therefore take one camera GOP; use a short keyframe interval within the source's
+configured deadline. Native connection setup and reads use the RTSP source's
+configured connect and I/O timeouts, with standalone defaults of five and ten
+seconds. Stop or parent disconnect cancels camera I/O without waiting on it in
 the WebRTC control loop. Python requests graceful stop and allows camera teardown
-to finish before falling back to bounded process-group termination.
+to finish before bounded process-group termination.
 
-Native media assembly and delivery queues have byte/count limits. Retina's RTSP
-client options currently expose no response-size limit, so oversized
-camera responses can consume memory before the I/O deadline. This first mode
-is intended for operator-configured cameras on a trusted LAN/VPN; it does not
-provide a total memory bound against a malicious RTSP server. A library-level
-response cap is required before migrating shared recording into this process.
+Native media assembly and delivery queues have byte/count limits. The pinned
+Retina and FFmpeg recipes cap aggregate RTSP response headers/body at 256 KiB
+during reads, before allocating an oversized body. The FFmpeg H.264 parser and
+delivered compressed packets have a 2 MiB access-unit limit. Each shared consumer
+has its own 16-packet queue; a slow or overflowing preview consumer fails without
+blocking a healthy recording consumer. The FFmpeg transcoding/audio fallback
+drains its loopback RTP sockets on an independent receiver thread, so WebRTC
+encryption or a slow viewer cannot delay receiving the rest of a fragmented
+picture. Only complete H.264 access units cross that receiver boundary: its video
+queue holds at most eight units, each limited to 2 MiB plus parameter sets, and
+its audio queue holds at most 64 Opus packets of 4000 bytes each. Both queues are
+drained fairly; overflow stops preview rather than forwarding compressed frames
+with missing dependencies. Stop, parent disconnect, source failure, and timeout
+cancel the receiver and reap FFmpeg without requiring global socket-buffer tuning.
+These limits bound individual buffers and queues, not the entire process.
+Cameras remain operator-configured sources on a trusted LAN/VPN.
 
-This is the first step of the [shared Rust media plan](shared-rust-media.md).
-Recording and motion still own independent inputs. FFmpeg and ffprobe remain
-required for recording, compatible motion fallback, and preview transcoding/audio.
+See the [shared Rust media plan](shared-rust-media.md) for ingestion, recording,
+and lifecycle details. FFmpeg and ffprobe command-line tools remain required for
+preflight, compatibility recording/motion, and preview transcoding/audio.
 
 The preview input decoder uses slice threading rather than frame threading.
 Frame threading queues future frames and can add about a second of delay at
@@ -140,9 +153,10 @@ Opus. Camera AAC is not passed directly to WebRTC. The UI preserves its existing
 mute behavior and push-to-talk coordination; changing the preview transport does
 not change microphone-to-camera transport.
 
-Closing a viewer detaches only that peer. The camera-level force-stop operation
-and recording-priority shedding stop the shared preview and all its peers.
-Runtime replacement also invalidates old sessions.
+Closing a viewer detaches only that peer. The camera-level preview force-stop
+operation and recording-priority shedding detach preview and close all its peers;
+they do not stop a healthy shared recording or motion consumer. Runtime
+replacement invalidates old sessions and cleans up the source-owned helper.
 
 ## Native motion detection
 
@@ -154,22 +168,52 @@ prepared input frame for one call and reuses its owned image buffers.
 It prepares the same 320x240 grayscale frames at 10 fps and uses the existing
 motion settings, including blur normalization and recording sensitivity.
 If startup cannot supply its first frame within the source's existing read or
-readiness deadline, HomeSec releases the native helper and selects compatibility
-motion. This avoids repeated native restarts for cameras with longer keyframe
+readiness deadline, HomeSec detaches native motion and selects compatibility
+motion. Other shared consumers retain their input. This avoids repeated native
+restarts for cameras with longer keyframe
 intervals. Once native input supplies a frame, missing frames continue through
 the existing source stall and reconnect policy.
 
-The RTSP source supervises the motion helper using the selected motion stream,
-independent of preview viewers. Python receives typed motion observations rather
-than raw pixels in JSON and retains recording, reconnect, stall, and upload policy.
-Rust does not record video or audio in this stage.
+The RTSP source supervises the shared helper using the selected motion stream,
+independent of preview viewers. Matching recording/preview URLs reuse this input;
+a separate detection substream keeps its own input. Python receives typed motion
+observations rather than raw pixels in JSON and retains recording, reconnect,
+stall, and upload policy. Rust writes eligible compressed video/audio recordings
+through the linked MP4 muxer, without routing them through prepared motion pixels.
 
 Hardware decoding, custom FFmpeg input flags, unsupported camera inputs, or an
 unavailable native helper use the existing FFmpeg/OpenCV path. This compatibility
 fallback preserves the existing configuration; it does not require a second set
-of motion settings. A helper failure must release its camera input before fallback
-opens another one. Operational logs identify the selected path and stable failure
-reasons without exposing camera credentials or media.
+of motion settings. A consumer failure must detach its camera input before fallback
+opens another one. If a recording's startup or stop reply is uncertain, HomeSec
+retains the recording owner and confirms writer closure or owned helper death
+before retrying through FFmpeg. Operational logs identify the selected path and
+stable failure reasons without exposing camera credentials or media.
+
+## Shared recording lifecycle
+
+Eligible CPU H.264 sources use native recording for canonical copied MP4 profiles
+with no audio or AAC-LC audio. Custom FFmpeg flags, wall-clock timestamp profiles,
+unsupported codecs/AAC extensions, and audio transcoding retain the selected
+compatibility FFmpeg profile. The shared helper permits two selected stream URLs
+and two recording IDs, supporting the existing overlap during clip rotation.
+Per-consumer queues and stop operations are independent; stopping preview or
+motion leaves an active recording attached.
+
+Each native clip starts at a real IDR, preserves copied compressed packets and
+their presentation/decode timestamps, and keeps one audio/video epoch. Native
+MP4 recording can retain H.264 B-frames even though copy preview cannot display
+them. Invalid timing, zero packet duration, changed SPS/PPS, queue overflow, disk
+failure, and the limit of fewer than one million accepted packets fail explicitly.
+
+The helper writes `<final-name>.partial`, then drains accepted packets, writes
+the trailer, flushes, and syncs on stop. It publishes the final filename atomically
+without replacing an existing file. Python hands the clip to the existing pipeline
+only after successful finalization is confirmed. Failed or forcibly interrupted
+recording leaves a `.partial` file excluded from callbacks and replay. This is
+conventional MP4; an unfinalized partial has no guaranteed playback or automatic
+crash recovery. Inspect or remove abandoned partials only after confirming their
+writer has stopped. Successfully finalized files retain the existing replay path.
 
 ## Docker
 
@@ -180,8 +224,8 @@ libraries into the helper. Rust, native headers, CMake, and libclang are confine
 to the build stage. The image checks that the runtime can load the helper and
 that it has no shared OpenCV or libav dependency. Standard C/C++ runtime libraries
 remain OS dependencies.
-The system FFmpeg command-line tools remain in the image for recording, preview
-transcoding/audio, and compatibility motion.
+The system FFmpeg command-line tools remain in the image for preflight,
+compatibility recording/motion, and preview transcoding/audio.
 
 The bundled FFmpeg license and source/build notice are installed in
 `/usr/share/licenses/homesec-ffmpeg/`. The
@@ -218,8 +262,8 @@ For a source checkout on Linux or macOS, install these developer tools first:
   On macOS, use Xcode Command Line Tools (`xcode-select --install`).
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+
   or 22.12+, and pnpm 10.15.1 (the version in `ui/package.json`).
-- FFmpeg, including `ffprobe`, on `PATH` for recording, preview transcoding/audio,
-  and compatibility motion.
+- FFmpeg, including `ffprobe`, on `PATH` for preflight, compatibility
+  recording/motion, and preview transcoding/audio.
 - `pkg-config` so the Rust build can find the privately built libraries.
 - CMake to compile the private OpenCV libraries.
 - Optional NASM on x86 hosts for FFmpeg assembly optimizations. The build disables
@@ -301,7 +345,8 @@ Python CLI directly, set `preview.config.helper_path` to the absolute
 `CARGO_TARGET_DIR` is respected when choosing the release-helper directory.
 
 After Rust edits, run `make rust-build` and restart HomeSec to launch the new
-motion helper. Stop/start preview also launches a rebuilt preview helper. Python
+source-owned helper. Stop/start preview alone reuses a helper already serving
+motion or recording, so it does not load a rebuilt shared binary. Python
 and UI changes do not require a Rust rebuild. For UI hot reload,
 use `make ui-run-local VITE_API_PROXY_TARGET=http://127.0.0.1:8081`, replacing
 the proxy URL with the backend's address.

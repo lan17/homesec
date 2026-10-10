@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -71,9 +72,10 @@ from homesec.sources.rtsp.preflight import (
     PreflightError,
     RTSPStartupPreflight,
 )
-from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder
+from homesec.sources.rtsp.recorder import FfmpegRecorder, Recorder, RecordingHandle
 from homesec.sources.rtsp.recording_profile import MotionProfile, build_default_recording_profile
 from homesec.sources.rtsp.rust_motion import build_motion_input
+from homesec.sources.rtsp.shared_media import SharedMediaSession, SharedRecorder
 from homesec.sources.rtsp.talk.backend import validate_rtsp_talk_backend_config
 from homesec.sources.rtsp.talk.manager import TalkManager, TalkManagerError, TalkSession
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
@@ -409,7 +411,7 @@ class RTSPRunState(str, Enum):
 class RTSPSource(ThreadedClipSource):
     """RTSP clip source with motion detection.
 
-    Uses ffmpeg for frame extraction and recording; detects motion from
+    Uses source-owned media workers for frame extraction and recording; detects motion from
     downscaled grayscale frames and emits clips when recordings finish.
     """
 
@@ -508,7 +510,7 @@ class RTSPSource(ThreadedClipSource):
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.recording_process: subprocess.Popen[bytes] | None = None
+        self.recording_process: RecordingHandle | None = None
         self.last_motion_time: float | None = None
         self.recording_start_time: float | None = None
         self.recording_start_wall: datetime | None = None
@@ -531,6 +533,35 @@ class RTSPSource(ThreadedClipSource):
         )
         self._motion_debug_frame_count = 0
         self._owns_frame_pipeline = frame_pipeline is None
+        helper_path = "homesec-webrtc"
+        native_preview_config: WebRTCPreviewConfig | None = None
+        if config.runtime_preview is not None and isinstance(
+            config.runtime_preview.config, WebRTCPreviewConfig
+        ):
+            helper_path = config.runtime_preview.config.helper_path
+            if (
+                config.runtime_preview.enabled
+                and config.runtime_preview.config.video_codec == "copy"
+                and not config.runtime_preview.config.audio_enabled
+            ):
+                native_preview_config = config.runtime_preview.config
+        self._shared_media: SharedMediaSession | None = None
+        if (
+            self._owns_frame_pipeline
+            and recorder is None
+            and not self._legacy_ffmpeg_flags
+            and not (self.hwaccel_config.is_available and not self._hwaccel_failed)
+            and 0 < self.rtsp_connect_timeout_s <= 120
+            and 0 < self.rtsp_io_timeout_s <= 120
+        ):
+            resolved_helper = shutil.which(helper_path)
+            if resolved_helper is not None:
+                self._shared_media = SharedMediaSession(
+                    helper_path=resolved_helper,
+                    preview_config=native_preview_config,
+                    connect_timeout_s=self.rtsp_connect_timeout_s,
+                    io_timeout_s=self.rtsp_io_timeout_s,
+                )
         self._live_publisher: LivePublisher = live_publisher or self._build_live_publisher(
             config,
             camera_name=camera_name,
@@ -563,11 +594,6 @@ class RTSPSource(ThreadedClipSource):
         fallback = FfmpegMotionInput(self._frame_pipeline, self._motion_detector)
         self._motion_input: MotionInput = fallback
         if self._owns_frame_pipeline:
-            helper_path = "homesec-webrtc"
-            if config.runtime_preview is not None and isinstance(
-                config.runtime_preview.config, WebRTCPreviewConfig
-            ):
-                helper_path = config.runtime_preview.config.helper_path
             self._motion_input = build_motion_input(
                 fallback=fallback,
                 pixel_threshold=self.pixel_threshold,
@@ -580,6 +606,9 @@ class RTSPSource(ThreadedClipSource):
                 hwaccel_active=self.hwaccel_config.is_available and not self._hwaccel_failed,
                 helper_path=helper_path,
                 on_frame=self._touch_heartbeat,
+                helper_factory=(
+                    self._shared_media.motion_client if self._shared_media is not None else None
+                ),
             )
         self._recorder: Recorder = recorder or FfmpegRecorder(
             rtsp_url=self.rtsp_url,
@@ -590,6 +619,13 @@ class RTSPSource(ThreadedClipSource):
             clock=self._clock,
             timeout_capabilities=self._timeout_capabilities,
         )
+        if self._shared_media is not None and isinstance(self._recorder, FfmpegRecorder):
+            self._recorder = SharedRecorder(
+                session=self._shared_media,
+                fallback=self._recorder,
+                connect_timeout_s=self.rtsp_connect_timeout_s,
+                io_timeout_s=self.rtsp_io_timeout_s,
+            )
         self._run_state = RTSPRunState.IDLE
         self._motion_rtsp_url = self.detect_rtsp_url
         self._detect_stream_available = self.detect_rtsp_url != self.rtsp_url
@@ -970,6 +1006,20 @@ class RTSPSource(ThreadedClipSource):
             self._motion_input.set_motion_profile(outcome.motion_profile)
         if self._owns_recorder and isinstance(self._recorder, FfmpegRecorder):
             self._recorder.configure_profile(outcome.recording_profile)
+        elif self._owns_recorder and isinstance(self._recorder, SharedRecorder):
+            recording_probe = next(
+                (
+                    probe
+                    for probe in outcome.diagnostics.probes
+                    if probe.probe_ok and probe.url == outcome.recording_profile.input_url
+                ),
+                None,
+            )
+            self._recorder.configure_profile(
+                outcome.recording_profile,
+                video_codec=recording_probe.video_codec if recording_probe is not None else None,
+                audio_codec=recording_probe.audio_codec if recording_probe is not None else None,
+            )
 
         if outcome.concurrent_preview_supported is False:
             reason = (
@@ -1045,7 +1095,7 @@ class RTSPSource(ThreadedClipSource):
     def _set_recording_state(
         self,
         *,
-        proc: subprocess.Popen[bytes],
+        proc: RecordingHandle,
         output_file: Path,
         stderr_log: Path,
         start_mono: float,
@@ -1062,7 +1112,7 @@ class RTSPSource(ThreadedClipSource):
     def _clear_recording_state(
         self,
     ) -> tuple[
-        subprocess.Popen[bytes] | None,
+        RecordingHandle | None,
         Path | None,
         float | None,
         datetime | None,
@@ -1281,6 +1331,13 @@ class RTSPSource(ThreadedClipSource):
                 rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
                 rtsp_io_timeout_s=self.rtsp_io_timeout_s,
                 timeout_capabilities=self._timeout_capabilities,
+                helper_factory=(
+                    self._shared_media.preview_client
+                    if self._shared_media is not None
+                    and hls_config.video_codec == "copy"
+                    and not hls_config.audio_enabled
+                    else None
+                ),
             )
         return HLSLivePublisher(
             camera_name=camera_name,
@@ -1449,14 +1506,15 @@ class RTSPSource(ThreadedClipSource):
                     logger.warning("Could not read log file: %s", e, exc_info=True)
 
             cleared_proc, cleared_output, start_mono, start_wall = self._clear_recording_state()
-            if cleared_proc is not None:
-                self._stop_recording_process(cleared_proc, cleared_output)
-            self._finalize_clip(cleared_output, start_wall, start_mono)
+            if cleared_proc is not None and self._stop_recording_process(
+                cleared_proc, cleared_output
+            ):
+                self._finalize_clip(cleared_output, start_wall, start_mono)
             return False
         return True
 
     def start_recording(self) -> None:
-        """Start ffmpeg recording process with audio."""
+        """Start a recording with the selected audio profile."""
         if self.recording_process:
             return
         now = self._clock.now()
@@ -1464,7 +1522,7 @@ class RTSPSource(ThreadedClipSource):
             return
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         output_file, stderr_log = self._make_recording_paths(timestamp)
 
         proc = self._recorder.start(output_file, stderr_log)
@@ -1506,14 +1564,13 @@ class RTSPSource(ThreadedClipSource):
         )
 
     def stop_recording(self) -> None:
-        """Stop ffmpeg recording process."""
+        """Stop the recorder and hand off successfully finalized clips."""
         if not self.recording_process:
             return
 
         proc, output_file, started_at, started_wall = self._clear_recording_state()
-        if proc is not None:
-            self._stop_recording_process(proc, output_file)
-        self._finalize_clip(output_file, started_wall, started_at)
+        if proc is not None and self._stop_recording_process(proc, output_file):
+            self._finalize_clip(output_file, started_wall, started_at)
 
         if output_file:
             duration_s = (self._clock.now() - started_at) if started_at else None
@@ -1529,13 +1586,20 @@ class RTSPSource(ThreadedClipSource):
                 ),
             )
 
-    def _stop_recording_process(
-        self, proc: subprocess.Popen[bytes], output_file: Path | None
-    ) -> None:
+    def _stop_recording_process(self, proc: RecordingHandle, output_file: Path | None) -> bool:
         try:
-            self._recorder.stop(proc, output_file)
+            finalized = self._recorder.stop(proc, output_file)
         except Exception:
             logger.exception("Failed while stopping recording process (PID: %s)", proc.pid)
+            return False
+        if finalized is False:
+            logger.warning(
+                "Skipping clip handoff because recording was not finalized: %s",
+                output_file,
+                extra={"recording_id": output_file.name if output_file else None},
+            )
+            return False
+        return True
 
     def _rotate_recording_if_needed(self) -> None:
         if self.recording_process is None or self.recording_start_time is None:
@@ -1556,7 +1620,7 @@ class RTSPSource(ThreadedClipSource):
         old_started_wall = self.recording_start_wall
         old_started_mono = self.recording_start_time
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         new_output, new_log = self._make_recording_paths(timestamp)
 
         logger.info(
@@ -1572,7 +1636,7 @@ class RTSPSource(ThreadedClipSource):
                 proc=new_proc,
                 output_file=new_output,
                 stderr_log=new_log,
-                start_mono=now,
+                start_mono=self._clock.now(),
                 start_wall=datetime.now(),
             )
 
@@ -1588,15 +1652,14 @@ class RTSPSource(ThreadedClipSource):
                     ),
                 )
 
-            self._stop_recording_process(old_proc, old_output)
-            self._finalize_clip(old_output, old_started_wall, old_started_mono)
+            if self._stop_recording_process(old_proc, old_output):
+                self._finalize_clip(old_output, old_started_wall, old_started_mono)
             return
 
         logger.warning("Rotation start failed; stopping current recording and retrying")
         proc, output_file, started_mono, started_wall = self._clear_recording_state()
-        if proc is not None:
-            self._stop_recording_process(proc, output_file)
-        self._finalize_clip(output_file, started_wall, started_mono)
+        if proc is not None and self._stop_recording_process(proc, output_file):
+            self._finalize_clip(output_file, started_wall, started_mono)
         self.start_recording()
 
     def _start_frame_pipeline(self) -> None:
@@ -2021,6 +2084,11 @@ class RTSPSource(ThreadedClipSource):
             logger.exception("Error stopping frame pipeline")
         self._shutdown_live_publisher_once()
         self._shutdown_talk_manager_once()
+        if self._shared_media is not None:
+            try:
+                self._shared_media.shutdown()
+            except Exception:
+                logger.exception("Error stopping shared media worker")
 
     async def _shutdown_talk_manager_async(self) -> None:
         if self._talk_manager_shutdown:

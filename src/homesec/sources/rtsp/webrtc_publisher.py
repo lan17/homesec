@@ -7,8 +7,10 @@ helper loopback sockets; media and camera credentials never enter logs or files.
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from threading import Event, Lock, RLock, Thread
 from typing import Literal, Protocol, runtime_checkable
 
@@ -99,6 +101,19 @@ class _HelperClient(HelperClient[_HelperRequest, _HelperMessage]):
         return result
 
 
+class _PreviewHelper(Protocol):
+    @property
+    def process(self) -> subprocess.Popen[bytes]: ...
+
+    def wait_ready(self, timeout_s: float) -> _HelperMessage: ...
+
+    def request(
+        self, command: str, *, timeout_s: float = 2.0, **fields: object
+    ) -> _HelperMessage: ...
+
+    def stop(self) -> None: ...
+
+
 class RustWebRTCLivePublisher:
     """One bounded helper and one RTSP reader per active camera preview."""
 
@@ -113,6 +128,7 @@ class RustWebRTCLivePublisher:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         timeout_capabilities: RTSPTimeoutCapabilities,
+        helper_factory: Callable[[list[str]], _PreviewHelper] | None = None,
     ) -> None:
         advertised_ip = config.advertised_ip
         if advertised_ip is None:
@@ -127,9 +143,10 @@ class RustWebRTCLivePublisher:
         self._connect_timeout_s = rtsp_connect_timeout_s
         self._io_timeout_s = rtsp_io_timeout_s
         self._timeout_capabilities = timeout_capabilities
+        self._helper_factory = helper_factory
         self._lock = RLock()
         self._startup_lock = Lock()
-        self._helper: _HelperClient | None = None
+        self._helper: _PreviewHelper | None = None
         self._generation = 0
         self._recording_active = False
         self._degraded_reason: str | None = None
@@ -167,7 +184,7 @@ class RustWebRTCLivePublisher:
                     state=LivePublisherState.STARTING, viewer_count=0
                 )
                 self._media_start_at = time.monotonic()
-            helper: _HelperClient | None = None
+            helper: _PreviewHelper | None = None
             try:
                 if expired_helper is not None:
                     # An abrupt helper exit can leave FFmpeg alive in its process group.
@@ -179,7 +196,8 @@ class RustWebRTCLivePublisher:
                             if self._recording_blocks()
                             else self._unavailable()
                         )
-                helper = _HelperClient(
+                factory = self._helper_factory or _HelperClient
+                helper = factory(
                     [
                         self._config.helper_path,
                         "--advertised-ip",
@@ -224,7 +242,12 @@ class RustWebRTCLivePublisher:
                     return self._status
             except (OSError, HelperError) as exc:
                 if helper is not None:
-                    helper.stop()
+                    try:
+                        helper.stop()
+                    except (OSError, HelperError):
+                        # Shared consumer teardown retains unconfirmed ownership;
+                        # the source may still have a healthy active recorder.
+                        pass
                 with self._lock:
                     if generation != self._generation:
                         return (
@@ -368,7 +391,7 @@ class RustWebRTCLivePublisher:
     def _stop_owned_helper(
         self,
         *,
-        expected: _HelperClient | None = None,
+        expected: _PreviewHelper | None = None,
         error: str | None = None,
         idle_since: float | None = None,
     ) -> None:
@@ -386,7 +409,10 @@ class RustWebRTCLivePublisher:
             self._helper = None
             self._status = LivePublisherStatus(state=LivePublisherState.STOPPING, viewer_count=0)
         if helper is not None:
-            helper.stop()
+            try:
+                helper.stop()
+            except (OSError, HelperError):
+                error = error or "WebRTC preview detach was not confirmed"
         with self._lock:
             # An old teardown must never overwrite the state of a newer activation.
             if self._generation == generation and self._helper is None:

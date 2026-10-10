@@ -40,6 +40,7 @@ pub struct GrayDecoder {
     preparation: Option<Preparation>,
     previous_timestamp: Option<u32>,
     elapsed_ticks: i64,
+    packet_epoch: Option<i64>,
 }
 
 impl GrayDecoder {
@@ -61,7 +62,53 @@ impl GrayDecoder {
             preparation: None,
             previous_timestamp: None,
             elapsed_ticks: 0,
+            packet_epoch: None,
         })
+    }
+
+    /// Shared demuxing retains the camera's codec metadata and decode timestamps.
+    /// Compressed packets never travel through the prepared grayscale queue.
+    pub fn from_parameters(parameters: codec::Parameters) -> Result<Self, &'static str> {
+        ffmpeg::init().map_err(|_| "motion_decoder_unavailable")?;
+        let mut context = codec::Context::from_parameters(parameters)
+            .map_err(|_| "motion_decoder_unavailable")?
+            .decoder();
+        context.set_packet_time_base((1, 90_000));
+        context.set_threading(codec::threading::Config::count(1));
+        let decoder = context.video().map_err(|_| "motion_decoder_unavailable")?;
+        Ok(Self {
+            decoder,
+            preparation: None,
+            previous_timestamp: None,
+            elapsed_ticks: 0,
+            packet_epoch: None,
+        })
+    }
+
+    pub fn push_packet(
+        &mut self,
+        input: &ffmpeg::Packet,
+        time_base: Rational,
+        mut emit: impl FnMut(GrayFrame),
+    ) -> Result<(), &'static str> {
+        if input.size() == 0 || input.size() > MAX_PACKET_BYTES {
+            return Err("motion_frame_invalid");
+        }
+        let mut packet = input.clone();
+        packet.rescale_ts(time_base, Rational(1, 90_000));
+        let pts = packet.pts().ok_or("motion_timestamp_invalid")?;
+        let dts = packet.dts().ok_or("motion_timestamp_invalid")?;
+        let epoch = *self.packet_epoch.get_or_insert(dts);
+        packet.set_pts(Some(
+            pts.checked_sub(epoch).ok_or("motion_timestamp_invalid")?,
+        ));
+        packet.set_dts(Some(
+            dts.checked_sub(epoch).ok_or("motion_timestamp_invalid")?,
+        ));
+        self.decoder
+            .send_packet(&packet)
+            .map_err(|_| "motion_decode_failed")?;
+        self.receive(&mut emit, &mut 0)
     }
 
     pub fn push(

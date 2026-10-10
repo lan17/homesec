@@ -11,12 +11,75 @@ pub struct Request {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeOperationSettings {
+    pub pixel_threshold: u64,
+    pub min_changed_pct: f64,
+    pub blur_kernel: usize,
+    pub recording_sensitivity_factor: f64,
+}
+
+#[derive(Serialize)]
+pub struct Observation {
+    pub changed_pixels: usize,
+    pub changed_pct: f64,
+    pub motion: bool,
+}
+
+impl From<crate::motion::MotionObservation> for Observation {
+    fn from(value: crate::motion::MotionObservation) -> Self {
+        Self {
+            changed_pixels: value.changed_pixels,
+            changed_pct: value.changed_pct,
+            motion: value.motion,
+        }
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Operation {
     Start {
         ffmpeg_args: Option<Vec<String>>,
         rtsp_url: Option<String>,
+        connect_timeout_s: Option<f64>,
+        io_timeout_s: Option<f64>,
     },
+    StartMotion {
+        motion_id: Option<String>,
+        rtsp_url: String,
+        motion_config: NativeOperationSettings,
+        frame_queue_size: usize,
+        connect_timeout_s: f64,
+        io_timeout_s: f64,
+    },
+    ReadMotion {
+        motion_id: Option<String>,
+        threshold: f64,
+        wait_timeout_s: f64,
+    },
+    DiscardFrame {
+        motion_id: Option<String>,
+        wait_timeout_s: f64,
+    },
+    StopMotion {
+        motion_id: Option<String>,
+    },
+    StartRecording {
+        recording_id: String,
+        rtsp_url: String,
+        output_path: String,
+        audio_mode: String,
+        connect_timeout_s: f64,
+        io_timeout_s: f64,
+    },
+    StopRecording {
+        recording_id: String,
+    },
+    RecordingStatus {
+        recording_id: String,
+    },
+    StopPreview,
     Offer {
         session_id: String,
         sdp: String,
@@ -39,6 +102,18 @@ pub enum Operation {
 pub struct Reply {
     pub request_id: String,
     pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation: Option<Observation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_finalized: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]

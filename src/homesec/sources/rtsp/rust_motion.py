@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import math
 import shutil
+import subprocess
 from collections.abc import Callable
 from threading import RLock
-from typing import Literal
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -65,6 +66,19 @@ class _MotionReply(HelperMessage):
     frame_available: bool = False
 
 
+class _MotionHelper(Protocol):
+    @property
+    def process(self) -> subprocess.Popen[bytes]: ...
+
+    def wait_ready(self, timeout_s: float) -> _MotionReply: ...
+
+    def request(
+        self, command: str, *, timeout_s: float = 2.0, **fields: object
+    ) -> _MotionReply: ...
+
+    def stop(self) -> None: ...
+
+
 class RustMotionInput:
     def __init__(
         self,
@@ -76,6 +90,7 @@ class RustMotionInput:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         on_frame: Callable[[], None],
+        helper_factory: Callable[[Callable[[_MotionReply], None]], _MotionHelper] | None = None,
     ) -> None:
         self._fallback = fallback
         self._settings = settings
@@ -84,8 +99,9 @@ class RustMotionInput:
         self._connect_timeout = rtsp_connect_timeout_s
         self._io_timeout = rtsp_io_timeout_s
         self._on_frame = on_frame
+        self._helper_factory = helper_factory
         self._lock = RLock()
-        self._helper: HelperClient[_MotionRequest, _MotionReply] | None = None
+        self._helper: _MotionHelper | None = None
         self._url: str | None = None
         self._fallback_url: str | None = None
         self._compatible_profile = True
@@ -114,13 +130,20 @@ class RustMotionInput:
             reason: str | None = None
             generation = self._generation
             try:
-                self._helper = HelperClient(
-                    [self._helper_path, "--motion"],
-                    request_model=_MotionRequest,
-                    reply_model=_MotionReply,
-                    on_message=lambda reply: self._message(reply, generation),
-                    context="Motion",
-                )
+
+                def callback(reply: _MotionReply) -> None:
+                    self._message(reply, generation)
+
+                if self._helper_factory is not None:
+                    self._helper = self._helper_factory(callback)
+                else:
+                    self._helper = HelperClient(
+                        [self._helper_path, "--motion"],
+                        request_model=_MotionRequest,
+                        reply_model=_MotionReply,
+                        on_message=callback,
+                        context="Motion",
+                    )
                 self._helper.wait_ready(timeout_s=2.0)
                 reply = self._helper.request(
                     "start",
@@ -141,7 +164,7 @@ class RustMotionInput:
     def _start_fallback(
         self,
         reason: str,
-        expected_helper: HelperClient[_MotionRequest, _MotionReply] | None = None,
+        expected_helper: _MotionHelper | None = None,
     ) -> None:
         with self._lock:
             if (
@@ -267,6 +290,7 @@ def build_motion_input(
     hwaccel_active: bool,
     on_frame: Callable[[], None],
     helper_path: str = "homesec-webrtc",
+    helper_factory: Callable[[Callable[[_MotionReply], None]], _MotionHelper] | None = None,
 ) -> MotionInput:
     """Reuse the existing path for settings not supported by the native CPU decoder."""
     if hwaccel_active:
@@ -299,4 +323,5 @@ def build_motion_input(
         rtsp_connect_timeout_s=rtsp_connect_timeout_s,
         rtsp_io_timeout_s=rtsp_io_timeout_s,
         on_frame=on_frame,
+        helper_factory=helper_factory,
     )

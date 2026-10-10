@@ -94,6 +94,43 @@ fn native_preparation_matches_cli_cadence_and_color_conversion() {
 }
 
 #[test]
+fn shared_demux_parameters_preserve_the_existing_prepared_pixel_contract() {
+    // Given: The same frozen cadence/color corpus and codec metadata from libavformat.
+    for (name, fps) in [
+        ("15fps-bt709-tv.h264", 15),
+        ("7fps-bt709-pc.h264", 7),
+        ("15fps-smpte170m-tv.h264", 15),
+        ("7fps-smpte170m-pc.h264", 7),
+    ] {
+        let path = fixture(name);
+        let input = ffmpeg_next::format::input(&path).unwrap();
+        let parameters = input.stream(0).unwrap().parameters();
+        let mut decoder = GrayDecoder::from_parameters(parameters).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let reference = ffmpeg_reference::prepare_gray(&path, fps, 20);
+        let mut actual = Vec::new();
+        // When: The shared decoder consumes the original compressed access units,
+        // retaining source timestamps rather than depending on a zero camera epoch.
+        for (index, data) in access_units(&bytes).iter().enumerate() {
+            let timestamp = 37_000_000 + index as i64 * 90_000 / i64::from(fps);
+            let mut packet = ffmpeg_next::Packet::copy(data);
+            packet.set_pts(Some(timestamp));
+            packet.set_dts(Some(timestamp));
+            decoder
+                .push_packet(&packet, ffmpeg_next::Rational(1, 90_000), |frame| {
+                    append(frame, &mut actual)
+                })
+                .unwrap();
+        }
+        decoder
+            .finish(180_000, |frame| append(frame, &mut actual))
+            .unwrap();
+        // Then: Count and every prepared grayscale byte match the existing CLI oracle.
+        assert_eq!(actual, reference, "{name}: shared preparation differs");
+    }
+}
+
+#[test]
 fn timestamp_regression_refuses_without_emitting_media() {
     // Given: One accepted access unit establishes the RTP timestamp baseline.
     let bytes = std::fs::read(fixture("15fps-bt709-tv.h264")).unwrap();

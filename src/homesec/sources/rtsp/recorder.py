@@ -23,12 +23,24 @@ from homesec.sources.rtsp.utils import (
 logger = logging.getLogger(__name__)
 
 
+class RecordingHandle(Protocol):
+    """Opaque recorder-owned lifetime with process information for operational logs."""
+
+    @property
+    def pid(self) -> int: ...
+
+    @property
+    def returncode(self) -> int | None: ...
+
+
 class Recorder(Protocol):
-    def start(self, output_file: Path, stderr_log: Path) -> subprocess.Popen[bytes] | None: ...
+    def start(self, output_file: Path, stderr_log: Path) -> RecordingHandle | None: ...
 
-    def stop(self, proc: subprocess.Popen[bytes], output_file: Path | None) -> None: ...
+    def stop(self, proc: RecordingHandle, output_file: Path | None) -> bool | None:
+        """Finalize the clip; False refuses handoff, None retains legacy behavior."""
+        ...
 
-    def is_alive(self, proc: subprocess.Popen[bytes]) -> bool: ...
+    def is_alive(self, proc: RecordingHandle) -> bool: ...
 
 
 class FfmpegRecorder:
@@ -180,7 +192,9 @@ class FfmpegRecorder:
 
         return None
 
-    def stop(self, proc: subprocess.Popen[bytes], output_file: Path | None) -> None:
+    def stop(self, proc: RecordingHandle, output_file: Path | None) -> None:
+        if not isinstance(proc, subprocess.Popen):
+            raise TypeError("FFmpeg recorder requires its own subprocess handle")
         try:
             if proc.poll() is None:
                 if not _signal_process_group(proc.pid, signal.SIGTERM):
@@ -203,5 +217,7 @@ class FfmpegRecorder:
             extra={"recording_id": output_file.name if output_file else None},
         )
 
-    def is_alive(self, proc: subprocess.Popen[bytes]) -> bool:
+    def is_alive(self, proc: RecordingHandle) -> bool:
+        if not isinstance(proc, subprocess.Popen):
+            raise TypeError("FFmpeg recorder requires its own subprocess handle")
         return proc.poll() is None

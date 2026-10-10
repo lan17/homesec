@@ -354,6 +354,7 @@ pub fn run() -> Result<()> {
                 Operation::ReadMotion {
                     threshold,
                     wait_timeout_s,
+                    ..
                 } => {
                     queue_read(
                         &mut pending,
@@ -363,7 +364,7 @@ pub fn run() -> Result<()> {
                         Some(threshold),
                     )?;
                 }
-                Operation::DiscardFrame { wait_timeout_s } => {
+                Operation::DiscardFrame { wait_timeout_s, .. } => {
                     queue_read(&mut pending, worker.is_some(), id, wait_timeout_s, None)?;
                 }
                 Operation::Status => output(&Reply::success(id))?,

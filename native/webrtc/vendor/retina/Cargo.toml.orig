@@ -1,0 +1,64 @@
+[workspace]
+members = [".", "examples/client", "examples/ffmpeg-decode", "examples/webrtc-proxy", "fuzz"]
+default-members = ["."]
+
+[package]
+name = "retina"
+version = "0.4.20"
+authors = ["Scott Lamb <slamb@slamb.org>"]
+license = "MIT/Apache-2.0"
+edition = "2024"
+keywords = ["rtsp", "multimedia", "video", "streaming", "ip-camera"]
+categories = ["network-programming", "multimedia"]
+description = "high-level RTSP multimedia streaming library"
+repository = "https://github.com/scottlamb/retina"
+include = ["src/**/*", "benches", "Cargo.toml"]
+rust-version = "1.88"
+
+[features]
+default = ["h265"]
+h265 = []
+
+[package.metadata.docs.rs]
+# https://docs.rs/about/metadata
+# To generate docs locally, run: RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
+[dependencies]
+base64 = "0.22.0"
+bitstream-io = "2.6"
+bytes = "1.10"
+derive_more = { version = "2", features = ["debug", "display", "error", "from"] }
+futures = "0.3.14"
+h264-reader = "0.8.0"
+hex = "0.4.3"
+http-auth = "0.1.2"
+jiff = "0.2.0"
+log = "0.4.8"
+memchr = "2.7.4"
+pin-project = "1.0.7"
+pretty-hex = "0.4.0"
+rand = "0.8.3"
+sdp-types = "0.1.4"
+smallvec = { version = "1.6.1", features = ["union"] }
+socket2 = "0.5"
+tokio = { version = "1.13.0", features = ["macros", "net", "rt", "sync", "time"] }
+url = "2.2.1"
+
+[dev-dependencies]
+criterion = { version = "0.7.0", features = ["async_tokio"] }
+mylog = { git = "https://github.com/scottlamb/mylog" }
+pretty_assertions = "1.4.1"
+tokio = { version = "1.5.0", features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
+
+[profile.bench]
+debug = true
+
+[[bench]]
+name = "client"
+harness = false
+
+[[bench]]
+name = "depacketize"
+harness = false

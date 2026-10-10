@@ -5,6 +5,7 @@ use crate::protocol::{
 use crate::rtp::{Event as SourceEvent, TimestampClock};
 use crate::rtp_receiver::RtpReceiver;
 use crate::rtsp::RtspSource;
+use crate::shared_worker::SharedRuntime;
 use mio::net::UdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::collections::HashMap;
@@ -145,6 +146,7 @@ enum MediaInput {
         source: RtpReceiver,
     },
     Rtsp(RtspSource),
+    Shared,
 }
 
 // Passthrough cannot lower the camera's encoder level to match a receiver.
@@ -242,14 +244,24 @@ pub fn run(options: Options) -> Result<()> {
     }
     let negotiation_timeout = Duration::from_secs_f64(options.negotiation_timeout_s);
     let session_limit = Duration::from_secs_f64(options.max_session_duration_s);
-    let advertised_ip = options.advertised_ip.ok_or("invalid_options")?;
+    let preview_address_available = options.advertised_ip.is_some();
+    let advertised_ip = match options.advertised_ip {
+        Some(address) => address,
+        None if options.shared => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        None => return Err("invalid_options".into()),
+    };
     let bind_ip = match advertised_ip {
         IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
     };
-    let mut media = (options.udp_port_start..=options.udp_port_end)
-        .find_map(|port| UdpSocket::bind(SocketAddr::new(bind_ip, port)).ok())
-        .ok_or("media_port_unavailable")?;
+    // Recording/motion-only shared workers need no reserved preview port.
+    let mut media = if options.shared && !preview_address_available {
+        UdpSocket::bind("127.0.0.1:0".parse()?)?
+    } else {
+        (options.udp_port_start..=options.udp_port_end)
+            .find_map(|port| UdpSocket::bind(SocketAddr::new(bind_ip, port)).ok())
+            .ok_or("media_port_unavailable")?
+    };
     let candidate_addr = SocketAddr::new(advertised_ip, media.local_addr()?.port());
     let video = std::net::UdpSocket::bind("127.0.0.1:0")?;
     let audio = std::net::UdpSocket::bind("127.0.0.1:0")?;
@@ -259,6 +271,9 @@ pub fn run(options: Options) -> Result<()> {
     poll.registry()
         .register(&mut media, MEDIA, Interest::READABLE)?;
     let waker = Arc::new(Waker::new(poll.registry(), CONTROL)?);
+    let mut shared = options
+        .shared
+        .then(|| SharedRuntime::new(Arc::clone(&waker)));
     let controls = controls(Arc::clone(&waker), |bytes| {
         let request: Request = serde_json::from_slice(bytes).ok()?;
         (request.request_id.len() <= 128).then_some(request)
@@ -273,6 +288,8 @@ pub fn run(options: Options) -> Result<()> {
     let mut source_profile: Option<u32> = None;
     let mut started: Option<Instant> = None;
     let mut last_video: Option<Instant> = None;
+    let mut input_start_timeout = MEDIA_TIMEOUT;
+    let mut input_io_timeout = MEDIA_TIMEOUT;
     let mut media_failed = false;
     let mut video_clock = TimestampClock::default();
     let mut audio_clock = TimestampClock::default();
@@ -283,16 +300,30 @@ pub fn run(options: Options) -> Result<()> {
     let mut bytes = [0u8; 65536];
     loop {
         let now = Instant::now();
+        if let Some(shared) = &mut shared {
+            for reply in shared.poll() {
+                output(&reply)?;
+            }
+        }
         let exited = match &mut input {
             Some(MediaInput::Ffmpeg { child, .. }) => child.0.try_wait()?.is_some(),
             _ => false,
         };
         if input.is_some()
             && (exited
-                || last_video
-                    .or(started)
-                    .is_some_and(|last| now.duration_since(last) >= MEDIA_TIMEOUT))
+                || last_video.map_or_else(
+                    || {
+                        started
+                            .is_some_and(|start| now.duration_since(start) >= input_start_timeout)
+                    },
+                    |last| now.duration_since(last) >= input_io_timeout,
+                ))
         {
+            if matches!(input, Some(MediaInput::Shared))
+                && let Some(shared) = &mut shared
+            {
+                shared.stop_preview();
+            }
             input = None;
             media_failed = true;
             peers.clear();
@@ -306,6 +337,10 @@ pub fn run(options: Options) -> Result<()> {
             let event = match &mut input {
                 Some(MediaInput::Rtsp(source)) => source.try_recv(),
                 Some(MediaInput::Ffmpeg { source, .. }) => source.try_recv(),
+                Some(MediaInput::Shared) => shared
+                    .as_mut()
+                    .ok_or("preview_temporarily_unavailable")
+                    .and_then(SharedRuntime::try_recv_preview),
                 None => break,
             };
             match event {
@@ -338,6 +373,11 @@ pub fn run(options: Options) -> Result<()> {
                 }
                 Ok(None) => break,
                 Err(code) => {
+                    if matches!(input, Some(MediaInput::Shared))
+                        && let Some(shared) = &mut shared
+                    {
+                        shared.stop_preview();
+                    }
                     input = None;
                     media_failed = true;
                     peers.clear();
@@ -371,6 +411,8 @@ pub fn run(options: Options) -> Result<()> {
                 Operation::Start {
                     ffmpeg_args,
                     rtsp_url,
+                    connect_timeout_s,
+                    io_timeout_s,
                 } => {
                     if started.is_some() {
                         reply = Reply::error(request.request_id, "preview_temporarily_unavailable");
@@ -393,6 +435,8 @@ pub fn run(options: Options) -> Result<()> {
                                             .spawn()
                                         {
                                             Ok(process) => {
+                                                input_start_timeout = MEDIA_TIMEOUT;
+                                                input_io_timeout = MEDIA_TIMEOUT;
                                                 input = Some(MediaInput::Ffmpeg {
                                                     child: MediaChild(process),
                                                     source,
@@ -411,14 +455,32 @@ pub fn run(options: Options) -> Result<()> {
                                 }
                             }
                             (None, Some(url)) if !url.is_empty() && url.len() <= 16_384 => {
-                                match RtspSource::start(
-                                    url,
-                                    Duration::from_secs(5),
-                                    MEDIA_TIMEOUT,
-                                    Arc::clone(&waker),
-                                ) {
+                                let connect =
+                                    crate::shared_worker::timeout(connect_timeout_s.unwrap_or(5.0));
+                                let io = crate::shared_worker::timeout(
+                                    io_timeout_s.unwrap_or(MEDIA_TIMEOUT.as_secs_f64()),
+                                );
+                                let (Ok(connect), Ok(io)) = (connect, io) else {
+                                    output(&Reply::error(
+                                        request.request_id,
+                                        "invalid_rtsp_timeout",
+                                    ))?;
+                                    continue;
+                                };
+                                let source = if let Some(shared) = &mut shared {
+                                    shared
+                                        .start_preview(url, connect, io)
+                                        .map(|()| MediaInput::Shared)
+                                } else {
+                                    RtspSource::start(url, connect, io, Arc::clone(&waker))
+                                        .map(MediaInput::Rtsp)
+                                };
+                                match source {
                                     Ok(source) => {
-                                        input = Some(MediaInput::Rtsp(source));
+                                        input_start_timeout =
+                                            connect_timeout_s.map_or(MEDIA_TIMEOUT, |_| connect);
+                                        input_io_timeout = io;
+                                        input = Some(source);
                                         started = Some(now);
                                         pending_start = Some(request.request_id);
                                         continue;
@@ -435,6 +497,42 @@ pub fn run(options: Options) -> Result<()> {
                         }
                     }
                 }
+                operation @ (Operation::StartMotion { .. }
+                | Operation::ReadMotion { .. }
+                | Operation::DiscardFrame { .. }
+                | Operation::StopMotion { .. }
+                | Operation::StartRecording { .. }
+                | Operation::StopRecording { .. }
+                | Operation::RecordingStatus { .. }) => {
+                    if let Some(shared) = &mut shared {
+                        if let Some(reply) = shared.handle(Request {
+                            request_id: request.request_id,
+                            operation,
+                        }) {
+                            output(&reply)?;
+                        }
+                        // A motion read may remain pending without blocking
+                        // preview, recording, cancellation or authorization.
+                        continue;
+                    }
+                    reply = Reply::error(request.request_id, "native_media_unavailable");
+                }
+                Operation::StopPreview => {
+                    if let Some(shared) = &mut shared {
+                        shared.stop_preview();
+                    }
+                    input = None;
+                    peers.clear();
+                    started = None;
+                    last_video = None;
+                    source_profile = None;
+                    media_failed = false;
+                    video_clock = TimestampClock::default();
+                    audio_clock = TimestampClock::default();
+                    if let Some(request_id) = pending_start.take() {
+                        output(&Reply::error(request_id, "preview_stopped"))?;
+                    }
+                }
                 Operation::Offer {
                     session_id,
                     sdp,
@@ -442,7 +540,11 @@ pub fn run(options: Options) -> Result<()> {
                     lease_expires_at,
                 } => {
                     let deadline = lease(lease_seconds, lease_expires_at, now, session_limit);
-                    if input.is_none() || media_failed || pending_start.is_some() {
+                    if !preview_address_available
+                        || input.is_none()
+                        || media_failed
+                        || pending_start.is_some()
+                    {
                         reply = Reply::error(request.request_id, "preview_temporarily_unavailable");
                     } else if peers.len() >= options.max_viewers {
                         reply = Reply::error(request.request_id, "session_limit");

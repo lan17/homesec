@@ -139,26 +139,44 @@ fn serve_rtsp_camera(
         atomic::{AtomicBool, Ordering},
     };
     let partial_idr = codec == "PARTIAL_IDR";
-    let nals = annex_b_nals(if partial_idr {
+    let multislice = partial_idr || codec == "DAMAGED_IDR";
+    let nals = annex_b_nals(if multislice {
         include_bytes!("../fixtures/baseline-multislice-160x120.h264")
     } else {
         include_bytes!("../fixtures/baseline-160x120.h264")
     });
     let sps = nals.iter().find(|nal| nal[0] & 31 == 7).unwrap();
     let pps = nals.iter().find(|nal| nal[0] & 31 == 8).unwrap();
+    let stale_pps = codec == "STALE_PPS";
+    let changing_preview = matches!(codec, "LEVEL_CHANGE" | "CLOCK_BACKWARDS");
+    // Keep both parameter IDs and syntax valid, but advertise pic_init_qp_minus26
+    // as -2 instead of the actual encoder's -3. Real cameras can similarly
+    // advertise stale encoder settings before sending their in-band parameters.
+    let advertised_pps: &[u8] = if stale_pps {
+        assert_eq!(pps.as_slice(), &[0x68, 0xce, 0x0f, 0xc8]);
+        &[0x68, 0xce, 0x0b, 0xc8]
+    } else {
+        pps
+    };
     let encoding = if codec == "H265" { "H265" } else { "H264" };
-    let sdp = format!(
+    let audio = codec == "H264_AAC";
+    let mut sdp = format!(
         "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=synthetic camera\r\nt=0 0\r\na=control:*\r\nm=video 0 RTP/AVP 101\r\na=rtpmap:101 {encoding}/90000\r\na=fmtp:101 packetization-mode=1;profile-level-id={:02x}{:02x}{:02x};sprop-parameter-sets={},{}\r\na=control:trackID=0\r\n",
         sps[1],
         sps[2],
         sps[3],
         base64_parameter(sps),
-        base64_parameter(pps)
+        base64_parameter(advertised_pps)
     );
+    if audio {
+        sdp.push_str("m=audio 0 RTP/AVP 102\r\na=rtpmap:102 MPEG4-GENERIC/48000/2\r\na=fmtp:102 streamtype=5;profile-level-id=1;mode=AAC-hbr;config=1190;SizeLength=13;IndexLength=3;IndexDeltaLength=3\r\na=control:trackID=1\r\n");
+    }
     let writer = Arc::new(Mutex::new(socket.try_clone().unwrap()));
     let streaming_stop = Arc::new(AtomicBool::new(false));
     let mut streaming = None;
     let mut reader = BufReader::new(socket);
+    let mut video_channel = 0;
+    let mut audio_channel = 2;
     loop {
         if reader
             .fill_buf()
@@ -205,6 +223,18 @@ fn serve_rtsp_camera(
                 }
             }
         }
+        if method == "SETUP" {
+            if request
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .ends_with("trackID=1")
+            {
+                audio_channel = channel;
+            } else {
+                video_channel = channel;
+            }
+        }
         calls.lock().unwrap().push(method.clone());
         if codec == "STALL" && method == "DESCRIBE" {
             continue;
@@ -218,7 +248,11 @@ fn serve_rtsp_camera(
                 body = &sdp;
             }
             "SETUP" => headers.push_str(&format!("Session: fixture;timeout=60\r\nTransport: RTP/AVP/TCP;unicast;interleaved={channel}-{}\r\n", channel + 1)),
-            "PLAY" => headers.push_str(&format!("Session: fixture\r\nRange: npt=0.000-\r\nRTP-Info: url={url}/trackID=0;seq=1;rtptime=0\r\n")),
+            "PLAY" => {
+                headers.push_str(&format!("Session: fixture\r\nRange: npt=0.000-\r\nRTP-Info: url={url}/trackID=0;seq=1;rtptime=0"));
+                if audio { headers.push_str(&format!(",url={url}/trackID=1;seq=1;rtptime=12000")); }
+                headers.push_str("\r\n");
+            },
             "TEARDOWN" | "GET_PARAMETER" => headers.push_str("Session: fixture\r\n"),
             _ => panic!("Unexpected RTSP method: {method}"),
         }
@@ -241,8 +275,37 @@ fn serve_rtsp_camera(
             let writer = Arc::clone(&writer);
             let stop = Arc::clone(&streaming_stop);
             let nals = nals.clone();
+            let codec = codec.to_owned();
             streaming = Some(thread::spawn(move || {
-                stream_h264(writer, stop, channel, nals, partial_idr)
+                let audio_worker = if audio {
+                    // Both sender reports share one NTP epoch, while the first
+                    // AAC sample deliberately begins 250ms after video time zero.
+                    if !sender_report(&writer, video_channel + 1, 0x12345678)
+                        || !sender_report(&writer, audio_channel + 1, 0x87654321)
+                    {
+                        return;
+                    }
+                    let audio_writer = Arc::clone(&writer);
+                    let audio_stop = Arc::clone(&stop);
+                    Some(thread::spawn(move || {
+                        stream_aac(audio_writer, audio_stop, audio_channel)
+                    }))
+                } else {
+                    None
+                };
+                stream_h264(
+                    writer,
+                    Arc::clone(&stop),
+                    video_channel,
+                    nals,
+                    partial_idr,
+                    stale_pps || changing_preview,
+                    &codec,
+                );
+                stop.store(true, Ordering::Release);
+                if let Some(audio_worker) = audio_worker {
+                    audio_worker.join().unwrap();
+                }
             }));
         }
     }
@@ -260,29 +323,44 @@ fn stream_h264(
     channel: u8,
     nals: Vec<Vec<u8>>,
     partial_idr: bool,
+    inband_parameters: bool,
+    mode: &str,
 ) {
     let mut frames: Vec<Vec<Vec<u8>>> = Vec::new();
     for nal in nals {
         match nal[0] & 31 {
             9 => frames.push(Vec::new()),
-            7 | 8 => {} // Deliberately exercise parameter sets supplied only in SDP.
+            7 | 8 if !inband_parameters => {} // Exercise parameters supplied only in SDP.
             _ => frames.last_mut().unwrap().push(nal),
         }
     }
     let mut sequence = if partial_idr { 2_u16 } else { 1_u16 };
     let mut timestamp = 0_u32;
-    for frame in frames.iter().cycle() {
+    for (frame_index, frame) in frames.iter().cycle().enumerate() {
         if stop.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
+        if mode == "CLOCK_BACKWARDS" && frame_index == 30 {
+            timestamp -= 18_000;
+        }
+        if mode == "CLOCK_RESET" && frame_index >= 30 {
+            timestamp = 0;
+        }
         let mut payloads = Vec::new();
         let first_slice = frame.iter().position(|nal| nal[0] & 31 == 5);
-        for (index, nal) in frame.iter().enumerate() {
+        for (index, original) in frame.iter().enumerate() {
+            let mut nal = original.clone();
+            if mode == "LEVEL_CHANGE" && frame_index >= 30 && nal[0] & 31 == 7 {
+                nal[3] = 42;
+            }
             if partial_idr && timestamp == 0 && Some(index) == first_slice {
                 continue;
             }
+            if mode == "DAMAGED_IDR" && frame_index >= 30 && Some(index) == first_slice {
+                continue;
+            }
             if nal.len() <= 1000 {
-                payloads.push(nal.clone());
+                payloads.push(nal);
             } else {
                 let chunks: Vec<_> = nal[1..].chunks(998).collect();
                 for (index, chunk) in chunks.iter().enumerate() {
@@ -316,5 +394,70 @@ fn stream_h264(
         }
         timestamp = timestamp.wrapping_add(9000);
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Actual AAC-LC compressed access units from the committed synthetic tone.
+pub(crate) fn aac_access_units() -> Vec<Vec<u8>> {
+    ffmpeg_next::init().unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/recording/h264-aac-bframes.mp4");
+    let mut input = ffmpeg_next::format::input(&path).unwrap();
+    input
+        .packets()
+        .filter(|(stream, _)| stream.parameters().medium() == ffmpeg_next::media::Type::Audio)
+        .map(|(_, packet)| packet.data().unwrap().to_vec())
+        .collect()
+}
+
+fn sender_report(
+    writer: &std::sync::Arc<std::sync::Mutex<std::net::TcpStream>>,
+    channel: u8,
+    ssrc: u32,
+) -> bool {
+    let mut report = vec![0x80, 200, 0, 6];
+    report.extend_from_slice(&ssrc.to_be_bytes());
+    report.extend_from_slice(&(3_900_000_000_u64 << 32).to_be_bytes());
+    report.extend_from_slice(&[0; 12]); // RTP timestamp=0, packet/octet counts=0.
+    write_interleaved(writer, channel, &report)
+}
+
+fn write_interleaved(
+    writer: &std::sync::Arc<std::sync::Mutex<std::net::TcpStream>>,
+    channel: u8,
+    packet: &[u8],
+) -> bool {
+    let mut interleaved = vec![b'$', channel];
+    interleaved.extend_from_slice(&(packet.len() as u16).to_be_bytes());
+    interleaved.extend_from_slice(packet);
+    writer.lock().unwrap().write_all(&interleaved).is_ok()
+}
+
+fn stream_aac(
+    writer: std::sync::Arc<std::sync::Mutex<std::net::TcpStream>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    channel: u8,
+) {
+    let packets = aac_access_units();
+    let mut sequence = 1_u16;
+    let mut timestamp = 12000_u32;
+    for access_unit in packets.iter().cycle() {
+        if stop.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        assert!(access_unit.len() < 8192);
+        let mut packet = vec![0x80, 0x80 | 102];
+        packet.extend_from_slice(&sequence.to_be_bytes());
+        packet.extend_from_slice(&timestamp.to_be_bytes());
+        packet.extend_from_slice(&0x87654321_u32.to_be_bytes());
+        packet.extend_from_slice(&16_u16.to_be_bytes()); // AU-headers-length in bits.
+        packet.extend_from_slice(&((access_unit.len() as u16) << 3).to_be_bytes());
+        packet.extend_from_slice(access_unit);
+        if !write_interleaved(&writer, channel, &packet) {
+            return;
+        }
+        sequence = sequence.wrapping_add(1);
+        timestamp = timestamp.wrapping_add(1024);
+        thread::sleep(Duration::from_micros(21_333));
     }
 }
