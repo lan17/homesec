@@ -1,0 +1,31 @@
+schema: spec-driven
+
+context: |
+  HomeSec uses Python/FastAPI, Pydantic, PostgreSQL, and a React/TypeScript UI.
+  Read AGENTS.md, DESIGN.md, TESTING.md, and relevant source, configuration,
+  and tests before proposing changes. For frontend work, also read ui/AGENTS.md.
+  Follow the existing architecture, persistence, security, and testing boundaries.
+  Prefer the simplest solution that satisfies the requirements; reuse existing
+  mechanisms before adding public APIs, abstractions, dependencies, or state.
+  Confirm unresolved behavior and architecture decisions with Leonidas before
+  recording or implementing them. Do not merge into a default branch or perform
+  database writes without his explicit approval for that specific action
+  immediately beforehand.
+
+rules:
+  proposal:
+    - Keep the problem, scope, affected capabilities, and unresolved choices concise.
+  specs:
+    - Describe observable behavior with Given/When/Then scenarios, including relevant failure, cancellation, and compatibility cases.
+  design:
+    - Ground the approach in existing code and boundaries; explain why existing mechanisms are insufficient before introducing new ones.
+  tasks:
+    - Map changed scenarios to meaningful boundary verification, reusing existing tests where appropriate, and include validation required by AGENTS.md.
+
+operations:
+  apply:
+    guidance:
+      - Read and follow the applicable AGENTS.md files for implementation, validation, publication, and approval requirements.
+  archive:
+    guidance:
+      - Review implementation and test evidence; report unresolved discrepancies before syncing current specs.
