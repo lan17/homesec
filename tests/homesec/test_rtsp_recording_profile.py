@@ -32,7 +32,7 @@ def test_candidates_prefer_audio_copy_for_compatible_codec() -> None:
     assert [candidate.audio_mode for candidate in candidates] == ["copy", "aac", "none"]
 
 
-def test_candidates_include_passthrough_vsync_defaults() -> None:
+def test_candidates_include_passthrough_frame_timing_defaults() -> None:
     """All generated recording profiles should default to passthrough timing mode."""
     # Given: a stream with audio where all output profiles are generated
     candidates = build_recording_profile_candidates(
@@ -40,19 +40,19 @@ def test_candidates_include_passthrough_vsync_defaults() -> None:
         audio_codec="aac",
     )
 
-    # When/Then: each candidate includes -vsync 0
+    # When/Then: each candidate preserves input frame timing without duplication or dropping
     for candidate in candidates:
-        assert "-vsync" in candidate.ffmpeg_output_args
-        idx = candidate.ffmpeg_output_args.index("-vsync")
-        assert candidate.ffmpeg_output_args[idx + 1] == "0"
+        assert "-fps_mode" in candidate.ffmpeg_output_args
+        idx = candidate.ffmpeg_output_args.index("-fps_mode")
+        assert candidate.ffmpeg_output_args[idx + 1] == "passthrough"
 
 
-def test_default_profile_includes_passthrough_vsync_defaults() -> None:
+def test_default_profile_includes_passthrough_frame_timing_defaults() -> None:
     """Default recording profile should also preserve passthrough timing mode."""
     # Given: default profile selection before preflight
     profile = build_default_recording_profile("rtsp://camera/front")
 
-    # Then: default output args include -vsync 0
-    assert "-vsync" in profile.ffmpeg_output_args
-    idx = profile.ffmpeg_output_args.index("-vsync")
-    assert profile.ffmpeg_output_args[idx + 1] == "0"
+    # When/Then: default output args preserve input frame timing
+    assert "-fps_mode" in profile.ffmpeg_output_args
+    idx = profile.ffmpeg_output_args.index("-fps_mode")
+    assert profile.ffmpeg_output_args[idx + 1] == "passthrough"

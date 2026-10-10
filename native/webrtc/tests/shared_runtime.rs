@@ -366,7 +366,16 @@ fn assert_decode(path: &Path, elementary: bool) {
         .arg("-i")
         .arg(path)
         .args([
-            "-map", "0:v:0", "-threads", "1", "-pix_fmt", "rgb24", "-vsync", "0", "-f", "rawvideo",
+            "-map",
+            "0:v:0",
+            "-threads",
+            "1",
+            "-pix_fmt",
+            "rgb24",
+            "-fps_mode",
+            "passthrough",
+            "-f",
+            "rawvideo",
             "pipe:1",
         ])
         .output()
