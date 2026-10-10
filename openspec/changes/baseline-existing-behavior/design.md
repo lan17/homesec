@@ -2,11 +2,17 @@
 
 ## Context
 
-See [proposal.md](proposal.md) for motivation and scope. This is a draft baseline of the implementation on fetched `origin/main` after the OpenSpec initialization merge on 2026-10-10. Research covered application source, configuration models, API routes, UI flows, native media boundaries, existing tests, and operator/developer documents. No application tests or device checks were executed while preparing these artifacts.
+See [proposal.md](proposal.md) for motivation and scope. This baseline records the implementation on fetched `origin/main` after the OpenSpec initialization merge on 2026-10-10. Research covered application source, configuration models, API routes, UI flows, native media boundaries, existing tests, and operator/developer documents. No application tests or device checks were executed while preparing these artifacts.
 
-There are no maintained capability specs yet. Existing documents combine implemented behavior, older examples, design goals, and planned work. The API already has deterministic schema export in `src/homesec/api/openapi_export.py` and generated UI contracts checked by `ui/scripts/api_codegen.mjs`. Configuration validation lives in the core and plugin Pydantic models; a complete exported plugin-configuration reference does not currently exist.
+The maintained specification inventory was empty before this bootstrap. Existing documents combine implemented behavior, older examples, design goals, and planned work. The API already has deterministic schema export in `src/homesec/api/openapi_export.py` and generated UI contracts checked by `ui/scripts/api_codegen.mjs`. Configuration validation lives in the core and plugin Pydantic models; a complete exported plugin-configuration reference does not currently exist.
 
 The important product boundary is between recording/storage work and best-effort analysis, notification, and telemetry. The baseline describes concrete failure handling observed today. It does not infer universal outage resilience or durable replay from that priority statement. Saved configuration and active runtime are also separate states.
+
+## Review and promotion status
+
+The corrected baseline received [LGTM on PR118](https://github.com/lan17/homesec/pull/118#pullrequestreview-5481056106), and Leonidas approved promotion to the long-term inventory. All eight capabilities now live in `openspec/specs/`, with unchanged reviewed Purpose, requirement, and scenario text. [The behavior reference](../../../docs/reference.md) preserves the known limitations and evidence limits, and each maintained spec links to its capability notes there.
+
+A fresh comparison found no relevant source/config/test changes on `origin/main` since the researched snapshot. Promotion is documentation-only and uses the explicitly approved PR118 docs-only validation scope. The unchecked tasks retain deeper coverage and guide-reconciliation follow-ups; no new application tests or device certification are implied, and no runtime fix is included. The change stays active until its remaining tasks are completed and it can be archived honestly.
 
 ## Goals / Non-Goals
 
@@ -42,15 +48,15 @@ An automatic extraction of every code branch would preserve accidental behavior.
 
 ### 3. Keep behavioral specs and generated references complementary
 
-After review, `openspec/specs/<capability>/spec.md` will hold the maintained public behavior. Normal OpenSpec changes will add or modify requirement deltas; syncing and archiving will update those maintained specs through the existing workflow. The CLI does not automatically carry the delta files' nonnormative `Current limitations` sections into a newly seeded main spec. During promotion, preserve retained limitations in the existing planned `docs/reference.md` and link each affected maintained spec to that durable reference. Verify those links after archive; a link into the active change is not a durable public reference.
+`openspec/specs/<capability>/spec.md` now holds the reviewed maintained public behavior. Normal OpenSpec changes will add or modify requirement deltas; syncing and archiving will update those maintained specs through the existing workflow. The CLI does not automatically carry the delta files' nonnormative `Current limitations` sections into a newly seeded main spec. The promotion preserves retained limitations in `docs/reference.md`, with links from each affected maintained spec to that durable reference. Verify those links after archive; a link into the active change is not a durable public reference.
 
-Reference documentation should use those specs for behavior, lifecycle, failure semantics, and compatibility. Exact API methods and payload shapes should continue to come from the existing OpenAPI exporter. Configuration and CLI references should point to the current validation models and commands, with examples checked against them. Keep operator recipes in existing guides and add a small capability index connecting the specs, API reference, and guides. No documentation generator is needed for this bootstrap.
+Reference documentation should use those specs for behavior, lifecycle, failure semantics, and compatibility. Exact API methods and payload shapes should continue to come from the existing OpenAPI exporter. Configuration and CLI references should point to the current validation models and commands, with examples checked against them. Operator recipes remain in existing guides; the capability index connects the specs, API reference, and guides. No documentation generator is needed for this bootstrap.
 
 The alternative of copying full API schemas and every configuration field into prose would create another drift-prone source. A new generator is unnecessary until the existing references and navigation have proved insufficient.
 
 ### 4. Treat baseline review as the implementation work for this change
 
-The next phase is to review the requirements, resolve or bound the listed disagreements, add only missing critical behavioral coverage where justified, and promote the reviewed contracts. Reference navigation and workflow guidance follow that promotion. These planning artifacts do not authorize application changes or certify runtime conformance.
+The requirements and bounded disagreements have been reviewed, and the reviewed contracts, reference navigation, and workflow guidance are now maintained. Remaining tasks assess deeper critical coverage and reconcile older guides without treating promotion as executed runtime conformance. Corrective application changes require their own approved scope.
 
 Future public behavior changes should include a spec delta, relevant behavioral test changes, and affected reference-document changes in the same PR. Internal refactors with unchanged behavior need no invented delta. Documentation-only corrections must be distinguished from actual behavior changes during review.
 
@@ -193,7 +199,7 @@ Draft: [operations-maintenance/spec.md](specs/operations-maintenance/spec.md).
 
 ## Review gaps and documentation disagreements
 
-These findings are bounded in the drafts. They are not decisions to preserve accidental behavior or requests to implement a fix as part of this baseline.
+These findings are bounded in the maintained baseline and preserved in the reference notes. They are not decisions to preserve accidental behavior or requests to implement a fix as part of this baseline.
 
 | Area | Observed evidence or missing evidence | Baseline treatment and review action |
 | --- | --- | --- |

@@ -2,14 +2,14 @@
 
 ## Why
 
-HomeSec has an OpenSpec workflow but no maintained capability specifications. Its public behavior is spread across implementation, tests, configuration models, and documents, making it difficult to review behavior changes or maintain reliable reference documentation.
+HomeSec began this bootstrap with an OpenSpec workflow but no maintained capability specifications. Its public behavior is spread across implementation, tests, configuration models, and documents, making it difficult to review behavior changes or maintain reliable reference documentation.
 
 ## What Changes
 
 - Establish a first-pass, whole-product baseline of already implemented public behavior, with concrete scenarios for important normal paths, failures, lifecycle transitions, security, and compatibility.
-- Add eight capability delta specs. These are new entries in the specification inventory, not new runtime features.
+- Establish eight maintained capability specs under `openspec/specs/` from the reviewed capability deltas. These are new entries in the specification inventory, not new runtime features.
 - Record implementation and existing-test evidence, explicit coverage limits, and unresolved code/documentation disagreements in the design and review tasks.
-- Plan promotion into maintained `openspec/specs/` and reference-document navigation after review. Reference documentation will draw behavioral semantics from the maintained specs and precise API shapes from existing schema generation.
+- Connect maintained specs to `docs/reference.md`, preserving reviewed known limitations and operator-guide links. Reference documentation draws behavioral semantics from the maintained specs and precise API shapes from existing schema generation.
 - Keep pending features and corrective behavior changes separate from this baseline. This proposal does not change application behavior or introduce a documentation generator.
 
 ## Capabilities
@@ -27,10 +27,10 @@ HomeSec has an OpenSpec workflow but no maintained capability specifications. It
 
 ### Modified Capabilities
 
-None. The maintained specification inventory is currently empty.
+None. The pre-bootstrap maintained specification inventory was empty; these deltas introduce the eight new capabilities.
 
 ## Impact
 
 The planning artifacts cover the UI, API, CLI, configuration, camera sources, processing pipeline, integrations, and operator documentation. Application code, dependencies, runtime defaults, external services, and API schemas are unchanged by the proposed baseline.
 
-The baseline targets the fetched `origin/main` after the OpenSpec setup merge on 2026-10-10. It excludes pending work such as activation-only event-card media loading and the broader configuration editor. Unclear product promises and incomplete evidence must be reviewed before the affected requirements are promoted as maintained contracts.
+The baseline targets the fetched `origin/main` after the OpenSpec setup merge on 2026-10-10. It excludes pending work such as activation-only event-card media loading and the broader configuration editor. The reviewed baseline keeps unclear product promises and incomplete evidence explicit in the reference notes; corrective runtime changes remain separate. The active change retains review evidence and the remaining deeper-verification/guide follow-ups.
