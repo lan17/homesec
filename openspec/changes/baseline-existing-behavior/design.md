@@ -1,0 +1,233 @@
+# Design
+
+## Context
+
+See [proposal.md](proposal.md) for motivation and scope. This is a draft baseline of the implementation on fetched `origin/main` after the OpenSpec initialization merge on 2026-10-10. Research covered application source, configuration models, API routes, UI flows, native media boundaries, existing tests, and operator/developer documents. No application tests or device checks were executed while preparing these artifacts.
+
+There are no maintained capability specs yet. Existing documents combine implemented behavior, older examples, design goals, and planned work. The API already has deterministic schema export in `src/homesec/api/openapi_export.py` and generated UI contracts checked by `ui/scripts/api_codegen.mjs`. Configuration validation lives in the core and plugin Pydantic models; a complete exported plugin-configuration reference does not currently exist.
+
+The important product boundary is between recording/storage work and best-effort analysis, notification, and telemetry. The baseline describes concrete failure handling observed today. It does not infer universal outage resilience or durable replay from that priority statement. Saved configuration and active runtime are also separate states.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- Make every major public capability reviewable through observable requirements and critical Given/When/Then scenarios.
+- Keep evidence and uncertainty beside the draft, without putting implementation choices into the behavioral contracts.
+- Use the existing OpenSpec change-to-main-spec lifecycle and existing API schema generation.
+- Make future behavior, tests, and reference documentation changes reviewable together.
+
+**Non-Goals:**
+
+- Exhaustive coverage of every configuration field, codec, hardware model, error combination, or timing edge case in this first pass.
+- New runtime behavior, reliability guarantees, API/schema changes, or corrections to disputed behavior.
+- A custom spec schema, traceability framework, documentation renderer, or new CI system.
+- Promotion of these drafts into maintained specs before review.
+
+## Decisions
+
+### 1. Use eight capability specs with one owner for each behavior
+
+The proposal's capability list is the directory inventory. A requirement belongs with its user-visible responsibility: storage owns retention/deletion; analysis owns alert eligibility and stage completion; integrations owns notification payloads and transport outcomes; operations owns CLI entry points and maintenance controls. Cross-cutting behavior is referenced rather than repeated with potentially different guarantees.
+
+One giant product spec would make reviews and future deltas difficult to navigate. A spec per route or class would couple the inventory to implementation structure and introduce too many concepts. The eight capabilities group behavior at a useful review and documentation level.
+
+### 2. Document observed behavior without adopting every implementation detail
+
+The delta specs use `ADDED Requirements` because this adds documentation inventory, not new application features. Sources and existing tests support each requirement in the evidence tables below. Test evidence is representative and inspected, not an assertion that every scenario has an executed test.
+
+When source and documents disagree, this baseline states only the supported, useful contract and records the disagreement below. A suspected defect is not made a permanent promise merely because it exists in code. Correcting behavior requires a separately approved change. Unsupported desired behavior, including durable ingestion replay, broad configuration editing, and activation-only event-card media loading, remains outside the baseline.
+
+An automatic extraction of every code branch would preserve accidental behavior. Rewriting intended behavior from old documents would misdescribe the current product. Reviewed observable contracts with explicit gaps avoid both problems.
+
+### 3. Keep behavioral specs and generated references complementary
+
+After review, `openspec/specs/<capability>/spec.md` will hold the maintained public behavior. Normal OpenSpec changes will add or modify requirement deltas; syncing and archiving will update those maintained specs through the existing workflow.
+
+Reference documentation should use those specs for behavior, lifecycle, failure semantics, and compatibility. Exact API methods and payload shapes should continue to come from the existing OpenAPI exporter. Configuration and CLI references should point to the current validation models and commands, with examples checked against them. Keep operator recipes in existing guides and add a small capability index connecting the specs, API reference, and guides. No documentation generator is needed for this bootstrap.
+
+The alternative of copying full API schemas and every configuration field into prose would create another drift-prone source. A new generator is unnecessary until the existing references and navigation have proved insufficient.
+
+### 4. Treat baseline review as the implementation work for this change
+
+The next phase is to review the requirements, resolve or bound the listed disagreements, add only missing critical behavioral coverage where justified, and promote the reviewed contracts. Reference navigation and workflow guidance follow that promotion. These planning artifacts do not authorize application changes or certify runtime conformance.
+
+Future public behavior changes should include a spec delta, relevant behavioral test changes, and affected reference-document changes in the same PR. Internal refactors with unchanged behavior need no invented delta. Documentation-only corrections must be distinguished from actual behavior changes during review.
+
+## Coverage and evidence
+
+All paths below are repository-relative. Each row maps an exact requirement name to primary source and representative existing tests. The remaining scenarios should be checked against those files during review. `test_...` names refer to Python/Rust test functions; quoted descriptions refer to UI tests.
+
+### Setup and configuration
+
+Draft: [setup-configuration/spec.md](specs/setup-configuration/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| Setup readiness reflects configuration and runtime state | `src/homesec/services/setup.py` | `tests/homesec/test_setup_service.py`: `test_get_setup_status_returns_fresh_in_bootstrap_mode`, `test_get_setup_status_returns_partial_without_pipeline`, `test_get_setup_status_returns_complete_when_pipeline_running` |
+| Setup checks report readiness without saving configuration | `src/homesec/services/setup.py`; `src/homesec/api/routes/setup.py` | `tests/homesec/test_setup_service.py`: `test_run_preflight_marks_check_failed_when_timeout_expires`; `tests/homesec/test_setup_test_connection_service.py`: `test_test_connection_analyzer_uses_ping_and_shutdown`. No-save is supported by the source call path. |
+| Setup finalization validates before persistence and activation | `src/homesec/services/setup.py`; `src/homesec/app.py`; `src/homesec/api/routes/setup.py` | `tests/homesec/test_setup_service.py`: `test_finalize_setup_validate_only_returns_success_without_writing_or_restart`, `test_finalize_setup_returns_validation_error_without_writing_config`, `test_finalize_setup_writes_config_with_defaults_and_activates_runtime`; `tests/homesec/test_api_setup_routes.py`: `test_setup_finalize_requires_bootstrap_mode` |
+| ONVIF setup discovers cameras and reports probe outcomes | `src/homesec/api/routes/onvif.py` | `tests/homesec/test_api_onvif.py`: `test_discover_returns_found_cameras`, `test_discover_returns_empty_list_when_none_found`, `test_probe_returns_device_info_and_profiles`, `test_probe_times_out_with_canonical_timeout_error` |
+| Camera configuration mutations validate and preserve omitted fields | `src/homesec/config/manager.py`; `src/homesec/api/routes/cameras.py` | `tests/homesec/test_config_manager.py`: `test_config_manager_update_camera_merges_source_config_and_preserves_existing_keys`, `test_config_manager_update_camera_supports_backend_switch_with_new_config`; `tests/homesec/test_api_routes.py`: `test_create_camera_duplicate_returns_409`, `test_update_camera_missing_returns_404` |
+| Configuration reads protect sensitive values | `src/homesec/api/redaction.py`; `src/homesec/api/routes/config.py`; `src/homesec/config/manager.py` | `tests/homesec/test_api_routes.py`: `test_get_config_redacts_sensitive_fields`, `test_list_cameras_redacts_sensitive_source_config`, `test_update_camera_rejects_redacted_source_config_patch` |
+| Saving camera configuration is distinct from activating it | `src/homesec/api/routes/cameras.py`; `src/homesec/api/routes/runtime.py` | `tests/homesec/test_api_routes.py`: `test_create_camera`, `test_create_camera_apply_changes_triggers_runtime_reload`; `tests/homesec/test_api_runtime_routes.py`: `test_runtime_reload_endpoint_returns_busy_conflict` |
+| Runtime activation reports completion and preserves the prior runtime on candidate failure | `src/homesec/runtime/manager.py`; `src/homesec/api/routes/runtime.py` | `tests/homesec/test_runtime_manager.py`: `test_runtime_manager_happy_path_swaps_runtime`, `test_runtime_manager_rolls_back_when_candidate_start_fails`, `test_runtime_manager_shuts_down_candidate_before_rollback_on_activation_failure` |
+
+### Capture and recording
+
+Draft: [capture-recording/spec.md](specs/capture-recording/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| Local folder ready-file ingestion | `src/homesec/sources/local_folder.py` | `tests/homesec/test_clip_sources.py`: `test_detects_new_clips`, `test_ignores_non_video_files`, `test_stability_threshold_delays_detection`. Partial-file exclusion is supported by the filename glob. |
+| Local folder repeat suppression | `src/homesec/sources/local_folder.py` | `tests/homesec/test_clip_sources.py`: `test_does_not_detect_same_file_twice`. Manifest-loaded restart behavior has source evidence but no focused test identified. |
+| FTP completed-upload ingestion | `src/homesec/sources/ftp.py` | `tests/homesec/test_ftp_source.py`: `test_allowed_extension_emits_clip`, `test_all_extensions_allowed_when_empty`, `test_extension_check_is_case_insensitive` |
+| FTP incomplete-upload handling | `src/homesec/sources/ftp.py` | `tests/homesec/test_clip_sources.py`: `test_incomplete_upload_deletes_when_enabled`; `tests/homesec/test_ftp_source.py`: `test_incomplete_upload_kept_when_not_configured` |
+| Motion-triggered recording boundaries | `src/homesec/sources/rtsp/core.py` | `tests/homesec/rtsp/test_runtime.py`: `test_stop_delay_resets_on_motion`, `test_recording_threshold_is_more_sensitive`, `test_recording_rotates_after_max_duration`, `test_rotation_duration_starts_after_the_new_recorder_is_ready` |
+| RTSP camera unavailability and reconnection | `src/homesec/sources/rtsp/core.py` | `tests/homesec/rtsp/test_runtime.py`: `test_rtsp_start_degrades_when_startup_preflight_fails`, `test_startup_preflight_retries_until_ready`, `test_reconnect_respects_max_attempts_exact`; `tests/homesec/test_rtsp_startup_failfast.py`: `test_runtime_bundle_startup_allows_background_rtsp_preflight_retries` |
+| RTSP clip handoff eligibility | `src/homesec/sources/rtsp/core.py` | `tests/homesec/rtsp/test_runtime.py`: `test_recording_handoff_requires_successful_finalization`, `test_recording_finalization_exception_refuses_clip_handoff`. Missing/empty file exclusion is directly supported by source. |
+| Native recording publication and compatibility | `native/webrtc/src/shared_worker.rs`; `src/homesec/sources/rtsp/shared_media.py` | `tests/homesec/rtsp/test_shared_media.py`: `test_source_hands_off_only_finalized_native_files`, `test_native_process_death_never_marks_partial_file_complete`, `test_unsupported_profiles_preserve_legacy_recording` |
+| Ingestion callback failure isolation | `src/homesec/sources/base.py` | `tests/homesec/test_clip_sources.py`: `test_callback_exception_does_not_crash`. The shared threaded source boundary also serves FTP. |
+
+### Storage and retention
+
+Draft: [storage-retention/spec.md](specs/storage-retention/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| Clip destination and upload outcome | `src/homesec/storage_paths.py`; `src/homesec/pipeline/core.py`; `src/homesec/plugins/storage/local.py` | `tests/homesec/test_pipeline.py`: `test_full_pipeline_with_person_detection`; `tests/homesec/test_local_storage.py`: `test_put_get_delete_roundtrip`. Exact pipeline destination assembly is source-supported. |
+| Built-in storage delivery and destination validation | `src/homesec/plugins/storage/local.py`; `src/homesec/plugins/storage/dropbox.py` | `tests/homesec/test_local_storage.py`: `test_put_get_delete_roundtrip`, `test_rejects_path_traversal_attempts`, `test_rejects_backslash_paths`, `test_rejects_empty_dest_path`; `tests/homesec/test_dropbox_storage.py`: `test_dropbox_storage_get_view_url` |
+| Dropbox credential selection | `src/homesec/plugins/storage/dropbox.py` | `tests/homesec/test_dropbox_storage.py`: `test_dropbox_storage_uses_token_auth`, `test_dropbox_storage_uses_refresh_token_auth`, `test_raises_when_no_credentials`, `test_raises_when_partial_refresh_credentials` |
+| Bounded upload retries and failure outcome | `src/homesec/pipeline/core.py` | `tests/homesec/test_pipeline.py`: `test_stage_retries_succeed`, `test_upload_failure_does_not_block_processing` |
+| Local retention deletion eligibility | `src/homesec/retention/pruner.py` | `tests/homesec/test_retention_pruner.py`: `test_prune_respects_upload_and_done_gates`, `test_prune_uses_local_files_as_source_of_candidates` |
+| Oldest eligible clip pruning | `src/homesec/retention/pruner.py` | `tests/homesec/test_retention_pruner.py`: `test_prune_deletes_oldest_until_under_limit`, `test_prune_tie_breaks_by_clip_id_for_equal_created_at`, `test_prune_reports_incomplete_measurement_on_stat_error` |
+| Retention triggering and failure isolation | `src/homesec/pipeline/core.py`; `src/homesec/retention/wiring.py` | `tests/homesec/test_pipeline.py`: `test_retention_trigger_fires_on_clip_arrival`, `test_retention_triggered_on_clip_arrival_even_when_upload_fails`, `test_retention_single_flight_drops_overlapping_triggers`, `test_retention_failures_are_logged_and_non_fatal` |
+| Built-in storage deletion is idempotent | `src/homesec/plugins/storage/local.py`; `src/homesec/plugins/storage/dropbox.py` | `tests/homesec/test_local_storage.py`: `test_delete_is_idempotent`; `tests/homesec/test_dropbox_storage.py`: `test_dropbox_storage_delete_is_idempotent` |
+| API clip deletion reports partial failures | `src/homesec/api/routes/clips.py`; `src/homesec/repository/clip_repository.py` | `tests/homesec/test_api_routes.py`: `test_delete_clip_success_removes_storage`, `test_delete_clip_missing_returns_404`, `test_delete_clip_returns_500_when_repository_delete_fails_unexpectedly`, `test_delete_clip_storage_failure_returns_500`. No-storage and original-local-file behavior are directly supported by source. |
+| Cleanup rechecks before deleting empty clips | `src/homesec/maintenance/cleanup_clips.py` | `tests/homesec/test_cleanup_clips.py`: `test_cleanup_deletes_empty_clips`, `test_cleanup_marks_false_negatives` (database tests inspected only). Dry-run and partial-deletion failure need focused coverage assessment. |
+
+### Analysis and alerts
+
+Draft: [analysis-alerts/spec.md](specs/analysis-alerts/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| Clip processing stage ordering | `src/homesec/pipeline/core.py` | `tests/homesec/test_pipeline.py`: `test_vlm_overlaps_upload`, `test_filter_failure_aborts_processing`, `test_full_pipeline_with_person_detection` |
+| Supported object-filter results | `src/homesec/plugins/filters/yolo.py` | `tests/homesec/test_yolo_filter.py`: `test_detect_worker_returns_detection`, `test_detect_worker_filters_small_boxes`. Tests exercise detector boundaries, not real-model accuracy. |
+| Analysis run modes and skip reasons | `src/homesec/pipeline/core.py`; `src/homesec/models/enums.py` | `tests/homesec/test_pipeline.py`: `test_vlm_skipped_when_no_trigger_classes`, `test_run_mode_always_runs_vlm_regardless`, `test_run_mode_never_skips_vlm_with_explicit_reason` |
+| OpenAI-compatible analysis validation | `src/homesec/plugins/analyzers/openai.py` | `tests/homesec/test_openai_vlm.py`: `test_analyze_extracts_frames_and_calls_api`, `test_analyze_respects_preprocessing_limits`, `test_analyze_handles_api_error`, `test_analyze_handles_malformed_json_response`, `test_analyze_handles_schema_mismatch`, `test_analyze_raises_on_empty_video` |
+| Default alert policy decision precedence | `src/homesec/plugins/alert_policies/default.py` | `tests/homesec/test_alert_policy.py`: `test_notify_on_motion_always_notifies`, `test_risk_threshold_blocks_when_below`, `test_risk_threshold_allows_when_above`, `test_activity_type_override_notifies`; `tests/homesec/test_pipeline.py`: `test_notify_on_motion_override_alerts_when_vlm_skipped`. Equality at the threshold is source-supported. |
+| Disabled alert policy suppresses notification | `src/homesec/plugins/alert_policies/__init__.py`; `src/homesec/plugins/alert_policies/noop.py` | Source-supported; no dedicated disabled-policy assertion identified during inspection. |
+| Failed-analysis fallback and missing-analysis suppression | `src/homesec/plugins/alert_policies/default.py`; `src/homesec/pipeline/core.py` | `tests/homesec/test_alert_policy.py`: `test_vlm_failure_falls_back_to_filter_triggers`, `test_no_analysis_no_triggers_skips_notification`; `tests/homesec/test_pipeline.py`: `test_vlm_failure_continues_to_notify`, `test_vlm_failure_falls_back_to_filter_trigger` |
+| Bounded processing-stage retries | `src/homesec/pipeline/core.py` | `tests/homesec/test_pipeline.py`: `test_stage_retries_succeed`, `test_notify_failure_still_marks_done`. Exact backoff and attempt bounds have direct source evidence. |
+| Notification eligibility and clip completion | `src/homesec/pipeline/core.py` | `tests/homesec/test_pipeline.py`: `test_no_notification_when_notifier_entries_explicitly_empty`, `test_no_notification_when_below_risk_threshold`, `test_notification_sent_when_above_risk_threshold`, `test_notify_failure_still_marks_done` |
+| Best-effort workflow persistence during processing | `src/homesec/repository/clip_repository.py`; `src/homesec/pipeline/core.py` | `tests/homesec/test_pipeline.py`: `test_state_store_failure_does_not_abort_processing`. Event-append failure containment is source-supported; a dedicated outage scenario was not identified. |
+
+### Events and playback
+
+Draft: [events-playback/spec.md](specs/events-playback/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| Event queries support filtering and cursor pagination | `src/homesec/api/routes/clips.py`; `src/homesec/state/postgres.py` | `tests/homesec/test_api_routes.py`: `test_list_clips_cursor_pagination`, `test_list_clips_invalid_cursor_returns_canonical_error`, `test_list_clips_rejects_naive_datetime_filter`, `test_list_clips_rejects_inverted_time_window`; `tests/homesec/test_state_store.py`: `test_list_clips_keyset_cursor_uses_created_at_and_clip_id` |
+| Event browsing preserves filter context in the URL | `ui/src/features/clips/queryParams.ts`; `ui/src/features/clips/cursorState.ts`; `ui/src/features/clips/ClipsPage.tsx` | Corresponding `queryParams.test.ts`: "defaults missing detected filter to true", "preserves explicit detected any in route search params"; `cursorState.test.ts`: "drops stale cursor history when filter signature changes" |
+| Event views present available summaries and inline playback | `ui/src/features/clips/ClipsPage.tsx` | `ui/src/features/clips/ClipsPage.test.tsx`: "renders grouped media-first event cards with inline video and details", "shows a no-results state without a table shell" |
+| Event detail lookup distinguishes known and missing events | `src/homesec/api/routes/clips.py`; `ui/src/features/clips/ClipDetailPage.tsx` | `tests/homesec/test_api_routes.py`: `test_get_clip_includes_analysis_and_alert_details`, `test_get_clip_missing_returns_404`; `ui/src/features/clips/ClipDetailPage.test.tsx`: "disables previous and next controls when no client result window is loaded" |
+| Media URLs respect authentication and clip availability | `src/homesec/api/routes/clips.py`; `src/homesec/api/media_tokens.py` | `tests/homesec/test_api_routes.py`: `test_create_clip_media_token_auth_disabled_returns_direct_media_url`, `test_create_clip_media_token_rejects_token_only_auth`; `tests/homesec/test_api_media_tokens.py`: `test_validate_clip_media_token_rejects_mismatched_clip_id`, `test_validate_clip_media_token_rejects_expired_token` |
+| Media delivery exposes availability and retrieval failures | `src/homesec/api/routes/media.py` | `tests/homesec/test_api_routes.py`: `test_get_clip_media_proxy_success_returns_inline_video`, `test_get_clip_media_missing_returns_404`, `test_get_clip_media_missing_storage_uri_returns_409`, `test_get_clip_media_storage_failure_returns_502` |
+| Tokenized playback supports bounded source refresh | `ui/src/api/hooks/useClipMediaUrl.ts`; `ui/src/features/clips/playbackRetry.ts` | `ui/src/api/hooks/useClipMediaUrl.test.ts`: "computes preemptive refresh delay from expiry"; `ui/src/features/clips/playbackRetry.test.ts`: "rejects refresh once max retry count is reached", "retains retry attempts when media source is unchanged" |
+
+### Preview and talk
+
+Draft: [preview-talk/spec.md](specs/preview-talk/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| Preview availability and transport are explicit | `src/homesec/models/config.py`; `src/homesec/api/routes/preview.py` | `tests/homesec/test_api_webrtc_preview.py`: `test_default_webrtc_session_snapshot_returns_signaling`, `test_explicit_hls_defaults_remain_available_with_webrtc_default`; `tests/homesec/test_api_preview_routes.py`: `test_get_preview_status_returns_404_for_missing_camera`, `test_get_preview_status_returns_503_when_runtime_unavailable` |
+| Preview access is scoped and expires | `src/homesec/api/routes/preview.py`; `src/homesec/api/preview_tokens.py`; `src/homesec/sources/rtsp/webrtc_publisher.py` | `tests/homesec/test_api_webrtc_preview.py`: `test_camera_scoped_token_cannot_signal_other_camera`, `test_peer_lease_cannot_outlive_current_token`; `tests/homesec/test_api_preview_routes.py`: `test_preview_playback_rejects_stale_files_when_runtime_reports_inactive_preview` |
+| Preview yields according to recording policy | `src/homesec/sources/rtsp/live_publisher.py`; `src/homesec/sources/rtsp/webrtc_publisher.py` | `tests/homesec/rtsp/test_live_publisher.py`: `test_recording_priority_sheds_active_preview_and_refuses_restart`, `test_allow_during_recording_allows_start_while_recording_is_active`; `tests/homesec/rtsp/test_webrtc_publisher.py`: `test_recording_stops_all_peers_and_refuses_new_preview` |
+| Preview resources have bounded lifetimes | `src/homesec/sources/rtsp/live_publisher.py`; `src/homesec/sources/rtsp/webrtc_publisher.py`; `native/webrtc/src/engine.rs` | `tests/homesec/rtsp/test_live_publisher.py`: `test_idle_shutdown_stops_preview_after_viewers_go_inactive`; `tests/homesec/rtsp/test_webrtc_publisher.py`: `test_http_activity_cannot_keep_lease_or_media_alive`, `test_pending_negotiation_survives_idle_timeout_then_expiry_releases_input`; native test `leases_are_finite_positive_and_capped`. Viewer cap is source-supported. |
+| Browser preview handles visibility and changing authorization | `ui/src/features/cameras/hooks/useCameraPreview.ts`; `ui/src/features/cameras/hooks/useWebRTCPreview.ts` | Corresponding `useWebRTCPreview.test.tsx`: "renews on token refresh and closes only the current viewer on stop and unmount", "closes on background and reconnects when visible without retaining the old peer"; `useCameraPreview.test.tsx`: "does not let an older in-flight status refresh clear a newer preview session" |
+| Talk capability and backend selection reflect camera support | `src/homesec/talk/selector.py`; `src/homesec/sources/rtsp/core.py`; `src/homesec/talk/tapo/client.py` | `tests/homesec/rtsp/test_runtime.py`: `test_manual_rtsp_auto_keeps_onvif_before_tapo_discovery`; `tests/homesec/talk/tapo/test_client.py`: `test_tapo_endpoint_probe_does_not_send_credentials_or_setup`; `tests/homesec/talk/tapo/test_tapo_selector.py`: `test_explicit_tapo_backend_does_not_fallback_to_onvif` |
+| Talk preparation defines the authorized audio stream | `src/homesec/models/talk.py`; `src/homesec/api/routes/talk.py`; `src/homesec/sources/rtsp/talk/manager.py` | `tests/homesec/test_api_talk_routes.py`: `test_prepare_talk_session_returns_websocket_url_and_runtime_contract`, `test_prepare_talk_session_uses_configured_input_when_request_omits_input`, `test_talk_websocket_rejects_invalid_audio_frame_length`, `test_talk_websocket_rejects_expired_token_when_auth_enabled` |
+| Talk sessions are exclusive and bounded per camera | `src/homesec/sources/rtsp/talk/manager.py`; `src/homesec/api/routes/talk.py` | `tests/homesec/rtsp/talk/test_manager.py`: `test_talk_manager_enforces_one_reserved_or_active_session`, `test_talk_manager_idle_cleanup_closes_active_session_after_silence`, `test_talk_manager_cancelled_open_closes_returned_session_before_claim`, `test_talk_manager_shutdown_closes_active_session`; `tests/homesec/test_api_talk_routes.py`: `test_talk_websocket_disconnect_before_start_releases_reserved_session` |
+| Browser talk respects hold intent and microphone availability | `ui/src/features/cameras/hooks/usePushToTalk.ts`; `ui/src/features/cameras/components/CameraPreviewPanel.tsx` | Corresponding `usePushToTalk.test.tsx`: "cancels release before getUserMedia resolves without preparing a session", "does not prepare a session when microphone permission is denied"; `CameraPreviewPanel.test.tsx`: "keeps preview video muted while talk is active" |
+| Browser talk stops on excessive audio backpressure | `ui/src/features/cameras/hooks/usePushToTalk.ts` | `ui/src/features/cameras/hooks/usePushToTalk.test.tsx`: "closes and stops the session when audio backpressure exceeds the threshold" |
+
+### Integration contracts
+
+Draft: [integration-contracts/spec.md](specs/integration-contracts/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| API key authentication | `src/homesec/api/dependencies.py`; `src/homesec/api/routes/__init__.py` | `tests/homesec/test_api_routes.py`: `test_auth_required_when_enabled`, `test_auth_env_missing_returns_500` |
+| Browser session authentication | `ui/src/api/apiKeyStorage.ts`; `ui/src/api/http.ts` | `ui/src/api/apiKeyStorage.test.ts`: "saves, loads, and clears API key values"; `ui/src/api/http.test.ts`: "loads API key from session storage when apiKey option is omitted". Explicit request overrides are source-supported. |
+| Legacy browser route compatibility | `ui/src/routes/AppRouter.tsx` | `ui/src/routes/AppRouter.test.tsx`: "redirects the root route to Live", "redirects dashboard to System", "redirects the old cameras route to Settings camera setup", "redirects clips list to Events while preserving filters", "redirects clip detail to event detail while preserving search context" |
+| Canonical API exception responses | `src/homesec/api/errors.py` | `tests/homesec/test_api_errors.py`: `test_http_exception_dict_detail_is_normalized_to_canonical_envelope`, `test_unhandled_exception_maps_to_internal_server_error_envelope`; `tests/homesec/test_api_routes.py`: `test_list_clips_invalid_query_returns_canonical_validation_error` |
+| Generated API contract | `src/homesec/api/server.py`; `src/homesec/api/openapi_export.py` | `tests/homesec/test_api_openapi_export.py`: `test_build_openapi_schema_includes_health_route`, `test_write_openapi_schema_writes_deterministic_json`, `test_openapi_export_main_writes_requested_output` |
+| Notification payload meaning | `src/homesec/models/alert.py`; `src/homesec/pipeline/core.py` | `tests/homesec/test_pipeline.py`: `test_full_pipeline_with_person_detection`, `test_upload_failure_does_not_block_processing`, `test_vlm_failure_continues_to_notify` |
+| MQTT alert publication | `src/homesec/plugins/notifiers/mqtt.py` | `tests/homesec/test_mqtt_notifier.py`: `test_mqtt_notifier_publishes_alert`, `test_mqtt_notifier_raises_on_timeout` |
+| Email alert delivery | `src/homesec/plugins/notifiers/sendgrid_email.py` | `tests/homesec/test_sendgrid_notifier.py`: `test_send_constructs_correct_api_request`, `test_send_includes_cc_and_bcc`, `test_send_raises_on_api_error`, `test_send_requires_api_key`, `test_send_fails_after_shutdown`, `test_send_escapes_analysis_html` |
+| Notification fan-out isolation | `src/homesec/runtime/worker.py`; `src/homesec/pipeline/core.py`; `src/homesec/notifiers/multiplex.py` | `tests/homesec/test_notifiers.py`: `test_multiplex_notifier_fans_out_success`, `test_multiplex_notifier_raises_on_failure`; `tests/homesec/test_runtime_worker.py`: `test_runtime_worker_create_notifier_skips_disabled_entries` |
+| Plugin registration and discovery | `src/homesec/plugins/registry.py`; `src/homesec/plugins/__init__.py`; `PLUGIN_DEVELOPMENT.md` | `tests/homesec/test_plugin_registration.py`: `test_register_and_load_plugin`, `test_duplicate_registration_error`, `test_unknown_plugin_error`. Installed external entry-point discovery is source-supported; no dedicated end-to-end test identified. |
+| Plugin configuration and component contracts | `src/homesec/interfaces.py`; `src/homesec/plugins/registry.py`; category loaders | `tests/homesec/test_plugin_registration.py`: `test_validation_error`. Validate-before-factory and configuration-only no-construction paths are source-supported. |
+
+### Operations and maintenance
+
+Draft: [operations-maintenance/spec.md](specs/operations-maintenance/spec.md).
+
+| Requirement | Primary source | Representative existing tests |
+| --- | --- | --- |
+| CLI operation and configuration validation | `src/homesec/cli.py`; `src/homesec/app.py` | `tests/homesec/test_cli.py`: `test_validate_valid_config`, `test_validate_invalid_config_exits`, `test_validate_nonexistent_config_exits`, `test_run_config_error_exits`, `test_run_exits_with_restart_code_when_app_requests_restart` |
+| Public health summaries | `src/homesec/api/routes/health.py`; `src/homesec/app.py` | `tests/homesec/test_api_routes.py`: `test_root_health_endpoint_matches_versioned_health`, `test_health_endpoints_degrade_when_postgres_unavailable`, `test_health_endpoints_return_503_when_pipeline_stopped`, `test_health_endpoints_report_setup_required_in_bootstrap_mode` |
+| Component diagnostics | `src/homesec/api/routes/health.py` | `tests/homesec/test_api_routes.py`: `test_diagnostics_reports_degraded_when_storage_ping_raises`, `test_diagnostics_ignores_disabled_unhealthy_camera_for_global_status`, `test_diagnostics_degrades_when_enabled_camera_has_no_source`, `test_diagnostics_reports_unhealthy_when_pipeline_stopped` |
+| Operational system statistics | `src/homesec/api/routes/stats.py`; `src/homesec/repository/clip_repository.py`; `src/homesec/state/postgres.py` | `tests/homesec/test_api_routes.py`: `test_stats_endpoint_returns_counts`, `test_stats_endpoint_includes_camera_counts_and_uptime`; `tests/homesec/test_state_store.py`: `test_count_alerts_since_counts_notifying_alert_decision_events`, `test_count_alerts_since_ignores_notification_sent_events`; `tests/homesec/test_clip_repository.py`: `test_count_alerts_since_returns_zero_when_state_store_count_fails` |
+| Shutdown ordering and runtime termination | `src/homesec/app.py`; `src/homesec/runtime/subprocess_controller.py`; `src/homesec/pipeline/core.py` | `tests/homesec/test_app.py`: `test_application_shutdown_stops_api_before_runtime_manager`, `test_application_shuts_down_postgres_backup_manager_before_storage`; `tests/homesec/test_runtime_subprocess_controller.py`: `test_subprocess_controller_escalates_to_sigkill_when_worker_ignores_term`; `tests/homesec/test_pipeline.py`: `test_shutdown_waits_for_in_flight_clips` |
+| Cleanup selection and dry run | `src/homesec/cli.py`; `src/homesec/maintenance/cleanup_clips.py` | `tests/homesec/test_cli.py`: `test_cleanup_passes_options`. Default dry-run preservation is source-supported; dedicated original-media/state-event no-write assertions were not identified. |
+| Backup opt-in and prerequisites | `src/homesec/models/config.py`; `src/homesec/maintenance/postgres_backup.py` | `tests/homesec/test_postgres_backup.py`: `test_postgres_backup_config_rejects_interval_below_minimum`. Missing executable degradation and local-directory resolution are source-supported. |
+| Backup status and manual requests | `src/homesec/api/routes/maintenance.py`; `src/homesec/maintenance/postgres_backup.py` | `tests/homesec/test_api_maintenance_routes.py`; `tests/homesec/test_postgres_backup.py`: `test_manual_backup_requests_are_single_flight_before_task_starts`, `test_scheduled_backup_backs_off_when_manual_backup_is_active` |
+| Dump artifacts and credential isolation | `src/homesec/maintenance/postgres_backup.py` | `tests/homesec/test_postgres_backup.py`: `test_pg_dump_command_uses_env_for_credentials`, `test_pg_dump_env_ignores_ambient_libpq_variables`, `test_successful_backups_do_not_overwrite_same_timestamp_artifacts`. Private permissions have direct source evidence. |
+| Interrupted dump cleanup | `src/homesec/maintenance/postgres_backup.py` | `tests/homesec/test_postgres_backup.py`: `test_backup_timeout_removes_temp_artifact`, `test_backup_cancellation_terminates_pg_dump_and_removes_temp_artifact` |
+| Backup manifest recovery and upload outcomes | `src/homesec/maintenance/postgres_backup.py` | `tests/homesec/test_postgres_backup.py`: `test_manifest_recovery_scans_local_backups`, `test_manifest_recovery_marks_local_backups_pending_upload_when_enabled`, `test_manifest_recovery_reconciles_running_record_with_local_artifact`, `test_upload_failure_skips_retention_that_would_delete_previous_uploaded_backup` |
+| Backup retention and remote-delete recovery | `src/homesec/maintenance/postgres_backup.py` | `tests/homesec/test_postgres_backup.py`: `test_successful_backups_upload_and_prune_oldest`, `test_upload_outage_prunes_old_pending_local_backups`, `test_cancelled_upload_record_is_not_pruned_during_later_upload_outage`, `test_pending_remote_delete_retries_on_successful_backup`, `test_cancelled_remote_delete_preserves_retry_tombstone` |
+
+## Review gaps and documentation disagreements
+
+These findings are bounded in the drafts. They are not decisions to preserve accidental behavior or requests to implement a fix as part of this baseline.
+
+| Area | Observed evidence or missing evidence | Baseline treatment and review action |
+| --- | --- | --- |
+| Saved configuration after activation failure | `services/setup.py` persists before activation. Runtime rollback tests establish prior-runtime preservation, not saved-file rollback. | Specify saved and active states separately. Review and document failure recovery; do not promise transactional file/runtime rollback. |
+| General configuration editor | `ui/src/features/settings/SettingsPage.tsx` links several settings to `/setup`; finalization is bootstrap-only, and configuration has a GET endpoint without a general PATCH endpoint. | Cover camera editing and first-run setup only. Keep the broader editor in its own feature change. |
+| Local-folder replay | `sources/local_folder.py` marks IDs accepted before callback completion; `sources/base.py` contains callback errors. | Specify repeat suppression and callback failure isolation, with no durable/exactly-once replay promise. Assess manifest-restart coverage. |
+| Retention budget trigger | `retention/pruner.py` decides pruning using eligible uploaded-completed bytes, but reports remaining usage using measured discovered local bytes. Protected files can leave usage over the configured limit. | Specify eligibility, oldest-first deletion when pruning occurs, and truthful results. Do not promise a hard total-disk cap or freeze the disputed trigger as intended policy. Confirm semantics before publishing a budget recipe. |
+| Object detector settings | `plugins/filters/yolo.py` uses `sample_fps` as a frame-index stride; `min_hits` counts distinct classes for early exit rather than suppressing below-threshold results. Its target mapping is narrower than some README examples. | State supported detection results and acceptance constraints only. Reconcile names/examples and intended semantics with the user before expanding the reference. |
+| Missing-analysis alert reason | `plugins/alert_policies/default.py` uses `filter_detected_trigger_vlm_failed` whenever analysis is absent and a trigger is detected, including intentional `never` mode. | Describe the failed-analysis fallback and analysis skip reasons. Do not infer that `never` mode disables notification, or label intentional skipping as a proven provider failure. Resolve reason semantics separately. |
+| Media scheduling and devices | Playback refresh has source/helper tests; no complete mounted-hook timer test identified. WebRTC viewer caps are enforced in native code without a focused cap test identified. | Keep these evidence limits explicit. Assess critical timer/cap coverage; broader camera/codec/browser/device QA remains a follow-up. |
+| Event-card loading | Event cards acquire media eagerly today; activation-only loading is pending work. | Describe inline playback without requiring a particular prefetch schedule or adopting the pending feature. |
+| Health interpretation | Health summary and diagnostics use different degradation criteria; DESIGN wording conflates them. | Specify each surface's actual meaning, including camera counts, without claiming summary status proves every camera/storage dependency healthy. |
+| Plugin guide drift | Runtime uses the unified class-based registry and external `homesec.plugins` entry points; older AGENTS examples use per-type factory/context patterns. Some `PLUGIN_DEVELOPMENT.md` decorator examples use `type` where source accepts `plugin_type`. | Follow current extension contracts. Reconcile obsolete examples without adding a new plugin abstraction or promising automatic interface verification. |
+| RTSP startup flags | README documents `stream.ffmpeg_flags`; current startup preflight reports those flags ignored while automatic negotiation is enabled. | Do not promise deprecated flags control current startup. Reconcile operator guidance before promotion. |
+| Physical media integrity | Native finalization and compatible recording paths have different checks. Nonempty output alone does not prove playable media. | Describe handoff/publication conditions without universal MP4 validity, gapless rotation, or hardware compatibility promises. |
+| Local-storage confinement | `plugins/storage/local.py` validates destination syntax and joins the configured root; copy operations can follow existing symlinks. | Specify root-relative destination construction and syntactic checks. Do not imply filesystem confinement against symlinks; assess that separately if needed. |
+| Cleanup persistence and safety coverage | Cleanup uses best-effort repository writes. Media deletion can succeed while workflow persistence fails; default dry-run preservation lacks a focused test in the inspected suite. | Distinguish attempted state recording from confirmed persistence, and assess a boundary test proving dry-run preserves original media and workflow state/events. |
+| Statistics after database failure | Repository count methods can return zero after an individual count query fails, even if the earlier availability check passed. | Describe UTC-day clip-level counts and their error limits. Do not treat a zero count as proof of no activity or promise a new error field. |
+| Backup operational recovery | Missing-executable startup degradation and private permissions are directly supported by code, with limited focused coverage. Recovery recognizes artifact names/metadata without proving dump integrity; unit tests fake dump output. Local-directory persistence and restore procedures are operator responsibilities in `docs/postgres-backups.md`. | Assess critical startup/permission coverage and verify mount/restore guidance. Do not imply a tested real dump/restore round trip or a universal backup disk bound; uncertain interrupted uploads preserve retry handles. |
+
+## Risks / Trade-offs
+
+- [A broad draft appears exhaustive] → Keep first-pass limits and source-only evidence explicit; deepen scenarios through normal changes.
+- [A code defect becomes a contract] → Keep disputed behavior in the review table and require explicit decisions for corrective changes.
+- [Duplicated references drift] → Use maintained specs for semantics, generated API schemas for shapes, and linked guides for operational procedures.
+- [Static evidence is mistaken for executed validation] → Report OpenSpec structural validation separately from application tests and physical-device checks.
+- [Baseline work expands into a feature rewrite] → Bound requirements where evidence is incomplete and create separate changes for behavior corrections.
+
+## Migration Plan
+
+1. Review all eight deltas against their evidence, prioritizing setup/save/activation, recording handoff, retention safety, alert fallback, and media authorization/lifecycle.
+2. Resolve documentation disagreements or explicitly preserve the bounded draft scope. Obtain a product decision before changing public behavior; record any deferred issues in the review result.
+3. Close only critical evidence gaps justified by review, using existing test boundaries. Database-writing validation requires immediate explicit approval; publishing requires repository validation or an explicitly scoped waiver.
+4. Sync reviewed deltas to `openspec/specs/` after capability review, critical boundary verification, and strict delta validation. Verify all eight capabilities are present and preserve unrelated files.
+5. Add reference navigation and concise workflow guidance tying subsequent public behavior changes to spec deltas, tests, and affected documentation. Complete integrated inventory/documentation checks and repository publication validation after those updates, then archive through the existing workflow once tracked tasks and review requirements are satisfied.
+
+This is a documentation migration with no runtime deployment, database migration, or application rollback. Before promotion, edits remain isolated in this change. After promotion, a documentation correction can revise or revert the relevant spec and reference changes through a normal reviewed PR.
