@@ -7,6 +7,7 @@ mod decode;
 mod engine;
 mod motion;
 mod motion_worker;
+mod preview;
 mod protocol;
 mod recording;
 mod rtp;

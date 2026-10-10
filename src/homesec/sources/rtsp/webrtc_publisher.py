@@ -1,7 +1,7 @@
 """Source-owned supervision for the Rust WebRTC preview helper.
 
-Only typed signaling crosses the runtime boundary. FFmpeg sends RTP directly to
-helper loopback sockets; media and camera credentials never enter logs or files.
+Only typed signaling crosses the runtime boundary. Native workers or compatibility
+FFmpeg deliver encoded media inside the helper; camera credentials never enter logs.
 """
 
 from __future__ import annotations
@@ -58,15 +58,24 @@ class _HelperMessage(HelperMessage):
     video_port: int | None = Field(default=None, ge=1, le=65535)
     audio_port: int | None = Field(default=None, ge=1, le=65535)
     media_port: int | None = Field(default=None, ge=1, le=65535)
+    native_preview: bool = False
+
+
+class _PreviewSettings(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    video_codec: Literal["copy", "h264"]
+    audio_enabled: bool
 
 
 class _HelperRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     request_id: str
-    command: Literal["start", "offer", "renew", "close", "status", "stop"]
+    command: Literal["start", "offer", "renew", "close", "status", "stop_preview", "stop"]
     ffmpeg_args: list[str] | None = None
     rtsp_url: str | None = Field(default=None, min_length=1)
+    preview_settings: _PreviewSettings | None = None
     session_id: str | None = None
     sdp: str | None = Field(default=None, max_length=48_000)
     lease_seconds: float | None = Field(default=None, gt=0.0, le=86400.0)
@@ -79,6 +88,8 @@ class _HelperRequest(BaseModel):
                 raise ValueError("Media startup requires exactly one input")
             if self.ffmpeg_args is not None and not self.ffmpeg_args:
                 raise ValueError("Media startup requires arguments")
+        if self.preview_settings is not None and (self.command != "start" or self.rtsp_url is None):
+            raise ValueError("Native preview settings require an RTSP input")
         if self.command in ("offer", "renew", "close") and not self.session_id:
             raise ValueError("Peer commands require a session")
         if self.command == "offer" and not self.sdp:
@@ -147,6 +158,9 @@ class RustWebRTCLivePublisher:
         self._lock = RLock()
         self._startup_lock = Lock()
         self._helper: _PreviewHelper | None = None
+        self._helper_ready: _HelperMessage | None = None
+        self._native_preview_active = False
+        self._native_preview_failed = False
         self._generation = 0
         self._recording_active = False
         self._degraded_reason: str | None = None
@@ -180,6 +194,8 @@ class RustWebRTCLivePublisher:
                     return self._status
                 expired_helper = self._helper
                 self._helper = None
+                self._helper_ready = None
+                self._native_preview_active = False
                 self._status = LivePublisherStatus(
                     state=LivePublisherState.STARTING, viewer_count=0
                 )
@@ -224,7 +240,38 @@ class RustWebRTCLivePublisher:
                         )
                     self._helper = helper
                 ready = helper.wait_ready(timeout_s=5.0)
-                if self._config.video_codec == "copy" and not self._config.audio_enabled:
+                with self._lock:
+                    if self._helper is not helper or generation != self._generation:
+                        return (
+                            self._recording_refusal()
+                            if self._recording_blocks()
+                            else self._unavailable()
+                        )
+                    self._helper_ready = ready
+                if ready.native_preview and not self._native_preview_failed:
+                    try:
+                        response = helper.request(
+                            "start",
+                            rtsp_url=self._rtsp_url,
+                            preview_settings=_PreviewSettings(
+                                video_codec=self._config.video_codec,
+                                audio_enabled=self._config.audio_enabled and self._audio_available,
+                            ),
+                            timeout_s=10.0,
+                        )
+                    except HelperError:
+                        response = _HelperMessage(ok=False)
+                    if response.ok:
+                        with self._lock:
+                            if self._helper is helper and generation == self._generation:
+                                self._native_preview_active = True
+                    else:
+                        response = self._fallback_to_ffmpeg(helper, ready, generation)
+                elif (
+                    self._config.video_codec == "copy"
+                    and not self._config.audio_enabled
+                    and not self._native_preview_failed
+                ):
                     response = helper.request("start", rtsp_url=self._rtsp_url, timeout_s=10.0)
                 else:
                     response = helper.request("start", ffmpeg_args=self._ffmpeg_args(ready))
@@ -256,6 +303,8 @@ class RustWebRTCLivePublisher:
                             else self._unavailable()
                         )
                     self._helper = None
+                    self._helper_ready = None
+                    self._native_preview_active = False
                     self._status = LivePublisherStatus(
                         state=LivePublisherState.ERROR,
                         viewer_count=0,
@@ -407,6 +456,8 @@ class RustWebRTCLivePublisher:
             generation = self._generation
             helper = self._helper
             self._helper = None
+            self._helper_ready = None
+            self._native_preview_active = False
             self._status = LivePublisherStatus(state=LivePublisherState.STOPPING, viewer_count=0)
         if helper is not None:
             try:
@@ -430,53 +481,109 @@ class RustWebRTCLivePublisher:
 
     def _maintain(self) -> None:
         while not self._shutdown.wait(0.5):
+            # Startup and fallback have their own bounded request deadlines.
+            # Do not classify an intermediate media state as another failure.
+            if self._startup_lock.locked():
+                continue
+            self._poll_helper()
+
+    def _poll_helper(self) -> None:
+        with self._lock:
+            helper = self._helper
+            observed_activity_at = self._last_viewer_at
+            ready = self._status.state in (
+                LivePublisherState.STARTING,
+                LivePublisherState.READY,
+                LivePublisherState.DEGRADED,
+            )
+        if helper is None or not ready:
+            return
+        try:
+            response = helper.request("status")
+        except HelperError:
+            self._stop_owned_helper(expected=helper, error="WebRTC preview helper exited")
+            return
+        if self._startup_lock.locked():
+            return
+        if (
+            response.ok
+            and response.state == "starting"
+            and time.monotonic() - self._media_start_at < 10.0
+        ):
             with self._lock:
-                helper = self._helper
-                observed_activity_at = self._last_viewer_at
-                ready = self._status.state in (
-                    LivePublisherState.STARTING,
-                    LivePublisherState.READY,
-                    LivePublisherState.DEGRADED,
-                )
-            if helper is None or not ready:
-                continue
-            try:
-                response = helper.request("status")
-            except HelperError:
-                self._stop_owned_helper(expected=helper, error="WebRTC preview helper exited")
-                continue
+                if self._helper is helper:
+                    self._status = LivePublisherStatus(
+                        state=LivePublisherState.STARTING, viewer_count=response.viewer_count
+                    )
+            return
+        if not response.ok or not response.media_active:
+            with self._lock:
+                native = self._native_preview_active and self._helper is helper
+                helper_ready = self._helper_ready
+                generation = self._generation
+            if native and helper_ready is not None:
+                try:
+                    with self._startup_lock:
+                        response = self._fallback_to_ffmpeg(helper, helper_ready, generation)
+                except HelperError:
+                    response = _HelperMessage(ok=False)
+                if response.ok:
+                    with self._lock:
+                        if self._helper is helper and generation == self._generation:
+                            self._status = self._running_status(response)
+                    return
+            self._stop_owned_helper(expected=helper, error="WebRTC preview media is unavailable")
+            return
+        with self._lock:
+            if self._helper is not helper:
+                return
+            if response.active_session_count:
+                self._last_viewer_at = time.monotonic()
+            elif self._last_viewer_at != observed_activity_at:
+                # An accepted offer made this no-session observation stale.
+                return
+            idle = (
+                not response.active_session_count
+                and time.monotonic() - self._last_viewer_at >= self._idle_timeout_s
+            )
+            idle_since = self._last_viewer_at
+            self._status = self._running_status(response)
+        if idle:
+            self._stop_owned_helper(expected=helper, idle_since=idle_since)
+
+    def _fallback_to_ffmpeg(
+        self, helper: _PreviewHelper, ready: _HelperMessage, generation: int
+    ) -> _HelperMessage:
+        with self._lock:
             if (
-                response.ok
-                and response.state == "starting"
-                and time.monotonic() - self._media_start_at < 10.0
+                self._helper is not helper
+                or generation != self._generation
+                or self._recording_blocks()
+                or self._shutdown.is_set()
             ):
-                with self._lock:
-                    if self._helper is helper:
-                        self._status = LivePublisherStatus(
-                            state=LivePublisherState.STARTING, viewer_count=response.viewer_count
-                        )
-                continue
-            if not response.ok or not response.media_active:
-                self._stop_owned_helper(
-                    expected=helper, error="WebRTC preview media is unavailable"
-                )
-                continue
-            with self._lock:
-                if self._helper is not helper:
-                    continue
-                if response.active_session_count:
-                    self._last_viewer_at = time.monotonic()
-                elif self._last_viewer_at != observed_activity_at:
-                    # An accepted offer made this no-session observation stale.
-                    continue
-                idle = (
-                    not response.active_session_count
-                    and time.monotonic() - self._last_viewer_at >= self._idle_timeout_s
-                )
-                idle_since = self._last_viewer_at
-                self._status = self._running_status(response)
-            if idle:
-                self._stop_owned_helper(expected=helper, idle_since=idle_since)
+                raise HelperError("Preview activation was cancelled")
+            self._native_preview_active = False
+            self._native_preview_failed = True
+        # Only the capability-advertising shared helper reaches this path.
+        # A lost startup reply may still own a consumer: explicit acknowledgement
+        # must precede another input, without terminating recording or motion.
+        detached = helper.request("stop_preview")
+        if not detached.ok:
+            raise HelperError("Native preview detach was not confirmed")
+        with self._lock:
+            if (
+                self._helper is not helper
+                or generation != self._generation
+                or self._recording_blocks()
+                or self._shutdown.is_set()
+            ):
+                raise HelperError("Preview activation was cancelled")
+            self._media_start_at = time.monotonic()
+        logger.info(
+            "Using compatible FFmpeg preview",
+            extra={"camera_name": self._camera_name, "event_type": "preview_backend_fallback"},
+        )
+        return helper.request("start", ffmpeg_args=self._ffmpeg_args(ready))
 
     def _running_status(self, response: _HelperMessage) -> LivePublisherStatus:
         return LivePublisherStatus(

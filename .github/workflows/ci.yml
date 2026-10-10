@@ -46,7 +46,7 @@ jobs:
           key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.toml', 'native/webrtc/Cargo.lock', 'native/webrtc/build_native.py') }}
 
       - name: Rust check
-        # The shared recipe builds static FFmpeg/OpenCV; media tests also use the CLI.
+        # The shared recipe builds static FFmpeg/OpenCV/x264/Opus; media tests also use the CLI.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -57,8 +57,8 @@ jobs:
         run: |
           make rust-build
           dependencies="$(ldd native/webrtc/target/release/homesec-webrtc)"
-          if printf '%s\n' "$dependencies" | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'; then
-            echo "The native helper must use bundled static FFmpeg and OpenCV libraries." >&2
+          if printf '%s\n' "$dependencies" | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample|x264|opus)\.so'; then
+            echo "The native helper must use bundled static FFmpeg, OpenCV, x264 and Opus libraries." >&2
             exit 1
           fi
           echo "$GITHUB_WORKSPACE/native/webrtc/target/release" >> "$GITHUB_PATH"

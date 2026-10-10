@@ -5,14 +5,24 @@ edition = "2024"
 rust-version = "1.88"
 publish = false
 license = "Apache-2.0"
+# Source license; the statically linked x264/FFmpeg helper is distributed under
+# GPL-3.0-or-later. See FFMPEG-NOTICE.md for the bundled source/build recipe.
 
 [package.metadata.native-dependencies.opencv]
 version = "4.12.0"
 sha256 = "44c106d5bb47efec04e531fd93008b3fcd1d27138985c5baf4eafac0e1ec9e9d"
 
+[package.metadata.native-dependencies.x264]
+version = "b35605ace3ddf7c1a5d67a2eb553f034aef41d55"
+sha256 = "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9"
+
+[package.metadata.native-dependencies.opus]
+version = "1.6.1"
+sha256 = "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["codec", "filter", "format"] }
+ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling", "static"] }
 futures-util = "0.3"
 h264-reader = "0.8"
 mio = { version = "1", features = ["net", "os-poll"] }

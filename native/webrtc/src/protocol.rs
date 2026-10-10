@@ -44,6 +44,7 @@ pub enum Operation {
         rtsp_url: Option<String>,
         connect_timeout_s: Option<f64>,
         io_timeout_s: Option<f64>,
+        preview_settings: Option<PreviewSettings>,
     },
     StartMotion {
         motion_id: Option<String>,
@@ -96,6 +97,30 @@ pub enum Operation {
     },
     Status,
     Stop,
+}
+
+/// Existing preview choices, kept independent of the concrete encoder library.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewSettings {
+    pub video_codec: PreviewVideoCodec,
+    pub audio_enabled: bool,
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewVideoCodec {
+    Copy,
+    H264,
+}
+
+impl Default for PreviewSettings {
+    fn default() -> Self {
+        Self {
+            video_codec: PreviewVideoCodec::Copy,
+            audio_enabled: false,
+        }
+    }
 }
 
 #[derive(Default, Serialize)]
