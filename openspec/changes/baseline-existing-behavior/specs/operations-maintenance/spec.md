@@ -10,7 +10,7 @@ Applied clip cleanup and media deletion outcomes are specified by the `storage-r
 
 ### Requirement: CLI operation and configuration validation
 
-The CLI SHALL support running HomeSec from a selected configuration path and validating configuration without starting the camera runtime. Validation SHALL report success with configured component information or configuration failure with exit code 1. A runtime configuration failure SHALL also exit with code 1. When setup requests a process restart, a normally completed run SHALL exit with code 42 for an external supervisor to handle.
+The CLI SHALL support running HomeSec from a selected configuration path and validating configuration without starting the camera runtime. Validation SHALL report success with configured component information or configuration failure with exit code 1. A runtime configuration failure SHALL also exit with code 1.
 
 #### Scenario: Validate usable configuration
 
@@ -29,12 +29,6 @@ The CLI SHALL support running HomeSec from a selected configuration path and val
 - **GIVEN** a run encounters a configuration error
 - **WHEN** the CLI handles the failure
 - **THEN** it reports the configuration error and exits with code 1
-
-#### Scenario: Setup requests a supervised restart
-
-- **GIVEN** setup has requested a restart and the application finishes its run
-- **WHEN** the CLI returns control to the process supervisor
-- **THEN** the process exits with code 42
 
 ### Requirement: Public health summaries
 

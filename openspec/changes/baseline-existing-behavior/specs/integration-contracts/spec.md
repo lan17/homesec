@@ -45,16 +45,19 @@ API routes protected by API-key authentication SHALL accept the configured key i
 The browser UI SHALL retain a supplied API key in browser session storage and use it for API requests that rely on stored authentication. Clearing the stored key SHALL remove it from subsequent requests using that stored authentication. An explicitly supplied request key SHALL take precedence over the stored value.
 
 #### Scenario: Reuse the supplied key within the browser session
+
 - **GIVEN** the user has supplied an API key and it is stored for the browser session
 - **WHEN** the browser makes an API request without an explicit request-key override
 - **THEN** the request includes that stored key as a bearer credential
 
 #### Scenario: Clear stored authentication
+
 - **GIVEN** an API key is stored for the browser session
 - **WHEN** the user clears the stored authentication and a later request relies on the stored key
 - **THEN** that request does not include the cleared key
 
 #### Scenario: Override the stored key for one request
+
 - **GIVEN** an API key is stored for the browser session
 - **WHEN** a request explicitly supplies a different key or no key
 - **THEN** that explicit choice takes precedence over the stored key
@@ -64,12 +67,14 @@ The browser UI SHALL retain a supplied API key in browser session storage and us
 The browser UI SHALL redirect `/` and `/home` to Live, `/dashboard` to System, `/cameras` to Settings camera setup, and legacy clip routes to Events. Dashboard, cameras, and clip redirects SHALL preserve query parameters; clip-detail redirects SHALL preserve the encoded clip identity.
 
 #### Scenario: Open a legacy event search or detail link
+
 - **GIVEN** a `/clips` or `/clips/{clipId}` link contains search context
 - **WHEN** the browser opens the link
 - **THEN** it redirects to the corresponding Events route with the query parameters preserved
 - **AND** a detail redirect preserves the clip identity in encoded form
 
 #### Scenario: Open former navigation destinations
+
 - **GIVEN** a user opens `/dashboard`, `/cameras`, `/`, or `/home`
 - **WHEN** the browser resolves the route
 - **THEN** dashboard opens System, cameras opens Settings camera setup, and root or home opens Live
