@@ -15,7 +15,7 @@ MP4_COPY_AUDIO_CODECS: frozenset[str] = frozenset(
     }
 )
 
-MP4_PASSTHROUGH_TIMING_ARGS: list[str] = ["-vsync", "0"]
+MP4_PASSTHROUGH_TIMING_ARGS: list[str] = ["-fps_mode", "passthrough"]
 
 
 class MotionProfile(BaseModel):

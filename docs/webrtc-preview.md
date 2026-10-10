@@ -3,10 +3,10 @@
 WebRTC is the default backend for live camera viewing. Preview remains disabled
 until enabled in config. HomeSec supervises a `homesec-webrtc` Rust helper for
 each eligible RTSP source. On compatible CPU H.264 sources, native motion,
-copied MP4 recording with optional AAC-LC audio, and video-only copy preview
-share one pinned FFmpeg library RTSP input per selected URL. All preview viewers
-share that input. Transcoding and audio-enabled preview retain a separate FFmpeg
-input for H.264 video and optional Opus audio. Hardware motion, unsupported or
+copied MP4 recording with optional AAC-LC audio, and preview share one pinned
+FFmpeg library RTSP input per selected URL. All preview viewers share that input.
+Rust copies compatible H.264 or transcodes it through pinned x264, and converts
+supported camera audio through pinned libopus. Hardware motion, unsupported or
 custom recording profiles, and push-to-talk retain their established paths.
 Python continues to own recording policy, supervision, and finalized clip delivery.
 
@@ -63,7 +63,7 @@ give the server its own TURN allocation. Validate the relay path from the target
 network before enabling public access.
 
 The UDP range is shared by active camera helpers. Match the configured range to
-firewall rules and Docker port mappings. FFmpeg preview transcoding/audio uses
+firewall rules and Docker port mappings. Compatibility FFmpeg preview uses
 separate loopback RTP sockets, which should not be published externally. Shared
 motion and recording can run with preview disabled and do not require an
 advertised IP or an externally published WebRTC port.
@@ -77,10 +77,12 @@ while motion or recording still needs it; RTSP source cleanup owns helper shutdo
 
 The default `stop_on_recording` policy yields preview resources to recording.
 `allow_during_recording` is best-effort and can consume another direct camera
-session for separate selected streams, preview transcoding/audio, or compatibility
+session for separate selected streams or compatibility
 paths. Compatible native consumers using the same selected URL share one RTSP
 PLAY. Existing camera preflight and concurrency refusal behavior still apply;
 sharing does not override a preflight downgrade or the selected recording policy.
+Preflight still conservatively probes separate camera sessions and can refuse
+concurrent preview even when native consumers could share one selected input.
 A preview failure must not prevent recording or upload.
 WebRTC preview temporarily refuses activation until background camera discovery
 finishes, so discovered audio and camera session policy are applied before it
@@ -93,11 +95,12 @@ B-frames. This uses CPU and is the compatibility-first setting. `video_codec:
 copy` avoids video transcoding but requires a compatible camera H.264 profile,
 packetization, and keyframe cadence; validate new viewer joins and loss recovery
 with the actual camera and browser before using it. H.265 and H.264 with B-frames
-require transcoding for this path.
+require transcoding for this path. H.264 with B-frames can use native transcoding;
+other input video codecs currently use the existing FFmpeg compatibility path.
 
-With `video_codec: copy` and `audio_enabled: false`, eligible CPU RTSP sources use
-the shared helper's pinned FFmpeg library demuxer over RTSP/TCP. This path does not
-launch an FFmpeg command-line process for preview. Matching motion and recording
+Eligible CPU H.264 RTSP sources use the shared helper's pinned FFmpeg library
+demuxer over RTSP/TCP for both preview modes, with or without audio. This path does
+not launch an FFmpeg command-line process for preview. Matching motion and recording
 URLs reuse the same input, and the same encoded video feeds every preview viewer.
 When the source cannot use shared mode, standalone native copy preview retains
 the Retina adapter. Camera credentials travel only through private
@@ -122,12 +125,29 @@ seconds. Stop or parent disconnect cancels camera I/O without waiting on it in
 the WebRTC control loop. Python requests graceful stop and allows camera teardown
 to finish before bounded process-group termination.
 
+The native H.264 encoder preserves the existing baseline YUV420p,
+veryfast/zerolatency settings, with no B-frames and periodic one-second IDRs.
+Encoder selection and options live in private adapters in
+`native/webrtc/src/preview.rs`; changing the encoder requires updating those
+adapters and the native build recipe, without changing the source or Python IPC.
+Preview owns its decoder/filters independently of motion preparation and copied
+recording, so encoder failure cannot stall those consumers.
+
+Shared helpers advertise `native_preview` in their ready response. Older helpers
+keep the existing start payloads. On native startup or later media failure,
+HomeSec requires an acknowledged `stop_preview` before starting the compatibility
+FFmpeg input through the same shared helper. Failed or lost detach acknowledgement
+prevents replacement; compatibility selection stays pinned for that publisher's
+lifetime. Hardware/custom configurations retain the existing selector.
+
 Native media assembly and delivery queues have byte/count limits. The pinned
 Retina and FFmpeg recipes cap aggregate RTSP response headers/body at 256 KiB
 during reads, before allocating an oversized body. The FFmpeg H.264 parser and
 delivered compressed packets have a 2 MiB access-unit limit. Each shared consumer
 has its own 16-packet queue; a slow or overflowing preview consumer fails without
-blocking a healthy recording consumer. The FFmpeg transcoding/audio fallback
+blocking a healthy recording consumer. Native preview outputs use separate
+eight-unit video and 64-packet audio queues with fair draining. Each encoded
+video unit is limited to 2 MiB and each Opus packet to 4000 bytes. The FFmpeg fallback
 drains its loopback RTP sockets on an independent receiver thread, so WebRTC
 encryption or a slow viewer cannot delay receiving the rest of a fragmented
 picture. Only complete H.264 access units cross that receiver boundary: its video
@@ -141,15 +161,21 @@ Cameras remain operator-configured sources on a trusted LAN/VPN.
 
 See the [shared Rust media plan](shared-rust-media.md) for ingestion, recording,
 and lifecycle details. FFmpeg and ffprobe command-line tools remain required for
-preflight, compatibility recording/motion, and preview transcoding/audio.
+preflight and compatibility recording, motion, and preview.
 
 The preview input decoder uses slice threading rather than frame threading.
 Frame threading queues future frames and can add about a second of delay at
 15 fps on a many-core host; slice threading avoids that queue while preserving
 source frame reordering. Encoding already uses FFmpeg's zero-latency tuning.
 
-When `audio_enabled` is true and the camera supplies audio, FFmpeg converts it to
-Opus. Camera AAC is not passed directly to WebRTC. The UI preserves its existing
+When `audio_enabled` is true and the camera supplies AAC, G.711 A-law/mu-law, or
+Opus, native preview converts it to 48 kHz stereo Opus at 64 kbps with 20 ms
+frames. Unsupported audio selects compatibility preview. A camera without audio
+still supplies video. Source timestamps, including encoder lookahead, map to a
+common wallclock for WebRTC audio/video synchronization. Media that arrives early
+waits until its presentation time in a bounded slot per track, while the other
+track and control requests continue. Camera AAC is not passed
+directly to WebRTC. The UI preserves its existing
 mute behavior and push-to-talk coordination; changing the preview transport does
 not change microphone-to-camera transport.
 
@@ -219,13 +245,13 @@ writer has stopped. Successfully finalized files retain the existing replay path
 
 The Docker image builds the helper with the pinned Rust toolchain and installs it
 at `/usr/local/bin/homesec-webrtc`. The same `make rust-build` recipe used locally
-builds verified FFmpeg 8.1.3 and OpenCV 4.12.0 source and statically links their
+builds verified FFmpeg 8.1.3, OpenCV 4.12.0, x264 API 165, and Opus 1.6.1 source and statically links their
 libraries into the helper. Rust, native headers, CMake, and libclang are confined
 to the build stage. The image checks that the runtime can load the helper and
-that it has no shared OpenCV or libav dependency. Standard C/C++ runtime libraries
+that it has no shared OpenCV, libav, x264, or libopus dependency. Standard C/C++ runtime libraries
 remain OS dependencies.
 The system FFmpeg command-line tools remain in the image for preflight,
-compatibility recording/motion, and preview transcoding/audio.
+compatibility recording, motion, and preview.
 
 The bundled FFmpeg license and source/build notice are installed in
 `/usr/share/licenses/homesec-ffmpeg/`. The
@@ -233,6 +259,11 @@ The bundled FFmpeg license and source/build notice are installed in
 checksum, and recipe for rebuilding the helper. OpenCV, its bundled zlib, and the
 Rust binding license/notice are installed in `/usr/share/licenses/homesec-opencv/`;
 the [OpenCV notice](../native/webrtc/OPENCV-NOTICE.md) identifies their sources.
+The x264 and Opus notices/licenses are installed alongside them. Static x264
+makes the combined helper GPLv3; HomeSec source remains Apache-2.0.
+The image includes corresponding source and rebuild instructions under
+`/usr/share/homesec-native/source/`. Preserve the complete source bundle and
+licenses when distributing a separately packaged helper.
 
 The bundled Compose file publishes UDP `8189-8199` alongside HTTP `8081`. The UDP
 ports are used only by the WebRTC backend. Remove that mapping for HLS-only
@@ -263,7 +294,7 @@ For a source checkout on Linux or macOS, install these developer tools first:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+
   or 22.12+, and pnpm 10.15.1 (the version in `ui/package.json`).
 - FFmpeg, including `ffprobe`, on `PATH` for preflight, compatibility
-  recording/motion, and preview transcoding/audio.
+  recording, motion, and preview.
 - `pkg-config` so the Rust build can find the privately built libraries.
 - CMake to compile the private OpenCV libraries.
 - Optional NASM on x86 hosts for FFmpeg assembly optimizations. The build disables
@@ -288,13 +319,15 @@ brew install python cmake ffmpeg pkg-config
 
 `make rust-build` and `make rust-check` download exact
 [FFmpeg 8.1.3](https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz) and
-[OpenCV 4.12.0](https://github.com/opencv/opencv/tree/4.12.0) source archives,
+[OpenCV 4.12.0](https://github.com/opencv/opencv/tree/4.12.0),
+[x264 API 165](https://code.videolan.org/videolan/x264/-/tree/b35605ace3ddf7c1a5d67a2eb553f034aef41d55), and
+[Opus 1.6.1](https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz) source archives,
 verify their pinned SHA-256 checksums, and build the required libraries privately.
 OpenCV builds only `core` and `imgproc`, with bundled static zlib. Cargo pins the
 Rust bindings to `opencv = "=0.101.0"`; the native version and archive checksum
 are recorded in `native/webrtc/Cargo.toml` metadata and enforced by the build.
 System FFmpeg/OpenCV development packages are unnecessary. The helper links
-private static archives and does not load system OpenCV or libav shared libraries.
+private static archives and does not load system OpenCV, libav, x264, or libopus shared libraries.
 Use the Make targets or build wrapper; direct Cargo builds without the pinned
 private build environment are refused.
 
@@ -303,21 +336,22 @@ temporary directory in `homesec-native-<uid>/`.
 Matching platform, compiler, and build recipes reuse the caches. Clearing them
 causes a fresh download and build. No libraries are installed globally.
 
-Each private FFmpeg installation retains `COPYING.LGPLv2.1`. The
+Each private FFmpeg installation retains `COPYING.GPLv3`. The
 [bundled-component notice](../native/webrtc/FFMPEG-NOTICE.md) records its source
 and rebuild recipe; keep the license and notice with a separately packaged helper.
 The OpenCV installation retains `LICENSE` and `ZLIB-LICENSE`; distribute these,
 `native/webrtc/OPENCV-BINDINGS-LICENSE`, and the
 [OpenCV notice](../native/webrtc/OPENCV-NOTICE.md) with the helper too.
+Keep the x264 `COPYING`, Opus `COPYING`, and their bundled notices as well.
 
-The first build needs internet access and compiles both libraries using the available CPU
+The first build needs internet access and compiles these libraries using the available CPU
 count. Limit CPU and memory use on a shared host with:
 
 ```bash
 FFMPEG_JOBS=4 make rust-build
 ```
 
-The existing `FFMPEG_JOBS` setting limits both native builds and also applies to
+The existing `FFMPEG_JOBS` setting limits all native builds and also applies to
 `make rust-check` and `make dev-setup`. If bindgen
 cannot locate libclang, set `LIBCLANG_PATH` to the directory containing
 `libclang.so` or `libclang.dylib`; on a standard macOS Command Line Tools

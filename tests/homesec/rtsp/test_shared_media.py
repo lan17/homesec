@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from typing import Literal
 
 import pytest
 
@@ -21,6 +22,7 @@ from homesec.sources.rtsp.capabilities import RTSPTimeoutCapabilities
 from homesec.sources.rtsp.core import RTSPSource, RTSPSourceConfig
 from homesec.sources.rtsp.discovery import ProbeStreamInfo
 from homesec.sources.rtsp.helper_client import HelperClient, HelperError
+from homesec.sources.rtsp.live_publisher import LivePublisherStartRefusal, LivePublisherState
 from homesec.sources.rtsp.motion_input import MotionObservation
 from homesec.sources.rtsp.preflight import CameraPreflightDiagnostics, CameraPreflightOutcome
 from homesec.sources.rtsp.recorder import RecordingHandle
@@ -46,6 +48,7 @@ trace = Path(__file__).with_suffix('.calls')
 recordings = {}
 peers = {}
 preview = False
+native_preview = False
 pending = None
 motion_id = None
 motion_reads = 0
@@ -53,7 +56,8 @@ motion_reads = 0
 def emit(value):
     print(json.dumps(value), flush=True)
 
-emit({'event': 'ready', 'video_port': 20001, 'audio_port': 20003, 'media_port': 8189})
+emit({'event': 'ready', 'video_port': 20001, 'audio_port': 20003, 'media_port': 8189,
+      'native_preview': '--shared' in sys.argv and mode != 'legacy_preview'})
 for line in sys.stdin:
     request = json.loads(line)
     with trace.open('a') as stream:
@@ -139,6 +143,11 @@ for line in sys.stdin:
             reply.update(ok=False, error_code='preview_already_active')
         else:
             preview = True
+            native_preview = 'preview_settings' in request
+            if native_preview and mode in ('reject_native_preview', 'native_preview_detach_refused', 'native_preview_detach_lost'):
+                reply.update(ok=False, error_code='unsupported_codec')
+            if native_preview and mode == 'lost_native_preview_start':
+                continue
     elif command == 'offer':
         peers[request['session_id']] = time.monotonic() + request['lease_seconds']
         reply['sdp'] = 'v=0\r\ns=answer\r\n'
@@ -147,9 +156,9 @@ for line in sys.stdin:
     elif command == 'close':
         peers.pop(request['session_id'], None)
     elif command == 'stop_preview':
-        if mode == 'lost_preview_stop_reply':
+        if mode in ('lost_preview_stop_reply', 'native_preview_detach_lost'):
             continue
-        if mode == 'preview_stop_failure':
+        if mode in ('preview_stop_failure', 'native_preview_detach_refused'):
             reply.update(ok=False, error_code='preview_stop_failed')
         else:
             preview = False
@@ -157,6 +166,8 @@ for line in sys.stdin:
     elif command == 'stop' and mode == 'unretirable':
         continue
     reply.update(viewer_count=len(peers), active_session_count=len(peers), media_active=preview)
+    if command == 'status' and native_preview and mode == 'native_preview_media_failure':
+        reply.update(media_active=False, state='error')
     emit(reply)
     if command == 'stop':
         break
@@ -300,6 +311,208 @@ def preview(session: SharedMediaSession, config: WebRTCPreviewConfig) -> RustWeb
     )
 
 
+@pytest.mark.parametrize("video_codec", ["copy", "h264"])
+@pytest.mark.parametrize("audio_enabled", [False, True])
+@pytest.mark.parametrize("audio_available", [False, True])
+def test_shared_preview_preserves_video_mode_and_discovered_audio(
+    tmp_path: Path,
+    video_codec: Literal["copy", "h264"],
+    audio_enabled: bool,
+    audio_available: bool,
+) -> None:
+    # Given: A capable shared helper and audio discovered by the existing source preflight.
+    helper = helper_script(tmp_path)
+    config = WebRTCPreviewConfig(
+        helper_path=str(helper),
+        advertised_ip="127.0.0.1",
+        video_codec=video_codec,
+        audio_enabled=audio_enabled,
+    )
+    session = SharedMediaSession(
+        helper_path=str(helper), preview_config=config, connect_timeout_s=2.0, io_timeout_s=3.0
+    )
+    publisher = preview(session, config)
+    publisher.set_audio_available(audio_available)
+    try:
+        # When: Two viewers negotiate against this publisher.
+        first = publisher.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+        second = publisher.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+
+        # Then: One native input carries typed intent and optional audio without an extra probe.
+        assert isinstance(first, PreviewAnswer) and isinstance(second, PreviewAnswer)
+        starts = [
+            record["request"]
+            for record in requests(helper)
+            if record["request"]["command"] == "start"
+        ]
+        assert len(starts) == 1
+        assert starts[0]["rtsp_url"] == "rtsp://camera/main"
+        assert starts[0]["preview_settings"] == {
+            "video_codec": video_codec,
+            "audio_enabled": audio_enabled and audio_available,
+        }
+        assert starts[0]["connect_timeout_s"] == 2.0
+        assert starts[0]["io_timeout_s"] == 3.0
+        assert "ffmpeg_args" not in starts[0]
+    finally:
+        publisher.shutdown()
+        session.shutdown()
+
+
+def test_older_shared_helper_retains_compatible_preview_without_new_settings(
+    tmp_path: Path,
+) -> None:
+    # Given: An installed shared helper predates the native transcoding capability.
+    helper = helper_script(tmp_path, "legacy_preview")
+    config = WebRTCPreviewConfig(helper_path=str(helper), advertised_ip="127.0.0.1")
+    session = SharedMediaSession(helper_path=str(helper), preview_config=config)
+    publisher = preview(session, config)
+    publisher.set_audio_available(True)
+    try:
+        # When: Default H.264 and audio preview activates.
+        result = publisher.ensure_active()
+
+        # Then: Its established FFmpeg path receives one input and no unsupported new payload.
+        assert not isinstance(result, LivePublisherStartRefusal)
+        start = next(
+            record["request"]
+            for record in requests(helper)
+            if record["request"]["command"] == "start"
+        )
+        assert "preview_settings" not in start
+        assert "rtsp_url" not in start
+        assert start["ffmpeg_args"].count("-i") == 1
+        assert "libx264" in start["ffmpeg_args"]
+        assert "libopus" in start["ffmpeg_args"]
+    finally:
+        publisher.shutdown()
+        session.shutdown()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"ffmpeg_args": []},
+        {"ffmpeg_args": ["-i", "input"], "rtsp_url": "rtsp://camera/main"},
+        {
+            "rtsp_url": "rtsp://camera/main",
+            "preview_settings": {"video_codec": "hevc", "audio_enabled": True},
+        },
+        {
+            "ffmpeg_args": ["-i", "input"],
+            "preview_settings": {"video_codec": "h264", "audio_enabled": True},
+        },
+    ],
+)
+def test_shared_preview_rejects_invalid_input_before_dispatch(
+    tmp_path: Path, fields: dict[str, object]
+) -> None:
+    # Given: A shared consumer using the typed request transport.
+    helper = helper_script(tmp_path)
+    session = SharedMediaSession(helper_path=str(helper), preview_config=None)
+    client = session.preview_client([str(helper)])
+    try:
+        # When: A malformed native or compatible input is submitted before a valid command.
+        with pytest.raises(HelperError, match="Invalid media helper command"):
+            client.request("start", **fields)
+        response = client.request("status")
+
+        # Then: Validation keeps the connection usable and never allocates a media input.
+        assert response.ok
+        assert commands(helper) == ["status"]
+    finally:
+        session.shutdown()
+
+
+@pytest.mark.parametrize(
+    "mode", ["reject_native_preview", "native_preview_media_failure", "lost_native_preview_start"]
+)
+def test_native_preview_failure_detaches_before_compatible_input_and_preserves_recording(
+    tmp_path: Path, mode: str
+) -> None:
+    # Given: A healthy native recorder and preview whose native media fails or loses startup.
+    helper = helper_script(tmp_path, mode)
+    config = WebRTCPreviewConfig(helper_path=str(helper), advertised_ip="127.0.0.1")
+    session = SharedMediaSession(helper_path=str(helper), preview_config=config)
+    publisher = preview(session, config)
+    publisher.set_audio_available(True)
+    recording = recorder(session, LegacyRecorder())
+    output = tmp_path / "clip.mp4"
+    try:
+        handle = recording.start(output, tmp_path / "clip.log")
+        assert handle is not None
+
+        # When: Native startup or maintenance encounters failure, then preview restarts.
+        result = publisher.ensure_active()
+        assert not isinstance(result, LivePublisherStartRefusal)
+        deadline = time.monotonic() + 4
+        while not any("ffmpeg_args" in record["request"] for record in requests(helper)):
+            assert time.monotonic() < deadline, "Preview did not reach its compatible input"
+            time.sleep(0.02)
+        publisher.request_stop()
+        restarted = publisher.negotiate(PreviewOffer(sdp="v=0"), time.time() + 10)
+
+        # Then: Confirmed consumer detach precedes fallback and the same recorder keeps its input.
+        assert isinstance(restarted, PreviewAnswer)
+        records = requests(helper)
+        starts = [
+            record["request"] for record in records if record["request"]["command"] == "start"
+        ]
+        assert sum("preview_settings" in start for start in starts) == 1
+        assert sum("ffmpeg_args" in start for start in starts) == 2
+        operations = [record["request"]["command"] for record in records]
+        first_start = operations.index("start")
+        fallback_start = operations.index("start", first_start + 1)
+        assert "stop_preview" in operations[first_start + 1 : fallback_start]
+        assert "stop" not in operations
+        assert len({record["pid"] for record in records}) == 1
+        assert recording.is_alive(handle)
+        assert recording.stop(handle, output)
+        assert output.exists()
+    finally:
+        publisher.shutdown()
+        session.shutdown()
+
+
+@pytest.mark.parametrize("mode", ["native_preview_detach_refused", "native_preview_detach_lost"])
+def test_unconfirmed_native_preview_detach_never_starts_fallback_or_kills_recording(
+    tmp_path: Path, mode: str
+) -> None:
+    # Given: Native preview startup fails while a healthy recorder owns the shared helper.
+    helper = helper_script(tmp_path, mode)
+    config = WebRTCPreviewConfig(helper_path=str(helper), advertised_ip="127.0.0.1")
+    session = SharedMediaSession(helper_path=str(helper), preview_config=config)
+    publisher = preview(session, config)
+    recording = recorder(session, LegacyRecorder())
+    output = tmp_path / "clip.mp4"
+    try:
+        handle = recording.start(output, tmp_path / "clip.log")
+        assert handle is not None
+
+        # When: Detach is refused or its acknowledgement is lost, and activation is retried.
+        refused = publisher.ensure_active()
+        retried = publisher.ensure_active()
+
+        # Then: Unknown ownership refuses the successor while recording remains healthy.
+        assert isinstance(refused, LivePublisherStartRefusal)
+        assert isinstance(retried, LivePublisherStartRefusal)
+        assert publisher.status().state == LivePublisherState.ERROR
+        starts = [
+            record["request"]
+            for record in requests(helper)
+            if record["request"]["command"] == "start"
+        ]
+        assert len(starts) == 1 and "preview_settings" in starts[0]
+        assert "stop" not in commands(helper)
+        assert recording.is_alive(handle)
+        assert recording.stop(handle, output)
+        os.kill(handle.pid, 0)
+    finally:
+        publisher.shutdown()
+        session.shutdown()
+
+
 def test_consumers_share_helper_and_detach_without_interrupting_rotation(tmp_path: Path) -> None:
     # Given: independent motion, compressed recording, and video-only preview consumers
     helper = helper_script(tmp_path)
@@ -374,7 +587,10 @@ def test_consumers_share_helper_and_detach_without_interrupting_rotation(tmp_pat
 
 
 @pytest.mark.parametrize("mode", ["normal", "finish_failure", "exit_on_status"])
-def test_source_hands_off_only_finalized_native_files(tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize("video_codec", ["copy", "h264"])
+def test_source_hands_off_only_finalized_native_files(
+    tmp_path: Path, mode: str, video_codec: Literal["copy", "h264"]
+) -> None:
     # Given: the actual source wiring with a negotiated H264/AAC profile and helper boundary
     helper = helper_script(tmp_path, mode)
     config = RTSPSourceConfig.model_validate(
@@ -390,8 +606,8 @@ def test_source_hands_off_only_finalized_native_files(tmp_path: Path, mode: str)
                 "config": {
                     "helper_path": str(helper),
                     "advertised_ip": "127.0.0.1",
-                    "video_codec": "copy",
-                    "audio_enabled": False,
+                    "video_codec": video_codec,
+                    "audio_enabled": True,
                 },
             },
         }
@@ -438,6 +654,16 @@ def test_source_hands_off_only_finalized_native_files(tmp_path: Path, mode: str)
         if clips:
             assert clips[0].local_path == final_files[0]
         assert len({record["pid"] for record in requests(helper)}) == 1
+        preview_start = next(
+            record["request"]
+            for record in requests(helper)
+            if record["request"]["command"] == "start"
+        )
+        assert preview_start["preview_settings"] == {
+            "video_codec": video_codec,
+            "audio_enabled": True,
+        }
+        assert "ffmpeg_args" not in preview_start
     finally:
         source.cleanup()
 

@@ -539,11 +539,7 @@ class RTSPSource(ThreadedClipSource):
             config.runtime_preview.config, WebRTCPreviewConfig
         ):
             helper_path = config.runtime_preview.config.helper_path
-            if (
-                config.runtime_preview.enabled
-                and config.runtime_preview.config.video_codec == "copy"
-                and not config.runtime_preview.config.audio_enabled
-            ):
+            if config.runtime_preview.enabled:
                 native_preview_config = config.runtime_preview.config
         self._shared_media: SharedMediaSession | None = None
         if (
@@ -1332,11 +1328,7 @@ class RTSPSource(ThreadedClipSource):
                 rtsp_io_timeout_s=self.rtsp_io_timeout_s,
                 timeout_capabilities=self._timeout_capabilities,
                 helper_factory=(
-                    self._shared_media.preview_client
-                    if self._shared_media is not None
-                    and hls_config.video_codec == "copy"
-                    and not hls_config.audio_enabled
-                    else None
+                    self._shared_media.preview_client if self._shared_media is not None else None
                 ),
             )
         return HLSLivePublisher(

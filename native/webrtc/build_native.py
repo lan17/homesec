@@ -17,8 +17,9 @@ import tempfile
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import TextIO
+from typing import Literal, TextIO
 
 
 @dataclass(frozen=True)
@@ -44,9 +45,10 @@ FFMPEG = NativeDependency(
     required=(
         "bin/ffmpeg",
         "COPYING.LGPLv2.1",
+        "COPYING.GPLv3",
         *(
             path
-            for library in ("avcodec", "avformat", "avfilter", "avutil", "swscale")
+            for library in ("avcodec", "avformat", "avfilter", "avutil", "swscale", "swresample")
             for path in (
                 f"lib/lib{library}.a",
                 f"lib/pkgconfig/lib{library}.pc",
@@ -65,18 +67,47 @@ FFMPEG_CONFIGURE = (
     "--disable-doc",
     "--disable-debug",
     "--disable-avdevice",
-    "--disable-swresample",
+    "--enable-swresample",
     "--disable-ffplay",
     "--disable-ffprobe",
     "--enable-ffmpeg",
-    "--enable-decoder=h264,aac",
-    "--enable-parser=h264,aac",
+    "--enable-gpl",
+    "--enable-version3",
+    "--enable-libx264",
+    "--enable-libopus",
+    "--pkg-config-flags=--static",
+    "--enable-decoder=h264,aac,aac_latm,pcm_alaw,pcm_mulaw,opus",
+    "--enable-parser=h264,aac,aac_latm,opus",
     "--enable-demuxer=h264,mov,rtsp,rtp",
     "--enable-protocol=file,pipe,tcp,udp,rtp",
     "--enable-bsf=extract_extradata",
-    "--enable-filter=fps,scale,format",
-    "--enable-encoder=rawvideo",
+    "--enable-filter=buffer,buffersink,fps,scale,format,abuffer,abuffersink,aresample,anull,aformat",
+    "--enable-encoder=rawvideo,libx264,libopus",
     "--enable-muxer=rawvideo,mp4",
+)
+X264_CONFIGURE = (
+    "--enable-static",
+    "--enable-pic",
+    "--disable-cli",
+    "--disable-opencl",
+    "--disable-avs",
+    "--disable-lavf",
+    "--disable-ffms",
+    "--disable-swscale",
+    "--disable-gpac",
+    "--disable-lsmash",
+    "--bit-depth=8",
+    "--chroma-format=420",
+)
+OPUS_CONFIGURE = (
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_INSTALL_LIBDIR=lib",
+    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+    "-DBUILD_SHARED_LIBS=OFF",
+    "-DOPUS_BUILD_SHARED_LIBRARY=OFF",
+    "-DOPUS_BUILD_TESTING=OFF",
+    "-DOPUS_BUILD_PROGRAMS=OFF",
+    "-DOPUS_INSTALL_PKG_CONFIG_MODULE=ON",
 )
 OPENCV_CONFIGURE = (
     "-DCMAKE_BUILD_TYPE=Release",
@@ -120,9 +151,11 @@ OPENCV_CONFIGURE = (
 )
 
 
-def opencv_dependency(cargo: str = "cargo") -> NativeDependency:
-    # Cargo pins both the Rust bindings and the native implementation. The build
-    # bootstrap consumes its native metadata so there is only one native pin.
+def native_dependency(
+    name: Literal["OpenCV", "x264", "Opus"], cargo: str = "cargo"
+) -> NativeDependency:
+    # Cargo pins native implementations alongside the Rust bindings. Consume
+    # that metadata rather than duplicating versions/checksums in this recipe.
     manifest = Path(__file__).with_name("Cargo.toml")
     packages = json.loads(
         subprocess.check_output(
@@ -145,18 +178,37 @@ def opencv_dependency(cargo: str = "cargo") -> NativeDependency:
             for package in packages
             if Path(package["manifest_path"]).resolve() == manifest.resolve()
         )
-        metadata = package["metadata"]["native-dependencies"]["opencv"]
+        metadata = package["metadata"]["native-dependencies"][name.lower()]
         version = metadata["version"]
         checksum = metadata["sha256"]
     except (KeyError, StopIteration, TypeError) as error:
-        raise RuntimeError("Cargo.toml must pin the OpenCV release and SHA256") from error
+        raise RuntimeError(f"Cargo.toml must pin the {name} release and SHA256") from error
+    version_pattern = r"[0-9a-f]{40}" if name == "x264" else r"\d+\.\d+\.\d+"
     if (
         not isinstance(version, str)
-        or not re.fullmatch(r"\d+\.\d+\.\d+", version)
+        or not re.fullmatch(version_pattern, version)
         or not isinstance(checksum, str)
         or not re.fullmatch(r"[0-9a-f]{64}", checksum)
     ):
-        raise RuntimeError("Cargo.toml must pin the OpenCV release and SHA256")
+        raise RuntimeError(f"Cargo.toml must pin the {name} release and SHA256")
+    if name == "x264":
+        return NativeDependency(
+            name=name,
+            version=version,
+            archive=f"x264-{version}.tar.gz",
+            url=f"https://code.videolan.org/videolan/x264/-/archive/{version}/x264-{version}.tar.gz",
+            sha256=checksum,
+            required=("lib/libx264.a", "lib/pkgconfig/x264.pc", "include/x264.h", "COPYING"),
+        )
+    if name == "Opus":
+        return NativeDependency(
+            name=name,
+            version=version,
+            archive=f"opus-{version}.tar.gz",
+            url=f"https://downloads.xiph.org/releases/opus/opus-{version}.tar.gz",
+            sha256=checksum,
+            required=("lib/libopus.a", "lib/pkgconfig/opus.pc", "include/opus/opus.h", "COPYING"),
+        )
     return NativeDependency(
         name="OpenCV",
         version=version,
@@ -226,7 +278,11 @@ def extract_archive(archive: Path, workspace: Path, dependency: NativeDependency
 
 
 def private_environment(
-    ffmpeg: Path, opencv: Path | None = None, opencv_version: str | None = None
+    ffmpeg: Path,
+    opencv: Path | None = None,
+    opencv_version: str | None = None,
+    *,
+    encoders: tuple[Path, ...] = (),
 ) -> dict[str, str]:
     environment = {
         key: value
@@ -235,8 +291,9 @@ def private_environment(
         and "PKG_CONFIG" not in key
         and not key.startswith(("BINDGEN_EXTRA_CLANG_ARGS", "OPENCV_", "HOMESEC_OPENCV_"))
     }
-    environment["PKG_CONFIG_PATH"] = str(ffmpeg / "lib/pkgconfig")
-    environment["PKG_CONFIG_LIBDIR"] = str(ffmpeg / "lib/pkgconfig")
+    search_paths = os.pathsep.join(str(prefix / "lib/pkgconfig") for prefix in (ffmpeg, *encoders))
+    environment["PKG_CONFIG_PATH"] = search_paths
+    environment["PKG_CONFIG_LIBDIR"] = search_paths
     # The parity oracle needs the same FFmpeg build; recording and other
     # fixtures retain the full system CLI through the unchanged PATH.
     environment["HOMESEC_FFMPEG_REFERENCE"] = str(ffmpeg / "bin/ffmpeg")
@@ -261,7 +318,13 @@ def private_environment(
 
 
 def build_ffmpeg(
-    source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
+    source: Path,
+    prefix: Path,
+    options: tuple[str, ...],
+    jobs: int,
+    log: TextIO,
+    *,
+    encoders: tuple[Path, ...] = (),
 ) -> None:
     patch_ffmpeg_rtsp(source)
     for command in (
@@ -270,9 +333,29 @@ def build_ffmpeg(
         ["make", "install"],
     ):
         subprocess.run(
+            command,
+            cwd=source,
+            env=private_environment(prefix, encoders=encoders),
+            stdout=log,
+            stderr=log,
+            check=True,
+        )
+    for license_name in ("COPYING.LGPLv2.1", "COPYING.GPLv3"):
+        shutil.copyfile(source / license_name, prefix / license_name)
+
+
+def build_x264(
+    source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
+) -> None:
+    for command in (
+        ["./configure", f"--prefix={prefix}", *options],
+        ["make", f"-j{jobs}"],
+        ["make", "install-lib-static"],
+    ):
+        subprocess.run(
             command, cwd=source, env=private_environment(prefix), stdout=log, stderr=log, check=True
         )
-    shutil.copyfile(source / "COPYING.LGPLv2.1", prefix / "COPYING.LGPLv2.1")
+    shutil.copyfile(source / "COPYING", prefix / "COPYING")
 
 
 FFMPEG_RTSP_PATCH: tuple[tuple[str, str], ...] = (
@@ -346,7 +429,7 @@ def patch_ffmpeg_rtsp(source: Path) -> None:
     parser.write_text(text.replace(original, replacement))
 
 
-def build_opencv(
+def build_cmake(
     source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
 ) -> None:
     workspace = source / "native-build"
@@ -364,8 +447,21 @@ def build_opencv(
         ["cmake", "--install", str(workspace)],
     ):
         subprocess.run(command, env=private_environment(prefix), stdout=log, stderr=log, check=True)
+
+
+def build_opencv(
+    source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
+) -> None:
+    build_cmake(source, prefix, options, jobs, log)
     shutil.copyfile(source / "LICENSE", prefix / "LICENSE")
     shutil.copyfile(source / "3rdparty/zlib/LICENSE", prefix / "ZLIB-LICENSE")
+
+
+def build_opus(
+    source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
+) -> None:
+    build_cmake(source, prefix, options, jobs, log)
+    shutil.copyfile(source / "COPYING", prefix / "COPYING")
 
 
 def complete(prefix: Path, dependency: NativeDependency) -> bool:
@@ -385,6 +481,8 @@ def ensure_dependency(
     jobs: int,
     options: tuple[str, ...],
     build: Callable[[Path, Path, tuple[str, ...], int, TextIO], None],
+    *,
+    dependencies: tuple[Path, ...] = (),
 ) -> Path:
     if platform.system() not in ("Linux", "Darwin"):
         raise RuntimeError("The bundled native build supports Linux and macOS")
@@ -399,7 +497,7 @@ def ensure_dependency(
         compiler = shlex.split(os.environ.get(variable, "c++" if variable == "CXX" else "cc"))
         identity = subprocess.check_output([*compiler, "--version"], text=True)
         toolchain[variable] = [compiler, identity]
-    if dependency.name == "OpenCV":
+    if dependency.name in ("OpenCV", "Opus"):
         toolchain["cmake"] = subprocess.check_output(["cmake", "--version"], text=True)
     fingerprint = {
         "archive": dependency.sha256,
@@ -408,6 +506,7 @@ def ensure_dependency(
         "machine": platform.machine(),
         "compiler": toolchain,
         "options": options,
+        "dependencies": [str(prefix) for prefix in dependencies],
         "environment": {
             key: os.environ.get(key, "")
             for key in (
@@ -423,7 +522,7 @@ def ensure_dependency(
     key = hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()[:20]
     prefix = root / f"{dependency.source_directory}-{key}"
     # One lock also serializes archive publication. Cargo can run independently
-    # once both immutable installations have been published.
+    # once the immutable installations have been published.
     with (root / "build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if complete(prefix, dependency):
@@ -449,13 +548,19 @@ def ensure_dependency(
     return prefix
 
 
-def ensure_ffmpeg(jobs: int) -> Path:
+def ensure_ffmpeg(jobs: int, encoders: tuple[Path, ...]) -> Path:
     options: tuple[str, ...] = FFMPEG_CONFIGURE
     if platform.machine().lower() in ("x86_64", "amd64", "i386", "i686") and not shutil.which(
         "nasm"
     ):
         options += ("--disable-x86asm",)
-    return ensure_dependency(FFMPEG, jobs, options, build_ffmpeg)
+    return ensure_dependency(
+        FFMPEG,
+        jobs,
+        options,
+        partial(build_ffmpeg, encoders=encoders),
+        dependencies=encoders,
+    )
 
 
 def main() -> int:
@@ -472,10 +577,23 @@ def main() -> int:
         parser.error("provide a Cargo command after --")
     try:
         cargo = command[0] if Path(command[0]).name == "cargo" else os.environ.get("CARGO", "cargo")
-        dependency = opencv_dependency(cargo)
-        ffmpeg = ensure_ffmpeg(args.jobs)
-        opencv = ensure_dependency(dependency, args.jobs, OPENCV_CONFIGURE, build_opencv)
-        return subprocess.call(command, env=private_environment(ffmpeg, opencv, dependency.version))
+        opencv_pin = native_dependency("OpenCV", cargo)
+        x264_pin = native_dependency("x264", cargo)
+        opus_pin = native_dependency("Opus", cargo)
+        x264_options: tuple[str, ...] = X264_CONFIGURE
+        if platform.machine().lower() in ("x86_64", "amd64", "i386", "i686") and not shutil.which(
+            "nasm"
+        ):
+            x264_options += ("--disable-asm",)
+        encoders = (
+            ensure_dependency(x264_pin, args.jobs, x264_options, build_x264),
+            ensure_dependency(opus_pin, args.jobs, OPUS_CONFIGURE, build_opus),
+        )
+        ffmpeg = ensure_ffmpeg(args.jobs, encoders)
+        opencv = ensure_dependency(opencv_pin, args.jobs, OPENCV_CONFIGURE, build_opencv)
+        return subprocess.call(
+            command, env=private_environment(ffmpeg, opencv, opencv_pin.version, encoders=encoders)
+        )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Bundled native build failed: {error}", file=sys.stderr)
         return 1

@@ -31,14 +31,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY Makefile ./
 COPY rust-toolchain.toml ./
+COPY LICENSE ./
 COPY native/webrtc/ ./native/webrtc/
 RUN make rust-build \
     && install -D -m 0644 /tmp/homesec-native-0/ffmpeg-*/COPYING.LGPLv2.1 \
         /app/ffmpeg-license/COPYING.LGPLv2.1 \
+    && install -D -m 0644 /tmp/homesec-native-0/ffmpeg-*/COPYING.GPLv3 \
+        /app/ffmpeg-license/COPYING.GPLv3 \
+    && install -D -m 0644 /tmp/homesec-native-0/x264-*/COPYING \
+        /app/x264-license/COPYING \
+    && install -D -m 0644 /tmp/homesec-native-0/opus-*/COPYING \
+        /app/opus-license/COPYING \
     && install -D -m 0644 /tmp/homesec-native-0/opencv-*/LICENSE \
         /app/opencv-license/LICENSE \
     && install -D -m 0644 /tmp/homesec-native-0/opencv-*/ZLIB-LICENSE \
-        /app/opencv-license/ZLIB-LICENSE
+        /app/opencv-license/ZLIB-LICENSE \
+    && install -D -m 0644 /tmp/homesec-native-0/ffmpeg-8.1.3.tar.xz \
+        /app/native-source/ffmpeg-8.1.3.tar.xz \
+    && install -D -m 0644 /tmp/homesec-native-0/x264-*.tar.gz \
+        /app/native-source/x264.tar.gz \
+    && install -D -m 0644 /tmp/homesec-native-0/opus-*.tar.gz \
+        /app/native-source/opus.tar.gz \
+    && install -D -m 0644 /tmp/homesec-native-0/opencv-*.tar.gz \
+        /app/native-source/opencv.tar.gz \
+    && mkdir -p .cargo \
+    && cargo vendor --manifest-path native/webrtc/Cargo.toml --locked --versioned-dirs \
+        native/webrtc/vendor/registry > .cargo/config.toml \
+    && tar --exclude=native/webrtc/target -czf /app/native-source/homesec-native-source.tar.gz \
+        Makefile rust-toolchain.toml LICENSE .cargo/config.toml native/webrtc
 
 # =============================================================================
 # Stage 2: Python Builder
@@ -133,6 +153,11 @@ COPY --from=ui-builder /app/ui/dist /app/ui/dist
 COPY --from=webrtc-builder /app/native/webrtc/target/release/homesec-webrtc /usr/local/bin/homesec-webrtc
 COPY --from=webrtc-builder /app/ffmpeg-license/ /usr/share/licenses/homesec-ffmpeg/
 COPY native/webrtc/FFMPEG-NOTICE.md /usr/share/licenses/homesec-ffmpeg/NOTICE.md
+COPY --from=webrtc-builder /app/x264-license/ /usr/share/licenses/homesec-x264/
+COPY native/webrtc/X264-NOTICE.md /usr/share/licenses/homesec-x264/NOTICE.md
+COPY --from=webrtc-builder /app/opus-license/ /usr/share/licenses/homesec-opus/
+COPY native/webrtc/OPUS-NOTICE.md /usr/share/licenses/homesec-opus/NOTICE.md
+COPY --from=webrtc-builder /app/native-source/ /usr/share/homesec-native/source/
 COPY --from=webrtc-builder /app/opencv-license/ /usr/share/licenses/homesec-opencv/
 COPY native/webrtc/OPENCV-NOTICE.md /usr/share/licenses/homesec-opencv/NOTICE.md
 COPY native/webrtc/OPENCV-BINDINGS-LICENSE /usr/share/licenses/homesec-opencv/OPENCV-BINDINGS-LICENSE
@@ -140,7 +165,7 @@ COPY native/webrtc/OPENCV-BINDINGS-LICENSE /usr/share/licenses/homesec-opencv/OP
 RUN homesec-webrtc --help > /dev/null \
     && dependencies="$(ldd /usr/local/bin/homesec-webrtc)" \
     && ! printf '%s\n' "$dependencies" \
-        | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample)\.so'
+        | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample|x264|opus)\.so'
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
