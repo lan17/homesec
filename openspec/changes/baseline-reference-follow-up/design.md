@@ -36,6 +36,10 @@ The maintained specifications and current reference notes are corrected to descr
 
 Source-derived interleavings are not an executed concurrency test. In particular, the state fake's shared mutable objects do not reproduce independent Postgres snapshots. Task 5.4 requires controlled read/write ordering and observable persisted results; task 3.3 covers sequential ID reuse separately from concurrency. Retain the current evidence limits until these checks actually run. Do not re-sync archived ADDED deltas over the corrected maintained specifications.
 
+A later review identified startup upload-retry cancellation losing an unsaved unknown-outcome marker (9.4), cancellation before the talk start message bypassing reservation cleanup (7.3), and missing motion-disabled preconditions for activity/fallback decision reasons (5.5). Corrected requirements distinguish in-memory retry metadata from recovered manifest state and pre-start waiting from camera-session opening. The activity scenario, failed-analysis requirement, and misleading-reason reference note consistently give motion notification precedence.
+
+The cancellation and activity counterexamples were reproduced with retrieved method excerpts, fake transport/storage, and temporary manifests. These checks are not the repository application suite or proof of full startup/shutdown behavior. The added tasks stay unchecked until repository-level coverage is verified. Direct re-review of these corrections is not an independent fresh-context agent review.
+
 ## Risks / Trade-offs
 
 - **Older evidence can become stale.** Compare the relevant maintained contract, source, and tests before implementing each task; retain explicit limits where execution is incomplete.

@@ -1,6 +1,6 @@
 # Tasks
 
-The eleven original unfinished tasks were transferred from the [archived bootstrap](../archive/2026-10-10-baseline-existing-behavior/tasks.md). Original task IDs and wording are retained for traceability. Tasks 2.3, 2.4, 3.3, 5.4, and 6.3 were added during subsequent PR118 review; they are not part of the archived transfer. Read [design.md](design.md), the [maintained specs](../../specs/), and [current reference limits](../../../docs/reference.md) before implementation. The archive records historical evidence; update current reference notes as checks are completed.
+The eleven original unfinished tasks were transferred from the [archived bootstrap](../archive/2026-10-10-baseline-existing-behavior/tasks.md). Original task IDs and wording are retained for traceability. Tasks 2.3, 2.4, 3.3, 5.4, 5.5, 6.3, 7.3, and 9.4 were added during subsequent PR118 review; they are not part of the archived transfer. Read [design.md](design.md), the [maintained specs](../../specs/), and [current reference limits](../../../docs/reference.md) before implementation. The archive records historical evidence; update current reference notes as checks are completed.
 
 ## 2. Review setup and configuration
 
@@ -27,6 +27,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 
 - [ ] 5.4 Add deterministic barrier-controlled characterization of competing snapshot writes through the real repository and database boundary. Exercise both upload/filter write orders, a stale upload write after exhausted filter failure, and a stale processing write after API deletion, with every database operation succeeding. Assert persisted metadata/status plus resulting list/media/retention behavior separately from in-process notification outcomes. Use independent serialized snapshots or an approved isolated Postgres database; the existing shared-object state fake is not evidence of isolation. Include sequential controls and verify that collecting the upload result does not repair lost stored fields. Update analysis/storage/events reference evidence without claiming terminal deletion or atomic updates; runtime fixes remain separately scoped.
 
+- [ ] 5.5 Verify default-policy decision precedence with the real policy: a below-threshold matching activity produces the activity reason only when motion notification is disabled; enabled motion notification takes precedence even when activity matches or a failed analysis leaves a trigger detection. Include effective per-camera overrides and a disabled-policy control through its loader. Reuse existing tests where they establish these combinations and add only missing boundary checks. Record repository-test evidence separately from the isolated source-excerpt harness; no runtime policy change is part of this task.
+
 ## 6. Review events and playback
 
 - [ ] 6.2 Assess mounted playback-token refresh coverage and add a timer-boundary UI test if needed; verify refresh behavior with the focused UI check and update playback reference guidance without importing activation-only loading or requiring current eager acquisition timing.
@@ -37,6 +39,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 
 - [ ] 7.2 Assess focused native viewer-cap coverage and add a boundary test if the existing suite does not establish it; verify the selected native check and reconcile `docs/webrtc-preview.md`, `docs/push-to-talk.md`, and relevant deployment guidance. Preserve explicit hardware/codec/browser QA limits.
 
+- [ ] 7.3 Characterize cancellation of an accepted, authorized talk WebSocket while it awaits the first start message, using the real route and source-manager boundary with fake transport. Inspect the reservation after cancellation and its release by the existing duration timer or an explicit stop. Keep normal disconnect, start timeout, cancellation during camera-session opening, and active-stream cleanup as controls. Distinguish a requested best-effort stop from confirmed release and do not infer continued microphone transmission before streaming begins. Update current reference evidence; fixing the handler cleanup scope is a separate runtime change.
+
 ## 8. Review integration contracts
 
 - [ ] 8.2 Assess production per-entry mixed-success notifier fan-out, installed-entry-point discovery, and validate-before-factory/no-construction coverage; add only justified plugin-boundary tests and verify the selected checks. Reconcile `PLUGIN_DEVELOPMENT.md` and obsolete AGENTS examples with the existing unified registry and correct decorator arguments.
@@ -45,6 +49,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 
 - [ ] 9.2 Assess missing-executable startup degradation, private dump permissions, and critical backup recovery coverage; add focused process/filesystem tests where justified and verify them using fake dump boundaries. Reconcile `docs/postgres-backups.md` with durable local-directory/manifest mounting, upload outcomes, retention limits, and operator restore responsibilities without claiming a real restore was tested.
 - [ ] 9.3 Update operator reference guidance for CLI validation/cleanup and health/statistics interpretation; verify documented options against current CLI/config models and existing tests. Keep applied cleanup semantics owned by `storage-retention`.
+
+- [ ] 9.4 Characterize cancellation of startup pending-upload retry through the real backup manager, with fake dump/storage boundaries and a temporary manifest directory. Cancel after a remote object may have been created, compare in-memory and saved markers, reconstruct the manager from disk, and exercise another failed retry plus pending-upload pruning. Assert loss of an unsaved unknown-outcome marker and pruning eligibility; include a persisted-marker control that retains the local artifact and the new-backup cancellation path as a separate control. No real database or provider writes are needed. Update reference evidence without claiming an isolated source-excerpt harness proves full startup/shutdown conformance; marker-persistence fixes require a separate reviewed runtime change.
 
 ## Validation and publication
 

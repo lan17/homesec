@@ -234,7 +234,7 @@ A dump that exceeds its configured timeout or is cancelled SHALL have its proces
 
 ### Requirement: Backup manifest recovery and upload outcomes
 
-HomeSec SHALL persist backup records and pending storage work in a manifest beside local dumps. Startup SHALL reconcile interrupted records and recover recognized local dump artifacts when the manifest is absent or invalid. Local dump success SHALL remain distinct from optional upload success. Failed or interrupted uploads SHALL retain retry information while the local artifact is retained, and backup status SHALL expose upload failures.
+HomeSec SHALL persist backup records and pending storage work in a manifest beside local dumps. Startup SHALL reconcile interrupted records and recover recognized local dump artifacts when the manifest is absent or invalid. Local dump success SHALL remain distinct from optional upload success. Failed or interrupted upload attempts SHALL update their in-memory record with retry information while the local artifact is retained. Public backup status exposes manifest summary fields, not every pending record's error. Preserving changed retry information across restart requires a subsequent successful manifest save. Cancellation of startup storage-retry work can bypass that save, leaving older retry information on disk; see the [startup upload-retry cancellation limitation](../../../docs/reference.md#operations-maintenance).
 
 #### Scenario: Recover local backups after manifest corruption
 
@@ -252,7 +252,7 @@ HomeSec SHALL persist backup records and pending storage work in a manifest besi
 
 ### Requirement: Backup retention and remote-delete recovery
 
-Backup retention SHALL prune the oldest eligible completed backups beyond `keep_count`, deleting local files and known uploaded objects. A failed new upload SHALL preserve prior uploaded backups; ordinary pending local uploads SHALL have their own `keep_count` limit. Interrupted uploads with unknown remote outcomes SHALL preserve their local retry handle. Failed or interrupted remote deletion SHALL persist pending work for a later retry.
+Backup retention SHALL prune the oldest eligible completed backups beyond `keep_count`, deleting local files and known uploaded objects. A failed new upload SHALL preserve prior uploaded backups; ordinary pending local uploads SHALL have their own `keep_count` limit. Pending-upload pruning SHALL preserve retained local artifacts marked `pending_upload_unknown`. That protection survives restart only when the unknown-outcome marker is available in the recovered manifest; cancellation does not guarantee it was saved. Failed or interrupted remote deletion SHALL persist pending work for a later retry.
 
 #### Scenario: Retention after successful upload
 
@@ -268,9 +268,10 @@ Backup retention SHALL prune the oldest eligible completed backups beyond `keep_
 
 #### Scenario: Interrupted upload has uncertain remote outcome
 
-- **GIVEN** an upload was cancelled after a remote object may have been created
-- **WHEN** later upload failures cause pending-upload pruning
-- **THEN** the interrupted upload's local retry handle is preserved
+- **GIVEN** an upload was cancelled after a remote object may have been created, its retained local artifact is marked `pending_upload_unknown`, and that marker has been saved and recovered if a restart occurs
+- **WHEN** later upload failures cause pending-upload pruning without resolving the unknown outcome
+- **THEN** the marked local retry handle is preserved
+- **AND** this does not promise protection after startup-retry cancellation leaves only an ordinary pending-upload marker on disk
 
 #### Scenario: Remote deletion fails or is interrupted
 

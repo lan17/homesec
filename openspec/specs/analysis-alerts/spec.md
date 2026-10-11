@@ -122,7 +122,7 @@ The default alert policy SHALL apply non-null per-camera overrides to its base s
 
 #### Scenario: Activity list permits a low-risk notification
 
-- **GIVEN** analyzed risk is below the effective threshold but activity matches the effective configured activity list
+- **GIVEN** motion notification is disabled, analyzed risk is below the effective threshold, and activity matches the effective configured activity list
 - **WHEN** the default policy evaluates the clip
 - **THEN** it permits notification with a reason identifying the matching activity
 
@@ -144,7 +144,7 @@ When the alert policy is disabled, HomeSec SHALL suppress notification with deci
 
 ### Requirement: Failed-analysis fallback and missing-analysis suppression
 
-An exhausted analysis failure SHALL NOT itself abort alert evaluation. After such failure, the default alert policy SHALL permit notification for a successfully filtered trigger detection using reason `filter_detected_trigger_vlm_failed`; `notify_on_motion` SHALL also permit notification. Without analysis, trigger detection, or motion notification, the policy SHALL suppress notification with reason `no_analysis`.
+An exhausted analysis failure SHALL NOT itself abort alert evaluation. After such failure, the default alert policy SHALL first permit notification with reason `notify_on_motion=true` when motion notification is enabled. Otherwise, it SHALL permit notification for a successfully filtered trigger detection using reason `filter_detected_trigger_vlm_failed`. Without analysis, trigger detection, or motion notification, the policy SHALL suppress notification with reason `no_analysis`.
 
 #### Scenario: Failed analysis falls back to a trigger detection
 

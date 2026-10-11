@@ -160,7 +160,7 @@ HomeSec SHALL prepare a talk session before streaming, returning a session ident
 
 ### Requirement: Talk sessions are exclusive and bounded per camera
 
-HomeSec SHALL allow at most one reserved or active talk session per camera. Reservation and active phases SHALL each have a separate `max_session_s` limit, restarted at activation. Active sessions SHALL also have an `idle_timeout_s` audio-idle limit. After WebSocket acceptance and authorization, the start-message wait SHALL use `idle_timeout_s`. Stop, disconnect, failed opening, cancellation, and runtime shutdown SHALL release the affected session and resources.
+HomeSec SHALL allow at most one reserved or active talk session per camera. Reservation and active phases SHALL each have a separate `max_session_s` limit, restarted at activation. Active sessions SHALL also have an `idle_timeout_s` audio-idle limit. After WebSocket acceptance and authorization, the start-message wait SHALL use `idle_timeout_s`. Explicit stop, failed or cancelled camera-session opening, disconnect during streaming, and runtime shutdown SHALL initiate cleanup of the affected session and resources. A disconnect returned by the first-message receive or expiry of that wait SHALL request best-effort reservation cleanup. Cancellation while the authorized WebSocket is still waiting for its first start message is outside that handler cleanup path and can leave the reservation until its existing duration timer or another successful cleanup action releases it; see the [pre-start cancellation limitation](../../../docs/reference.md#preview-talk).
 
 #### Scenario: Reserve talk while another session exists
 
@@ -183,13 +183,14 @@ HomeSec SHALL allow at most one reserved or active talk session per camera. Rese
 #### Scenario: Disconnect before streaming starts
 
 - **GIVEN** a reserved talk session with an accepted and authorized WebSocket awaiting the start message
-- **WHEN** the browser disconnects or the `idle_timeout_s` wait for that message expires
-- **THEN** HomeSec releases the reserved session
+- **WHEN** the first-message receive returns a disconnect or the `idle_timeout_s` wait for that message expires
+- **THEN** the WebSocket handler requests best-effort stop of the reserved session
+- **AND** successful runtime cleanup releases the reservation; cancellation of the waiting handler is a separate limitation
 
 #### Scenario: Cancel opening or shut down an active session
 
-- **GIVEN** talk is opening or active
-- **WHEN** opening is cancelled, opening fails, an explicit stop arrives, or the runtime shuts down
+- **GIVEN** camera-session opening has begun or talk is active, and the affected cleanup operations can complete
+- **WHEN** camera-session opening is cancelled or fails, an explicit stop arrives, or the runtime shuts down
 - **THEN** HomeSec cleans up the affected session so it cannot continue transmitting after cleanup
 
 ### Requirement: Browser talk respects hold intent and microphone availability
