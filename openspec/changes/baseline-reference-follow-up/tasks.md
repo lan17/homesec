@@ -1,6 +1,6 @@
 # Tasks
 
-These eleven unfinished tasks were transferred from the [archived bootstrap](../archive/2026-10-10-baseline-existing-behavior/tasks.md). Original task IDs and wording are retained for traceability. Read [design.md](design.md), the [maintained specs](../../specs/), and [current reference limits](../../../docs/reference.md) before implementation. The archive records historical evidence; update current reference notes as checks are completed.
+The eleven original unfinished tasks were transferred from the [archived bootstrap](../archive/2026-10-10-baseline-existing-behavior/tasks.md). Original task IDs and wording are retained for traceability. Task 6.3 was added during subsequent PR118 review; it is not part of the archived transfer. Read [design.md](design.md), the [maintained specs](../../specs/), and [current reference limits](../../../docs/reference.md) before implementation. The archive records historical evidence; update current reference notes as checks are completed.
 
 ## 2. Review setup and configuration
 
@@ -23,6 +23,8 @@ These eleven unfinished tasks were transferred from the [archived bootstrap](../
 ## 6. Review events and playback
 
 - [ ] 6.2 Assess mounted playback-token refresh coverage and add a timer-boundary UI test if needed; verify refresh behavior with the focused UI check and update playback reference guidance without importing activation-only loading or requiring current eager acquisition timing.
+
+- [ ] 6.3 Add focused characterization coverage for event-list failure masking: given successful authentication and database availability checks, a later connection/query failure currently returns HTTP 200 with an empty page. Exercise the real Postgres store, repository retry handling, and route response with failures at the database boundary, rather than mocking the repository to return an empty page. Cover store-contained failures bypassing retries, exceptions reaching the repository exhausting retries, and invalid-row hydration producing incomplete pages with pagination based on fetched rows. Include a genuine empty-result control and update the current reference evidence note after verification. This records the current limitation, not a policy to preserve; any runtime correction requires a separate reviewed change.
 
 ## 7. Review preview and talk
 

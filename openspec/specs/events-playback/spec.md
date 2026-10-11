@@ -12,11 +12,11 @@ See [reference notes and known limitations](../../../docs/reference.md#events-pl
 
 ### Requirement: Event queries support filtering and cursor pagination
 
-HomeSec SHALL support clip queries filtered by camera, processing status, alert outcome, detection outcome, risk, activity, and creation-time bounds. Queries without an explicit status filter SHALL exclude deleted clips; an explicit deleted-status filter SHALL include matching deleted records. Results SHALL use newest-first cursor pagination, with clip identity breaking equal-time ties, and expose whether another page exists.
+HomeSec SHALL support clip queries filtered by camera, processing status, alert outcome, detection outcome, risk, activity, and creation-time bounds. When the database query and hydration of its returned rows succeed, queries without an explicit status filter SHALL exclude deleted clips; an explicit deleted-status filter SHALL include matching deleted records. Under those conditions, results SHALL use newest-first cursor pagination, with clip identity breaking equal-time ties, and expose whether another page exists. HTTP 200 alone does not establish successful querying or complete hydration; see the [list-query limitations](../../../docs/reference.md#events-playback).
 
 #### Scenario: Continue to the next result page
 
-- **GIVEN** a valid query with more matching events than its page limit
+- **GIVEN** a valid query with more matching events than its page limit, successful database querying, and successful row hydration
 - **WHEN** the client requests a page and then supplies its returned cursor
 - **THEN** HomeSec returns the continuation page and a next cursor only when further results exist
 
@@ -78,7 +78,7 @@ The event UI SHALL present camera, time, available activity summary, risk, detec
 
 #### Scenario: No events match the search
 
-- **GIVEN** a successful query with no matching events
+- **GIVEN** a successful database query establishes that no events match the search
 - **WHEN** the event list is displayed
 - **THEN** the UI explicitly reports that no results were found
 
