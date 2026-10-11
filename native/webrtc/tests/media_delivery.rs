@@ -146,6 +146,71 @@ impl Drop for Helper {
     }
 }
 
+#[derive(Default)]
+struct VideoSample {
+    data: Vec<u8>,
+    frames: usize,
+}
+
+impl VideoSample {
+    fn push(&mut self, data: &[u8], keyframe: bool) {
+        // The first received frames may precede decoder synchronization. Keep
+        // the decode sample's window separate from lifetime delivery counters.
+        if self.is_complete() || (self.frames == 0 && !keyframe) {
+            return;
+        }
+        self.data.extend_from_slice(data);
+        self.frames += 1;
+    }
+
+    fn is_complete(&self) -> bool {
+        self.frames == 3
+    }
+}
+
+#[test]
+fn video_sample_waits_for_a_keyframe_then_captures_three_frames() {
+    for leading_frames in 0..=10 {
+        // Given: Any number of delta frames can arrive before synchronization.
+        let mut sample = VideoSample::default();
+        for _ in 0..leading_frames {
+            sample.push(&[0], false);
+        }
+        assert!(sample.data.is_empty());
+        assert!(!sample.is_complete());
+
+        // When: A keyframe and two subsequent frames arrive.
+        sample.push(&[1], true);
+        assert_eq!(sample.data, [1]);
+        assert!(!sample.is_complete());
+        sample.push(&[2], false);
+        assert!(!sample.is_complete());
+        sample.push(&[3], false);
+
+        // Then: Readiness refers to the saved sample, not lifetime frame count.
+        assert!(sample.is_complete());
+        assert_eq!(sample.data, [1, 2, 3]);
+        sample.push(&[4], false);
+        assert_eq!(sample.data, [1, 2, 3]);
+    }
+}
+
+#[test]
+fn video_sample_keeps_consecutive_keyframes_without_restarting_or_growing() {
+    // Given: A burst source emits a keyframe on every access unit.
+    let mut sample = VideoSample::default();
+
+    // When: More than three keyframes arrive.
+    for frame in 1..=5 {
+        sample.push(&[frame], true);
+    }
+
+    // Then: The first three remain captured, even after later keyframes arrive.
+    assert!(sample.is_complete());
+    assert_eq!(sample.frames, 3);
+    assert_eq!(sample.data, [1, 2, 3]);
+}
+
 struct Viewer {
     rtc: Rtc,
     socket: UdpSocket,
@@ -153,7 +218,7 @@ struct Viewer {
     video_frames: usize,
     keyframes: usize,
     audio_packets: usize,
-    video_sample: Vec<u8>,
+    video_sample: VideoSample,
     video_payload_types: Vec<Pt>,
 }
 
@@ -191,7 +256,7 @@ impl Viewer {
             video_frames: 0,
             keyframes: 0,
             audio_packets: 0,
-            video_sample: Vec::new(),
+            video_sample: VideoSample::default(),
             video_payload_types: Vec::new(),
         }
     }
@@ -233,9 +298,7 @@ impl Viewer {
                             self.video_frames += 1;
                             self.video_payload_types.push(data.params.pt());
                             self.keyframes += usize::from(data.is_keyframe());
-                            if self.video_frames <= 3 {
-                                self.video_sample.extend_from_slice(&data.data);
-                            }
+                            self.video_sample.push(&data.data, data.is_keyframe());
                         }
                         Codec::Opus => self.audio_packets += 1,
                         codec => panic!("unexpected negotiated codec: {codec}"),
@@ -247,13 +310,21 @@ impl Viewer {
         }
     }
 
+    fn has_video(&self) -> bool {
+        self.connected && self.video_sample.is_complete()
+    }
+
     fn has_media(&self) -> bool {
-        self.connected && self.video_frames >= 3 && self.keyframes >= 1 && self.audio_packets >= 5
+        self.has_video() && self.audio_packets >= 5
     }
 
     fn assert_video_decodes(&self) {
+        assert!(
+            self.video_sample.is_complete(),
+            "video sample is incomplete"
+        );
         let mut sample = tempfile::NamedTempFile::new().unwrap();
-        sample.write_all(&self.video_sample).unwrap();
+        sample.write_all(&self.video_sample.data).unwrap();
         // Bound FFmpeg thread pools when media tests run in parallel.
         let output = Command::new("ffmpeg")
             .args([
@@ -505,8 +576,8 @@ fn bursty_large_access_units_reach_two_encrypted_viewers_with_audio() {
     // Then: Both decrypt complete, decodable access units and receive Opus.
     first.assert_video_decodes();
     second.assert_video_decodes();
-    assert!(first.video_sample.len() > 3 * 192 * 1024);
-    assert!(second.video_sample.len() > 3 * 192 * 1024);
+    assert!(first.video_sample.data.len() > 3 * 192 * 1024);
+    assert!(second.video_sample.data.len() > 3 * 192 * 1024);
     assert_eq!(
         helper.successful_request(json!({"command": "status"}))["viewer_count"],
         2
@@ -827,21 +898,17 @@ fn native_rtsp_shares_one_play_and_sdp_parameters_between_two_viewers() {
 
     // When: Two real encrypted WebRTC viewers join the same native input.
     let mut first = Viewer::attach(&mut helper, "native-first");
-    progress_until(&mut [&mut first], |viewers| {
-        viewers[0].connected && viewers[0].video_frames >= 3 && viewers[0].keyframes >= 1
-    });
+    progress_until(&mut [&mut first], |viewers| viewers[0].has_video());
     let mut second = Viewer::attach(&mut helper, "native-second");
     progress_until(&mut [&mut first, &mut second], |viewers| {
-        viewers
-            .iter()
-            .all(|viewer| viewer.connected && viewer.video_frames >= 3 && viewer.keyframes >= 1)
+        viewers.iter().all(|viewer| viewer.has_video())
     });
 
     // Then: Both late-join streams initialize a decoder without a second camera PLAY.
     first.assert_video_decodes();
     second.assert_video_decodes();
     for viewer in [&first, &second] {
-        let nals = annex_b_nals(&viewer.video_sample);
+        let nals = annex_b_nals(&viewer.video_sample.data);
         assert!(nals.iter().any(|nal| nal[0] & 31 == 7));
         assert!(nals.iter().any(|nal| nal[0] & 31 == 8));
         assert_eq!(viewer.audio_packets, 0);
@@ -948,9 +1015,7 @@ fn native_rtsp_receiver_profile_and_level_constraints_refuse_unsupported_offers(
 
     // When: A receiver offers a compatible profile and level after those refusals.
     let mut viewer = Viewer::attach(&mut helper, "compatible-receiver");
-    progress_until(&mut [&mut viewer], |viewers| {
-        viewers[0].connected && viewers[0].video_frames >= 3 && viewers[0].keyframes >= 1
-    });
+    progress_until(&mut [&mut viewer], |viewers| viewers[0].has_video());
 
     // Then: The shared native source still delivers decodable encrypted video.
     viewer.assert_video_decodes();
@@ -1044,9 +1109,7 @@ fn native_rtsp_selects_compatible_receiver_level_over_a_closer_unsupported_level
 
     // When: The peer joins with a supported receive envelope after the lower-level PT.
     let mut viewer = Viewer::attach_rtc(&mut helper, "mixed-levels", config.build(Instant::now()));
-    progress_until(&mut [&mut viewer], |viewers| {
-        viewers[0].connected && viewers[0].video_frames >= 3 && viewers[0].keyframes >= 1
-    });
+    progress_until(&mut [&mut viewer], |viewers| viewers[0].has_video());
 
     // Then: Encrypted video uses PT98 and decodes at the source's actual dimensions.
     assert!(
