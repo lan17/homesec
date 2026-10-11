@@ -167,11 +167,11 @@ The local and Dropbox storage backends SHALL treat deletion of an already-missin
 
 ### Requirement: API clip deletion reports partial failures
 
-The clip-deletion API SHALL mark a known clip deleted before deleting its storage object when a URI is available, then return the clip response on success. Missing clips established by a readable state lookup SHALL return HTTP 404. Marking or storage-deletion failures SHALL return HTTP 500 with distinct reasons; storage failure SHALL NOT roll back the earlier deletion mark.
+The clip-deletion API SHALL mark a known clip deleted before deleting its storage object when a URI is available, then return the clip response on success. Missing clips established by a readable state lookup SHALL return HTTP 404. Marking or storage-deletion failures SHALL return HTTP 500 with distinct reasons; the API SHALL NOT issue a rollback of the earlier deletion mark when storage deletion fails. This ordering is not a concurrency-safe terminal-state guarantee: competing snapshot writes or re-ingestion of the same clip ID can overwrite `DELETED`. The response describes the deletion operation's snapshot, not a guarantee that subsequent reads retain it; see the [deletion limitations](../../../docs/reference.md#storage-retention).
 
 #### Scenario: Delete a known uploaded clip
 
-- **GIVEN** a known clip with a stored object and successful persistence and storage operations
+- **GIVEN** a known clip with a stored object, successful persistence and storage operations, and no concurrent state mutation or re-ingestion of its ID
 - **WHEN** a client deletes that clip through the API
 - **THEN** the clip is marked deleted and the stored object is deleted
 - **AND** the response returns the clip data with HTTP 200
@@ -200,22 +200,22 @@ The clip-deletion API SHALL mark a known clip deleted before deleting its storag
 - **GIVEN** a known uploaded clip is marked deleted but storage deletion fails
 - **WHEN** the API returns the operation result
 - **THEN** the response is HTTP 500 with `CLIP_STORAGE_DELETE_FAILED`
-- **AND** the earlier deletion mark remains rather than implying an atomic rollback
+- **AND** the API does not roll back the earlier deletion mark; competing writes or ID reuse can still overwrite it
 
 ### Requirement: Cleanup rechecks before deleting empty clips
 
-Cleanup SHALL recheck candidate clips with an existing empty detection result before deleting them. If rechecking finds detections, it SHALL retain the clip. If rechecking remains empty, non-dry-run cleanup SHALL attempt local and stored-copy deletion and attempt to record deletion only after those deletion attempts succeed. Dry-run cleanup SHALL NOT delete clip copies or update their workflow state. Workflow writes remain best-effort.
+Cleanup SHALL recheck candidate clips with an existing empty detection result before deleting them. If rechecking finds detections, it SHALL retain the clip. If rechecking remains empty, non-dry-run cleanup SHALL attempt local and stored-copy deletion and attempt to record deletion only after those deletion attempts succeed. Dry-run cleanup SHALL NOT delete clip copies or update their workflow state. Workflow writes remain best-effort and subject to the same concurrent-snapshot and reused-ID limitations as processing and API deletion.
 
 #### Scenario: Recheck rescues a previous empty detection
 
-- **GIVEN** a cleanup candidate previously had no detected classes and workflow persistence is available
+- **GIVEN** a cleanup candidate previously had no detected classes, workflow persistence is available, and no competing mutation or re-ingestion changes its state
 - **WHEN** rechecking detects a class
 - **THEN** the clip copies are retained
 - **AND** a non-dry-run cleanup records the rechecked detection result rather than a deletion
 
 #### Scenario: Empty clip is deleted after recheck
 
-- **GIVEN** a cleanup candidate has available media, rechecking finds no detected classes, and workflow persistence succeeds
+- **GIVEN** a cleanup candidate has available media, rechecking finds no detected classes, workflow persistence succeeds, and no competing mutation or re-ingestion changes its state
 - **WHEN** non-dry-run cleanup successfully deletes its existing local and stored copies
 - **THEN** it records the clip's deleted status and deletion event
 

@@ -8,6 +8,10 @@ Describe how HomeSec accepts local and FTP clips and produces motion-triggered R
 
 See [reference notes and known limitations](../../../docs/reference.md#capture-recording) for this capability's operator guides and verification limits.
 
+## Clip identity scope
+
+Within one HomeSec state store, clip IDs share a namespace across all cameras and sources; camera names and source directories do not namespace event identity. Independent clips need distinct IDs, including against previously ingested records. Local-folder and FTP sources use filename stems without a global collision check. Source-local repeat suppression is not a global uniqueness guarantee, and a handoff does not necessarily create a new event record. See the [clip-ID collision and re-ingestion limitations](../../../docs/reference.md#capture-recording) for overwrite, timestamp, and notification-key consequences. Those consequences are existing limitations, not a policy to preserve.
+
 ## Requirements
 
 ### Requirement: Local folder ready-file ingestion

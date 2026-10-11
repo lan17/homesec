@@ -28,6 +28,14 @@ Keep `docs/reference.md` as the live limitation/evidence reference. Link to arch
 
 Reuse tests that already establish observable behavior. Add focused coverage only where an identified gap remains, follow `TESTING.md`, and mock existing external boundaries. Update the affected guide and reference evidence note alongside verified results.
 
+## Subsequent PR118 review corrections
+
+After the original task transfer, review identified event-list failure masking (task 6.3), bounded redaction (2.3), backend comparison before normalization (2.4), global clip-ID collisions (3.3), and concurrent whole-snapshot overwrites including deletion races (5.4). The original eleven tasks and archived bootstrap remain historical records; the new tasks are additional unchecked verification work.
+
+The maintained specifications and current reference notes are corrected to describe the implementation, not to adopt these defects as intended policies. The redaction and same-backend patch guarantees are narrowed; in-process stage outcomes are distinguished from persisted snapshot preservation; deletion ordering is distinguished from terminal-state safety; and clip identity and notification deduplication scope are explicit. No runtime, schema, or default changes are included.
+
+Source-derived interleavings are not an executed concurrency test. In particular, the state fake's shared mutable objects do not reproduce independent Postgres snapshots. Task 5.4 requires controlled read/write ordering and observable persisted results; task 3.3 covers sequential ID reuse separately from concurrency. Retain the current evidence limits until these checks actually run. Do not re-sync archived ADDED deltas over the corrected maintained specifications.
+
 ## Risks / Trade-offs
 
 - **Older evidence can become stale.** Compare the relevant maintained contract, source, and tests before implementing each task; retain explicit limits where execution is incomplete.

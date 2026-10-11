@@ -119,7 +119,7 @@ HomeSec SHALL expose an OpenAPI description derived from its registered API rout
 
 ### Requirement: Notification payload meaning
 
-Notifications SHALL use the existing alert payload schema, identifying the clip and camera, decision reason, timestamp, and a deduplication key equal to the clip identifier. Storage/view links and analysis fields SHALL be nullable when unavailable. The payload SHALL indicate upload and analysis failures independently so recipients can distinguish missing enrichment from available clip identity. The key SHALL identify the alert; it SHALL NOT imply exactly-once delivery.
+Notifications SHALL use the existing alert payload schema, identifying the clip and camera, decision reason, timestamp, and a deduplication key equal to the clip identifier. Storage/view links and analysis fields SHALL be nullable when unavailable. The payload SHALL indicate upload and analysis failures independently so recipients can distinguish missing enrichment from available clip identity. The key SHALL NOT imply exactly-once delivery or camera-scoped uniqueness. Reusing a clip ID reuses the deduplication key, including across cameras; see the [clip identity limitations](../../../docs/reference.md#capture-recording).
 
 #### Scenario: Notification includes available analysis and media references
 

@@ -27,7 +27,8 @@ HomeSec SHALL start upload and filtering independently for an accepted clip. Eli
 - **WHEN** processing handles the failure
 - **THEN** the outstanding upload is allowed to finish and its outcome is handled
 - **AND** analysis and notification are not attempted for that processing run
-- **AND** available workflow state records the filter failure rather than successful processing completion
+- **AND** processing attempts to record the filter failure and does not attempt successful processing completion for that run
+- **AND** the recorded failure status is subject to the concurrent-write limitations below
 
 ### Requirement: Supported object-filter results
 
@@ -209,7 +210,9 @@ HomeSec SHALL attempt notification only when the alert decision permits it and e
 
 ### Requirement: Best-effort workflow persistence during processing
 
-Failures while saving workflow state or appending lifecycle history SHALL be reported and contained so the accepted clip's in-process upload, filtering, analysis, and permitted notification can proceed. HomeSec SHALL NOT equate successful in-process work with guaranteed durable state, complete event history, or automatic replay after a process restart.
+Failures while saving workflow state or appending lifecycle history SHALL be reported and contained so the accepted clip's in-process upload, filtering, analysis, and permitted notification can proceed. HomeSec SHALL NOT equate successful in-process work or successful individual writes with a complete, concurrency-safe state snapshot, complete event history, or automatic replay after a process restart.
+
+Concurrent stages currently read independent snapshots and replace the whole stored state. A later stale write can overwrite another stage's metadata or status even when every database operation succeeds. The stage-ordering and completion rules above describe in-process actions; they do not guarantee preservation of their combined persisted results or make deletion a concurrency-safe terminal state. See the [concurrent-write limitations](../../../docs/reference.md#analysis-alerts).
 
 #### Scenario: Workflow-state write failure does not stop delivery
 

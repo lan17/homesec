@@ -112,12 +112,12 @@ HomeSec SHALL expose ONVIF discovery results and credentialed probes for device 
 
 ### Requirement: Camera configuration mutations validate and preserve omitted fields
 
-HomeSec SHALL support creating, updating, and removing named cameras. A patch within the same source backend SHALL preserve omitted source settings. Invalid mutations SHALL fail without saving invalid configuration; duplicate creation and mutation of a missing camera SHALL return conflict and not-found responses respectively.
+HomeSec SHALL support creating, updating, and removing named cameras. A source patch that omits `source_backend` or exactly matches the saved normalized backend identifier SHALL preserve omitted settings within objects that are not explicitly cleared or replaced. Backend comparison occurs before normalization; a case-only change can discard omitted settings as described in the [configuration limitations](../../../docs/reference.md#setup-configuration). Invalid mutations SHALL fail without saving invalid configuration; duplicate creation and mutation of a missing camera SHALL return conflict and not-found responses respectively.
 
 #### Scenario: Update one source setting
 
 - **GIVEN** an existing camera with multiple source settings
-- **WHEN** a valid patch supplies one setting without changing the source backend
+- **WHEN** a valid patch supplies one setting, with `source_backend` omitted or exactly equal to the saved normalized identifier
 - **THEN** HomeSec saves the supplied setting and preserves the omitted settings
 
 #### Scenario: Switch source backends
@@ -140,13 +140,13 @@ HomeSec SHALL support creating, updating, and removing named cameras. A patch wi
 
 ### Requirement: Configuration reads protect sensitive values
 
-HomeSec SHALL redact sensitive values from configuration and camera API responses while preserving environment-variable references. Camera source patches SHALL reject redacted placeholders as replacement values.
+HomeSec SHALL redact string values whose field names match the shared sensitive-key rules and redact URL userinfo (the username/password before `@`) in string values under URL-named fields. Environment-variable names in `_env` fields SHALL remain visible. Camera source patches SHALL reject redacted placeholders as replacement values. This field-name and userinfo protection does not guarantee removal of arbitrary embedded secrets, including URL query, path, or fragment credentials; see the [redaction scope and limitations](../../../docs/reference.md#setup-configuration).
 
 #### Scenario: Read a configuration containing credentials
 
-- **GIVEN** configuration contains sensitive values, credential-bearing URLs, and environment-variable references
+- **GIVEN** configuration contains sensitive string values in recognized fields, URL-named fields with username/password userinfo, and environment-variable names in `_env` fields
 - **WHEN** a client reads the configuration or camera source settings
-- **THEN** the response hides sensitive values and URL credentials while retaining environment-variable names
+- **THEN** the response hides those recognized sensitive strings and URL userinfo while retaining the environment-variable names
 
 #### Scenario: Submit a displayed redaction placeholder
 
