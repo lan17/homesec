@@ -319,7 +319,10 @@ impl Viewer {
     }
 
     fn assert_video_decodes(&self) {
-        assert!(self.video_sample.is_complete(), "video sample is incomplete");
+        assert!(
+            self.video_sample.is_complete(),
+            "video sample is incomplete"
+        );
         let mut sample = tempfile::NamedTempFile::new().unwrap();
         sample.write_all(&self.video_sample.data).unwrap();
         // Bound FFmpeg thread pools when media tests run in parallel.
