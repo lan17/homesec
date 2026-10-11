@@ -40,6 +40,8 @@ A later review identified startup upload-retry cancellation losing an unsaved un
 
 The cancellation and activity counterexamples were reproduced with retrieved method excerpts, fake transport/storage, and temporary manifests. These checks are not the repository application suite or proof of full startup/shutdown behavior. The added tasks stay unchecked until repository-level coverage is verified. Direct re-review of these corrections is not an independent fresh-context agent review.
 
+The independent Codex review at `ad171a8` also found that clip destinations sanitize camera and basename segments (with possible collisions), storage plugins may return no view URL despite successful upload, and media-token issuance is gated by normal mode and database availability before clip lookup. The maintained storage/playback contracts now distinguish these boundaries. Follow-up tasks 4.4 and 6.4 remain unchecked until behavior is verified at actual storage/pipeline and mounted-route boundaries. No runtime fixes or collision-rejection guarantees are introduced.
+
 ## Risks / Trade-offs
 
 - **Older evidence can become stale.** Compare the relevant maintained contract, source, and tests before implementing each task; retain explicit limits where execution is incomplete.

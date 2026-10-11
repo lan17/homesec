@@ -12,14 +12,14 @@ See [reference notes and known limitations](../../../docs/reference.md#storage-r
 
 ### Requirement: Clip destination and upload outcome
 
-HomeSec SHALL upload clips under the configured clip-storage directory, a camera-name segment, and the local filename. Successful uploads SHALL supply the backend's storage URI and optional view URL to downstream processing. The upload operation SHALL NOT itself delete its local input.
+HomeSec SHALL build clip destinations under the configured clip-storage directory using sanitized camera-name and local-filename segments. Each segment is trimmed, path separators are replaced with underscores, whitespace-separated words are joined with underscores, and an empty result becomes `unknown`. The mapping is not unique: distinct names may produce the same destination, and this builder does not reject collisions. Successful uploads SHALL supply the backend's storage URI and optional view URL to downstream processing. The upload operation SHALL NOT itself delete its local input.
 
 #### Scenario: Stored clip retains its camera grouping
 
-- **GIVEN** clip storage is configured with a `clips` directory and a clip belongs to camera `front`
-- **WHEN** a local file named `motion.mp4` is uploaded successfully
-- **THEN** the storage destination is `clips/front/motion.mp4` beneath the configured storage root
-- **AND** the returned storage URI and view URL are available to downstream processing
+- **GIVEN** clip storage is configured with a `clips` directory and a clip belongs to camera `front door`
+- **WHEN** a local file named `motion clip.mp4` is uploaded successfully
+- **THEN** the storage destination is `clips/front_door/motion_clip.mp4` beneath the configured storage root
+- **AND** the returned storage URI and any backend-provided view URL are available to downstream processing
 - **AND** uploading does not itself remove the original local file
 
 ### Requirement: Built-in storage delivery and destination validation
@@ -76,7 +76,7 @@ HomeSec SHALL retry failed upload attempts up to the configured maximum, using t
 
 - **GIVEN** the first upload fails and another attempt is permitted
 - **WHEN** the next upload attempt succeeds
-- **THEN** processing uses that attempt's storage URI and view URL
+- **THEN** processing uses that attempt's storage URI and any backend-provided view URL
 
 #### Scenario: Upload failure survives retry exhaustion
 

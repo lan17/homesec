@@ -1,6 +1,6 @@
 # Tasks
 
-The eleven original unfinished tasks were transferred from the [archived bootstrap](../archive/2026-10-10-baseline-existing-behavior/tasks.md). Original task IDs and wording are retained for traceability. Tasks 2.3, 2.4, 3.3, 5.4, 5.5, 6.3, 7.3, and 9.4 were added during subsequent PR118 review; they are not part of the archived transfer. Read [design.md](design.md), the [maintained specs](../../specs/), and [current reference limits](../../../docs/reference.md) before implementation. The archive records historical evidence; update current reference notes as checks are completed.
+The eleven original unfinished tasks were transferred from the [archived bootstrap](../archive/2026-10-10-baseline-existing-behavior/tasks.md). Original task IDs and wording are retained for traceability. Tasks 2.3, 2.4, 3.3, 4.4, 5.4, 5.5, 6.3, 6.4, 7.3, and 9.4 were added during subsequent PR118 review; they are not part of the archived transfer. Read [design.md](design.md), the [maintained specs](../../specs/), and [current reference limits](../../../docs/reference.md) before implementation. The archive records historical evidence; update current reference notes as checks are completed.
 
 ## 2. Review setup and configuration
 
@@ -20,6 +20,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 - [ ] 4.2 Review API deletion and cleanup separately using their existing route and cleanup tests; verify mark-before-storage failure, original-local-file handling, non-atomic media deletion, deleted-record addressability/conditional media failures, and best-effort cleanup persistence are correctly documented. Confirm any requested change to Delete semantics separately; no new all-copies deletion policy is established by this baseline. Add focused boundary coverage for default dry-run preservation of original media and workflow writes if existing tests do not establish it.
 - [ ] 4.3 Reconcile storage/retention/cleanup reference guidance with the reviewed specs; verify examples distinguish retention, API deletion, and cleanup and promise only the destination syntax checks actually implemented, including the filesystem-confinement limit.
 
+- [ ] 4.4 Characterize `build_clip_path` camera/filename sanitization and collisions between distinct valid filenames, then exercise a successful storage upload and retry with a fake plugin returning a storage URI but `view_url=None`. Assert the pipeline preserves optional view URLs and the backend destination results; do not infer uniqueness or collision rejection. Use temporary paths and fake storage, with no provider writes, and update the reference evidence.
+
 ## 5. Review analysis and alerts
 
 - [ ] 5.2 Review detector setting/class discrepancies and the intentional-`never` fallback reason with Leonidas; verify the baseline either remains explicitly bounded or reflects a confirmed current contract. Correct inaccurate README/DESIGN examples; put any requested behavior fix in a separate change.
@@ -34,6 +36,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 - [ ] 6.2 Assess mounted playback-token refresh coverage and add a timer-boundary UI test if needed; verify refresh behavior with the focused UI check and update playback reference guidance without importing activation-only loading or requiring current eager acquisition timing.
 
 - [ ] 6.3 Add focused characterization coverage for event-list failure masking: given successful authentication and database availability checks, a later connection/query failure currently returns HTTP 200 with an empty page. Exercise the real Postgres store, repository retry handling, and route response with failures at the database boundary, rather than mocking the repository to return an empty page. Cover store-contained failures bypassing retries, exceptions reaching the repository exhausting retries, and invalid-row hydration producing incomplete pages with pagination based on fetched rows. Include a genuine empty-result control and update the current reference evidence note after verification. This records the current limitation, not a policy to preserve; any runtime correction requires a separate reviewed change.
+
+- [ ] 6.4 Characterize the mounted media-token and media routes with normal/bootstrap mode, authentication on/off, database guards available/unavailable, successful/failed clip lookup, and present/missing storage URI. Check setup/database 503 responses, lookup failure masking, missing-media 409, and authorized direct/tokenized URLs only after prerequisites. Use fake database/storage boundaries without live writes and update reference evidence.
 
 ## 7. Review preview and talk
 

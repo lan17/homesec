@@ -106,17 +106,17 @@ When the clip-state lookup succeeds, HomeSec SHALL return available processing, 
 
 ### Requirement: Media URLs respect authentication and clip availability
 
-HomeSec SHALL return a direct media URL when authentication is disabled and a clip-scoped, expiring URL when it is enabled. Token issuance SHALL require normal API authentication when enabled. Media playback SHALL reject invalid, expired, or wrong-clip tokens and permit valid media tokens or a valid API key.
+After normal-mode and database-availability checks pass and a successful clip lookup finds a storage URI, HomeSec SHALL return a direct media URL when authentication is disabled or a clip-scoped, expiring URL when authentication is enabled and a valid API key is supplied. Bootstrap mode returns HTTP 503 `SETUP_REQUIRED`, and a failed database availability guard returns HTTP 503 `DB_UNAVAILABLE`; passing that guard does not guarantee clip lookup. Token issuance SHALL require normal API authentication when enabled. Media playback SHALL reject invalid, expired, or wrong-clip tokens and permit valid media tokens or a valid API key.
 
 #### Scenario: Request media without authentication enabled
 
-- **GIVEN** an existing clip with a storage URI and server authentication disabled
+- **GIVEN** normal mode, a successful database availability check and clip lookup of an existing clip with a storage URI, and server authentication disabled
 - **WHEN** a client requests its media URL
 - **THEN** HomeSec returns a direct URL with no token expiry
 
 #### Scenario: Request authorized media access
 
-- **GIVEN** authentication is enabled and an existing clip has a storage URI
+- **GIVEN** normal mode, a successful database availability check and clip lookup of an existing clip with a storage URI, and authentication enabled
 - **WHEN** a client uses a valid API key to request its media URL
 - **THEN** HomeSec returns a tokenized URL with an expiry for that clip
 
@@ -134,23 +134,23 @@ HomeSec SHALL return a direct media URL when authentication is disabled and a cl
 
 ### Requirement: Media delivery exposes availability and retrieval failures
 
-HomeSec SHALL serve available clip media with an inline content disposition. When the clip-state lookup succeeds, unknown clips SHALL return HTTP 404 and clips without a storage URI SHALL return HTTP 409. Storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason.
+In normal mode, with a successful database availability guard and authorized media access, HomeSec SHALL serve retrievable clip media with an inline content disposition. Bootstrap and failed availability guards return the HTTP 503 outcomes described above. When the clip-state lookup succeeds, unknown clips SHALL return HTTP 404 and clips without a storage URI SHALL return HTTP 409. Storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason.
 
 #### Scenario: Play stored media
 
-- **GIVEN** a known clip whose configured storage object can be retrieved
+- **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip whose stored object can be retrieved
 - **WHEN** an authorized client requests clip media
 - **THEN** HomeSec returns the media for inline playback
 
 #### Scenario: Request media before storage is available
 
-- **GIVEN** a known clip without a storage URI
+- **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip without a storage URI
 - **WHEN** a client requests its media or media URL
 - **THEN** HomeSec returns HTTP 409 with the media-unavailable reason
 
 #### Scenario: Storage retrieval fails
 
-- **GIVEN** a known clip has a storage URI but retrieval fails
+- **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip with a storage URI whose retrieval fails
 - **WHEN** an authorized client requests its media
 - **THEN** HomeSec returns HTTP 502 with the media-fetch-failed reason
 
