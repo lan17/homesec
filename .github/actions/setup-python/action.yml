@@ -1,0 +1,21 @@
+name: Setup Python checks
+description: Install the existing locked Python development environment.
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v3
+      with:
+        python-version: "3.14"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    - name: Check uv lockfile
+      shell: bash
+      run: uv lock --check
+    - name: Restore Python environment
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-v2-${{ runner.os }}-${{ runner.arch }}-py3.14-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+    - name: Sync Python dependencies
+      shell: bash
+      run: uv sync --group dev --locked

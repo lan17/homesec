@@ -1,0 +1,45 @@
+name: Setup native build
+description: Install the pinned toolchain and restore validated native-library inputs.
+outputs:
+  cache-key:
+    description: Exact native-library cache key for this runner and recipe.
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+  cache-hit:
+    description: Whether the exact native-library cache was restored.
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-path:
+    description: Private native-library cache directory.
+    value: ${{ steps.toolchain.outputs.cache-path }}
+runs:
+  using: composite
+  steps:
+    - name: Install native prerequisites
+      shell: bash
+      run: |
+        rustup show active-toolchain
+        rustup component add rustfmt clippy
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential python3 cmake ffmpeg clang libclang-dev pkg-config nasm
+    - name: Identify native build environment
+      id: toolchain
+      shell: bash
+      run: |
+        fingerprint="$(
+          {
+            printf '%s\n' "${ImageOS:-}" "${ImageVersion:-}" "$(id -u)"
+            cc --version
+            c++ --version
+            cmake --version
+            clang --version
+            nasm -v
+          } | sha256sum | cut -d ' ' -f 1
+        )"
+        echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+        echo "cache-path=/tmp/homesec-native-$(id -u)" >> "$GITHUB_OUTPUT"
+    - name: Restore native libraries
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.toolchain.outputs.cache-path }}
+        key: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.toml', 'native/webrtc/Cargo.lock', 'native/webrtc/build_native.py', '.github/actions/setup-native/action.yml') }}
