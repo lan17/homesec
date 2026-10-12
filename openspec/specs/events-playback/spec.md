@@ -8,11 +8,15 @@ Describe how users browse recorded events, retain their browsing context, inspec
 
 See [reference notes and known limitations](../../../docs/reference.md#events-playback) for this capability's operator guides and verification limits.
 
+HTTP scenarios use the [shared API preconditions and gate order](../integration-contracts/spec.md#shared-api-preconditions) unless the scenario explicitly tests a failed prerequisite. CLI and direct component scenarios are not HTTP requests.
+
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: Event queries support filtering and cursor pagination
 
-HomeSec SHALL support clip queries filtered by camera, processing status, alert outcome, detection outcome, risk, activity, and creation-time bounds. When the database query and hydration of its returned rows succeed, queries without an explicit status filter SHALL exclude deleted clips; an explicit deleted-status filter SHALL include matching deleted records. Under those conditions, results SHALL use newest-first cursor pagination, with clip identity breaking equal-time ties, and expose whether another page exists. HTTP 200 alone does not establish successful querying or complete hydration; see the [list-query limitations](../../../docs/reference.md#events-playback).
+HomeSec SHALL support clip queries filtered by camera, processing status, alert outcome, detection outcome, risk, activity, and creation-time bounds. When the database query and hydration of its returned rows succeed, queries without an explicit status filter SHALL exclude deleted clips; an explicit deleted-status filter SHALL include matching deleted records. Under those conditions, results SHALL use newest-first cursor pagination, with clip identity breaking equal-time ties, and expose whether another page exists. The built-in Postgres query uses the record's database `created_at` for creation-time filtering and ordering, not the source's estimated clip start/end or notification time. Reusing an existing ID preserves that database creation time. HTTP 200 alone does not establish successful querying or complete hydration; see the [list-query limitations](../../../docs/reference.md#events-playback).
 
 #### Scenario: Continue to the next result page
 
@@ -106,7 +110,7 @@ When the clip-state lookup succeeds, HomeSec SHALL return available processing, 
 
 ### Requirement: Media URLs respect authentication and clip availability
 
-After normal-mode and database-availability checks pass and a successful clip lookup finds a storage URI, HomeSec SHALL return a direct media URL when authentication is disabled or a clip-scoped, expiring URL when authentication is enabled and a valid API key is supplied. Bootstrap mode returns HTTP 503 `SETUP_REQUIRED`, and a failed database availability guard returns HTTP 503 `DB_UNAVAILABLE`; passing that guard does not guarantee clip lookup. Token issuance SHALL require normal API authentication when enabled. Media playback SHALL reject invalid, expired, or wrong-clip tokens and permit valid media tokens or a valid API key.
+After normal-mode and database-availability checks pass and a successful clip lookup finds a storage URI, HomeSec SHALL return a direct media URL when authentication is disabled or a clip-scoped, expiring URL when authentication is enabled and a valid API key is supplied. Bootstrap mode returns HTTP 503 `SETUP_REQUIRED`, and a failed database availability guard returns HTTP 503 `DB_UNAVAILABLE`; passing that guard does not guarantee clip lookup. Token issuance SHALL require normal API authentication when enabled. With authentication enabled and no valid bearer API key, media playback SHALL require a valid, unexpired, clip-scoped token. A valid API key authorizes independently of the query token; disabling authentication skips token checks. Admission still depends on the earlier mode/database gates and the credential-comparison limitations in the shared API contract.
 
 #### Scenario: Request media without authentication enabled
 
@@ -122,7 +126,7 @@ After normal-mode and database-availability checks pass and a successful clip lo
 
 #### Scenario: Attempt to reuse authorization for another clip
 
-- **GIVEN** a valid token issued for one clip
+- **GIVEN** authentication is enabled, earlier admission gates pass, no valid bearer API key is supplied, credential comparison can complete, and a valid token was issued for one clip
 - **WHEN** it is used to request another clip's media
 - **THEN** HomeSec rejects the request
 
@@ -132,20 +136,32 @@ After normal-mode and database-availability checks pass and a successful clip lo
 - **WHEN** it requests a new media token
 - **THEN** HomeSec rejects the token-issuance request
 
+#### Scenario: API key takes precedence over an invalid media query token
+
+- **GIVEN** earlier mode/database gates pass and authentication is enabled with a valid bearer API key
+- **WHEN** a media request also contains an invalid query token
+- **THEN** media authorization accepts the API key without validating that token, and later clip/media availability checks still apply
+
+#### Scenario: Disabled authentication ignores a media query token
+
+- **GIVEN** earlier mode/database gates pass and authentication is disabled
+- **WHEN** a media request contains an invalid query token
+- **THEN** media authorization skips token validation and proceeds to the remaining route checks
+
 ### Requirement: Media delivery exposes availability and retrieval failures
 
-In normal mode, with a successful database availability guard and authorized media access, HomeSec SHALL serve retrievable clip media with an inline content disposition. Bootstrap and failed availability guards return the HTTP 503 outcomes described above. When the clip-state lookup succeeds, unknown clips SHALL return HTTP 404 and clips without a storage URI SHALL return HTTP 409. Storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason.
+In normal mode, with a successful database availability guard and authorized media access, HomeSec SHALL serve retrievable clip media with an inline content disposition when local staging and response construction succeed. Successful storage retrieval alone does not guarantee a response can be constructed: the manual filename header can fail encoding for non-Latin clip identities, producing a pre-response generic 500 rather than a storage-fetch 502. Bootstrap and failed availability guards return the HTTP 503 outcomes described above. When the clip-state lookup succeeds, unknown clips SHALL return HTTP 404 and clips without a storage URI SHALL return HTTP 409. Storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason.
 
 #### Scenario: Play stored media
 
-- **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip whose stored object can be retrieved
+- **GIVEN** normal mode, a successful database availability check and clip lookup, a known clip whose stored object can be retrieved, and successful local staging and response construction
 - **WHEN** an authorized client requests clip media
 - **THEN** HomeSec returns the media for inline playback
 
 #### Scenario: Request media before storage is available
 
 - **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip without a storage URI
-- **WHEN** a client requests its media or media URL
+- **WHEN** a client admitted by the applicable authentication gates requests its media or media URL
 - **THEN** HomeSec returns HTTP 409 with the media-unavailable reason
 
 #### Scenario: Storage retrieval fails
@@ -153,6 +169,29 @@ In normal mode, with a successful database availability guard and authorized med
 - **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip with a storage URI whose retrieval fails
 - **WHEN** an authorized client requests its media
 - **THEN** HomeSec returns HTTP 502 with the media-fetch-failed reason
+
+#### Scenario: A retrieved clip filename fails response-header encoding
+
+- **GIVEN** all admission/lookup gates pass, clip ID `门口` has a storage URI, and storage retrieval succeeds
+- **WHEN** the current media route constructs its manual inline filename header and the response encoder cannot encode those characters
+- **THEN** the generic pre-response handler returns 500 instead of playable media or a storage-fetch 502
+- **AND** this response-construction branch has not attached successful-response staging cleanup
+
+### Requirement: Playback stages media before HTTP delivery
+
+For a media request that reaches retrieval, HomeSec SHALL create a per-request temporary directory and await `storage.get()` into a local file before constructing its file response. This route has no cache/reuse path and does not stream directly from the storage backend. Range handling by the file response does not bypass that preceding retrieval. A caught storage exception SHALL request temporary-directory cleanup; a normally completed file response SHALL run its attached background cleanup. Cancellation during retrieval and failure before response cleanup is attached can leave staging behind. Playback staging is not automatically registered with source-recording retention. These cleanup gaps are current limitations, not guarantees that temporary files remain indefinitely on every deployment.
+
+#### Scenario: Media retrieval completes before response construction
+
+- **GIVEN** an admitted request with a readable clip state and storage URI
+- **WHEN** the media route retrieves the object successfully and response construction succeeds
+- **THEN** it awaits a local staged file before constructing the HTTP file response and attaches cleanup to normal response completion
+
+#### Scenario: Cancellation bypasses retrieval cleanup
+
+- **GIVEN** storage retrieval has written partial staging and is still awaited
+- **WHEN** the media handler task is cancelled before the file response is constructed
+- **THEN** cancellation propagates outside the ordinary exception-cleanup path and that handler branch can leave staging behind
 
 ### Requirement: Tokenized playback supports bounded source refresh
 

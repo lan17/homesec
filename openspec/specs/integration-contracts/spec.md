@@ -8,21 +8,44 @@ Describe HomeSec's existing contracts for API clients, notification recipients, 
 
 See [reference notes and known limitations](../../../docs/reference.md#integration-contracts) for this capability's operator guides and verification limits.
 
+## Shared API preconditions
+
+Unless an HTTP scenario explicitly tests a failed prerequisite, it assumes an initialized application, a request that can be parsed and validated, and admission by that route's configured authentication, mode, and availability gates. An explicit failure replaces only that prerequisite; earlier gates still apply. Endpoint-specific outcomes describe requests that reach that endpoint's relevant branch, not a promise that they take precedence over every malformed request or dependency failure. Browser and direct plugin scenarios are not endpoint admission tests.
+
+The [route registration](../../../src/homesec/api/routes/__init__.py) and [dependencies](../../../src/homesec/api/dependencies.py) define these control paths before the endpoint body:
+
+| Route family | Registered admission gates, in order |
+| --- | --- |
+| Public `/health` and `/api/v1/health` | No API-key or normal-mode gate; bootstrap has its own summary |
+| Setup status/checks and ONVIF | API key when authentication is enabled; setup finalization additionally requires bootstrap mode |
+| Configuration, cameras, runtime, maintenance, preview/talk HTTP controls, diagnostics | API key when enabled, then normal mode |
+| Clip list/detail/token/deletion and statistics | API key when enabled, then normal mode, then database availability |
+| Clip media | Normal mode, database availability, then media authorization |
+| Preview playback/signaling | Normal mode, then preview authorization; camera/runtime/transport checks follow |
+
+These are dependency gates, not a total ordering of every body-decoding/schema-validation failure. API-key failure normally produces 401; a missing effective configured key produces 500. Normal-mode rejection produces 503 `SETUP_REQUIRED`; bootstrap-only finalization outside bootstrap produces 409. A failed database guard produces 503 `DB_UNAVAILABLE`; a passed probe, which can be cached, does not guarantee subsequent queries or hydration succeed.
+
+Media and preview authorization skip token validation when authentication is disabled. With authentication enabled, a matching bearer API key is accepted before examining the query token; otherwise the scoped token is validated. This assumes credential comparison itself completes; malformed non-ASCII comparisons are a separate limitation below. Permitted authorization is not proof of media/camera availability.
+
+Talk streaming is a WebSocket lifecycle, not an HTTP error-envelope route. The [talk handler](../../../src/homesec/api/routes/talk.py) checks application/bootstrap availability, accepts the WebSocket, then authorizes it: disabled authentication or a matching bearer API key bypasses query-token validation; otherwise a valid camera-and-session-scoped stream token is required. Rejected token authorization closes the accepted socket before camera-stream opening. It does not use the database guard.
+
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: API key authentication
 
-API routes protected by API-key authentication SHALL accept the configured key in an `Authorization: Bearer <key>` header when authentication is enabled. Missing or incorrect bearer credentials SHALL return HTTP 401 with `UNAUTHORIZED`. A missing configured key SHALL return HTTP 500 with `API_KEY_NOT_CONFIGURED`. Disabling authentication SHALL remove the API-key requirement. Public health summaries SHALL remain accessible without credentials.
+API routes protected by API-key authentication SHALL accept the configured ASCII key in an `Authorization: Bearer <key>` header when authentication is enabled. Missing bearer credentials or an incorrect ASCII-comparable key SHALL return HTTP 401 with `UNAUTHORIZED`. Non-ASCII strings passed to the current constant-time string comparison can raise instead of returning a mismatch, producing a generic pre-response HTTP 500; see the [malformed-credential limitation](../../../docs/reference.md#integration-contracts). A missing configured key SHALL return HTTP 500 with `API_KEY_NOT_CONFIGURED`. Disabling authentication SHALL remove the API-key requirement. Public health summaries SHALL remain accessible without credentials.
 
 #### Scenario: Protected request lacks valid credentials
 
-- **GIVEN** API authentication is enabled and a key is configured
-- **WHEN** a client requests camera configuration with no bearer header or an incorrect key
+- **GIVEN** API authentication is enabled and an ASCII key is configured
+- **WHEN** a client requests camera configuration with no bearer header or an incorrect ASCII bearer key
 - **THEN** the request returns HTTP 401 with `error_code` equal to `UNAUTHORIZED`
 
 #### Scenario: Valid bearer credentials
 
-- **GIVEN** API authentication is enabled and a key is configured
+- **GIVEN** API authentication is enabled and an ASCII key is configured
 - **WHEN** a client supplies that key to an API-key-protected route
 - **THEN** authentication permits the request to proceed to the route's other checks
 
@@ -43,6 +66,13 @@ API routes protected by API-key authentication SHALL accept the configured key i
 - **GIVEN** API authentication is disabled
 - **WHEN** a client calls an API-key-protected route without a bearer header
 - **THEN** the request proceeds to the route's other checks
+
+#### Scenario: Non-ASCII bearer comparison fails before route execution
+
+- **GIVEN** authentication is enabled with an ASCII key and the parsed bearer value contains a non-ASCII character
+- **WHEN** an API-key-protected HTTP request reaches the string comparison
+- **THEN** the current comparison raises and the generic pre-response exception handler returns 500 rather than the ordinary 401 mismatch response
+- **AND** the protected route body is not admitted; this is an error-handling limitation, not granted access
 
 ### Requirement: Browser session authentication
 
@@ -86,7 +116,7 @@ The browser UI SHALL redirect `/` and `/home` to Live, `/dashboard` to System, `
 
 ### Requirement: Canonical API exception responses
 
-API exceptions and request-validation failures SHALL return a JSON envelope containing textual `detail` and `error_code`, with applicable additional fields preserved. Invalid request parameters SHALL return HTTP 422 with `REQUEST_VALIDATION_FAILED` and validation details. Unexpected route exceptions SHALL return HTTP 500 with generic detail and `INTERNAL_SERVER_ERROR` rather than expose the exception text.
+Handled API exceptions and request-validation failures with JSON-serializable error data SHALL return a JSON envelope containing textual `detail` and `error_code`, with applicable additional fields preserved. Request-schema failures SHALL return HTTP 422 with `REQUEST_VALIDATION_FAILED` and validation details when that error payload can be serialized. The validation handler inserts `exc.errors()` without converting exception objects in `ctx.error`; such payloads can fail serialization and become a generic HTTP 500 instead. Before a response has started, unexpected exceptions reaching the generic handler SHALL return HTTP 500 with generic detail and `INTERNAL_SERVER_ERROR` rather than expose the exception text. This is not a promise to replace an already-started streaming response or a WebSocket close with a new HTTP envelope.
 
 #### Scenario: Route reports a conflict with additional context
 
@@ -96,15 +126,22 @@ API exceptions and request-validation failures SHALL return a JSON envelope cont
 
 #### Scenario: Invalid request parameters
 
-- **GIVEN** an API request contains parameters that fail request-schema validation
+- **GIVEN** an API request reaches request-schema validation and its invalid parameters produce JSON-serializable validation errors
 - **WHEN** the request is processed
 - **THEN** it returns HTTP 422 with `REQUEST_VALIDATION_FAILED` and `validation_errors`
 
 #### Scenario: Unexpected route exception
 
-- **GIVEN** a route encounters an unexpected exception
+- **GIVEN** a route encounters an unexpected exception before its response has started
 - **WHEN** the API produces its response
 - **THEN** it returns HTTP 500 with `detail` equal to `Internal server error` and `error_code` equal to `INTERNAL_SERVER_ERROR`
+
+#### Scenario: A model-validator exception cannot be serialized
+
+- **GIVEN** an admitted talk-session preparation request contains input with `sample_rate: 11025` and `frame_ms: 20`, causing the integral-frame validator to raise `ValueError`
+- **WHEN** the request-validation handler attempts to JSON-encode errors containing that exception in `ctx.error`
+- **THEN** error-response construction fails and the generic handler returns 500 `INTERNAL_SERVER_ERROR`, rather than the intended 422 validation envelope
+- **AND** the endpoint body is not executed; this characterizes a current serializer limitation
 
 ### Requirement: Generated API contract
 
@@ -119,7 +156,7 @@ HomeSec SHALL expose an OpenAPI description derived from its registered API rout
 
 ### Requirement: Notification payload meaning
 
-Notifications SHALL use the existing alert payload schema, identifying the clip and camera, decision reason, timestamp, and a deduplication key equal to the clip identifier. Storage/view links and analysis fields SHALL be nullable when unavailable. The payload SHALL indicate upload and analysis failures independently so recipients can distinguish missing enrichment from available clip identity. The key SHALL NOT imply exactly-once delivery or camera-scoped uniqueness. Reusing a clip ID reuses the deduplication key, including across cameras; see the [clip identity limitations](../../../docs/reference.md#capture-recording).
+Notifications SHALL use the existing alert payload schema, identifying the clip and camera, decision reason, timestamp, and a deduplication key equal to the clip identifier. Storage/view links and analysis fields SHALL be nullable when unavailable. The payload SHALL indicate upload and analysis failures independently so recipients can distinguish missing enrichment from available clip identity. The key SHALL NOT imply exactly-once delivery or camera-scoped uniqueness. Reusing a clip ID reuses the deduplication key, including across cameras; see the [clip identity limitations](../../../docs/reference.md#capture-recording). The pipeline SHALL construct `ts` with `datetime.now()` when it builds the alert, as a naive process-local notification time, not the clip capture time or the database record's creation time. That same alert object is supplied to per-entry retries.
 
 #### Scenario: Notification includes available analysis and media references
 
@@ -133,6 +170,12 @@ Notifications SHALL use the existing alert payload schema, identifying the clip 
 - **WHEN** the payload is delivered
 - **THEN** the corresponding failure flag is true and unavailable links or analysis values are null
 - **AND** the clip identity and decision reason remain present
+
+#### Scenario: Delayed processing does not preserve capture time as notification time
+
+- **GIVEN** a clip is processed substantially after its estimated source times
+- **WHEN** the pipeline builds its notification payload
+- **THEN** `ts` reflects alert construction time, while clip identity continues to identify the recorded event
 
 ### Requirement: MQTT alert publication
 
@@ -181,7 +224,7 @@ The SendGrid email integration SHALL render configured subject and text/HTML tem
 
 ### Requirement: Notification fan-out isolation
 
-HomeSec SHALL send a selected alert to each enabled configured notifier. Disabled notifiers SHALL not receive alerts. A delivery failure from one notifier SHALL not prevent delivery attempts to the others, and the failed delivery SHALL remain observable as a failure. When no notifier is enabled, notification delivery SHALL have no transport side effects.
+HomeSec SHALL send a selected alert to each enabled configured notifier. Disabled notifiers SHALL not receive alerts. A delivery failure from one notifier SHALL not prevent delivery attempts to the others, and the failed delivery SHALL remain observable as a failure. When no notifier is enabled, notification delivery SHALL have no transport side effects. Fan-out uses concurrent per-entry attempts and waits for all results; one indefinitely pending notifier can delay aggregate completion even when another succeeds. Failure isolation does not impose a shared deadline.
 
 #### Scenario: One notifier fails while another succeeds
 

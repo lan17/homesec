@@ -10,6 +10,10 @@ Applied clip cleanup and media deletion outcomes are specified by the `storage-r
 
 See [reference notes and known limitations](../../../docs/reference.md#operations-maintenance) for this capability's operator guides and verification limits.
 
+HTTP scenarios use the [shared API preconditions and gate order](../integration-contracts/spec.md#shared-api-preconditions) unless the scenario explicitly tests a failed prerequisite. CLI and direct component scenarios are not HTTP requests.
+
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: CLI operation and configuration validation
@@ -92,7 +96,7 @@ The CLI SHALL support running HomeSec from a selected configuration path and val
 
 ### Requirement: Operational system statistics
 
-`/api/v1/stats` SHALL report today's persisted clip creations and distinct clips with affirmative alert decisions since midnight UTC, plus configured/healthy-source camera counts and uptime. It SHALL require normal mode, API-key authentication when enabled, and a successful database availability check. Count-query failures after that check MAY return zero without a separate count-error field, so these counters SHALL not guarantee complete activity or successful notification delivery.
+`/api/v1/stats` SHALL report today's persisted clip creations and distinct clips with affirmative alert decisions since midnight UTC, plus configured/healthy-source camera counts and uptime. It SHALL require normal mode, API-key authentication when enabled, and a successful database availability check. The built-in store counts clips by database record creation time, but counts alerts by affirmative alert-decision event timestamps, distinct by clip ID. An older clip can therefore contribute to today's alert count, independently of current snapshot fields or notifier delivery. Count-query failures after that check MAY return zero without a separate count-error field, so these counters SHALL not guarantee complete activity or successful notification delivery.
 
 #### Scenario: Read current system statistics
 
@@ -145,7 +149,7 @@ HomeSec SHALL respond to SIGINT and SIGTERM by initiating shutdown. Normal shutd
 
 ### Requirement: Cleanup selection and dry run
 
-CLI cleanup SHALL re-analyze candidate clips whose prior filter result has no detected classes, with optional age and camera filters and configured batch/concurrency settings. Dry run SHALL be enabled by default and SHALL report proposed outcomes without deleting original local/stored media or changing clip workflow state/events. Cleanup MAY retrieve media and create temporary re-analysis files while evaluating candidates.
+When its implemented YOLO-shaped recheck configuration can be constructed, CLI cleanup SHALL re-analyze candidate clips whose prior filter result has no detected classes, with optional age and camera filters and configured batch/concurrency settings. Normal pipeline support for an external filter does not imply cleanup compatibility. Empty returned detection, including zero sampled frames, follows the empty-result path; a raised detection exception follows the error path. The recheck-builder and zero-frame safety limits are specified in [storage retention](../storage-retention/spec.md#requirement-cleanup-rechecks-before-deleting-empty-clips). Dry run SHALL be enabled by default and SHALL report proposed outcomes without deleting original local/stored media or changing clip workflow state/events. Cleanup MAY retrieve media and create temporary re-analysis files while evaluating candidates.
 
 #### Scenario: Preview deletion of an empty clip
 
@@ -234,7 +238,7 @@ A dump that exceeds its configured timeout or is cancelled SHALL have its proces
 
 ### Requirement: Backup manifest recovery and upload outcomes
 
-HomeSec SHALL persist backup records and pending storage work in a manifest beside local dumps. Startup SHALL reconcile interrupted records and recover recognized local dump artifacts when the manifest is absent or invalid. Local dump success SHALL remain distinct from optional upload success. Failed or interrupted upload attempts SHALL update their in-memory record with retry information while the local artifact is retained. Public backup status exposes manifest summary fields, not every pending record's error. Preserving changed retry information across restart requires a subsequent successful manifest save. Cancellation of startup storage-retry work can bypass that save, leaving older retry information on disk; see the [startup upload-retry cancellation limitation](../../../docs/reference.md#operations-maintenance).
+HomeSec SHALL persist backup records and pending storage work in a manifest beside local dumps. Startup SHALL reconcile interrupted records and recover recognized local dump artifacts when the manifest is absent or invalid. Local dump completion and optional upload completion SHALL be recorded separately on the normal bookkeeping path. A later housekeeping exception can still change the current new record from `success` to `failed` even after its final local dump exists. Upload retries require a retained, upload-enabled, not-yet-uploaded record with status `success`; a record reclassified as `failed` is skipped by that retry pass. A final file and a successful record are therefore distinct observations. Failed or interrupted upload attempts SHALL update their in-memory record with retry information while the local artifact is retained. Public backup status exposes manifest summary fields, not every pending record's error. Preserving changed retry information across restart requires a subsequent successful manifest save. Cancellation of startup storage-retry work can bypass that save, leaving older retry information on disk; see the [startup upload-retry cancellation limitation](../../../docs/reference.md#operations-maintenance).
 
 #### Scenario: Recover local backups after manifest corruption
 
@@ -245,25 +249,32 @@ HomeSec SHALL persist backup records and pending storage work in a manifest besi
 
 #### Scenario: Local dump succeeds but upload fails
 
-- **GIVEN** backup uploads are enabled
+- **GIVEN** backup uploads are enabled, subsequent bookkeeping/manifest saving succeeds, and the new artifact remains retained
 - **WHEN** a dump completes and its upload fails
 - **THEN** local dump success is recorded separately from the upload failure
 - **AND** retained local output remains eligible for an upload retry
 
+#### Scenario: Housekeeping failure reclassifies a completed dump
+
+- **GIVEN** a new dump has been finalized, its upload failed, and pending-upload retention attempts to unlink an older artifact
+- **WHEN** that older unlink raises and the new run's error bookkeeping and manifest save succeed
+- **THEN** the new record is marked `failed` despite its completed final dump remaining on disk
+- **AND** a later pending-upload retry pass skips that record because its status is not `success`
+
 ### Requirement: Backup retention and remote-delete recovery
 
-Backup retention SHALL prune the oldest eligible completed backups beyond `keep_count`, deleting local files and known uploaded objects. A failed new upload SHALL preserve prior uploaded backups; ordinary pending local uploads SHALL have their own `keep_count` limit. Pending-upload pruning SHALL preserve retained local artifacts marked `pending_upload_unknown`. That protection survives restart only when the unknown-outcome marker is available in the recovered manifest; cancellation does not guarantee it was saved. Failed or interrupted remote deletion SHALL persist pending work for a later retry.
+Backup retention SHALL attempt pruning of the oldest eligible completed backups beyond `keep_count`, deleting local files and known uploaded objects when those deletion operations succeed. Local unlink or bookkeeping errors can interrupt the pass and affect the current run's classification as described above. A failed new upload SHALL preserve prior uploaded backups; ordinary pending local uploads SHALL have their own `keep_count` limit. Pending-upload pruning SHALL preserve retained local artifacts marked `pending_upload_unknown`. That protection survives restart only when the unknown-outcome marker is available in the recovered manifest; cancellation does not guarantee it was saved. Failed or interrupted remote deletion SHALL persist pending work for a later retry.
 
 #### Scenario: Retention after successful upload
 
 - **GIVEN** completed uploaded backups exceed `keep_count`
-- **WHEN** a successful backup permits retention to run
+- **WHEN** a successful backup permits retention to run and the selected deletion operations succeed
 - **THEN** the oldest eligible local artifact and known uploaded object are deleted
 
 #### Scenario: Repeated upload failures
 
 - **GIVEN** a prior uploaded backup exists and later uploads repeatedly fail
-- **WHEN** ordinary pending local uploads exceed `keep_count`
+- **WHEN** ordinary pending local uploads exceed `keep_count` and their selected local deletions succeed
 - **THEN** the oldest pending local artifacts are pruned while prior uploaded backups are preserved
 
 #### Scenario: Interrupted upload has uncertain remote outcome

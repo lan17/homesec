@@ -8,11 +8,15 @@ Describe clip storage outcomes, bounded upload retries, local retention eligibil
 
 See [reference notes and known limitations](../../../docs/reference.md#storage-retention) for this capability's operator guides and verification limits.
 
+HTTP scenarios use the [shared API preconditions and gate order](../integration-contracts/spec.md#shared-api-preconditions) unless the scenario explicitly tests a failed prerequisite. CLI and direct component scenarios are not HTTP requests.
+
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: Clip destination and upload outcome
 
-HomeSec SHALL build clip destinations under the configured clip-storage directory using sanitized camera-name and local-filename segments. Each segment is trimmed, path separators are replaced with underscores, whitespace-separated words are joined with underscores, and an empty result becomes `unknown`. The mapping is not unique: distinct names may produce the same destination, and this builder does not reject collisions. Successful uploads SHALL supply the backend's storage URI and optional view URL to downstream processing. The upload operation SHALL NOT itself delete its local input.
+HomeSec SHALL build clip destinations under the configured clip-storage directory using sanitized camera-name and local-filename segments. Each segment is trimmed, path separators are replaced with underscores, whitespace-separated words are joined with underscores, and an empty result becomes `unknown`. The path is then normalized with `PurePosixPath`; dot segments can disappear, while absolute results or retained parent-traversal segments are rejected. For example, camera `.` with filename `motion.mp4` produces `clips/motion.mp4`, while camera `..` fails destination construction. The mapping is not unique: distinct names may produce the same destination, and this builder does not reject collisions. Destination preparation happens before the upload retry/error handler; its exceptions can escape the upload task rather than return an upload-failure value. Successful uploads SHALL supply the backend's storage URI and optional view URL to downstream processing. The upload operation SHALL NOT itself delete its local input.
 
 #### Scenario: Stored clip retains its camera grouping
 
@@ -21,6 +25,18 @@ HomeSec SHALL build clip destinations under the configured clip-storage director
 - **THEN** the storage destination is `clips/front_door/motion_clip.mp4` beneath the configured storage root
 - **AND** the returned storage URI and any backend-provided view URL are available to downstream processing
 - **AND** uploading does not itself remove the original local file
+
+#### Scenario: Dot camera segment is normalized away
+
+- **GIVEN** a clip for camera `.`, filename `motion.mp4`, and clip directory `clips`
+- **WHEN** its destination is built
+- **THEN** the destination is `clips/motion.mp4` without a distinct camera segment
+
+#### Scenario: Parent camera segment fails before an upload attempt
+
+- **GIVEN** a clip for camera `..`, filename `motion.mp4`, and clip directory `clips`
+- **WHEN** its upload stage builds the destination
+- **THEN** path validation raises before any storage attempt or retry, instead of returning `UploadError`
 
 ### Requirement: Built-in storage delivery and destination validation
 
@@ -70,7 +86,7 @@ The Dropbox backend SHALL prefer a present configured access-token environment v
 
 ### Requirement: Bounded upload retries and failure outcome
 
-HomeSec SHALL retry failed upload attempts up to the configured maximum, using the configured exponential backoff between attempts. Exhaustion SHALL yield an upload-failure outcome with no storage URI or view URL; it SHALL NOT by itself prevent filter, analysis, or alert processing from continuing under their own rules.
+After successful destination preparation, HomeSec SHALL retry failures from protected upload attempts up to the configured maximum, using the configured exponential backoff between attempts. The shared runner bounds attempts, not elapsed time, and adds no universal operation deadline. Exhaustion SHALL yield an upload-failure outcome with no storage URI or view URL; it SHALL NOT by itself prevent filter, analysis, or alert processing from continuing under their own rules.
 
 #### Scenario: Transient upload failure recovers
 
@@ -87,12 +103,12 @@ HomeSec SHALL retry failed upload attempts up to the configured maximum, using t
 
 ### Requirement: Local retention deletion eligibility
 
-Local retention SHALL delete only discovered local clip files with matching recorded local paths, a recorded storage URI, processing status `DONE`, and a readable size. It SHALL preserve files without those prerequisites. Retention deletion SHALL remove only the local file and SHALL NOT delete the stored copy or mark the clip as deleted from event history.
+Local retention SHALL select candidates from discovered files whose selection-time state snapshot has a matching recorded local path, a storage URI, status `DONE`, and a readable scanned size. Files lacking those prerequisites at selection SHALL be excluded. The deletion worker uses the selected pathname and captured size without revalidating current state or file identity; a replacement at that pathname can be removed. Retention SHALL NOT request storage-backend deletion or mutate clip state/events. Preserving a physically separate stored copy is not a guarantee for files that alias the selected local path. See the [selection-time and aliasing limitations](../../../docs/reference.md#storage-retention).
 
 #### Scenario: Uploaded completed clip is eligible
 
-- **GIVEN** a discovered local clip has matching recorded path, storage URI, status `DONE`, and a readable size
-- **WHEN** retention selects it for deletion
+- **GIVEN** a discovered local clip has matching recorded path, storage URI, status `DONE`, a readable size, and a physically separate stored copy, with no replacement or competing mutation
+- **WHEN** retention selects it for deletion and unlink succeeds
 - **THEN** its local file is removed
 - **AND** its storage copy and clip state remain available
 
@@ -102,14 +118,21 @@ Local retention SHALL delete only discovered local clip files with matching reco
 - **WHEN** retention evaluates deletion candidates
 - **THEN** those files are excluded from deletion even if local storage is over its configured limit
 
+#### Scenario: Selected pathname is replaced before unlink
+
+- **GIVEN** retention selected a three-byte completed uploaded file and a different file then replaces it at the same pathname
+- **WHEN** the deletion worker unlinks that selected pathname successfully
+- **THEN** the replacement is removed without rechecking its identity or current workflow status
+- **AND** the pass uses the captured three-byte size for its accounting
+
 ### Requirement: Oldest eligible clip pruning
 
-When a retention pass selects clips to reduce an eligible-byte total exceeding the configured limit, it SHALL delete eligible clips oldest first by recorded creation time, breaking ties by clip ID. It SHALL stop once that total is within the limit. Its summary SHALL distinguish incomplete measurement and remaining over-limit local usage from successful reclamation.
+When a retention pass selects clips to reduce an eligible-byte total exceeding the configured limit, it SHALL attempt selected candidates oldest first by recorded creation time, breaking ties by clip ID. It SHALL stop when its captured-size accounting total is within the limit or no candidates remain; unlink errors can leave that total above the limit. The summary uses scanned sizes rather than an atomic post-deletion filesystem measurement. Its summary SHALL distinguish incomplete measurement and remaining over-limit local usage from successful reclamation.
 
 #### Scenario: Oldest eligible clip is removed first
 
 - **GIVEN** three eligible clips total 150 bytes with oldest, middle, and newest sizes of 60, 50, and 40 bytes, and a 90-byte limit
-- **WHEN** a retention pass prunes those clips
+- **WHEN** a retention pass prunes those unchanged files and deletion succeeds
 - **THEN** the oldest clip is removed and the two newer clips remain
 - **AND** the summary reports 60 reclaimed bytes and 90 eligible bytes remaining
 
@@ -204,7 +227,7 @@ The clip-deletion API SHALL mark a known clip deleted before deleting its storag
 
 ### Requirement: Cleanup rechecks before deleting empty clips
 
-Cleanup SHALL recheck candidate clips with an existing empty detection result before deleting them. If rechecking finds detections, it SHALL retain the clip. If rechecking remains empty, non-dry-run cleanup SHALL attempt local and stored-copy deletion and attempt to record deletion only after those deletion attempts succeed. Dry-run cleanup SHALL NOT delete clip copies or update their workflow state. Workflow writes remain best-effort and subject to the same concurrent-snapshot and reused-ID limitations as processing and API deletion.
+Cleanup SHALL recheck candidate clips with an existing empty detection result before deleting them, provided its implemented recheck-configuration path can be constructed. That builder accepts a `YoloFilterConfig` or a dictionary valid as one, applies its YOLO-specific model/settings overrides (default recheck model `yolo11x.pt`), and retains the configured filter backend name. Other configuration-model types are rejected; supporting a plugin in normal processing does not imply cleanup compatibility. If rechecking finds detections, it SHALL retain the clip. If the detector returns an empty class list, including a zero-frame result, non-dry-run cleanup SHALL attempt local and stored-copy deletion and attempt to record deletion only after those deletion attempts succeed. Dry-run cleanup SHALL NOT delete clip copies or update their workflow state. Workflow writes remain best-effort and subject to the same concurrent-snapshot and reused-ID limitations as processing and API deletion.
 
 #### Scenario: Recheck rescues a previous empty detection
 
@@ -231,3 +254,16 @@ Cleanup SHALL recheck candidate clips with an existing empty detection result be
 - **WHEN** cleanup handles the candidate
 - **THEN** it reports the failure without claiming successful clip deletion
 - **AND** a deletion failure does not roll back a copy already removed by another deletion attempt
+
+#### Scenario: Cleanup receives an empty zero-frame recheck
+
+- **GIVEN** a cleanup candidate's recheck returns empty detected classes with `sampled_frames: 0` rather than raising
+- **WHEN** applied cleanup handles that returned result
+- **THEN** it follows the empty-result deletion path without requiring positive-frame inspection
+- **AND** dry-run cleanup instead retains original copies and workflow state; the applied behavior is a current safety limitation, not a recommended deletion policy
+
+#### Scenario: Cleanup cannot build an external filter configuration
+
+- **GIVEN** a normally supported filter whose configuration dictionary is invalid as `YoloFilterConfig`, or whose configuration is a different model type
+- **WHEN** CLI cleanup builds its recheck configuration
+- **THEN** construction fails before candidate re-analysis rather than providing generic plugin-compatible cleanup

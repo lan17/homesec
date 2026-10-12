@@ -36,6 +36,17 @@ Use an OpenSpec change with deltas for the existing capability names, meaningful
 boundary verification, and affected reference/guide updates in the same PR.
 Behavior-preserving internal refactors do not need an invented spec delta.
 
+Use the [shared API preconditions](specs/integration-contracts/spec.md#shared-api-preconditions)
+for endpoint scenarios and name the observation being asserted: returned stage
+result, stored snapshot/event, filesystem artifact, or completed response.
+The [scenario evidence register](../docs/behavior-evidence.md) maps scenarios to
+implementation leads and distinguishes retained source review, isolated checks,
+repository-boundary tests, and device QA. Map a specific test before claiming
+scenario coverage; representative requirement-level tests are not enough.
+Preserve historical archives, not a fixed requirement/scenario count. Add missing
+current behavior and update the register when accuracy requires it. Keep defects
+as explicit current limitations rather than desirable permanent policies.
+
 After review and verification, use `openspec-sync-specs` to update maintained
 specs, or `openspec-archive-change` to sync and archive completed work. Preserve
 known limitations in the reference page and keep links independent of an active

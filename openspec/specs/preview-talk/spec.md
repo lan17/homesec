@@ -8,6 +8,10 @@ Describe live camera viewing and push-to-talk behavior, including transport comp
 
 See [reference notes and known limitations](../../../docs/reference.md#preview-talk) for this capability's operator guides and verification limits.
 
+HTTP scenarios use the [shared API preconditions and gate order](../integration-contracts/spec.md#shared-api-preconditions) unless the scenario explicitly tests a failed prerequisite. CLI and direct component scenarios are not HTTP requests.
+
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: Preview availability and transport are explicit
@@ -34,17 +38,17 @@ HomeSec SHALL expose camera preview availability, state, and refusal reasons. En
 
 ### Requirement: Preview access is scoped and expires
 
-With authentication enabled, HomeSec SHALL authorize preview playback and signaling with the API key or a valid camera-scoped preview token. WebRTC viewer leases SHALL not outlive the authorization used to negotiate or renew them. HLS playback SHALL refuse stale media when the corresponding preview is disabled or inactive.
+With authentication enabled, HomeSec SHALL authorize preview playback and signaling with the API key or a valid camera-scoped preview token. A valid bearer API key takes precedence over an accompanying query token; disabled authentication skips token validation. Token scope/expiry rejection applies when token authorization is actually used and credential comparison completes. WebRTC viewer leases SHALL not outlive the authorization used to negotiate or renew them. HLS playback SHALL refuse stale media when the corresponding preview is disabled or inactive.
 
 #### Scenario: Attempt access to another camera
 
-- **GIVEN** a preview token issued for one camera
+- **GIVEN** authentication is enabled, no valid bearer API key is supplied, credential comparison completes, and a preview token was issued for one camera
 - **WHEN** a client uses it for another camera's signaling
 - **THEN** HomeSec rejects the request
 
 #### Scenario: Negotiate near token expiry
 
-- **GIVEN** a valid preview token has less remaining lifetime than a requested viewer lease
+- **GIVEN** authentication is enabled, a valid preview token is the authorization used without an overriding API key, and it has less remaining lifetime than a requested viewer lease
 - **WHEN** a WebRTC viewer is negotiated or renewed
 - **THEN** its lease is bounded by the token's remaining lifetime
 
@@ -53,6 +57,18 @@ With authentication enabled, HomeSec SHALL authorize preview playback and signal
 - **GIVEN** HLS files exist but runtime status reports preview disabled or inactive
 - **WHEN** a client requests playback
 - **THEN** HomeSec refuses to serve those files as a current preview
+
+#### Scenario: API-key preview authorization ignores an invalid query token
+
+- **GIVEN** normal mode and a valid bearer API key with authentication enabled
+- **WHEN** a playback or signaling request also supplies an invalid preview query token
+- **THEN** authorization accepts the key without validating that token and camera/runtime/transport checks still apply
+
+#### Scenario: Disabled preview authentication ignores tokens
+
+- **GIVEN** normal mode and disabled authentication
+- **WHEN** preview playback or signaling carries an invalid query token
+- **THEN** the authorization guard skips token validation and other preview checks still apply
 
 ### Requirement: Preview yields according to recording policy
 
@@ -138,7 +154,7 @@ HomeSec SHALL expose talk policy, capability, selected backend, and stable refus
 
 ### Requirement: Talk preparation defines the authorized audio stream
 
-HomeSec SHALL prepare a talk session before streaming, returning a session identity, WebSocket endpoint, and PCM input contract. The default input SHALL be mono signed 16-bit little-endian PCM at 16000 Hz in 20 ms frames. With authentication enabled, preparation SHALL require the API key and streaming SHALL require valid stream authorization.
+HomeSec SHALL prepare a talk session before streaming, returning a session identity, WebSocket endpoint, and PCM input contract. The default input SHALL be mono signed 16-bit little-endian PCM at 16000 Hz in 20 ms frames. With authentication enabled, preparation SHALL require the API key and streaming SHALL require valid stream authorization. The WebSocket authorizer accepts a valid bearer API key before inspecting a stream query token; otherwise it validates that token against camera, session, and expiry. Disabled authentication skips those token checks. The socket is accepted before this authorization step, so token rejection closes it rather than preventing the WebSocket handshake.
 
 #### Scenario: Prepare a supported talk session
 
@@ -154,9 +170,15 @@ HomeSec SHALL prepare a talk session before streaming, returning a session ident
 
 #### Scenario: Use expired stream authorization
 
-- **GIVEN** server authentication is enabled
-- **WHEN** a client attempts to open a talk WebSocket with an expired stream token
-- **THEN** HomeSec refuses the connection
+- **GIVEN** server authentication is enabled with an effective key, the application is in normal mode, no valid bearer API key is supplied, and credential comparison completes
+- **WHEN** a client connects to the talk WebSocket using an expired stream token
+- **THEN** HomeSec closes the accepted WebSocket with a policy-violation close before opening a camera stream
+
+#### Scenario: Talk bearer authorization supersedes an expired token
+
+- **GIVEN** normal mode, enabled authentication, and a valid bearer API key
+- **WHEN** a talk WebSocket also supplies an expired query token
+- **THEN** authorization accepts the bearer key without validating that token and the start-message/session checks still apply
 
 ### Requirement: Talk sessions are exclusive and bounded per camera
 
@@ -172,7 +194,8 @@ HomeSec SHALL allow at most one reserved or active talk session per camera. Rese
 
 - **GIVEN** a reservation reaches `max_session_s` since preparation or an active session reaches `max_session_s` since activation or its audio-idle limit
 - **WHEN** the corresponding timeout is detected
-- **THEN** HomeSec releases the reservation and closes any active camera talk session
+- **THEN** HomeSec clears the matching reservation and initiates cleanup of any active camera session
+- **AND** successful backend cleanup closes that session; timeout detection alone is not proof that awaited I/O and closure have completed
 
 #### Scenario: Activation starts a new duration limit
 

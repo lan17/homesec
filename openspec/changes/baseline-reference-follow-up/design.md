@@ -42,6 +42,14 @@ The cancellation and activity counterexamples were reproduced with retrieved met
 
 The independent Codex review at `ad171a8` also found that clip destinations sanitize camera and basename segments (with possible collisions), storage plugins may return no view URL despite successful upload, and media-token issuance is gated by normal mode and database availability before clip lookup. The maintained storage/playback contracts now distinguish these boundaries. Follow-up tasks 4.4 and 6.4 remain unchecked until behavior is verified at actual storage/pipeline and mounted-route boundaries. No runtime fixes or collision-rejection guarantees are introduced.
 
+## Direct review of the current-behavior baseline
+
+The direct reviews at `9927085` identified API error-serialization and credential-comparison limits, authorization alternatives, Unicode media-header and staging-cleanup failures, upload preparation outside retries, backup housekeeping reclassification, cleanup's YOLO-shaped applicability and zero-frame deletion consequence, and selection-time retention races. The maintained specs/reference now describe those boundaries. Normal patch algebra, disabled-component validation, camera-reference deletion, probe meanings, time origins, attempt budgets, and structured-analysis interpretation are explicit as well. A subsequent correction review also narrowed FTP unlink and retention-deletion success guarantees.
+
+The initial 77 requirements and 222 scenarios remain historical promotion counts, not acceptance targets. The [scenario evidence register](../../../docs/behavior-evidence.md) accounts for the corrected inventory and distinguishes retained source review from isolated checks and unverified production-boundary coverage. New characterization scenarios describe limitations without making accidental failures desirable permanent policies. The older bootstrap and all pre-existing unchecked task lines are retained.
+
+New tasks 2.5, 3.4, 4.5, 4.6, 5.6, 5.7, 6.5, 8.3, 9.5, and 10.1 require verification at the stated real boundaries. Prior and rerun isolated harnesses use excerpts, fake external dependencies, and temporary files; they do not complete these repository-level tasks or prove full application/native/device conformance. Runtime fixes remain separate.
+
 ## Risks / Trade-offs
 
 - **Older evidence can become stale.** Compare the relevant maintained contract, source, and tests before implementing each task; retain explicit limits where execution is incomplete.

@@ -12,11 +12,13 @@ See [reference notes and known limitations](../../../docs/reference.md#capture-r
 
 Within one HomeSec state store, clip IDs share a namespace across all cameras and sources; camera names and source directories do not namespace event identity. Independent clips need distinct IDs, including against previously ingested records. Local-folder and FTP sources use filename stems without a global collision check. Source-local repeat suppression is not a global uniqueness guarantee, and a handoff does not necessarily create a new event record. See the [clip-ID collision and re-ingestion limitations](../../../docs/reference.md#capture-recording) for overwrite, timestamp, and notification-key consequences. Those consequences are existing limitations, not a policy to preserve.
 
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: Local folder ready-file ingestion
 
-The local-folder source SHALL accept top-level files matching its `*.mp4` glob after their last modification is at least the configured stability threshold old, identify clips by filename stem, and associate them with the configured camera. Glob matching SHALL follow the host platform's case rules; on Linux/POSIX with case-sensitive matching, uppercase `.MP4` files SHALL remain outside local ingestion.
+The local-folder source SHALL accept top-level files matching its `*.mp4` glob after their last modification is at least the configured stability threshold old, identify clips by filename stem, and associate them with the configured camera. Glob matching SHALL follow the host platform's case rules; on Linux/POSIX with case-sensitive matching, uppercase `.MP4` files SHALL remain outside local ingestion. Readiness uses modification age, not repeated size measurements or successful media decoding. Local-folder clip times SHALL be estimated from file mtime using a naive process-local datetime, a fixed 10-second duration, and a start time 10 seconds before mtime; they are not measured capture timestamps.
 
 #### Scenario: Recently modified file waits
 
@@ -43,6 +45,13 @@ The local-folder source SHALL accept top-level files matching its `*.mp4` glob a
 - **WHEN** the local-folder source scans its watch directory
 - **THEN** the uppercase suffix does not match `*.mp4` and the file is not handed off
 
+#### Scenario: Local-folder timestamps are estimates
+
+- **GIVEN** an accepted local-folder file with a readable modification time
+- **WHEN** its clip metadata is constructed
+- **THEN** `end_ts` is the process-local naive datetime derived from mtime, `duration_s` is 10, and `start_ts` is 10 seconds earlier
+- **AND** no media-duration measurement is required to construct those timestamps
+
 ### Requirement: Local folder repeat suppression
 
 The local-folder source SHALL suppress further handoffs for clip IDs it has already accepted during its running instance. It SHALL also suppress IDs loaded from a readable processed-file manifest in the watch directory.
@@ -61,7 +70,7 @@ The local-folder source SHALL suppress further handoffs for clip IDs it has alre
 
 ### Requirement: FTP completed-upload ingestion
 
-The FTP source SHALL hand off completed uploads whose extensions match the configured case-insensitive allowlist. An empty allowlist SHALL accept every extension. It SHALL exclude disallowed files from processing and delete them only when configured to do so.
+The FTP source SHALL hand off completed uploads whose extensions match the configured case-insensitive allowlist. An empty allowlist SHALL accept every extension. It SHALL exclude disallowed files from processing and attempt deletion only when configured to do so; an unlink failure is logged and can leave the file present. FTP clip times SHALL use file mtime as a naive process-local end time and subtract `default_duration_s` for the start time, rather than measuring media duration.
 
 #### Scenario: Allowed upload becomes a clip
 
@@ -80,18 +89,31 @@ The FTP source SHALL hand off completed uploads whose extensions match the confi
 - **GIVEN** an upload has a disallowed extension
 - **WHEN** the completed upload is received
 - **THEN** it is not handed off as a clip
-- **AND** the local file is deleted when `delete_non_matching` is enabled and retained when it is disabled
+- **AND** deletion is attempted when `delete_non_matching` is enabled, succeeds when unlink succeeds, and is not attempted when it is disabled
+
+#### Scenario: FTP timestamps use the configured duration estimate
+
+- **GIVEN** an allowed completed FTP upload with readable mtime and `default_duration_s` equal to 30
+- **WHEN** its clip metadata is constructed
+- **THEN** its naive process-local end time comes from mtime, its duration is 30 seconds, and its start time is 30 seconds earlier
 
 ### Requirement: FTP incomplete-upload handling
 
-The FTP source SHALL exclude incomplete uploads from clip handoff and SHALL delete their local files when `delete_incomplete` is enabled.
+The FTP source SHALL exclude incomplete uploads from clip handoff and SHALL attempt to delete their local files when `delete_incomplete` is enabled. Deletion failures are logged and can leave partial files present.
 
 #### Scenario: Interrupted upload is discarded or retained by configuration
 
 - **GIVEN** an FTP upload ends before completion
 - **WHEN** the source receives the incomplete-upload notification
 - **THEN** it does not hand off a clip
-- **AND** the partial file is deleted when `delete_incomplete` is enabled and retained when it is disabled
+- **AND** deletion is attempted when `delete_incomplete` is enabled, succeeds when unlink succeeds, and is not attempted when it is disabled
+
+#### Scenario: Incomplete upload cannot be unlinked
+
+- **GIVEN** an incomplete upload, enabled `delete_incomplete`, and an unlink operation that raises
+- **WHEN** the incomplete-upload handler attempts deletion
+- **THEN** it logs the deletion failure without handing off the partial file
+- **AND** the failed deletion can leave the file present
 
 ### Requirement: Motion-triggered recording boundaries
 

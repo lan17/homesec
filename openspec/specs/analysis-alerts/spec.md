@@ -8,11 +8,13 @@ Describe how completed clips are filtered and analyzed, how alert eligibility is
 
 See [reference notes and known limitations](../../../docs/reference.md#analysis-alerts) for this capability's operator guides and verification limits.
 
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
 ## Requirements
 
 ### Requirement: Clip processing stage ordering
 
-HomeSec SHALL start upload and filtering independently for an accepted clip. Eligible analysis SHALL begin after successful filtering without waiting for upload to finish. Alert evaluation and any notification SHALL use the eventual upload outcome. A filter failure SHALL end analysis and notification processing after the upload outcome is collected.
+HomeSec SHALL start upload and filtering independently for an accepted clip. Eligible analysis SHALL begin after successful filtering without waiting for upload to finish. Alert evaluation and any notification SHALL use the eventual upload outcome. A filter failure SHALL end analysis and notification processing after the upload outcome is collected. These returned-outcome rules assume upload destination preparation succeeds and the joined tasks return their handled outcomes; they do not contain every exception before the retry boundary. A destination-construction exception escapes the upload task and can abort its later join before alert evaluation and completion. Filtering and eligible analysis may already have run. See the [preparation failure limitation](../../../docs/reference.md#analysis-alerts).
 
 #### Scenario: Analysis overlaps a slow upload
 
@@ -30,9 +32,16 @@ HomeSec SHALL start upload and filtering independently for an accepted clip. Eli
 - **AND** processing attempts to record the filter failure and does not attempt successful processing completion for that run
 - **AND** the recorded failure status is subject to the concurrent-write limitations below
 
+#### Scenario: Upload preparation aborts the later join
+
+- **GIVEN** filtering succeeds, the upload task raises during destination preparation, and any eligible analysis finishes
+- **WHEN** processing awaits that upload task before alert evaluation
+- **THEN** the exception propagates instead of becoming a returned noncritical upload-failure outcome
+- **AND** that run does not reach alert evaluation, notification, or successful completion recording through this path
+
 ### Requirement: Supported object-filter results
 
-The built-in object filter SHALL apply its configured supported target classes, confidence threshold, and minimum box-height ratio to sampled frames. Its result SHALL expose detected classes, confidence, model identity, and sampled-frame count. It SHALL report no detected classes and zero confidence when no accepted boxes are found.
+The built-in object filter SHALL apply its configured supported target classes, confidence threshold, and minimum box-height ratio to sampled frames. Its result SHALL expose detected classes, confidence, model identity, and sampled-frame count. It SHALL report no detected classes and zero confidence when no accepted boxes are found. This result does not establish complete or even positive-frame inspection: a reported zero frame count skips sampling, a failed frame read ends sampling, and the worker can return an ordinary result from zero or partial decoded frames without an incomplete-decoding flag. A returned empty result is distinct from a raised detector exception. These are current decoding limitations, not an intended policy to classify unreadable footage as safe to delete.
 
 #### Scenario: Accepted target detection is returned
 
@@ -45,6 +54,18 @@ The built-in object filter SHALL apply its configured supported target classes, 
 - **GIVEN** detections have boxes shorter than the configured minimum fraction of frame height
 - **WHEN** the object filter evaluates the clip and finds no other accepted boxes
 - **THEN** it returns no detected classes and zero confidence
+
+#### Scenario: Zero decoded frames return an empty detector result
+
+- **GIVEN** the detector dependencies and model are available and capture reports zero frames or its first read returns failure rather than raising
+- **WHEN** the built-in detector finishes its sampling loop
+- **THEN** it returns empty detected classes, zero confidence, and `sampled_frames` equal to zero rather than a decoding exception
+
+#### Scenario: A later failed read returns accumulated detection
+
+- **GIVEN** some frames have been sampled, the early-exit condition has not been reached, and a later read returns failure rather than raising
+- **WHEN** the detector ends its loop
+- **THEN** it returns the classes, confidence, and sampled-frame count accumulated so far without an incomplete-decoding flag
 
 ### Requirement: Analysis run modes and skip reasons
 
@@ -78,7 +99,7 @@ HomeSec SHALL run analysis after successful filtering in `always` mode, skip it 
 
 ### Requirement: OpenAI-compatible analysis validation
 
-The OpenAI-compatible analyzer SHALL analyze timestamped sampled images within configured preprocessing limits and accept only responses that satisfy its structured sequence-analysis contract. Valid responses SHALL provide risk, activity, summary, and detailed analysis to downstream processing. Provider errors, malformed responses, and clips yielding no readable frames SHALL be treated as analysis failures.
+The OpenAI-compatible analyzer SHALL analyze timestamped sampled images within configured preprocessing limits and accept only responses that satisfy its structured sequence-analysis contract. Valid responses SHALL provide risk, activity, summary, and detailed analysis to downstream processing. Provider errors, malformed responses, and clips yielding no readable frames SHALL be treated as analysis failures. Validation enforces the structured model, not factual correctness about the footage: timestamp fields are strings, `frame_count` is not checked against submitted samples or constrained to be nonnegative, and entity chronology is not checked against the video. A schema-valid response is not proof of visual or temporal accuracy.
 
 #### Scenario: Valid structured response supplies analysis
 
@@ -103,6 +124,12 @@ The OpenAI-compatible analyzer SHALL analyze timestamped sampled images within c
 - **GIVEN** a clip yields no readable frames
 - **WHEN** analysis is attempted
 - **THEN** the attempt fails before sending an image-analysis request
+
+#### Scenario: Schema-valid output has inconsistent temporal metadata
+
+- **GIVEN** provider content satisfies the structured model but contains a negative frame count or string timestamps inconsistent with submitted frames
+- **WHEN** the analyzer parses that content
+- **THEN** those inconsistencies alone do not reject the structured result or certify its factual correctness
 
 ### Requirement: Default alert policy decision precedence
 
@@ -167,7 +194,7 @@ An exhausted analysis failure SHALL NOT itself abort alert evaluation. After suc
 
 ### Requirement: Bounded processing-stage retries
 
-Failed filtering, analysis, and individual notification attempts SHALL use the configured maximum attempt count and exponential backoff. A successful retry SHALL supply that stage's successful outcome. Exhaustion SHALL follow the stage's failure behavior rather than claiming success or retrying indefinitely within that processing run.
+Failures raised by filtering, analysis, and individual notification operations inside the retry runner SHALL use the configured maximum attempt count and exponential backoff. The shared runner SHALL use at least one attempt and delays of `max(0, backoff_s) * 2**(attempt - 1)` between failed attempts; this is an attempt budget, not a total elapsed-time limit. It adds no generic timeout around an operation; backend-specific deadlines and shutdown/cancellation are separate. A successful retry SHALL supply that stage's successful outcome. Exhaustion SHALL follow the stage's failure behavior rather than claiming success or retrying indefinitely within that processing run.
 
 #### Scenario: Transient stage failure recovers
 
@@ -183,9 +210,15 @@ Failed filtering, analysis, and individual notification attempts SHALL use the c
 - **THEN** no further attempt is made in that processing run
 - **AND** processing follows the critical filter-failure or noncritical analysis/notification-failure behavior as applicable
 
+#### Scenario: An operation never settles within the retry runner
+
+- **GIVEN** an attempt remains pending and no backend timeout, shutdown, or cancellation settles it
+- **WHEN** time passes while the runner awaits the operation
+- **THEN** the runner does not start another attempt merely because time has passed and does not impose a generic operation deadline
+
 ### Requirement: Notification eligibility and clip completion
 
-HomeSec SHALL attempt notification only when the alert decision permits it and enabled notifiers are available. With successful filtering and completed alert evaluation, processing SHALL attempt to mark the clip completed even when upload, analysis, or notification has failed. Completion SHALL NOT imply that a notification was delivered or every processing stage succeeded.
+HomeSec SHALL attempt notification only when the alert decision permits it and enabled notifiers are available. With successful filtering, completed alert evaluation, and all invoked stages having returned their handled outcomes, processing SHALL attempt to mark the clip completed even when upload, analysis, or notification has failed. Completion SHALL NOT imply that a notification was delivered or every processing stage succeeded.
 
 #### Scenario: Policy suppresses delivery
 
