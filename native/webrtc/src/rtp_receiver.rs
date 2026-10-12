@@ -231,6 +231,17 @@ mod tests {
     fn burst_keyframes_survive_a_busy_consumer_without_growing_its_udp_buffer() {
         // Given: Valid 197 KiB access units and a private 32 KiB receive buffer.
         // The inline baseline cannot drain while its consumer is doing fanout.
+        let nals = burst_rtp::keyframe();
+        let mut expected = Vec::new();
+        // The assembler prepends current SPS/PPS before the complete input AU.
+        for nal in nals
+            .iter()
+            .filter(|nal| matches!(nal[0] & 31, 7 | 8))
+            .chain(nals.iter())
+        {
+            expected.extend_from_slice(&[0, 0, 0, 1]);
+            expected.extend_from_slice(nal);
+        }
         let baseline = socket();
         sender(baseline.local_addr().unwrap(), 1).join().unwrap();
         let mut assembler = H264Assembler::default();
@@ -259,7 +270,10 @@ mod tests {
             if let Some(Event::Frame(frame)) = source.try_recv().unwrap() {
                 assert!(frame.keyframe);
                 assert!(frame.data.len() > 192 * 1024);
-                assert!(frame.data.ends_with(&[0x41, 0x41, 0x80]));
+                assert!(
+                    frame.data.as_ref() == expected.as_slice(),
+                    "received access unit must preserve every NAL in order"
+                );
                 frames.push(frame.timestamp);
             }
             assert!(Instant::now() < deadline, "whole burst frames were lost");
