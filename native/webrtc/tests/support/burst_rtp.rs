@@ -24,7 +24,9 @@ pub(crate) fn keyframe() -> Vec<Vec<u8>> {
     metadata.extend_from_slice(&[0x55; 16]); // 16-byte application UUID.
     metadata.resize(metadata.len() + payload_size - 16, 0x41);
     metadata.push(0x80); // rbsp_trailing_bits.
-    nals.push(metadata);
+    // H.264 SEI precedes the picture's VCL NAL units. Appending it after the
+    // IDR would begin a new, pictureless access unit at the end of a sample.
+    nals.insert(idr, metadata);
     nals
 }
 
@@ -83,4 +85,56 @@ fn packet(
     // A short packet burst keeps the producer below loopback receiver capacity,
     // while remaining much larger than the private 32 KiB regression socket.
     thread::sleep(Duration::from_micros(100));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::process::Command;
+
+    #[test]
+    fn burst_keyframes_decode_all_three_frames_to_eof() {
+        // Given: Three complete copies of the same large synthetic access unit.
+        let nals = keyframe();
+        let mut sample = tempfile::NamedTempFile::new().unwrap();
+        for _ in 0..3 {
+            for nal in &nals {
+                sample.write_all(&[0, 0, 0, 1]).unwrap();
+                sample.write_all(nal).unwrap();
+            }
+        }
+
+        // When: FFmpeg parses and decodes the entire bounded sample, without
+        // stopping early before a malformed trailing access unit is reached.
+        let output = Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-xerror",
+                "-filter_threads",
+                "1",
+                "-threads",
+                "1",
+                "-f",
+                "h264",
+                "-i",
+            ])
+            .arg(sample.path())
+            .args([
+                "-threads", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
+            ])
+            .output()
+            .unwrap();
+
+        // Then: All three pictures decode and no pictureless SEI remains at EOF.
+        assert!(
+            output.status.success(),
+            "large keyframe fixture did not decode to EOF: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout.len(), 3 * 160 * 120 * 3);
+    }
 }
