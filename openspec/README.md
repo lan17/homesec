@@ -1,4 +1,9 @@
-# HomeSec OpenSpec setup
+# HomeSec specifications and OpenSpec workflow
+
+Maintained public behavior lives in [capability specs](specs/). The
+[behavior reference](../docs/reference.md) connects those contracts to operator
+guides, exact API shapes, and known limitations. Proposed changes and review
+evidence live under `changes/`; merging a Git PR does not itself sync delta specs.
 
 Developer tooling: OpenSpec **1.14.1**, Node.js **20.19+**. Use the existing
 `spec-driven` schema and `core` workflow profile with the Codex integration.
@@ -23,6 +28,38 @@ Start a discussion with `openspec-explore`, or draft a change with
 `openspec-propose`, selected from Codex's Skills picker. CLI/IDE invocations use
 `$openspec-explore` and `$openspec-propose`. Implementation uses
 `openspec-apply-change` after the proposal is reviewed.
+
+## Maintaining behavior and references
+
+Read the affected maintained specs before proposing a feature or behavior change.
+Use an OpenSpec change with deltas for the existing capability names, meaningful
+boundary verification, and affected reference/guide updates in the same PR.
+Behavior-preserving internal refactors do not need an invented spec delta.
+
+Use the [shared API preconditions](specs/integration-contracts/spec.md#shared-api-preconditions)
+for endpoint scenarios and name the observation being asserted: returned stage
+result, stored snapshot/event, filesystem artifact, or completed response.
+The [scenario evidence register](../docs/behavior-evidence.md) maps scenarios to
+implementation leads and distinguishes retained source review, isolated checks,
+repository-boundary tests, and device QA. Map a specific test before claiming
+scenario coverage; representative requirement-level tests are not enough.
+Preserve historical archives, not a fixed requirement/scenario count. Add missing
+current behavior and update the register when accuracy requires it. Keep defects
+as explicit current limitations rather than desirable permanent policies.
+
+After review and verification, use `openspec-sync-specs` to update maintained
+specs, or `openspec-archive-change` to sync and archive completed work. Preserve
+known limitations in the reference page and keep links independent of an active
+change directory. Specs own behavioral semantics; the existing OpenAPI exporter
+owns exact API shapes, and operator guides own procedures. No additional document
+generator or copied schema inventory is required.
+
+Archive completed work promptly. Transfer unfinished documentation or verification
+follow-ups to a separate change instead of keeping promoted ADDED deltas active.
+A follow-up that preserves specified behavior can declare `skip_specs: true` in
+its `.openspec.yaml` and carry no delta spec files.
+
+## Regenerating tooling
 
 When regenerating this project's integrations, explicitly select the same
 profile and target:

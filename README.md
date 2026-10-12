@@ -8,6 +8,8 @@
 
 HomeSec is a self-hosted, extensible video pipeline for home security cameras. You can connect cameras directly via RTSP, receive clips over FTP, or implement your own ClipSource. From there, the pipeline filters events with AI and sends smart notifications. Your footage stays private and off third-party clouds.
 
+The [behavior reference](docs/reference.md) links the maintained public specifications, operator guides, and known limitations.
+
 ## Design Principles
 
 - **Local-Only Data Processing**: Video footage remains on the local network by default. Cloud usage (Storage, VLM/OpenAI) is strictly opt-in.
