@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useSetupStatusQuery } from '../../api/hooks/useSetupStatusQuery'
-import { WIZARD_STATE_STORAGE_KEY } from './useWizardState'
+import { WIZARD_STATE_STORAGE_KEY } from '../../runtime/setupWizardStorage'
 
 interface PersistedWizardStateForRedirect {
   completedSteps?: unknown

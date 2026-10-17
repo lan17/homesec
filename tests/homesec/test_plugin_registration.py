@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from homesec.plugins.registry import PluginType, get_plugin_names, load_plugin, plugin
+from homesec.plugins.registry import (
+    PluginType,
+    get_plugin_names,
+    load_plugin,
+    plugin,
+    validate_plugin,
+)
 
 
 class DummyConfig(BaseModel):
@@ -87,3 +93,48 @@ def test_unknown_plugin_error() -> None:
     """Test loading unknown plugin raises ValueError."""
     with pytest.raises(ValueError):
         load_plugin(PluginType.SOURCE, "missing_plugin", {})
+
+
+def test_runtime_context_filters_unknown_keys_and_supports_aliases(
+    clean_registry: None,
+) -> None:
+    class RuntimeConfig(BaseModel):
+        model_config = {"extra": "forbid"}
+
+        foo: str
+        runtime_value: str = Field(default="", alias="__runtime_value__")
+
+    class RuntimePlugin:
+        config_cls = RuntimeConfig
+
+        def __init__(self, config: RuntimeConfig) -> None:
+            self.config = config
+
+        @classmethod
+        def create(cls, config: RuntimeConfig) -> RuntimePlugin:
+            return cls(config)
+
+    # Given: A strict plugin config with an alias-only runtime context field
+    plugin(plugin_type=PluginType.SOURCE, name="runtime_source")(RuntimePlugin)
+
+    # When: Loading and validating with both supported and unrelated runtime context
+    loaded = load_plugin(
+        PluginType.SOURCE,
+        "runtime_source",
+        {"foo": "configured"},
+        __runtime_value__="injected",
+        unrelated_dependency=object(),
+    )
+    validated = validate_plugin(
+        PluginType.SOURCE,
+        "runtime_source",
+        {"foo": "configured"},
+        __runtime_value__="injected",
+        unrelated_dependency=object(),
+    )
+
+    # Then: Supported alias context is injected and unknown context is ignored
+    assert isinstance(loaded, RuntimePlugin)
+    assert loaded.config.runtime_value == "injected"
+    assert isinstance(validated, RuntimeConfig)
+    assert validated.runtime_value == "injected"

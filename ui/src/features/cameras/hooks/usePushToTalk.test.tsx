@@ -3,11 +3,48 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { apiClient } from '../../../api/client'
+type MockNativeLifecycleState = {
+  isActive: boolean
+  isBackgrounded: boolean
+  pauseCount: number
+  resumeCount: number
+}
+
+const nativeLifecycleMock = vi.hoisted(() => ({
+  state: {
+    isActive: true,
+    isBackgrounded: false,
+    pauseCount: 0,
+    resumeCount: 0,
+  } as MockNativeLifecycleState,
+}))
+
+vi.mock('../../../runtime/nativeAppLifecycle', () => ({
+  useNativeAppLifecycleState: () => nativeLifecycleMock.state,
+}))
+
+import { apiClient, browserServerBaseUrlProvider } from '../../../api/client'
+import { runtimeAuthTokenProvider } from '../../../api/tokenProvider'
 import type { TalkSessionResponse, TalkStatusResponse } from '../../../api/generated/types'
 import { usePushToTalk } from './usePushToTalk'
 
 type TalkStatusSnapshot = TalkStatusResponse & { httpStatus: number }
+
+function resetNativeLifecycleState() {
+  nativeLifecycleMock.state = {
+    isActive: true,
+    isBackgrounded: false,
+    pauseCount: 0,
+    resumeCount: 0,
+  }
+}
+
+function setNativeLifecycleState(nextState: Partial<MockNativeLifecycleState>) {
+  nativeLifecycleMock.state = {
+    ...nativeLifecycleMock.state,
+    ...nextState,
+  }
+}
 
 const idleStatus: TalkStatusResponse = {
   camera_name: 'front',
@@ -242,8 +279,68 @@ describe('usePushToTalk', () => {
   })
 
   afterEach(() => {
+    resetNativeLifecycleState()
     cleanup()
     vi.restoreAllMocks()
+    window.sessionStorage.clear()
+  })
+
+  it.each([false, true])('keeps delayed talk cleanup on its owning server, connection changed=%s', async (connectionChanged) => {
+    // Given: Server A has an active talk session and audio shutdown has not completed.
+    vi.mocked(apiClient.getCameraTalkStatus).mockRestore()
+    vi.mocked(apiClient.prepareCameraTalkSession).mockRestore()
+    vi.mocked(apiClient.stopCameraTalkSession).mockRestore()
+    const audioClose = deferred<void>()
+    class DelayedAudioContext extends FakeAudioContext {
+      close = vi.fn(() => audioClose.promise)
+    }
+    const { stream, track } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    Object.assign(globalThis, { AudioContext: DelayedAudioContext })
+    await browserServerBaseUrlProvider.setBaseUrl('https://a.example.test')
+    await runtimeAuthTokenProvider.setToken('synthetic-a')
+    const requests: Array<{ url: string; method: string; authorization: string | null }> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const method = options?.method ?? 'GET'
+      requests.push({ url: String(url), method, authorization: new Headers(options?.headers).get('authorization') })
+      const payload = method === 'POST' ? talkSession : method === 'DELETE' ? { accepted: true, state: 'idle' } : idleStatus
+      return new Response(JSON.stringify(payload), {
+        status: method === 'POST' ? 201 : method === 'DELETE' ? 202 : 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const { result, unmount } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    let start!: Promise<void>
+    act(() => { start = result.current.start() })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    await act(async () => {
+      sockets[0]!.open()
+      sockets[0]!.message(JSON.stringify({ type: 'ready' }))
+      await start
+    })
+    let stop!: Promise<void>
+    act(() => { stop = result.current.stop() })
+    expect(track.stop).toHaveBeenCalled()
+    expect(sockets[0]!.readyState).toBe(FakeWebSocket.CLOSED)
+
+    // When: Connection setup detaches the hook and optionally changes servers before audio closes.
+    unmount()
+    if (connectionChanged) {
+      await runtimeAuthTokenProvider.clearToken()
+      await browserServerBaseUrlProvider.setBaseUrl('https://b.example.test')
+      await runtimeAuthTokenProvider.setToken('synthetic-b')
+    }
+    await act(async () => { audioClose.resolve(); await stop })
+
+    // Then: Only A may receive cleanup; B never receives A's session identity or a stale status request.
+    expect(requests.some((request) => request.url.startsWith('https://b.example.test/'))).toBe(false)
+    const deletes = requests.filter((request) => request.method === 'DELETE')
+    expect(deletes.every((request) => request.url === 'https://a.example.test/api/v1/talk/cameras/front/sessions/tk_123')).toBe(true)
+    if (!connectionChanged) {
+      expect(deletes.length).toBeGreaterThan(0)
+      expect(deletes.every((request) => request.authorization === 'Bearer synthetic-a')).toBe(true)
+    }
   })
 
   it('starts, marks ready, and stops a talk session through the Phase 3 protocol', async () => {
@@ -755,5 +852,109 @@ describe('usePushToTalk', () => {
     expect(lastAudioWorkletNode?.connect).toHaveBeenCalledWith(lastGainNode)
     expect(lastGainNode?.gain.value).toBe(0)
     expect(lastGainNode?.connect).toHaveBeenCalled()
+  })
+
+  it('stops active talk on native background and refreshes status on resume', async () => {
+    // Given: An active native app push-to-talk stream
+    const { stream, track } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result, rerender } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({ type: 'ready' }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // When: iOS backgrounds the app during an active talk session
+    setNativeLifecycleState({ isActive: false, isBackgrounded: true, pauseCount: 1 })
+    rerender()
+
+    // Then: The hook sends the stop frame, tears down media, and stops the backend session
+    await waitFor(() => {
+      expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
+    })
+    expect(sockets[0].sent).toContain(JSON.stringify({ type: 'stop' }))
+    expect(sockets[0].lastClose).toEqual({ code: 1000, reason: 'Talk stopped' })
+    expect(track.stop).toHaveBeenCalled()
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    expect(result.current.canStart).toBe(false)
+    const statusCallsAfterPause = vi.mocked(apiClient.getCameraTalkStatus).mock.calls.length
+
+    await act(async () => {
+      await result.current.refreshStatus()
+    })
+    expect(apiClient.getCameraTalkStatus).toHaveBeenCalledTimes(statusCallsAfterPause)
+
+    // When: iOS resumes the app
+    setNativeLifecycleState({ isActive: true, isBackgrounded: false, resumeCount: 1 })
+    rerender()
+
+    // Then: The hook refreshes talk status for the foregrounded route
+    await waitFor(() => {
+      expect(vi.mocked(apiClient.getCameraTalkStatus).mock.calls.length).toBeGreaterThan(
+        statusCallsAfterPause,
+      )
+    })
+  })
+
+  it('stops the microphone across batched native pause and resume', async () => {
+    // Given: An active native app push-to-talk stream
+    const { stream, track } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result, rerender } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({ type: 'ready' }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // When: Pause and resume arrive before a render, leaving the final lifecycle state active
+    setNativeLifecycleState({ isActive: true, isBackgrounded: false, pauseCount: 1, resumeCount: 1 })
+    rerender()
+
+    // Then: The hook sends the stop frame, tears down media, and stops the backend session
+    await waitFor(() => {
+      expect(apiClient.stopCameraTalkSession).toHaveBeenCalledWith('front', 'tk_123')
+    })
+    expect(sockets[0].sent).toContain(JSON.stringify({ type: 'stop' }))
+    expect(sockets[0].lastClose).toEqual({ code: 1000, reason: 'Talk stopped' })
+    expect(track.stop).toHaveBeenCalled()
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    rerender()
+    expect(track.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not stop active talk on transient native inactive transitions before background', async () => {
+    // Given: An active push-to-talk stream while iOS is active
+    const { stream, track } = createMediaStream()
+    installBrowserFakes(vi.fn().mockResolvedValue(stream))
+    const { result, rerender } = renderHook(() => usePushToTalk('front'))
+    await waitFor(() => expect(result.current.canStart).toBe(true))
+    void act(() => {
+      void result.current.start()
+    })
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0].open()
+    sockets[0].message(JSON.stringify({ type: 'ready' }))
+    await waitFor(() => expect(result.current.isStreaming).toBe(true))
+
+    // When: iOS becomes inactive without the pause/background event
+    setNativeLifecycleState({ isActive: false, isBackgrounded: false })
+    rerender()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // Then: The talk stream remains active until actual backgrounding
+    expect(apiClient.stopCameraTalkSession).not.toHaveBeenCalled()
+    expect(sockets[0].readyState).toBe(FakeWebSocket.OPEN)
+    expect(track.stop).not.toHaveBeenCalled()
+    expect(result.current.isStreaming).toBe(true)
   })
 })

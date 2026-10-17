@@ -4,6 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "api:generate": "node ./scripts/api_codegen.mjs generate",
@@ -13,11 +16,19 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "build": "pnpm typecheck && vite build",
+    "ios:build": "pnpm build && cap copy ios",
+    "ios:sync": "pnpm build && cap sync ios",
+    "ios:open": "pnpm ios:sync && cap open ios",
+    "ios:run": "pnpm ios:sync && cap run ios",
     "lint": "eslint .",
     "check": "pnpm api:check && pnpm lint && pnpm test && pnpm build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/app": "8.1.0",
+    "@capacitor/core": "^8.3.3",
+    "@capacitor/ios": "^8.3.3",
+    "@capacitor/push-notifications": "8.1.1",
     "@tanstack/react-query": "^5.90.21",
     "hls.js": "^1.6.16",
     "react": "^19.2.0",
@@ -25,6 +36,7 @@
     "react-router-dom": "^7.13.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.3.3",
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",

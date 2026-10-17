@@ -373,10 +373,10 @@ class ClipPipeline:
                 result = await op()
             except Exception as exc:
                 duration_ms = int((time.monotonic() - started) * 1000)
-                will_retry = attempts < max_attempts
+                will_retry = attempts < max_attempts and self._is_retryable_stage_error(exc)
                 if on_attempt_failure is not None:
                     await on_attempt_failure(exc, attempts, will_retry, duration_ms)
-                if attempts >= max_attempts:
+                if not will_retry:
                     raise
                 logger.warning(
                     "Stage %s failed for %s (attempt %d/%d): %s",
@@ -396,6 +396,16 @@ class ClipPipeline:
                 if on_attempt_success is not None:
                     await on_attempt_success(result, attempts, duration_ms)
                 return result
+
+    @classmethod
+    def _is_retryable_stage_error(cls, exc: Exception) -> bool:
+        retryable = getattr(exc, "retryable", None)
+        if isinstance(retryable, bool):
+            return retryable
+        cause = getattr(exc, "cause", None)
+        if isinstance(cause, Exception):
+            return cls._is_retryable_stage_error(cause)
+        return True
 
     async def _upload_stage(self, clip: Clip) -> UploadOutcome | UploadError:
         """Upload clip to storage. Returns UploadOutcome or UploadError."""

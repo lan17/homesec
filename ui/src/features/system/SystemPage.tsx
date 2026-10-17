@@ -48,12 +48,12 @@ export function SystemPage() {
   }
 
   async function submitApiKey(apiKey: string): Promise<void> {
-    saveApiKey(apiKey)
+    await saveApiKey(apiKey)
     await Promise.all([statsQuery.refetch(), backupStatusQuery.refetch()])
   }
 
   async function clearStoredApiKey(): Promise<void> {
-    clearApiKey()
+    await clearApiKey()
     await Promise.all([statsQuery.refetch(), backupStatusQuery.refetch()])
   }
 

@@ -1226,6 +1226,40 @@ def test_runtime_worker_create_notifier_skips_disabled_entries(
     assert entries == []
 
 
+def test_runtime_worker_create_notifier_skips_apns_when_postgres_unavailable(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: APNs mobile notifications are configured but the worker Postgres store did not initialize
+    config = _make_config(
+        notifiers=[
+            NotifierConfig(
+                backend="apns_mobile",
+                enabled=True,
+                config={"bundle_id": "com.levneiman.homesec"},
+            )
+        ]
+    )
+    service = _make_service(config)
+    service._state_store = worker_module.PostgresStateStore(
+        "postgresql://homesec:homesec@localhost/homesec"
+    )
+
+    def _unexpected_plugin_load(*_: object, **__: object) -> object:
+        raise AssertionError("APNs notifier should not load without repository context")
+
+    monkeypatch.setattr(worker_module, "load_notifier_plugin", _unexpected_plugin_load)
+
+    # When: Building notifier stack for runtime bundle
+    with caplog.at_level(logging.WARNING):
+        notifier, entries = service._create_notifier(config)
+
+    # Then: The worker keeps recording runtime startup independent of APNs persistence
+    assert isinstance(notifier, worker_module._NoopNotifier)
+    assert entries == []
+    assert "Skipping apns_mobile notifier" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_runtime_worker_run_runtime_skips_analyzer_load_when_run_mode_never(
     monkeypatch: pytest.MonkeyPatch,

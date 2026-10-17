@@ -4,6 +4,7 @@ import Hls from 'hls.js'
 import { apiClient, isAPIError } from '../../../api/client'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
+import { isIOSNativeApp } from '../../../runtime/nativeRuntime'
 import { describeUnknownError } from '../../shared/errorPresentation'
 import { useCameraPreview } from '../hooks/useCameraPreview'
 import { useWebRTCPreview } from '../hooks/useWebRTCPreview'
@@ -13,6 +14,7 @@ const PLAYLIST_POLL_DELAY_MS = 500
 const PLAYLIST_POLL_MAX_ATTEMPTS = 12
 const PLAYBACK_RETRY_DELAY_MS = 1000
 const PREVIEW_DISPLAY_STATUS_STATES = new Set(['starting', 'ready', 'degraded', 'stopping'])
+const HLS_MIME_TYPES = ['application/vnd.apple.mpegurl', 'application/x-mpegURL']
 
 type WebKitFullscreenDocument = Document & {
   webkitExitFullscreen?: () => Promise<void> | void
@@ -67,6 +69,22 @@ function previewLabel(state: string | undefined): string {
     default:
       return 'Idle'
   }
+}
+
+function canPlayNativeHls(video: HTMLVideoElement): boolean {
+  return HLS_MIME_TYPES.some((mimeType) => video.canPlayType(mimeType) !== '')
+}
+
+function previewPlaybackFailureMessage(isIOSNative: boolean): string {
+  return isIOSNative
+    ? 'Live preview could not play in the iOS app. Stop and start live view; if it keeps failing, check server or VPN reachability.'
+    : 'Preview playback failed. Stop and start live view.'
+}
+
+function previewUnsupportedMessage(isIOSNative: boolean): string {
+  return isIOSNative
+    ? 'This iOS app cannot play the live preview stream. Check the HomeSec preview configuration and try again.'
+    : 'This browser cannot play the live preview stream.'
 }
 
 function startLabel(statusState: string | undefined): string {
@@ -146,6 +164,7 @@ export function CameraPreviewPanel({
     ? (playlistState.url === playlistUrl && playlistState.attempt === previewAttempt ? playlistState.error : null)
       ?? (playbackError?.url === playlistUrl && playbackError.attempt === previewAttempt ? playbackError.error : null)
     : null
+  const isIOSNative = isIOSNativeApp()
   const effectiveState =
     session && (!status || !PREVIEW_DISPLAY_STATUS_STATES.has(status.state))
       ? session.state
@@ -221,24 +240,27 @@ export function CameraPreviewPanel({
   }, [])
 
   useEffect(() => {
-    const video = videoRef.current
-    if (!video || !playlistUrl || !playlistReady) {
+    const videoElement = videoRef.current
+    if (!videoElement || !playlistUrl || !playlistReady) {
       return
     }
+    const activeVideo: HTMLVideoElement = videoElement
+    const activePlaylistUrl = playlistUrl
 
     let hls: Hls | null = null
     let keepPlaybackActive = true
+    let playbackCleanedUp = false
     let resumeTimeoutId: number | null = null
     let resumeIntervalId: number | null = null
 
-    video.muted = true
-    video.defaultMuted = true
-    video.autoplay = true
-    video.playsInline = true
-    video.setAttribute('autoplay', '')
-    video.setAttribute('muted', '')
-    video.setAttribute('playsinline', '')
-    video.setAttribute('webkit-playsinline', '')
+    activeVideo.muted = true
+    activeVideo.defaultMuted = true
+    activeVideo.autoplay = true
+    activeVideo.playsInline = true
+    activeVideo.setAttribute('autoplay', '')
+    activeVideo.setAttribute('muted', '')
+    activeVideo.setAttribute('playsinline', '')
+    activeVideo.setAttribute('webkit-playsinline', '')
 
     const clearResumeTimeout = (): void => {
       if (resumeTimeoutId === null) {
@@ -266,10 +288,10 @@ export function CameraPreviewPanel({
         if (!keepPlaybackActive) {
           return
         }
-        if (!video.paused && !video.ended) {
+        if (!activeVideo.paused && !activeVideo.ended) {
           return
         }
-        void video.play().catch(() => {})
+        void activeVideo.play().catch(() => {})
       }, 0)
     }
 
@@ -280,7 +302,7 @@ export function CameraPreviewPanel({
         if (!keepPlaybackActive || document.visibilityState === 'hidden') {
           return
         }
-        if (video.paused || video.ended) {
+        if (activeVideo.paused || activeVideo.ended) {
           requestPlayback()
         }
       }, PLAYBACK_RETRY_DELAY_MS)
@@ -292,34 +314,56 @@ export function CameraPreviewPanel({
       }
     }
 
-    const cleanupPlayback = (): void => {
+    function releaseMediaElement(): void {
+      hls?.destroy()
+      hls = null
+      activeVideo.pause()
+      activeVideo.removeAttribute('src')
+      activeVideo.load()
+    }
+
+    function teardownPlayback(): void {
+      if (playbackCleanedUp) {
+        return
+      }
+      playbackCleanedUp = true
       keepPlaybackActive = false
       clearResumeTimeout()
       clearResumeInterval()
-      video.removeEventListener('pause', requestPlayback)
-      video.removeEventListener('ended', requestPlayback)
-      video.removeEventListener('loadedmetadata', requestPlayback)
-      video.removeEventListener('loadeddata', requestPlayback)
-      video.removeEventListener('canplay', requestPlayback)
-      video.removeEventListener('canplaythrough', requestPlayback)
-      video.removeEventListener('stalled', requestPlayback)
-      video.removeEventListener('waiting', requestPlayback)
+      activeVideo.removeEventListener('pause', requestPlayback)
+      activeVideo.removeEventListener('ended', requestPlayback)
+      activeVideo.removeEventListener('loadedmetadata', requestPlayback)
+      activeVideo.removeEventListener('loadeddata', requestPlayback)
+      activeVideo.removeEventListener('canplay', requestPlayback)
+      activeVideo.removeEventListener('canplaythrough', requestPlayback)
+      activeVideo.removeEventListener('stalled', requestPlayback)
+      activeVideo.removeEventListener('waiting', requestPlayback)
+      activeVideo.removeEventListener('error', handleVideoError)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      hls?.destroy()
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
+      releaseMediaElement()
     }
 
-    video.addEventListener('pause', requestPlayback)
-    video.addEventListener('ended', requestPlayback)
-    video.addEventListener('loadedmetadata', requestPlayback)
-    video.addEventListener('loadeddata', requestPlayback)
-    video.addEventListener('canplay', requestPlayback)
-    video.addEventListener('canplaythrough', requestPlayback)
-    video.addEventListener('stalled', requestPlayback)
-    video.addEventListener('waiting', requestPlayback)
+    function handleVideoError(): void {
+      setPlaybackError({ url: activePlaylistUrl, attempt: previewAttempt, error: previewPlaybackFailureMessage(isIOSNative) })
+      teardownPlayback()
+    }
+
+    activeVideo.addEventListener('pause', requestPlayback)
+    activeVideo.addEventListener('ended', requestPlayback)
+    activeVideo.addEventListener('loadedmetadata', requestPlayback)
+    activeVideo.addEventListener('loadeddata', requestPlayback)
+    activeVideo.addEventListener('canplay', requestPlayback)
+    activeVideo.addEventListener('canplaythrough', requestPlayback)
+    activeVideo.addEventListener('stalled', requestPlayback)
+    activeVideo.addEventListener('waiting', requestPlayback)
+    activeVideo.addEventListener('error', handleVideoError)
     document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    if (isIOSNative && canPlayNativeHls(activeVideo)) {
+      activeVideo.src = playlistUrl
+      startPlaybackMonitor()
+      return teardownPlayback
+    }
 
     if (Hls.isSupported()) {
       hls = new Hls({
@@ -327,7 +371,7 @@ export function CameraPreviewPanel({
         lowLatencyMode: true,
       })
       hls.loadSource(playlistUrl)
-      hls.attachMedia(video)
+      hls.attachMedia(activeVideo)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         startPlaybackMonitor()
       })
@@ -335,33 +379,30 @@ export function CameraPreviewPanel({
         if (!data.fatal) {
           return
         }
-        setPlaybackError({ url: playlistUrl, attempt: previewAttempt, error: 'Preview playback failed. Restart preview.' })
-        keepPlaybackActive = false
-        clearResumeTimeout()
-        clearResumeInterval()
-        hls?.destroy()
-        hls = null
+        setPlaybackError({ url: playlistUrl, attempt: previewAttempt, error: previewPlaybackFailureMessage(isIOSNative) })
+        teardownPlayback()
       })
 
       startPlaybackMonitor()
 
-      return cleanupPlayback
+      return teardownPlayback
     }
 
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playlistUrl
+    if (canPlayNativeHls(activeVideo)) {
+      activeVideo.src = playlistUrl
       startPlaybackMonitor()
-      return cleanupPlayback
+      return teardownPlayback
     }
 
     queueMicrotask(() => {
       if (keepPlaybackActive) {
-        setPlaybackError({ url: playlistUrl, attempt: previewAttempt, error: 'This browser cannot play the live preview stream.' })
+        setPlaybackError({ url: playlistUrl, attempt: previewAttempt, error: previewUnsupportedMessage(isIOSNative) })
+        teardownPlayback()
       }
     })
 
-    return cleanupPlayback
-  }, [playlistReady, playlistUrl, previewAttempt])
+    return teardownPlayback
+  }, [isIOSNative, playlistReady, playlistUrl, previewAttempt])
 
   const toggleFullscreen = async (): Promise<void> => {
     const viewport = viewportRef.current
@@ -387,9 +428,6 @@ export function CameraPreviewPanel({
   }
 
   const statusMessage = useMemo(() => {
-    if (warning) {
-      return warning
-    }
     if (isWebRTC && webRTC.error) {
       return webRTC.error
     }
@@ -401,6 +439,9 @@ export function CameraPreviewPanel({
         return 'Preview media is still starting.'
       }
       return describeUnknownError(error)
+    }
+    if (warning) {
+      return warning
     }
     if ((playlistUrl && !playlistReady) || (isWebRTC && webRTC.state !== 'connected')) {
       return 'Starting live view.'

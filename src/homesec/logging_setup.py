@@ -121,6 +121,9 @@ def configure_logging(*, log_level: str = "INFO", camera_name: str | None = None
     # Reduce noisy third-party request logs by default.
     logging.getLogger("dropbox").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # HTTPX request URLs contain raw APNs device tokens.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     config = PostgresConfig()
     if not config.enabled:

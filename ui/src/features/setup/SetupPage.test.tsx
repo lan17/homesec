@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
-import { WIZARD_STATE_STORAGE_KEY } from './useWizardState'
+import { WIZARD_STATE_STORAGE_KEY } from '../../runtime/setupWizardStorage'
 import { SetupPage } from './SetupPage'
 
 vi.mock('./steps/CameraStep', () => ({
