@@ -63,6 +63,8 @@ class FfmpegFramePipeline:
         on_frame: Callable[[], None],
         clock: Clock,
         timeout_capabilities: RTSPTimeoutCapabilities | None = None,
+        startup_timeout_s: float = 2.0,
+        on_hwaccel_failure: Callable[[], None] | None = None,
     ) -> None:
         self._output_dir = output_dir
         self._frame_queue_size = frame_queue_size
@@ -75,6 +77,8 @@ class FfmpegFramePipeline:
         self._on_frame = on_frame
         self._clock = clock
         self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
+        self._startup_timeout_s = startup_timeout_s
+        self._on_hwaccel_failure = on_hwaccel_failure
 
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr: Any | None = None
@@ -89,6 +93,31 @@ class FfmpegFramePipeline:
         self._motion_profile = profile
 
     def start(self, rtsp_url: str) -> None:
+        if self._process is not None:
+            if self._process.poll() is None:
+                raise RuntimeError("Previous compatible motion input is still owned")
+            self.stop()
+        hardware_attempt = self._hwaccel_config.is_available and not self._hwaccel_failed
+        try:
+            first_frame = self._start_input(rtsp_url)
+            if not hardware_attempt:
+                return
+            if first_frame.wait(self._startup_timeout_s):
+                return
+        except RuntimeError:
+            if not hardware_attempt:
+                raise
+
+        # A native trial certifies its linked backend, not this compatible executor.
+        # Stop the failed input before one software retry and remember the failure.
+        self._hwaccel_failed = True
+        if self._on_hwaccel_failure is not None:
+            self._on_hwaccel_failure()
+        self.stop()
+        logger.warning("Compatible motion hardware input failed; retrying with software decoding")
+        self._start_input(rtsp_url)
+
+    def _start_input(self, rtsp_url: str) -> Event:
         (
             self._process,
             self._stderr,
@@ -103,6 +132,7 @@ class FfmpegFramePipeline:
         frame_size = self._frame_size
         frame_queue = self._frame_queue
         stop_event = self._reader_stop
+        first_frame = Event()
 
         def reader_loop() -> None:
             stdout = process.stdout if process else None
@@ -133,9 +163,11 @@ class FfmpegFramePipeline:
                         frame_queue.put_nowait(raw)
                     except Full:
                         pass
+                first_frame.set()
 
         self._reader_thread = Thread(target=reader_loop, name="frame-reader", daemon=True)
         self._reader_thread.start()
+        return first_frame
 
     def stop(self) -> None:
         if self._reader_stop is not None:
@@ -144,8 +176,12 @@ class FfmpegFramePipeline:
         if self._process is not None:
             try:
                 self._stop_process(self._process, "Frame pipeline", terminate_timeout_s=2)
-            except Exception:
+            except Exception as exc:
+                if self._process.poll() is None:
+                    raise RuntimeError("Failed to stop compatible motion input") from exc
                 logger.exception("Error stopping frame pipeline process")
+            if self._process.poll() is None:
+                raise RuntimeError("Failed to stop compatible motion input")
             self._process = None
 
         if self._reader_thread is not None:

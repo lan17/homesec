@@ -29,6 +29,10 @@ class HelperError(RuntimeError):
     """Bounded transport failure; messages deliberately contain no input data."""
 
 
+class HelperTimeoutError(HelperError):
+    """The typed transport could not complete before its caller deadline."""
+
+
 RequestT = TypeVar("RequestT", bound=BaseModel)
 ReplyT = TypeVar("ReplyT", bound=HelperMessage)
 
@@ -60,6 +64,7 @@ class HelperClient(Generic[RequestT, ReplyT]):
         self._pending: dict[str, Queue[ReplyT | None]] = {}
         self._pending_lock = Lock()
         self._write_lock = Lock()
+        self._stop_lock = Lock()
         self._ready: Queue[ReplyT | None] = Queue(maxsize=1)
         self._reader = Thread(target=self._read, name="webrtc-helper-replies", daemon=True)
         self._reader.start()
@@ -68,7 +73,7 @@ class HelperClient(Generic[RequestT, ReplyT]):
         try:
             result = self._ready.get(timeout=timeout_s)
         except Empty as exc:
-            raise HelperError(f"{self._context} helper startup timed out") from exc
+            raise HelperTimeoutError(f"{self._context} helper startup timed out") from exc
         if result is None or result.event != "ready":
             raise HelperError(f"{self._context} helper did not become ready")
         return result
@@ -88,8 +93,9 @@ class HelperClient(Generic[RequestT, ReplyT]):
                 request = self._request_model.model_validate(
                     {"command": command, "request_id": request_id, **fields}
                 )
-            except ValueError as exc:
-                raise HelperError(f"Invalid {self._context.lower()} helper command") from exc
+            except ValueError:
+                # Pydantic's cause can contain private URLs or other command inputs.
+                raise HelperError(f"Invalid {self._context.lower()} helper command") from None
             payload = request.model_dump_json(exclude_none=True).encode() + b"\n"
             if len(payload) > _MAX_MESSAGE_BYTES:
                 raise HelperError(f"{self._context} helper request exceeds limit")
@@ -97,7 +103,7 @@ class HelperClient(Generic[RequestT, ReplyT]):
             try:
                 result = waiter.get(timeout=max(0.0, deadline - time.monotonic()))
             except Empty as exc:
-                raise HelperError(f"{self._context} helper command timed out") from exc
+                raise HelperTimeoutError(f"{self._context} helper command timed out") from exc
             if result is None:
                 raise HelperError(f"{self._context} helper disconnected")
             return result
@@ -107,7 +113,7 @@ class HelperClient(Generic[RequestT, ReplyT]):
 
     def _write(self, payload: bytes, deadline: float) -> None:
         if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
-            raise HelperError(f"{self._context} helper command timed out")
+            raise HelperTimeoutError(f"{self._context} helper command timed out")
         try:
             stdin = self.process.stdin
             if stdin is None:
@@ -119,12 +125,14 @@ class HelperClient(Generic[RequestT, ReplyT]):
                 while remaining:
                     timeout = deadline - time.monotonic()
                     if timeout <= 0:
-                        raise HelperError(f"{self._context} helper command timed out")
+                        raise HelperTimeoutError(f"{self._context} helper command timed out")
                     try:
                         written = os.write(descriptor, remaining)
                     except BlockingIOError:
                         if not selector.select(timeout):
-                            raise HelperError(f"{self._context} helper command timed out") from None
+                            raise HelperTimeoutError(
+                                f"{self._context} helper command timed out"
+                            ) from None
                         continue
                     except InterruptedError:
                         continue
@@ -169,37 +177,46 @@ class HelperClient(Generic[RequestT, ReplyT]):
             if self._ready.empty():
                 self._ready.put_nowait(None)
 
-    def stop(self) -> None:
-        """Allow camera teardown, then bound helper and child process cleanup."""
-        if self.process.poll() is None:
+    def stop(self, *, timeout_s: float | None = None) -> None:
+        """Stop and reap the process group within an optional caller cleanup budget."""
+        budget = 6.0 if timeout_s is None else max(0.05, timeout_s)
+        deadline = time.monotonic() + budget
+        cooperative_cap = 0.5 if timeout_s is None else budget * 0.15
+        terminate_cap = 2.0 if timeout_s is None else budget * 0.3
+        reap_cap = 2.0 if timeout_s is None else budget * 0.3
+        with self._stop_lock:
+
+            def remaining(cap: float) -> float:
+                return max(0.001, min(cap, deadline - time.monotonic()))
+
+            if self.process.poll() is None:
+                try:
+                    self.request("stop", timeout_s=remaining(cooperative_cap))
+                except HelperError:
+                    pass
+                try:
+                    self.process.wait(timeout=remaining(cooperative_cap))
+                except subprocess.TimeoutExpired:
+                    pass
+            if self.process.poll() is None:
+                try:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    self.process.wait(timeout=remaining(terminate_cap))
+                except subprocess.TimeoutExpired:
+                    pass
+            # Kill even if the helper exited, to close any surviving group children.
             try:
-                self.request("stop", timeout_s=0.5)
-            except HelperError:
-                pass
-            # The reply precedes Rust destruction, including RTSP TEARDOWN.
-            try:
-                self.process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
-        if self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
+                os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             try:
-                self.process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                self.process.wait(timeout=2.0)
-        # A helper could have exited while leaving its FFmpeg child in the group.
-        try:
-            os.killpg(self.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        for stream in (self.process.stdin, self.process.stdout):
-            if stream is not None:
-                stream.close()
-        self._reader.join(timeout=1.0)
+                self.process.wait(timeout=remaining(reap_cap))
+            except subprocess.TimeoutExpired as exc:
+                raise HelperError(f"{self._context} helper cleanup timed out") from exc
+            for stream in (self.process.stdin, self.process.stdout):
+                if stream is not None:
+                    stream.close()
+            self._reader.join(timeout=remaining(1.0))

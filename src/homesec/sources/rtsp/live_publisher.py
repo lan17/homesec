@@ -24,7 +24,7 @@ from homesec.sources.rtsp.capabilities import (
 from homesec.sources.rtsp.clock import Clock, SystemClock
 from homesec.sources.rtsp.discovery import (
     CameraProbeResult,
-    FfprobeStreamDiscovery,
+    NativeStreamDiscovery,
     ProbeError,
     ProbeStreamInfo,
     build_camera_key,
@@ -34,6 +34,7 @@ from homesec.sources.rtsp.hardware import (
     HardwareAccelConfig,
     HardwareAccelDetector,
 )
+from homesec.sources.rtsp.inspection import InspectionGroup
 from homesec.sources.rtsp.utils import (
     _build_timeout_attempts,
     _format_cmd,
@@ -143,6 +144,7 @@ class HLSLivePublisher(LivePublisher):
         clock: Clock | None = None,
         timeout_capabilities: RTSPTimeoutCapabilities | None = None,
         stream_discovery: StreamDiscovery | None = None,
+        inspection_helper_path: str = "homesec-webrtc",
         background_maintenance: bool = True,
         maintenance_interval_s: float | None = None,
     ) -> None:
@@ -170,10 +172,13 @@ class HLSLivePublisher(LivePublisher):
         self._rtsp_io_timeout_s = float(rtsp_io_timeout_s)
         self._clock = clock or SystemClock()
         self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
-        self._stream_discovery = stream_discovery or FfprobeStreamDiscovery(
+        self._owns_stream_discovery = stream_discovery is None
+        self._active_inspection: InspectionGroup | None = None
+        self._inspection_helper_path = inspection_helper_path
+        self._stream_discovery = stream_discovery or NativeStreamDiscovery(
             rtsp_connect_timeout_s=self._rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self._rtsp_io_timeout_s,
-            timeout_capabilities=self._timeout_capabilities,
+            helper_path=inspection_helper_path,
         )
         self._background_maintenance = background_maintenance
         self._maintenance_interval_s = (
@@ -301,10 +306,13 @@ class HLSLivePublisher(LivePublisher):
 
     def request_stop(self) -> None:
         with self._lock:
+            inspection = self._active_inspection
             self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
             self._last_cancellation_result = self._status
+        if inspection is not None:
+            inspection.cancel()
 
     def note_viewer_activity(self, viewer_id: str | None = None) -> None:
         with self._lock:
@@ -370,10 +378,14 @@ class HLSLivePublisher(LivePublisher):
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
             self._last_cancellation_result = self._recording_priority_refusal()
+            inspection = self._active_inspection
+        if inspection is not None:
+            inspection.cancel()
 
     def shutdown(self) -> None:
         maintenance_thread: Thread | None = None
         with self._lock:
+            inspection = self._active_inspection
             self._stop_request_token += 1
             self._cancel_pending_start_locked()
             self._stop_locked(clear_error=True)
@@ -382,6 +394,8 @@ class HLSLivePublisher(LivePublisher):
             maintenance_thread = self._maintenance_thread
             self._maintenance_thread = None
 
+        if inspection is not None:
+            inspection.cancel()
         if maintenance_thread is not None and maintenance_thread is not current_thread():
             maintenance_thread.join(timeout=2.0)
 
@@ -390,7 +404,28 @@ class HLSLivePublisher(LivePublisher):
         *,
         start_token: int,
     ) -> LivePublisherStatus | LivePublisherStartRefusal:
-        result = self._start_impl(start_token=start_token)
+        with self._lock:
+            if self._start_was_cancelled_locked(start_token):
+                return self._last_cancellation_result
+            inspection = InspectionGroup(
+                helper_path=self._inspection_helper_path,
+                total_timeout_s=13.0,
+                connect_timeout_s=self._rtsp_connect_timeout_s,
+                io_timeout_s=self._rtsp_io_timeout_s,
+            )
+            self._active_inspection = inspection
+            if self._owns_stream_discovery:
+                self._stream_discovery = NativeStreamDiscovery(
+                    rtsp_connect_timeout_s=self._rtsp_connect_timeout_s,
+                    rtsp_io_timeout_s=self._rtsp_io_timeout_s,
+                    inspection=inspection,
+                )
+        try:
+            result = self._start_impl(start_token=start_token)
+        finally:
+            inspection.close()
+            with self._lock:
+                self._active_inspection = None
         if isinstance(result, LivePublisherStartRefusal):
             with self._lock:
                 return self._maybe_downgrade_after_recording_preview_failure_locked(
@@ -666,7 +701,11 @@ class HLSLivePublisher(LivePublisher):
             video_args=_software_h264_transcode_args(self._segment_duration_s),
             audio_args=audio_args,
         )
-        hardware_encoder = HardwareAccelDetector.select_h264_encoder(self._hwaccel_config)
+        hardware_encoder = HardwareAccelDetector.select_h264_encoder(
+            self._hwaccel_config,
+            helper_path=self._inspection_helper_path,
+            inspection=self._active_inspection,
+        )
         if hardware_encoder is None:
             return (software_plan,)
 

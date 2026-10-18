@@ -63,7 +63,7 @@ The motion helper uses pinned `ffmpeg-next` bindings to bundled FFmpeg 8.1.3 dec
 
 The existing RTSP source owns and supervises the helper for its selected main/substream. Motion does not depend on preview viewers. Eligible CPU H.264 inputs prefer native motion. Hardware decoding, custom FFmpeg flags, unsupported inputs, or an unavailable helper retain the existing FFmpeg/OpenCV implementation. Native failure detaches its input before compatibility fallback. A first-frame timeout at the existing read/readiness deadline also selects compatibility input, preventing repeated native restarts before a long-GOP camera becomes decodable. Once a frame has been consumed or discarded for readiness, missing input retains the existing stall/reconnect policy. Prepared frames use the existing drop-oldest queue before detection; only Python-consumed frames advance the baseline, and reconnect readiness discards remain separate from detection. Each read carries the source-selected idle or recording threshold. Control output has a bounded write deadline so an abandoned parent cannot retain the camera session. Python continues to own recording lifecycle, sensitivity selection, reconnect/stall policy, and clip delivery to the existing pipeline.
 
-The motion-only stage merged in https://github.com/lan17/homesec/pull/113 used independent inputs. Shared recording now uses the same pinned FFmpeg libraries for demuxing and muxing, as described below. FFmpeg and ffprobe command-line tools remain necessary for preflight and compatibility paths. Build and platform prerequisites are documented in [the operator notes](webrtc-preview.md#local-development-and-python-installations).
+The motion-only stage merged in https://github.com/lan17/homesec/pull/113 used independent inputs. Shared recording now uses the same pinned FFmpeg libraries for demuxing and muxing, as described below. Inspection uses the separate bounded native mode described below. Compatible recording, motion, WebRTC conversion, and HLS execution can still require FFmpeg CLI. Build and platform prerequisites are documented in [the operator notes](webrtc-preview.md#local-development-and-python-installations).
 
 ## Shared input and recording
 
@@ -92,6 +92,105 @@ The preview worker owns its decoder, filters, and encoders independently of moti
 Existing authorization leases, viewer budgets, recording-priority policy, and camera preflight refusal behavior apply. Preflight still conservatively probes separate camera sessions and may refuse concurrent preview even when native consumers could share one input. Unsupported video, hardware/custom settings, HLS, and push-to-talk keep their established paths, so shared ingestion does not guarantee a single session for every configuration.
 
 Static x264 changes the combined distributed helper's license to GPLv3. HomeSec source remains Apache-2.0. Exact source pins, notices, licenses, and corresponding-source packaging are documented in [the operator notes](webrtc-preview.md#docker).
+
+## Native inspection and preflight
+
+[PR 124](https://github.com/lan17/homesec/pull/124) implements the approved
+[native-camera-preflight plan](../openspec/changes/native-camera-preflight/design.md)
+for [ticket 194](https://app.notion.com/p/3fdd8336c59f813eac7effebd396fb79).
+Its acceptance evidence is tracked below and in the [scenario register](behavior-evidence.md#native-camera-inspection).
+The private `homesec-webrtc --inspect` mode is mutually exclusive with motion,
+shared, and preview modes. It uses the existing bounded stdin/stdout transport;
+camera URLs travel only in the private control pipe. It is short-lived and owns
+no clip callback or repository connection.
+
+| Command | Inputs and evidence |
+| --- | --- |
+| `inspect_capabilities` | Camera-free linked library/build identity, compiled codecs/parsers/muxers/filters, optional backend/device availability |
+| `inspect_metadata` | URL and connect/I/O/operation limits; first video/audio codecs, dimensions, optional numeric and rational FPS |
+| `inspect_decode` | Selected backend/device and bounded sample; actual frame count and requested backend, with no hidden software success |
+| `inspect_recording` | MP4 video copy, copy/AAC/no audio, stream/wallclock timing, private target and duration; finalized media packet/byte counts and timing signals |
+| `inspect_overlap` | At most three independent roles, including equal URLs; per-role media/completion evidence and supported/session-limit/failed classification |
+| `stop` | Cooperative cancellation followed by parent process-group termination/kill and reap when required |
+
+The helper advertises inspection protocol version 1. Python validates replies
+with private Pydantic models and a 128,000-byte control limit. A missing or
+incompatible helper, missing linked component, malformed reply, or failed cleanup
+is a local dependency failure. It cannot silently select a CLI inspector.
+
+`InspectionGroup` owns one monotonic lifetime and its private trial directory.
+Each operation receives the smaller of its cap and the remaining group budget.
+Startup retains the eight-second **per-operation** cap and derives its finite
+total from candidate metadata attempts, up to six profile/timestamp trials,
+and role-aware overlap checks, plus startup/cleanup allowance. Setup retains
+its ten-second total and eleven-second registry budget, reserving cleanup time.
+Cancellation stops new operations, stops/reaps the helper, and then removes
+trial output. Setup waits for its worker's cleanup instead of abandoning a
+`to_thread` task. A local deadline cannot guarantee remote camera lease expiry
+after a connection is lost; protocol teardown is best-effort within that bound.
+
+Metadata is independent of shared recording eligibility and the first-IDR gate.
+Python retains low/high selection, profile IDs and copy → AAC → silent ordering,
+timestamp retry thresholds/weighting, startup retry/exhaustion, and recording
+priority. Native packet/mux timing measurements populate non-monotonic DTS,
+backward audio queue, DTS discontinuity, and truncated-SEI counters. Arbitrary
+`stream.ffmpeg_flags` remain outside startup validation. Trial files never enter
+production clip handoff. The shared runtime's H.264/AAC-LC eligibility is unchanged.
+
+Independent role opens remain conservative even for the same URL. Only explicit
+RTSP session-limit evidence proves capacity denial; authentication, network,
+decode, and timeout failures remain unclassified. Optional inspection does not
+stop an active recorder. Shared-aware topology/admission remains ticket 192.
+
+Runtime, readiness and Test Connection use the same source-owned helper selection:
+the existing WebRTC helper override is honored even when preview is disabled;
+HLS and defaults use `homesec-webrtc`. Setup passes existing `PreviewConfig`
+through its existing probe registry, using active configuration first, then saved
+configuration, then defaults. An invalid override fails rather than using another
+helper. The public `ffmpeg` check key is retained and describes **inspection**
+readiness, not end-to-end execution readiness.
+
+Hardware reporting separates compiled features, usable device creation, actual
+decode through the requested backend, and requested encoder availability. A native
+hardware trial does not certify a different compatible executor. If compatible
+motion hardware fails before usable frames, it is stopped before one software
+retry; that camera worker remembers the failure. Failed software returns to the
+existing source retry policy, without cycling back to hardware. A process that
+cannot be reaped remains owned and blocks another input; cleanup failure is
+reported and a later stop can retry. Hardware readiness observes a complete-frame
+event without consuming or reordering the bounded frame queue. HLS retains its
+existing software plan fallback. Remaining media execution replacement belongs
+to ticket 195; final CLI dependency/package retirement belongs to ticket 196.
+
+### Inspection compatibility evidence
+
+Evidence for this branch is deliberately separated by boundary. Protocol peers
+exercise Python policy/ownership, library fixtures exercise linked codecs, fake
+RTSP cameras exercise protocol/helper behavior, and IPyCam exercises the local
+webcam. Device and production evidence must be recorded separately.
+
+| Combination | Required evidence / current qualification |
+| --- | --- |
+| H.264 and HEVC MP4 video copy | Actual RTSP helper trials produce finalized nonempty media, including H.264/AAC and video-only HEVC; shared recorder eligibility remains narrower |
+| AAC, AC3, ALAC, EAC3, MP2, MP3 copy | All have linked-library media trials. Actual RTSP helper copy passed for AAC, RFC 4184 AC3, MPA payload-14 MP2/MP3, and MP2T payload-33 EAC3. MP2 layer-II headers and source-packet byte identity establish copy even when MP4 labels it MPEG/MP3. ALAC actual RTSP/RPC coverage remains pending |
+| G.711 A-law/mu-law and Opus to AAC | Linked-library fixtures and actual RTSP helper AAC conversion passed for static payloads 8/0 and Opus at 48 kHz; missing components cannot select silence |
+| Silent/no-audio and invalid audio | Actual broken-audio → silent helper trial, header-only refusal, active writer cancellation, real write and trailer seek failure tests plus Python ordered-fallback checks |
+| Timestamp retry | Actual fake-RTSP packet-clock reset validates a successful baseline and lower-score wallclock retry; failed/no-improvement outcomes have typed-peer Python policy coverage, with real packet-fixture coverage still pending |
+| Independent overlap | Actual equal-URL three-session, successful media, late failure and empty-input checks passed. Empty input reaches PLAY, returns failed with role timeout, and disconnects before cleanup completion |
+| macOS ARM64 software and VideoToolbox | Actual linked capability exchange and five VideoToolbox-decoded webcam frames passed; local source flow below uses CPU |
+| Linux VAAPI, CUDA/NVENC, QSV | GPU-free Linux arm64 static build, four hardware tests, camera-free capability exchange and missing-device refusal passed; actual GPU/device and x86_64 validation remain pending |
+| Live IPyCam | Earlier checkpoint: startup, single-candidate setup, motion, rotation, preview publisher coexistence, recovery/HLS and shutdown passed. Final source-freeze runs retained native recording/preview but used compatible motion after the existing three-second native first-observation deadline; seven children reaped per run and inspection launched no CLI. Eight final MP4s independently decoded and four stored copies matched. The final single-candidate setup attempt timed out in 9.283 s with cleanup, under its unchanged ten-second budget. No browser-viewer/audio/Linux-GPU parity claim |
+| Other camera codecs/custom execution flags | No universal codec claim; unsupported combinations remain explicit acceptance gaps |
+
+Caller wiring is implemented while these acceptance gaps remain open; the PR is
+still a draft and does not establish completed compatibility acceptance. The final
+stable `make check` passed 186 Rust, 1,705 Python and 325 UI tests, plus required
+static checks and builds. The final Linux arm64 actual-helper suite passed 16
+tests and its hardware suite passed four tests; capability exchanges with absent
+and incompatible CLI tools and static-link inspection passed. These results do
+not close the outstanding platform/device matrix. Compatible motion can still run during the local CPU
+flow when native startup misses its existing first-observation deadline; native
+inspection success does not remove that remaining execution dependency.
 
 ## Implementation Log
 - 2026-10-03: Leonidas authorized this architecture and staged implementation in a new PR. Inspected existing source, motion, recording, WebRTC, build, tests, and prior Notion tickets. Created branch codex/shared-rust-media from current main after verifying the WebRTC PR is merged. First milestone is native H.264 video-only preview ingestion; later milestones remain planned.

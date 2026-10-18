@@ -5,13 +5,28 @@ from __future__ import annotations
 import importlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal
 
-from homesec.models.setup import TestConnectionResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from homesec.models.config import PreviewConfig
+from homesec.models.setup import PreflightCheckResponse, TestConnectionResponse
 
 SetupProbeTarget = Literal["camera", "storage", "notifier", "analyzer"]
 SetupProbeFn = Callable[..., Awaitable[TestConnectionResponse]]
 _DEFAULT_SETUP_PROBE_TIMEOUT_S = 5.0
+
+
+class SetupProbeContext(BaseModel):
+    """Existing shared configuration supplied privately to source-owned probes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preview: PreviewConfig = Field(default_factory=PreviewConfig)
+
+
+SetupReadinessFn = Callable[..., Awaitable[PreflightCheckResponse]]
 
 
 @dataclass(frozen=True)
@@ -20,6 +35,8 @@ class _RegisteredSetupProbe:
     backend: str
     probe: SetupProbeFn
     timeout_s: float | None
+    contextual: bool
+    readiness: SetupReadinessFn | None
 
 
 class SetupProbeRegistry:
@@ -34,6 +51,8 @@ class SetupProbeRegistry:
         backend: str,
         *,
         timeout_s: float | None = _DEFAULT_SETUP_PROBE_TIMEOUT_S,
+        contextual: bool = False,
+        readiness: SetupReadinessFn | None = None,
     ) -> Callable[[SetupProbeFn], SetupProbeFn]:
         """Register a setup probe for a target/backend pair."""
 
@@ -52,17 +71,36 @@ class SetupProbeRegistry:
                 backend=normalized_backend,
                 probe=probe,
                 timeout_s=timeout_s,
+                contextual=contextual,
+                readiness=readiness,
             )
             return probe
 
         return decorator
 
-    def get(self, target: SetupProbeTarget, backend: str) -> SetupProbeFn | None:
+    def get(
+        self,
+        target: SetupProbeTarget,
+        backend: str,
+        *,
+        context: SetupProbeContext | None = None,
+    ) -> SetupProbeFn | None:
         """Return a registered probe for the target/backend pair, if present."""
         entry = self._probes.get((target, backend.strip().lower()))
         if entry is None:
             return None
+        if entry.contextual and context is not None:
+            return partial(entry.probe, context=context)
         return entry.probe
+
+    def get_readiness(self, target: SetupProbeTarget, backend: str) -> SetupReadinessFn | None:
+        """Return camera-free readiness registered beside its source probe."""
+        entry = self._probes.get((target, backend.strip().lower()))
+        return entry.readiness if entry is not None else None
+
+    def uses_context(self, target: SetupProbeTarget, backend: str) -> bool:
+        entry = self._probes.get((target, backend.strip().lower()))
+        return entry.contextual if entry is not None else False
 
     def get_backends(self, target: SetupProbeTarget) -> list[str]:
         """Return known special-case backends for a target."""
@@ -102,15 +140,36 @@ def setup_probe(
     backend: str,
     *,
     timeout_s: float | None = _DEFAULT_SETUP_PROBE_TIMEOUT_S,
+    contextual: bool = False,
+    readiness: SetupReadinessFn | None = None,
 ) -> Callable[[SetupProbeFn], SetupProbeFn]:
     """Decorator for registering a setup-only probe handler."""
-    return _SETUP_PROBE_REGISTRY.register(target, backend, timeout_s=timeout_s)
+    return _SETUP_PROBE_REGISTRY.register(
+        target, backend, timeout_s=timeout_s, contextual=contextual, readiness=readiness
+    )
 
 
-def get_setup_probe(target: SetupProbeTarget, backend: str) -> SetupProbeFn | None:
+def get_setup_probe(
+    target: SetupProbeTarget,
+    backend: str,
+    *,
+    context: SetupProbeContext | None = None,
+) -> SetupProbeFn | None:
     """Look up a setup-only probe handler."""
     load_builtin_setup_probes()
-    return _SETUP_PROBE_REGISTRY.get(target, backend)
+    return _SETUP_PROBE_REGISTRY.get(target, backend, context=context)
+
+
+def get_setup_readiness(target: SetupProbeTarget, backend: str) -> SetupReadinessFn | None:
+    """Look up a camera-free dependency check in the existing probe registry."""
+    load_builtin_setup_probes()
+    return _SETUP_PROBE_REGISTRY.get_readiness(target, backend)
+
+
+def setup_probe_uses_context(target: SetupProbeTarget, backend: str) -> bool:
+    """Only opted-in callbacks require shared configuration to be resolved."""
+    load_builtin_setup_probes()
+    return _SETUP_PROBE_REGISTRY.uses_context(target, backend)
 
 
 def get_setup_probe_timeout(target: SetupProbeTarget, backend: str) -> float | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 import time
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from tests.homesec.inspection_helpers import inspection_helper, inspection_requests
 
 from homesec.models.clip import Clip
 from homesec.models.config import CameraTalkConfig, TalkConfig
@@ -26,6 +28,7 @@ from homesec.models.talk import (
     TalkState,
 )
 from homesec.sources.rtsp.core import RTSPRunState, RTSPSource, RTSPSourceConfig
+from homesec.sources.rtsp.discovery import ProbeStreamInfo
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig
 from homesec.sources.rtsp.live_publisher import (
@@ -345,7 +348,7 @@ def test_hwaccel_detection_used_when_enabled(
     """Hardware accel detection should run when not disabled."""
 
     # Given: a detector that returns a CUDA config
-    def _detect(_: str) -> HardwareAccelConfig:
+    def _detect(_: str, *, helper_path: str = "homesec-webrtc") -> HardwareAccelConfig:
         return HardwareAccelConfig(hwaccel="cuda")
 
     monkeypatch.setattr("homesec.sources.rtsp.core.HardwareAccelDetector.detect", _detect)
@@ -372,7 +375,7 @@ def test_runtime_preview_publisher_receives_hwaccel_config(
             super().__init__()
             captured_kwargs.update(kwargs)
 
-    def _detect(_: str) -> HardwareAccelConfig:
+    def _detect(_: str, *, helper_path: str = "homesec-webrtc") -> HardwareAccelConfig:
         return HardwareAccelConfig(hwaccel="cuda")
 
     monkeypatch.setattr("homesec.sources.rtsp.core.HardwareAccelDetector.detect", _detect)
@@ -459,6 +462,9 @@ def test_startup_preflight_fallback_keeps_concurrent_preview_unclassified(
     """Session fallback should not force a process-local preview downgrade by itself."""
 
     class _FailingPreflight:
+        def cancel(self) -> None:
+            pass
+
         def run(
             self,
             *,
@@ -508,6 +514,9 @@ async def test_rtsp_start_degrades_when_startup_preflight_fails(
     """RTSP start() should not raise just because the camera is offline."""
 
     class _FailingPreflight:
+        def cancel(self) -> None:
+            pass
+
         def __init__(self) -> None:
             self.calls = 0
 
@@ -561,6 +570,9 @@ def test_startup_preflight_retries_until_ready(tmp_path: Path) -> None:
     """Transient RTSP preflight failures should retry inside the source thread path."""
 
     class _FlakyPreflight:
+        def cancel(self) -> None:
+            pass
+
         def __init__(self) -> None:
             self.calls = 0
 
@@ -617,6 +629,9 @@ def test_startup_preflight_passes_actual_preview_input_url_when_concurrency_requ
     """RTSPSource should validate the preview input URL used by the HLS publisher."""
 
     class _FakePreflight:
+        def cancel(self) -> None:
+            pass
+
         def __init__(self) -> None:
             self.preview_rtsp_url: str | None = None
             self.preview_probe_rtsp_url: str | None = None
@@ -2305,39 +2320,22 @@ def test_recording_disables_timeout_flags_after_first_unsupported(tmp_path: Path
     assert "-stimeout" not in calls[2]
 
 
-def test_probe_retries_without_timeouts_when_unsupported(tmp_path: Path) -> None:
-    """Stream probe should retry without timeouts when ffprobe rejects them."""
-    # Given: an RTSP source and a fake ffprobe error on timeout options
-    config = _make_config(tmp_path, rtsp_url="rtsp://host/stream")
+def test_recovery_metadata_uses_selected_native_helper(tmp_path: Path) -> None:
+    # Given: runtime uses a configured helper override even with preview disabled
+    helper = inspection_helper(tmp_path)
+    config = _make_config(
+        tmp_path, __runtime_preview__={"enabled": False, "config": {"helper_path": str(helper)}}
+    )
     source = RTSPSource(config, camera_name="cam")
-    calls: list[list[str]] = []
-
-    class FakeResult:
-        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def fake_run(cmd: list[str], **kwargs: object) -> FakeResult:
-        _ = kwargs
-        calls.append(list(cmd))
-        if "-rw_timeout" in cmd or "-stimeout" in cmd:
-            return FakeResult(returncode=1, stderr="Option rw_timeout not found")
-        return FakeResult(
-            returncode=0,
-            stdout='{"streams":[{"codec_name":"h264","width":640,"height":480,"avg_frame_rate":"30/1"}]}',
-        )
-
-    # When: probing the stream info
-    with patch("homesec.sources.rtsp.core.subprocess.run", side_effect=fake_run):
-        info = source._probe_stream_info(source.rtsp_url)
-
-    # Then: probe retries without timeouts and succeeds
+    # When: recovery requests fresh stream metadata
+    info = source._probe_stream_info(source.rtsp_url, timeout_s=1)
+    # Then: recovery shares native discovery and preserves its operation budget
     assert info is not None
-    assert info["width"] == 640
-    assert len(calls) == 2
-    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
-    assert "-rw_timeout" not in calls[1]
+    assert info.video_codec == "hevc"
+    assert info.width == 1280
+    requests = inspection_requests(tmp_path)
+    assert requests[0]["command"] == "inspect_metadata"
+    assert requests[0]["operation_timeout_s"] <= 1
 
 
 def test_recording_survives_short_stall(tmp_path: Path) -> None:
@@ -2423,10 +2421,12 @@ def test_detect_stream_recovers_after_probe(tmp_path: Path) -> None:
     source._activate_detect_fallback(now)
     source._detect_next_probe_at = now
 
-    def _probe(rtsp_url: str, *, timeout_s: float = 10.0) -> dict[str, object] | None:
+    def _probe(rtsp_url: str, *, timeout_s: float = 10.0) -> ProbeStreamInfo | None:
         _ = rtsp_url
         _ = timeout_s
-        return {"width": 640, "height": 480, "avg_frame_rate": "30/1"}
+        return ProbeStreamInfo(
+            url=rtsp_url, width=640, height=480, fps=30, fps_raw="30/1", probe_ok=True
+        )
 
     source._probe_stream_info = _probe  # type: ignore[assignment]
 
@@ -2449,7 +2449,7 @@ def test_detect_probe_schedules_backoff(tmp_path: Path) -> None:
     source._activate_detect_fallback(now)
     source._detect_next_probe_at = 0.0
 
-    def _probe(_: str, *, timeout_s: float = 3.0) -> dict[str, object] | None:
+    def _probe(_: str, *, timeout_s: float = 3.0) -> ProbeStreamInfo | None:
         _ = timeout_s
         return None
 
@@ -2473,9 +2473,9 @@ def test_detect_switch_failure_falls_back(tmp_path: Path) -> None:
     source._activate_detect_fallback(now)
     source._detect_next_probe_at = now
 
-    def _probe(_: str, *, timeout_s: float = 3.0) -> dict[str, object] | None:
+    def _probe(_: str, *, timeout_s: float = 3.0) -> ProbeStreamInfo | None:
         _ = timeout_s
-        return {"width": 640, "height": 480}
+        return ProbeStreamInfo(url="rtsp://host/stream", width=640, height=480, probe_ok=True)
 
     def _fail_start() -> None:
         raise RuntimeError("switch failed")
@@ -2495,39 +2495,56 @@ def test_detect_switch_failure_falls_back(tmp_path: Path) -> None:
 
 
 def test_probe_stream_info_returns_none_on_error(tmp_path: Path) -> None:
-    """ffprobe errors should return None and stop retries."""
-    # Given: a source and an ffprobe failure without timeout option errors
-    config = _make_config(tmp_path)
+    # Given: a source-owned native helper reports a camera connection failure
+    helper = inspection_helper(tmp_path, behavior="error = 'connection_failed'")
+    config = _make_config(
+        tmp_path, __runtime_preview__={"enabled": False, "config": {"helper_path": str(helper)}}
+    )
     source = RTSPSource(config, camera_name="cam")
-
-    def _fake_run(*_args: object, **_kwargs: object) -> object:
-        class Result:
-            returncode = 1
-            stdout = ""
-            stderr = "Some other ffprobe error"
-
-        return Result()
-
-    # When: probing stream info
-    with patch("homesec.sources.rtsp.core.subprocess.run", side_effect=_fake_run):
-        info = source._probe_stream_info(source.rtsp_url)
-
-    # Then: probe fails and returns None
+    # When: recovery inspects metadata
+    info = source._probe_stream_info(source.rtsp_url)
+    # Then: failed metadata preserves recovery's existing retry policy
     assert info is None
 
 
-def test_probe_stream_info_handles_exception(tmp_path: Path) -> None:
-    """ffprobe exceptions should return None."""
-    # Given: a source and an ffprobe exception
-    config = _make_config(tmp_path)
+def test_probe_stream_info_handles_missing_helper(tmp_path: Path) -> None:
+    # Given: the configured helper override is unavailable
+    config = _make_config(
+        tmp_path,
+        __runtime_preview__={
+            "enabled": False,
+            "config": {"helper_path": str(tmp_path / "missing-helper")},
+        },
+    )
     source = RTSPSource(config, camera_name="cam")
-
-    # When: probing stream info raises
-    with patch(
-        "homesec.sources.rtsp.core.subprocess.run",
-        side_effect=RuntimeError("ffprobe crashed"),
-    ):
-        info = source._probe_stream_info(source.rtsp_url)
-
-    # Then: probe fails and returns None
+    # When: recovery inspects the stream
+    info = source._probe_stream_info(source.rtsp_url)
+    # Then: it cannot silently select another local media implementation
     assert info is None
+
+
+@pytest.mark.asyncio
+async def test_source_shutdown_cancels_actual_native_startup_work(tmp_path: Path) -> None:
+    # Given: startup is blocked in a real helper process owning camera work
+    marker = tmp_path / "startup.pid"
+    helper = inspection_helper(
+        tmp_path,
+        behavior=f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))\nwhile True: time.sleep(.01)",
+    )
+    config = _make_config(
+        tmp_path, __runtime_preview__={"enabled": False, "config": {"helper_path": str(helper)}}
+    )
+    source = RTSPSource(
+        config, camera_name="cam", frame_pipeline=FakeFramePipeline(), recorder=FakeRecorder()
+    )
+    await source.start()
+    deadline = time.monotonic() + 2
+    while not marker.exists() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert marker.exists()
+    # When: the runtime shuts down the source
+    await source.shutdown()
+    # Then: native work is reaped before shutdown returns and background retry opens no more inputs
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)
+    assert len(inspection_requests(tmp_path)) == 1

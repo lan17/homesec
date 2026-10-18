@@ -1,30 +1,23 @@
 from __future__ import annotations
 
-import json
 import logging
-import subprocess
 import time
 from collections.abc import Sequence
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
-from homesec.sources.rtsp.capabilities import (
-    RTSPTimeoutCapabilities,
-    get_global_rtsp_timeout_capabilities,
-)
-from homesec.sources.rtsp.utils import (
-    _build_timeout_attempts,
-    _format_cmd,
-    _is_timeout_option_error,
-    _redact_rtsp_url,
+from homesec.sources.rtsp.inspection import (
+    InspectionFailure,
+    InspectionGroup,
+    MetadataEvidence,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class ProbeStreamInfo(BaseModel):
-    """Stream metadata discovered from ffprobe for one RTSP URL."""
+    """Stream metadata discovered through native inspection for one RTSP URL."""
 
     model_config = {"extra": "forbid"}
 
@@ -61,8 +54,8 @@ class ProbeError(Exception):
         self.__cause__ = cause
 
 
-class FfprobeStreamDiscovery:
-    """RTSP stream discovery using ffprobe (TCP transport only)."""
+class NativeStreamDiscovery:
+    """Bounded RTSP metadata inspection, independent of recorder eligibility."""
 
     def __init__(
         self,
@@ -70,12 +63,14 @@ class FfprobeStreamDiscovery:
         rtsp_connect_timeout_s: float,
         rtsp_io_timeout_s: float,
         command_timeout_s: float = 10.0,
-        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
+        helper_path: str = "homesec-webrtc",
+        inspection: InspectionGroup | None = None,
     ) -> None:
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._command_timeout_s = command_timeout_s
-        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
+        self._helper_path = helper_path
+        self._inspection = inspection
 
     def probe(
         self,
@@ -87,99 +82,51 @@ class FfprobeStreamDiscovery:
         ordered_urls = _dedupe_urls(candidate_urls)
         if not ordered_urls:
             return ProbeError(camera_key, "No candidate RTSP URLs provided for probing")
-
-        streams: list[ProbeStreamInfo] = []
-        for rtsp_url in ordered_urls:
-            streams.append(self._probe_single(rtsp_url))
-
+        try:
+            if self._inspection is not None:
+                streams = [self._probe_single(url, self._inspection) for url in ordered_urls]
+            else:
+                with InspectionGroup(
+                    helper_path=self._helper_path,
+                    total_timeout_s=(len(ordered_urls) * self._command_timeout_s) + 3.0,
+                    connect_timeout_s=self._rtsp_connect_timeout_s,
+                    io_timeout_s=self._rtsp_io_timeout_s,
+                ) as inspection:
+                    streams = [self._probe_single(url, inspection) for url in ordered_urls]
+        except InspectionFailure as exc:
+            return ProbeError(camera_key, str(exc), cause=exc)
         return CameraProbeResult(
             camera_key=camera_key,
             streams=streams,
-            attempted_urls=list(ordered_urls),
+            attempted_urls=ordered_urls,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 
-    def _probe_single(self, rtsp_url: str) -> ProbeStreamInfo:
-        base_cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "stream=codec_type,codec_name,width,height,avg_frame_rate",
-            "-of",
-            "json",
-            "-rtsp_transport",
-            "tcp",
-        ]
-
-        timeout_args = self._timeout_capabilities.build_ffprobe_timeout_args(
-            connect_timeout_s=self._rtsp_connect_timeout_s,
-            io_timeout_s=self._rtsp_io_timeout_s,
-        )
-
-        attempts = [
-            (
-                label,
-                base_cmd + timeout_attempt_args + [rtsp_url],
+    def _probe_single(self, rtsp_url: str, inspection: InspectionGroup) -> ProbeStreamInfo:
+        try:
+            evidence = inspection.request(
+                "inspect_metadata",
+                timeout_s=self._command_timeout_s,
+                rtsp_url=rtsp_url,
             )
-            for label, timeout_attempt_args in _build_timeout_attempts(timeout_args)
-        ]
-
-        for label, cmd in attempts:
-            redacted_cmd = _format_probe_cmd(cmd)
-            logger.debug("Running RTSP probe (%s): %s", label, redacted_cmd)
-
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=self._command_timeout_s,
-                    check=False,
-                )
-            except Exception as exc:
-                return ProbeStreamInfo(
-                    url=rtsp_url,
-                    probe_ok=False,
-                    error=f"ffprobe execution failed: {type(exc).__name__}",
-                )
-
-            if result.returncode != 0:
-                stderr_text = _redact_stderr(result.stderr, rtsp_url)
-                if label == "timeouts" and _is_timeout_option_error(stderr_text):
-                    changed = self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
-                    if changed:
-                        logger.warning(
-                            "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
-                        )
-                    else:
-                        logger.debug(
-                            "ffprobe timeout options still unsupported for %s",
-                            _redact_rtsp_url(rtsp_url),
-                        )
-                    continue
-                return ProbeStreamInfo(
-                    url=rtsp_url,
-                    probe_ok=False,
-                    error=f"ffprobe failed ({result.returncode}): {stderr_text[:240]}",
-                )
-
-            if label == "timeouts":
-                self._timeout_capabilities.note_ffprobe_timeout_success()
-
-            parsed = _parse_ffprobe_payload(result.stdout, rtsp_url)
-            if parsed.probe_ok:
-                return parsed
-
-            # Parsed payload may still indicate timeout-option issue in stderr after exit=0,
-            # but that's unusual; we intentionally do not retry here.
-            return parsed
-
-        return ProbeStreamInfo(
-            url=rtsp_url,
-            probe_ok=False,
-            error="ffprobe failed after retries",
-        )
+            if not isinstance(evidence, MetadataEvidence):
+                raise InspectionFailure("helper_failure")
+            usable = evidence.width is not None and evidence.height is not None
+            return ProbeStreamInfo(
+                url=rtsp_url,
+                video_codec=evidence.video_codec,
+                audio_codec=evidence.audio_codec,
+                width=evidence.width,
+                height=evidence.height,
+                fps=evidence.fps,
+                fps_raw=evidence.fps_raw,
+                probe_ok=usable,
+                error=None if usable else "Native inspection: invalid_video",
+            )
+        except InspectionFailure as exc:
+            if exc.terminal:
+                raise
+            return ProbeStreamInfo(url=rtsp_url, probe_ok=False, error=str(exc))
 
 
 def build_camera_key(camera_name: str, rtsp_url: str) -> str:
@@ -217,108 +164,3 @@ def _dedupe_urls(urls: Sequence[str]) -> list[str]:
         seen.add(url)
         ordered.append(url)
     return ordered
-
-
-def _format_probe_cmd(cmd: list[str]) -> str:
-    redacted = list(cmd)
-    if redacted:
-        redacted[-1] = _redact_rtsp_url(str(redacted[-1]))
-    return _format_cmd(redacted)
-
-
-def _redact_stderr(stderr_text: str, rtsp_url: str) -> str:
-    if not stderr_text:
-        return ""
-    return stderr_text.replace(rtsp_url, _redact_rtsp_url(rtsp_url)).strip()
-
-
-def _parse_ffprobe_payload(payload: str, rtsp_url: str) -> ProbeStreamInfo:
-    try:
-        raw = json.loads(payload)
-    except Exception:
-        return ProbeStreamInfo(
-            url=rtsp_url,
-            probe_ok=False,
-            error="ffprobe returned invalid JSON",
-        )
-
-    streams: list[dict[str, object]] = []
-    raw_streams = raw.get("streams")
-    if isinstance(raw_streams, list):
-        for item in raw_streams:
-            if isinstance(item, dict):
-                streams.append(item)
-
-    video_stream: dict[str, object] | None = None
-    audio_stream: dict[str, object] | None = None
-
-    for stream in streams:
-        codec_type = stream.get("codec_type")
-        if codec_type == "video" and video_stream is None:
-            video_stream = stream
-        if codec_type == "audio" and audio_stream is None:
-            audio_stream = stream
-
-    if video_stream is None:
-        return ProbeStreamInfo(
-            url=rtsp_url,
-            probe_ok=False,
-            error="No video stream found",
-        )
-
-    width = _coerce_int(video_stream.get("width"))
-    height = _coerce_int(video_stream.get("height"))
-    fps_raw = _coerce_str(video_stream.get("avg_frame_rate"))
-
-    return ProbeStreamInfo(
-        url=rtsp_url,
-        video_codec=_coerce_str(video_stream.get("codec_name")),
-        audio_codec=_coerce_str(audio_stream.get("codec_name")) if audio_stream else None,
-        width=width,
-        height=height,
-        fps=_parse_fps(fps_raw),
-        fps_raw=fps_raw,
-        probe_ok=width is not None and height is not None,
-        error=None if width is not None and height is not None else "Video dimensions unavailable",
-    )
-
-
-def _coerce_int(value: object) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _coerce_str(value: object) -> str | None:
-    if isinstance(value, str):
-        return value
-    return None
-
-
-def _parse_fps(raw_fps: str | None) -> float | None:
-    if raw_fps is None:
-        return None
-
-    value = raw_fps.strip()
-    if not value:
-        return None
-
-    if "/" in value:
-        numerator, denominator = value.split("/", 1)
-        try:
-            den = float(denominator)
-            if den == 0:
-                return None
-            return float(numerator) / den
-        except ValueError:
-            return None
-
-    try:
-        return float(value)
-    except ValueError:
-        return None

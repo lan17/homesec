@@ -2,7 +2,7 @@
 
 ## Context
 
-See [proposal.md](proposal.md) for motivation and confirmed scope. These are proposed implementation decisions; this planning PR changes no runtime behavior.
+See [proposal.md](proposal.md) for motivation and confirmed scope. These decisions were approved for implementation in follow-up commits on the existing PR. Task checkboxes and scenario evidence track implementation and validation separately.
 
 The source audit found these existing seams:
 

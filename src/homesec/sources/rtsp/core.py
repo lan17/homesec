@@ -6,16 +6,15 @@ Ported from motion_recorder.py to keep functionality within homesec.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import random
 import shutil
-import subprocess
 import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from threading import Lock
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -53,8 +52,10 @@ from homesec.sources.rtsp.capabilities import (
     get_global_rtsp_timeout_capabilities,
 )
 from homesec.sources.rtsp.clock import Clock, SystemClock
+from homesec.sources.rtsp.discovery import CameraProbeResult, NativeStreamDiscovery, ProbeStreamInfo
 from homesec.sources.rtsp.frame_pipeline import FfmpegFramePipeline, FramePipeline
 from homesec.sources.rtsp.hardware import HardwareAccelConfig, HardwareAccelDetector
+from homesec.sources.rtsp.inspection import InspectionGroup, select_helper_path
 from homesec.sources.rtsp.live_publisher import (
     HLSLivePublisher,
     LivePublisher,
@@ -80,8 +81,6 @@ from homesec.sources.rtsp.talk.backend import validate_rtsp_talk_backend_config
 from homesec.sources.rtsp.talk.manager import TalkManager, TalkManagerError, TalkSession
 from homesec.sources.rtsp.url_derivation import derive_detect_rtsp_url
 from homesec.sources.rtsp.utils import (
-    _build_timeout_attempts,
-    _is_timeout_option_error,
     _next_backoff,
     _redact_rtsp_url,
 )
@@ -157,12 +156,12 @@ class RTSPStreamConfig(BaseModel):
     connect_timeout_s: float = Field(
         default=2.0,
         ge=0.0,
-        description="RTSP connect timeout (seconds) passed to ffmpeg/ffprobe when supported.",
+        description="RTSP connect timeout for native inspection and compatible media execution.",
     )
     io_timeout_s: float = Field(
         default=2.0,
         ge=0.0,
-        description="RTSP I/O timeout (seconds) passed to ffmpeg/ffprobe when supported.",
+        description="RTSP I/O timeout for native inspection and compatible media execution.",
     )
     ffmpeg_flags: list[str] = Field(
         default_factory=list,
@@ -477,12 +476,16 @@ class RTSPSource(ThreadedClipSource):
         self.rtsp_io_timeout_s = float(config.stream.io_timeout_s)
         self._legacy_ffmpeg_flags = list(config.stream.ffmpeg_flags)
         self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
+        self._inspection_helper_path = select_helper_path(config.runtime_preview)
         self._preflight = RTSPStartupPreflight(
             output_dir=Path(config.output_dir),
             rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
             rtsp_io_timeout_s=self.rtsp_io_timeout_s,
-            timeout_capabilities=self._timeout_capabilities,
+            helper_path=self._inspection_helper_path,
+            stop_event=self._stop_event,
         )
+        self._recovery_inspection_lock = Lock()
+        self._recovery_inspection: InspectionGroup | None = None
         self._preflight_outcome: CameraPreflightOutcome | None = None
         self._preview_concurrency_requested = (
             config.runtime_preview is not None
@@ -505,7 +508,9 @@ class RTSPSource(ThreadedClipSource):
             self._hwaccel_failed = True
         else:
             logger.info("Testing hardware acceleration with camera stream...")
-            self.hwaccel_config = HardwareAccelDetector.detect(self.detect_rtsp_url)
+            self.hwaccel_config = HardwareAccelDetector.detect(
+                self.detect_rtsp_url, helper_path=self._inspection_helper_path
+            )
             self._hwaccel_failed = not self.hwaccel_config.is_available
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -533,12 +538,11 @@ class RTSPSource(ThreadedClipSource):
         )
         self._motion_debug_frame_count = 0
         self._owns_frame_pipeline = frame_pipeline is None
-        helper_path = "homesec-webrtc"
+        helper_path = self._inspection_helper_path
         native_preview_config: WebRTCPreviewConfig | None = None
         if config.runtime_preview is not None and isinstance(
             config.runtime_preview.config, WebRTCPreviewConfig
         ):
-            helper_path = config.runtime_preview.config.helper_path
             if config.runtime_preview.enabled:
                 native_preview_config = config.runtime_preview.config
         self._shared_media: SharedMediaSession | None = None
@@ -583,6 +587,8 @@ class RTSPSource(ThreadedClipSource):
             motion_profile=MotionProfile(input_url=self.detect_rtsp_url),
             hwaccel_config=self.hwaccel_config,
             hwaccel_failed=self._hwaccel_failed,
+            on_hwaccel_failure=self._note_hwaccel_failure,
+            startup_timeout_s=min(2.0, max(0.5, self.frame_timeout_s)),
             on_frame=self._touch_heartbeat,
             clock=self._clock,
             timeout_capabilities=self._timeout_capabilities,
@@ -840,6 +846,11 @@ class RTSPSource(ThreadedClipSource):
 
     def _on_stop(self) -> None:
         logger.info("Stopping RTSPSource...")
+        self._preflight.cancel()
+        with self._recovery_inspection_lock:
+            inspection = self._recovery_inspection
+        if inspection is not None:
+            inspection.cancel()
 
     def _on_stopped(self) -> None:
         logger.info("RTSPSource stopped")
@@ -953,9 +964,8 @@ class RTSPSource(ThreadedClipSource):
                     self._apply_preflight_outcome(fallback)
                 else:
                     logger.warning(
-                        "RTSP startup preflight failed: camera=%s key=%s stage=%s reason=%s",
+                        "RTSP startup preflight failed: camera=%s stage=%s reason=%s",
                         self.camera_name,
-                        err.camera_key,
                         err.stage,
                         err.message,
                     )
@@ -1047,10 +1057,8 @@ class RTSPSource(ThreadedClipSource):
         # Publish readiness only after discovery-dependent media configuration is applied.
         self._preflight_outcome = outcome
         logger.info(
-            "RTSP preflight complete: camera=%s motion_url=%s recording_url=%s profile=%s session_mode=%s",
+            "RTSP preflight complete: camera=%s profile=%s session_mode=%s",
             self.camera_name,
-            self._redact_rtsp_url(outcome.motion_profile.input_url),
-            self._redact_rtsp_url(outcome.recording_profile.input_url),
             outcome.recording_profile.profile_id(),
             outcome.diagnostics.session_mode,
         )
@@ -1333,6 +1341,7 @@ class RTSPSource(ThreadedClipSource):
             )
         return HLSLivePublisher(
             camera_name=camera_name,
+            inspection_helper_path=self._inspection_helper_path,
             rtsp_url=self.rtsp_url,
             storage_dir=hls_config.storage_dir,
             segment_duration_ms=hls_config.segment_duration_ms,
@@ -1373,80 +1382,38 @@ class RTSPSource(ThreadedClipSource):
         extra.update(fields)
         return extra
 
+    def _note_hwaccel_failure(self) -> None:
+        self._hwaccel_failed = True
+
     def _probe_stream_info(
         self,
         rtsp_url: str,
         *,
         timeout_s: float = 10.0,
-    ) -> dict[str, object] | None:
-        base_cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=codec_name,width,height,avg_frame_rate",
-            "-of",
-            "json",
-            "-rtsp_transport",
-            "tcp",
-        ]
-        timeout_args = self._timeout_capabilities.build_ffprobe_timeout_args(
-            connect_timeout_s=self.rtsp_connect_timeout_s,
-            io_timeout_s=self.rtsp_io_timeout_s,
-        )
-
-        attempts = [
-            (
-                label,
-                base_cmd + timeout_attempt_args + [rtsp_url],
-            )
-            for label, timeout_attempt_args in _build_timeout_attempts(timeout_args)
-        ]
-
-        for label, cmd in attempts:
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_s,
-                    check=False,
-                )
-                if result.returncode != 0:
-                    if _is_timeout_option_error(result.stderr):
-                        changed = self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
-                        if changed:
-                            logger.warning(
-                                "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
-                            )
-                        else:
-                            logger.debug(
-                                "ffprobe missing timeout options (%s), retrying",
-                                label,
-                            )
-                        continue
-                    logger.debug("ffprobe failed (%s) with exit code %s", label, result.returncode)
-                    break
-
-                if label == "timeouts":
-                    self._timeout_capabilities.note_ffprobe_timeout_success()
-
-                data = json.loads(result.stdout)
-                if not data.get("streams"):
-                    continue
-                stream = data["streams"][0]
-                return {
-                    "codec_name": stream.get("codec_name"),
-                    "width": stream.get("width"),
-                    "height": stream.get("height"),
-                    "avg_frame_rate": stream.get("avg_frame_rate"),
-                }
-            except Exception as exc:
-                logger.warning("Failed to probe stream info: %s", exc, exc_info=True)
+    ) -> ProbeStreamInfo | None:
+        with self._recovery_inspection_lock:
+            if self._stop_event.is_set():
                 return None
-
+            inspection = InspectionGroup(
+                helper_path=self._inspection_helper_path,
+                total_timeout_s=timeout_s + 3.0,
+                connect_timeout_s=self.rtsp_connect_timeout_s,
+                io_timeout_s=self.rtsp_io_timeout_s,
+            )
+            self._recovery_inspection = inspection
+        try:
+            result = NativeStreamDiscovery(
+                rtsp_connect_timeout_s=self.rtsp_connect_timeout_s,
+                rtsp_io_timeout_s=self.rtsp_io_timeout_s,
+                command_timeout_s=timeout_s,
+                inspection=inspection,
+            ).probe(camera_key=self.camera_name, candidate_urls=[rtsp_url])
+        finally:
+            inspection.close()
+            with self._recovery_inspection_lock:
+                self._recovery_inspection = None
+        if isinstance(result, CameraProbeResult):
+            return next((stream for stream in result.streams if stream.probe_ok), None)
         return None
 
     def _redact_rtsp_url(self, url: str) -> str:
@@ -1954,7 +1921,7 @@ class RTSPSource(ThreadedClipSource):
             return False
 
         info = self._probe_stream_info(self.detect_rtsp_url, timeout_s=3.0)
-        if not info or not info.get("width") or not info.get("height"):
+        if not info or not info.width or not info.height:
             self._schedule_detect_probe(now)
             return False
 
@@ -2208,12 +2175,7 @@ class RTSPSource(ThreadedClipSource):
         if self._preflight_outcome is not None:
             selected = self._preflight_outcome
             logger.info(
-                "Preflight-selected motion stream: %s",
-                self._redact_rtsp_url(selected.motion_profile.input_url),
-            )
-            logger.info(
-                "Preflight-selected recording stream: %s (profile=%s session_mode=%s)",
-                self._redact_rtsp_url(selected.recording_profile.input_url),
+                "Preflight-selected recording profile=%s session_mode=%s",
                 selected.recording_profile.profile_id(),
                 selected.diagnostics.session_mode,
             )

@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import logging
 import platform
-import subprocess
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+
+from homesec.sources.rtsp.inspection import (
+    CapabilityEvidence,
+    DecodeEvidence,
+    InspectionFailure,
+    InspectionGroup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,89 +39,86 @@ class H264HardwareEncoder:
 
 
 class HardwareAccelDetector:
-    """Detect available hardware acceleration options for ffmpeg."""
+    """Inspect the linked build and require decoded frames on the requested device."""
 
     @staticmethod
-    def detect(rtsp_url: str) -> HardwareAccelConfig:
-        """Detect the best available hardware acceleration method."""
-        if Path("/dev/dri/renderD128").exists():
-            if HardwareAccelDetector._test_hwaccel("vaapi"):
-                config = HardwareAccelConfig(
-                    hwaccel="vaapi",
-                    hwaccel_device="/dev/dri/renderD128",
-                )
-                if HardwareAccelDetector._test_decode(rtsp_url, config):
-                    return config
-                logger.warning("VAAPI detected but failed to decode stream - disabling")
-
-        if HardwareAccelDetector._check_nvidia():
-            if HardwareAccelDetector._test_hwaccel("cuda"):
-                config = HardwareAccelConfig(hwaccel="cuda")
-                if HardwareAccelDetector._test_decode(rtsp_url, config):
-                    return config
-                logger.warning("CUDA detected but failed to decode stream - disabling")
-
-        if platform.system() == "Darwin":
-            if HardwareAccelDetector._test_hwaccel("videotoolbox"):
-                config = HardwareAccelConfig(hwaccel="videotoolbox")
-                if HardwareAccelDetector._test_decode(rtsp_url, config):
-                    return config
-                logger.warning("VideoToolbox detected but failed to decode stream - disabling")
-
-        if HardwareAccelDetector._test_hwaccel("qsv"):
-            config = HardwareAccelConfig(hwaccel="qsv")
-            if HardwareAccelDetector._test_decode(rtsp_url, config):
-                return config
-            logger.warning("QSV detected but failed to decode stream - disabling")
-
-        logger.info("Using software decoding (no working hardware acceleration found)")
+    def detect(rtsp_url: str, *, helper_path: str = "homesec-webrtc") -> HardwareAccelConfig:
+        try:
+            with InspectionGroup(helper_path=helper_path, total_timeout_s=46.0) as inspection:
+                for backend, device in HardwareAccelDetector._candidates():
+                    capabilities = inspection.request(
+                        "inspect_capabilities",
+                        timeout_s=2.0,
+                        backend=backend,
+                        device=device,
+                    )
+                    if not isinstance(capabilities, CapabilityEvidence):
+                        raise InspectionFailure("helper_failure")
+                    if capabilities.device is None or not capabilities.device.available:
+                        continue
+                    try:
+                        evidence = inspection.request(
+                            "inspect_decode",
+                            timeout_s=10.0,
+                            rtsp_url=rtsp_url,
+                            backend=backend,
+                            device=device,
+                            sample_frames=5,
+                        )
+                    except InspectionFailure as exc:
+                        if exc.code in {"helper_failure", "cancelled", "cleanup_failed"}:
+                            raise
+                        logger.info(
+                            "Native hardware decode failed: backend=%s reason=%s", backend, exc.code
+                        )
+                        continue
+                    if (
+                        isinstance(evidence, DecodeEvidence)
+                        and evidence.backend == backend
+                        and evidence.frames_decoded >= 5
+                    ):
+                        return HardwareAccelConfig(hwaccel=backend, hwaccel_device=device)
+        except InspectionFailure as exc:
+            logger.info("Native hardware validation unavailable: %s", exc.code)
         return HardwareAccelConfig(hwaccel=None)
 
     @staticmethod
-    def select_h264_encoder(config: HardwareAccelConfig) -> H264HardwareEncoder | None:
-        """Choose a matching H.264 hardware encoder when ffmpeg supports it."""
+    def _candidates() -> list[tuple[str, str | None]]:
+        candidates: list[tuple[str, str | None]] = []
+        if Path("/dev/dri/renderD128").exists():
+            candidates.append(("vaapi", "/dev/dri/renderD128"))
+        candidates.append(("cuda", None))
+        if platform.system() == "Darwin":
+            candidates.append(("videotoolbox", None))
+        candidates.append(("qsv", None))
+        return candidates
+
+    @staticmethod
+    def select_h264_encoder(
+        config: HardwareAccelConfig,
+        *,
+        helper_path: str = "homesec-webrtc",
+        inspection: InspectionGroup | None = None,
+    ) -> H264HardwareEncoder | None:
         candidate = HardwareAccelDetector._candidate_h264_encoder(config)
         if candidate is None:
             return None
-        if HardwareAccelDetector._test_encoder(candidate.ffmpeg_encoder):
-            return candidate
-        logger.info(
-            "Hardware encoder %s unavailable for hwaccel=%s; using software encoding",
-            candidate.ffmpeg_encoder,
-            config.hwaccel,
-        )
+        try:
+            context = (
+                nullcontext(inspection)
+                if inspection is not None
+                else InspectionGroup(helper_path=helper_path, total_timeout_s=3.0)
+            )
+            with context as owner:
+                evidence = owner.request("inspect_capabilities", timeout_s=2.0)
+                if (
+                    isinstance(evidence, CapabilityEvidence)
+                    and candidate.ffmpeg_encoder in evidence.encoders
+                ):
+                    return candidate
+        except InspectionFailure:
+            pass
         return None
-
-    @staticmethod
-    def _test_hwaccel(method: str) -> bool:
-        """Test if a hardware acceleration method is available in ffmpeg."""
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-            return method in result.stdout
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-            return False
-
-    @staticmethod
-    def _test_encoder(encoder: str) -> bool:
-        """Test if a named ffmpeg encoder is available."""
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-            output = f"{result.stdout}\n{result.stderr}"
-            return encoder in output
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-            return False
 
     @staticmethod
     def _candidate_h264_encoder(config: HardwareAccelConfig) -> H264HardwareEncoder | None:
@@ -139,74 +143,3 @@ class HardwareAccelDetector:
                 return H264HardwareEncoder(ffmpeg_encoder="h264_qsv")
             case _:
                 return None
-
-    @staticmethod
-    def _test_decode(rtsp_url: str, config: HardwareAccelConfig) -> bool:
-        """Test if hardware acceleration works by decoding a few frames."""
-        cmd = ["ffmpeg"]
-
-        if config.hwaccel:
-            cmd.extend(["-hwaccel", config.hwaccel])
-            if config.hwaccel_device:
-                cmd.extend(["-hwaccel_device", config.hwaccel_device])
-
-        cmd.extend(
-            [
-                "-rtsp_transport",
-                "tcp",
-                "-i",
-                rtsp_url,
-                "-frames:v",
-                "5",
-                "-f",
-                "null",
-                "-",
-            ]
-        )
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=10,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                return True
-            if any(
-                err in result.stderr
-                for err in (
-                    "No VA display found",
-                    "Device creation failed",
-                    "No device available for decoder",
-                    "Failed to initialise VAAPI",
-                    "Cannot load",
-                )
-            ):
-                return False
-            return result.returncode == 0
-        except subprocess.TimeoutExpired:
-            return True
-        except Exception as exc:
-            logger.warning(
-                "Hardware decode check failed for %s: %s",
-                config.hwaccel or "software",
-                exc,
-                exc_info=True,
-            )
-            return False
-
-    @staticmethod
-    def _check_nvidia() -> bool:
-        """Check if NVIDIA GPU is available."""
-        try:
-            subprocess.run(
-                ["nvidia-smi"],
-                capture_output=True,
-                check=True,
-                timeout=2,
-            )
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-            return False

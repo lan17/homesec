@@ -41,32 +41,43 @@ from homesec.sources.rtsp.live_publisher import (
     LivePublisherRefusalReason,
     LivePublisherStartRefusal,
 )
+from tests.homesec.inspection_helpers import inspection_helper
 from tests.homesec.rtsp import test_webrtc_publisher
 from tests.homesec.test_runtime_subprocess_controller import _make_config
 from tests.homesec.test_runtime_worker import _make_config as _worker_config
 from tests.homesec.test_runtime_worker import _make_service
 
-helper = test_webrtc_publisher.helper
+
+@pytest.fixture
+def helper(tmp_path: Path, camera_tools: tuple[Path, Path]) -> tuple[Path, Path]:
+    script, observations = test_webrtc_publisher.helper.__wrapped__(tmp_path)
+    inspector = inspection_helper(
+        tmp_path,
+        behavior=(
+            "if command == 'inspect_metadata':\n"
+            f"    pathlib.Path({str(tmp_path / 'camera-tools' / 'probe-started')!r}).touch()\n"
+            f"    while not pathlib.Path({str(tmp_path / 'camera-tools' / 'release-probe')!r}).exists(): time.sleep(.01)\n"
+            "    inspection = dict(kind='metadata',video_codec='h264',audio_codec='aac',width=640,height=480,fps=25,fps_raw='25/1')"
+        ),
+    )
+    original = script.read_text()
+    first_line, body = original.split("\n", 1)
+    script.write_text(
+        first_line
+        + "\nimport os,sys\n"
+        + f"if '--inspect' in sys.argv: os.execv({str(inspector)!r}, [{str(inspector)!r}, '--inspect'])\n"
+        + body
+    )
+    return script, observations
 
 
 @pytest.fixture
 def camera_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """Camera command boundaries with controllable discovery and a steady motion stream."""
+    """Controllable native discovery markers and a compatible motion executor."""
     directory = tmp_path / "camera-tools"
     directory.mkdir()
     probe_started = directory / "probe-started"
     release_probe = directory / "release-probe"
-    ffprobe = directory / "ffprobe"
-    ffprobe.write_text(
-        f"#!{sys.executable}\n"
-        "import json,time\nfrom pathlib import Path\n"
-        f"Path({str(probe_started)!r}).touch()\n"
-        f"while not Path({str(release_probe)!r}).exists(): time.sleep(0.01)\n"
-        "print(json.dumps({'streams':["
-        "{'codec_type':'video','codec_name':'h264','width':640,'height':480,'avg_frame_rate':'25/1'},"
-        "{'codec_type':'audio','codec_name':'aac'}]}))\n"
-    )
-    ffprobe.chmod(0o700)
     ffmpeg = directory / "ffmpeg"
     ffmpeg.write_text(
         f"#!{sys.executable}\n"
