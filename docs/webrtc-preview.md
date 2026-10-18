@@ -9,6 +9,9 @@ Rust copies compatible H.264 or transcodes it through pinned x264, and converts
 supported camera audio through pinned libopus. Hardware motion, unsupported or
 custom recording profiles, and push-to-talk retain their established paths.
 Python continues to own recording policy, supervision, and finalized clip delivery.
+The maintained [preview and talk contract](../openspec/specs/preview-talk/spec.md)
+and [reference limitations](reference.md#preview-talk) cover public behavior and
+verification limits; this guide covers deployment.
 
 The initial deployment scope is direct UDP connectivity over LAN or VPN. HTTP
 signaling uses the existing HomeSec server and authentication. Media travels
@@ -53,6 +56,10 @@ but include HLS-specific settings such as `storage_dir`, `segment_duration_ms`,
 For new configurations, omitting `backend` selects WebRTC.
 If an older enabled preview has no backend or HLS-specific settings, add
 `backend: hls` to retain HLS, or configure `advertised_ip` to use WebRTC.
+
+After editing the configuration file, request a runtime reload through
+`POST /api/v1/runtime/reload` or restart HomeSec. Writing the file alone does not activate the new settings; runtime
+reload closes existing preview and talk sessions.
 
 For clients that require STUN or a TURN relay, supply `ice_servers` entries with
 `urls` (a list), optional `username`, and optional `credential_env` naming an
@@ -159,7 +166,7 @@ cancel the receiver and reap FFmpeg without requiring global socket-buffer tunin
 These limits bound individual buffers and queues, not the entire process.
 Cameras remain operator-configured sources on a trusted LAN/VPN.
 
-See the [shared Rust media plan](shared-rust-media.md) for ingestion, recording,
+See the [shared Rust media architecture](shared-rust-media.md) for ingestion, recording,
 and lifecycle details. FFmpeg and ffprobe command-line tools remain required for
 preflight and compatibility recording, motion, and preview.
 

@@ -18,9 +18,14 @@ when a backend reports supported capability. Operators can opt out globally with
 `talk.enabled: false` or per camera with
 `cameras[].talk.mode: disabled`.
 
-## Supported MVP Contract
+The maintained [preview and talk contract](../openspec/specs/preview-talk/spec.md)
+and [reference limitations](reference.md#preview-talk) define public behavior,
+including authorization and cleanup limits. This guide covers configuration,
+operation, and recorded hardware results.
 
-| Area | MVP support |
+## Supported Contract
+
+| Area | Support |
 | --- | --- |
 | UI mode | Push and hold, half-duplex talk |
 | Browser input | Mono PCM S16LE frames over WebSocket |
@@ -29,7 +34,7 @@ when a backend reports supported capability. Operators can opt out globally with
 | Camera backend | Backend adapter abstraction; bundled backends are `onvif_rtsp_backchannel` and `tapo_local` |
 | Transport | ONVIF: RTSP over TCP with interleaved RTP; Tapo local: local HTTP Digest multipart MPEG-TS |
 | Concurrency | One reserved or active talk session per camera |
-| Session limits | Bounded by `talk.max_session_s` and `talk.idle_timeout_s` |
+| Session limits | Separate reservation and active `max_session_s` timers; audio-idle and WebSocket start waits use `idle_timeout_s` |
 | Persistence | Microphone audio is not recorded or intentionally persisted |
 
 References:
@@ -225,12 +230,12 @@ cameras[].talk.backend: auto
   probes standards-based backends first
   ONVIF wins when it is supported
   proprietary candidates are considered only after standards-based probing fails
-  proprietary candidates must be explicitly configured in the current RTSP source path
+  proprietary candidates require safe explicit config, camera identity, or a local endpoint fingerprint
 
 cameras[].talk.backend: <name>
   selects that backend only
   no fallback runs
-  unknown registered-safe names produce talk_config_error until a backend is registered
+  unregistered safe identifiers produce talk_config_error until a backend is registered
 ```
 
 The bundled registry currently includes `onvif_rtsp_backchannel` and
@@ -403,7 +408,9 @@ the missing environment variable name, but never its value.
   discovers protocol support, but operators should still opt out cameras that do
   not need speaker access with `cameras[].talk.mode: disabled`.
 - Use the shortest practical `max_session_s`; the default `60` seconds prevents a
-  stuck client from keeping a speaker session open indefinitely.
+  stuck client from retaining an active session without a timeout. Each reservation
+  and active phase has its own timer; expiry initiates backend cleanup. See the
+  [timer and cleanup limits](reference.md#preview-talk).
 - Preview audio is muted while browser talk is active to reduce feedback. Browser
   echo cancellation can help, but the MVP is not full-duplex intercom.
 
@@ -425,7 +432,7 @@ Before relying on talk for a camera:
    timeouts.
 9. Record the result in the compatibility matrix below.
 
-Before implementing a new proprietary backend, confirm Phase 9 already provides:
+When implementing a new proprietary backend, use the existing extension points:
 
 - backend registration;
 - backend-specific config validation;
@@ -488,8 +495,9 @@ Suggested result values:
 
 - Set global `talk.enabled: true` or omit it, and set per-camera
   `cameras[].talk.mode: auto` or omit the camera talk block.
-- Reload/restart HomeSec after config changes if your deployment does not hot-reload
-  camera config.
+- After editing the configuration file, request a runtime reload through
+  `POST /api/v1/runtime/reload` or restart HomeSec. Writing the file alone does not activate it. Reload closes existing
+  preview and talk sessions.
 
 ### Session is refused with `source_not_talk_capable`
 

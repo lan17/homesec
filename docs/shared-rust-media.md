@@ -2,6 +2,13 @@
 
 Ticket: https://app.notion.com/p/3efd8336c59f8195b6b5c50c71c1d5e7
 
+This document describes the shipped native architecture and preserves dated
+implementation/validation history. For public behavior, see the maintained
+[capture contract](../openspec/specs/capture-recording/spec.md) and
+[preview/talk contract](../openspec/specs/preview-talk/spec.md). Deployment steps
+are in [WebRTC preview](webrtc-preview.md); current qualifications are in the
+[reference limitations](reference.md#known-limitations-and-evidence-limits).
+
 ## Context
 HomeSec shares one Rust RTSP input per selected stream across eligible CPU H.264 motion, compressed H.264 recording with optional AAC-LC audio, and H.264 preview with optional Opus audio. The source-owned helper calls pinned FFmpeg 8.1.3 libraries for RTSP/TCP demuxing, decoding, frame preparation, encoding, and MP4 muxing; pinned, statically linked OpenCV 4.12.0 performs the existing detector's pixel operations. Preview uses pinned static x264 and libopus encoders. Python retains recording policy and clip delivery. Hardware motion, custom profiles, unsupported media, and older helpers retain their existing compatibility paths.
 Leonidas approved a shared Rust media pipeline after discussing compressed-packet sharing, Rust motion detection, optional Python frame delivery, and preserving recording reliability. Established codec libraries remain acceptable initially; an entirely pure-Rust codec stack is a separate evaluation.
@@ -25,32 +32,22 @@ flowchart TD
 - The Rust-owned OpenCV detector preserves current blur, threshold, percentage, reset, and recording-sensitivity semantics. Preview copies compressed video or decodes it in its own worker; motion preparation remains independent. Delivering sampled Python frames remains later work.
 - Python normally receives motion events, health, and completed clip references. Add bounded binary sampled-frame delivery only for a concrete analysis consumer; keep it separate from JSON control. Do not introduce C FFI between Python and Rust.
 - Slow preview, motion, or Python consumers must not block recording. Each compressed-packet consumer has its own bounded queue; overflow fails that consumer rather than silently corrupting a recording or blocking other consumers. Motion's prepared-frame queue retains its existing drop-oldest behavior.
-- Recording overload or storage failure must be explicit. Correct GOP boundaries, SPS/PPS changes, timestamps, audio synchronization, MP4 finalization/rotation, reconnects, cancellation, and process death are required before migrating recording.
+- Recording overload or storage failure must be explicit. Correct GOP boundaries, SPS/PPS changes, timestamps, audio synchronization, MP4 finalization/rotation, reconnects, cancellation, and process death are required for recording correctness.
 - A shared worker introduces failure coupling. Keep preview encoding failures isolated from the recording path and retain per-camera supervision. Recording/upload must continue independently of Postgres.
 - Credentials, SDP, media frames, and tokens are not logged or persisted as diagnostics. Expose stable bounded refusal/error codes and sanitized operational metadata.
-- Codec implementations and packaging are distinct from orchestration. Evaluate existing native codec libraries and hardware support before selecting a binding; do not rewrite H.264/H.265/Opus codecs as a prerequisite.
+- Codec implementations and packaging are distinct from orchestration. The shipped helper uses pinned FFmpeg, OpenCV, x264, and libopus libraries. Hardware acceleration remains subject to the existing compatibility paths.
 
-## Plan
-1. Native Rust ingest, first PR: replace FFmpeg ingestion for existing video-only H.264 copy-mode WebRTC preview. Reuse video_codec=copy and audio_enabled=false; other configurations retain existing behavior. Use a maintained RTSP client rather than hand-written auth/session logic. Deliver access units and SDP parameter sets to the existing str0m multi-viewer path through a bounded cancellable source adapter. Validate actual source codec/profile against negotiation; handle non-default RTP payload types and SDP-only SPS/PPS. No new UI/API configuration or recording changes.
-2. Decode and Rust motion: feed the native encoded source into an established decoder; implement the current motion algorithm in Rust and compare behavior against fixtures from the Python/OpenCV implementation. Preserve reset, camera reconnect, sensitivity, stall grace, and recording policy. Emit typed observations through the existing source/runtime boundary.
-3. Shared recording: add compressed packet fanout and recording muxing with independent consumer budgets. Validate keyframe starts, timestamps, audio, rotation, interrupted writes, and disk errors before switching production recording. Harden library-level RTSP control-response reads before coupling recording to this input. Keep a rollback path during migration. This stage is implemented below; production rollout remains separate.
-4. Preview and Python reuse: share decode/encode work where compatible; allow sampled Python frames for an actual consumer. Support compatible H.264 passthrough and transcode other formats without compromising recordings.
-5. Package and validate: reproducible supported-platform builds, required-codec capability checks, redacted errors, and a real-camera trial with recording, motion, and two viewers. Compare session counts, CPU/RSS, start time, and source-to-display latency against the current implementation.
+## Delivery status
 
-## First PR acceptance
-- A fake TCP RTSP camera feeds two encrypted WebRTC receivers through one RTSP PLAY session without invoking FFmpeg.
-- SDP-only SPS/PPS and a payload type other than 96 are handled.
-- Unsupported codec/profile is refused safely; disconnect, stall, explicit stop, and parent EOF release the camera session.
-- Source startup/read cannot block helper control, authorization lease expiry, or shutdown.
-- Python chooses native ingest only for supported copy/video-only configuration; transcode/audio paths remain covered.
-- Existing recording and runtime regressions pass; run make check before publishing.
-
-## Overall acceptance
-- One input per selected stream serves concurrent consumers with measured session counts.
-- Recording retains original compressed video and remains healthy when preview/Python is slow or absent.
-- Motion behavior is validated against current fixtures; codec changes and real cameras are explicitly tested.
-- The existing motion configuration and prepared grayscale frames produce the same Python and Rust observations and decisions. Preserve defaults, normalization, blur rounding/borders, threshold boundaries, reset behavior, and recording sensitivity.
-- No claim of a fully FFmpeg-free stack or universal hardware acceleration without separate validation.
+- Native video-only H.264 RTSP ingestion, Rust motion, shared MP4 recording,
+  and native H.264/Opus preview conversion are implemented. Their current
+  selectors, compatibility fallbacks, and ownership are described below.
+- Sampled raw-frame delivery to Python remains unimplemented; there is no current
+  consumer or additional operator configuration for it.
+- Reproducible native builds and synthetic camera coverage are present. Dated
+  local IPyCam trials are recorded under Validation. Production camera rollout,
+  physical-device playback, and deployment-specific latency/resource comparisons
+  still require their own validation; the local results do not establish them.
 
 ## Rust motion parity checkpoint
 The private `native/webrtc/src/motion.rs` implementation preserves the existing grayscale detector's contract. The initial offline port used a custom Rust blur; runtime pixel operations now use pinned OpenCV 4.12.0. It takes explicit values for `pixel_threshold`, `min_changed_pct`, `blur_kernel`, and `recording_sensitivity_factor`; it introduces no operator settings or Rust defaults. Positive even kernels normalize to the next odd size, as in the RTSP source. The recording percentage override uses the existing division and zero-clamping behavior.

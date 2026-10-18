@@ -1,7 +1,50 @@
 # HomeSec Testing Guidelines
 
-**Last reviewed:** 2025-01-11
+**Last reviewed:** 2026-10-18
 **Purpose:** Principles for writing high-quality, maintainable tests that verify behavior without creating false confidence.
+
+---
+
+## Commands and Test Environment
+
+Run from the repository root after installing the locked dependencies. Current
+commands come from [Makefile](Makefile), [ui/Makefile](ui/Makefile), and
+[CI.md](CI.md):
+
+| Command | Scope |
+|---------|-------|
+| `make typecheck lint lock-check` | Strict Python typing, Ruff lint/format, lock consistency |
+| `make test` | `tests/homesec/` with terminal coverage |
+| `make coverage` | `tests/homesec/` with HTML/XML coverage |
+| `make rust-check` | Rust formatting, Clippy, and native tests through the dependency wrapper |
+| `make ui-check` | Generated API consistency, ESLint, Vitest, TypeScript, and production build |
+| `make check` | Lock, Rust, Python, and UI gates |
+
+The Python suite includes real Postgres fixtures. `TEST_DB_DSN` selects their
+database, defaulting to the local development Postgres service. See
+[postgres_test_support.py](tests/homesec/postgres_test_support.py) and
+[conftest.py](tests/homesec/conftest.py). A per-run schema is normally created and
+dropped, and fixtures recreate tables/write rows. `HOMESEC_TEST_DB_SCHEMA` can
+select a schema explicitly; schema isolation does not make tests read-only.
+Use an appropriate disposable database and obtain the required approval before
+database-writing validation. `make db` starts the development Postgres service;
+there is no `make db-up` target.
+
+CI support tests live outside the application target; run
+`uv run --locked python .github/scripts/test_ci.py` when changing that support
+code. Some Python tests also require FFmpeg/ffprobe or the built
+`homesec-webrtc` helper. Native tests use
+fixtures/fake peers; provider and physical-camera conformance require separate
+validation. Inspect test fixtures before treating a selected suite as offline.
+CI installs those prerequisites and runs migrations on its disposable Postgres.
+
+Repository policy requires `make check` before publication unless Leonidas
+explicitly approves a narrower scope. Structural OpenSpec validation and a clean
+generated API diff do not establish runtime conformance; link tests to relevant
+scenarios and state any untested provider/device behavior.
+
+The examples below illustrate testing patterns; some omit setup/imports for
+brevity. Linked repository tests supply complete current payloads and fixtures.
 
 ---
 
@@ -36,11 +79,14 @@ async def test_shutdown_is_idempotent(self):
 **Good - Testing observable behavior:**
 ```python
 async def test_shutdown_is_idempotent(self):
+    # Given: A notifier using a fake MQTT boundary.
     notifier = MQTTNotifier(config)
+
+    # When: Shutting down twice.
     await notifier.shutdown()
     await notifier.shutdown()  # Should not raise
 
-    # GOOD: Verify behavior via public interface
+    # Then: Shutdown is observable through public operations.
     result = await notifier.ping()
     assert result is False  # Shutdown state observable via ping
 
@@ -70,36 +116,18 @@ async def test_analyze_video(self):
 ```
 
 **Good - Mocking at HTTP boundary:**
-```python
-async def test_analyze_video(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # Create real test video
-    video_path = tmp_path / "test.mp4"
-    _create_test_video(video_path, frames=5)
 
-    # Mock only at HTTP boundary
-    mock_response = AsyncMock()
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value={
-        "choices": [{"message": {"content": '{"risk_level": "low"}'}}]
-    })
+[test_openai_vlm.py](tests/homesec/test_openai_vlm.py) creates a real tiny video
+and mocks `homesec.plugins.analyzers.openai.aiohttp.ClientSession`. The real
+analyzer extracts frames and builds the request; the fake captures URL, headers,
+and JSON. It returns a complete `SequenceAnalysis` payload in the provider's
+response envelope, so parsing and required-field validation remain exercised.
 
-    async_cm = AsyncMock()
-    async_cm.__aenter__ = AsyncMock(return_value=mock_response)
-    async_cm.__aexit__ = AsyncMock(return_value=None)
-
-    mock_session = MagicMock()
-    mock_session.post = MagicMock(return_value=async_cm)
-    mock_session.close = AsyncMock()
-
-    # Patch the module under test, not the global aiohttp import
-    monkeypatch.setattr("homesec.plugins.analyzers.openai.aiohttp.ClientSession", lambda **kw: mock_session)
-
-    # Now real frame extraction happens, only HTTP is mocked
-    vlm = OpenAIVLM(config)
-    result = await vlm.analyze(video_path)
-
-    assert result.risk_level == "low"
-```
+The current call is `await analyzer.analyze(video_path, filter_result, vlm_config)`;
+construction takes the backend's `OpenAIConfig`, while the call takes the core
+`VLMConfig`. Assert enum values such as `RiskLevel.LOW`, rather than assuming risk
+levels are plain strings. An incomplete `{"risk_level": "low"}` response does not
+satisfy the current provider schema.
 
 ---
 
@@ -110,7 +138,7 @@ async def test_analyze_video(self, tmp_path: Path, monkeypatch: pytest.MonkeyPat
 **Bad - Just checking call count:**
 ```python
 async def test_sends_email(self):
-    notifier = SendGridNotifier(config)
+    notifier = SendGridEmailNotifier(config)
     await notifier.send(alert)
 
     # BAD: Only verifies something was called
@@ -118,31 +146,18 @@ async def test_sends_email(self):
 ```
 
 **Good - Verifying request contract:**
-```python
-async def test_sends_email_with_correct_structure(self):
-    captured_request: dict[str, Any] = {}
 
-    async_cm = AsyncMock()
-    async_cm.__aenter__ = AsyncMock(return_value=mock_response)
-    async_cm.__aexit__ = AsyncMock(return_value=None)
+The bundled [SendGrid email notifier](src/homesec/plugins/notifiers/sendgrid_email.py)
+uses `SendGridEmailNotifier` and `SendGridEmailConfig`. Its complete
+[HTTP contract tests](tests/homesec/test_sendgrid_notifier.py) replace the
+`aiohttp.ClientSession` boundary, capture URL/headers/JSON, and assert the
+recipient, sender, subject, content, and optional structured-analysis rendering.
+The real notifier still builds the request.
 
-    def capture_post(url: str, json: dict, headers: dict) -> AsyncMock:
-        captured_request["url"] = url
-        captured_request["json"] = json
-        captured_request["headers"] = headers
-        return async_cm
-
-    mock_session.post = capture_post
-
-    notifier = SendGridNotifier(config)
-    await notifier.send(alert)
-
-    # GOOD: Verify the actual API contract
-    assert captured_request["url"] == "https://api.sendgrid.com/v3/mail/send"
-    assert "Authorization" in captured_request["headers"]
-    assert captured_request["json"]["personalizations"][0]["to"][0]["email"] == "user@example.com"
-    assert "subject" in captured_request["json"]
-```
+Use those tests as the current fixture/payload example. Assert the request data
+that matters to the provider contract rather than only counting `post()` calls.
+For the MQTT boundary, see
+[test_mqtt_notifier.py](tests/homesec/test_mqtt_notifier.py).
 
 ---
 
@@ -158,31 +173,41 @@ async def test_sends_email_with_correct_structure(self):
 
 **Mock:**
 - Network calls (HTTP, MQTT, etc.)
-- Databases (unless using testcontainers)
+- Databases for component/unit tests; use the existing isolated Postgres fixtures
+  for database contracts rather than assuming the suite uses testcontainers
 - GPU/ML inference
 - Time-sensitive operations
 
 **Example - Using real filesystem:**
 ```python
 async def test_put_get_delete_roundtrip(self, tmp_path: Path):
+    # Given: Input bytes and real local storage.
     # GOOD: Real filesystem via tmp_path
     storage = LocalStorage(LocalStorageConfig(root=str(tmp_path / "storage")))
 
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"video content")
 
-    # Real operations on real filesystem
-    result = await storage.put_file(source_file, "clips/test.mp4")
-    assert await storage.exists(result.storage_uri)
+    try:
+        # When: Uploading, downloading, and deleting through the public interface.
+        result = await storage.put_file(source_file, "clips/test.mp4")
+        download_path = tmp_path / "downloaded.mp4"
+        await storage.get(result.storage_uri, download_path)
 
-    download_path = tmp_path / "downloaded.mp4"
-    await storage.get(result.storage_uri, download_path)
-    assert download_path.read_bytes() == b"video content"
+        # Then: Storage preserves bytes and deletion is idempotent.
+        assert download_path.read_bytes() == b"video content"
+        assert await storage.exists(result.storage_uri)
+        await storage.delete(result.storage_uri)
+        await storage.delete(result.storage_uri)
+        assert not await storage.exists(result.storage_uri)
+    finally:
+        await storage.shutdown()
 ```
 
 **Example - Using stubbed entry points (deterministic):**
 ```python
 def test_returns_stubbed_entry_points(self, monkeypatch):
+    # Given: Deterministic entry-point metadata.
     # GOOD: Deterministic entry points without relying on installation metadata
     fake_eps = [
         metadata.EntryPoint(name="homesec", value="homesec.cli:main", group="console_scripts")
@@ -197,7 +222,10 @@ def test_returns_stubbed_entry_points(self, monkeypatch):
         lambda: _FakeEntryPoints(fake_eps),
     )
 
+    # When: Selecting entry points by group.
     result = list(iter_entry_points("console_scripts"))
+
+    # Then: Only the matching registered command is returned.
     assert [ep.name for ep in result] == ["homesec"]
 ```
 
@@ -286,7 +314,7 @@ def test_sets_camera_name(self):
 
 **Bad - Misleading test name:**
 ```python
-def test_handles_unicode_filenames(self):
+async def test_handles_unicode_filenames(self):
     # Claims to test unicode but uses ASCII!
     result = await storage.put_file(source, "clips/test_file.mp4")
     assert await storage.exists(result.storage_uri)
@@ -294,7 +322,7 @@ def test_handles_unicode_filenames(self):
 
 **Good - Test matches name:**
 ```python
-def test_handles_unicode_filenames(self):
+async def test_handles_unicode_filenames(self):
     # Actually tests unicode (Cyrillic and Japanese)
     result = await storage.put_file(source, "clips/камера_передняя.mp4")
     assert await storage.exists(result.storage_uri)
@@ -324,18 +352,20 @@ This naturally leads to behavioral testing because:
 ### Template
 
 ```python
-async def test_filter_detects_person(self):
-    # Given: A video with a person visible
-    video_path = tmp_path / "person.mp4"
-    _create_test_video(video_path, frames=10)
+async def test_filter_detects_person(self, person_video: Path):
+    # Given: A fixture containing visible person footage, not blank synthetic frames.
+    # config is YoloFilterConfig; this test needs local weights and inference deps.
     filter_plugin = YOLOFilter(config)
 
     # When: Running detection
-    result = await filter_plugin.detect(video_path)
+    try:
+        result = await filter_plugin.detect(person_video)
 
-    # Then: Person should be detected with high confidence
-    assert "person" in result.detected_classes
-    assert result.confidence > 0.5
+        # Then: Person should be detected with high confidence.
+        assert "person" in result.detected_classes
+        assert result.confidence > 0.5
+    finally:
+        await filter_plugin.shutdown()
 ```
 
 ### Writing Good "Given" Sections

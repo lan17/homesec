@@ -8,7 +8,7 @@
 ## Absolute Rules
 
 - **Strict type checking required**: Run `make typecheck` before committing. Error-as-value pattern requires explicit type narrowing via match/isinstance.
-- **Program to interfaces**: Use factory/registry helpers (e.g., `load_filter_plugin()`). Avoid direct instantiation of plugins.
+- **Program to interfaces**: Use factory/registry helpers (e.g., `load_filter()`). Avoid direct instantiation of plugins.
 - **Architecture constraints**: See `DESIGN.md` → “Architecture Constraints”. Boundary violations (core ↔ concrete plugins, backend-specific config in core) are bugs.
 - **Repository pattern**: Use `ClipRepository` for all state/event writes. Never touch `StateStore`/`EventStore` directly.
 - **Preserve stack traces**: Custom errors must set `self.__cause__ = cause` to preserve original exception.
@@ -109,9 +109,11 @@ logger.warning(
 # Define custom error that preserves stack traces
 class FilterError(PipelineError):
     def __init__(self, clip_id: str, plugin_name: str, cause: Exception):
-        super().__init__(f"Filter failed for {clip_id}", stage="filter", clip_id=clip_id)
+        super().__init__(
+            f"Filter failed for {clip_id}", stage="filter", clip_id=clip_id, cause=cause
+        )
         self.plugin_name = plugin_name
-        self.__cause__ = cause  # ← Preserves full stack trace
+        # PipelineError sets cause and __cause__, preserving the original exception.
 
 # Stage returns error as value, not raise
 async def _filter_stage(self, clip: Clip) -> FilterResult | FilterError:
@@ -284,10 +286,10 @@ await self._repository.record_filter_completed(
     duration_ms=int(duration * 1000),
 )
 
-# Repository coordinates state + event atomically:
-# 1. Updates state.filter_result = result
-# 2. Appends FilterCompletedEvent(...)
-# 3. Handles retries with exponential backoff
+# Repository coordinates separate best-effort writes:
+# 1. Loads and upserts the clip snapshot
+# 2. Appends FilterCompletedEvent(...) independently
+# 3. Retries retryable failures with exponential backoff; logs exhaustion
 ```
 
 **❌ Anti-Pattern: Direct State/Event Manipulation**
@@ -302,7 +304,7 @@ event = FilterCompletedEvent(...)
 await self._event_store.append(event)  # What if this fails? State already updated!
 ```
 
-**Why:** Repository ensures state and events stay consistent, provides retry logic, and prevents forgetting to emit events.
+**Why:** Repository centralizes transitions, retry handling, and lifecycle-event calls. Snapshot upserts and event appends are separate best-effort operations, not an atomic transaction. Events can be missing after state advances, and concurrent whole-snapshot updates can overwrite one another. See [current persistence limitations](docs/reference.md#analysis-alerts); using the repository does not establish durable replay or exactly-once processing.
 
 **Reference:** See `src/homesec/repository/clip_repository.py` for all available methods (`record_upload_completed`, `record_vlm_started`, etc.).
 
@@ -310,88 +312,31 @@ await self._event_store.append(event)  # What if this fails? State already updat
 
 ### 4. Plugin Registration
 
-**Rule:** Use decorator-based registration with typed factories. All plugins follow the same pattern: `@<type>_plugin` decorator + `load_<type>_plugin()` loader.
+**Rule:** Use the existing unified registry in `src/homesec/plugins/registry.py`.
+Plugins register a class with `@plugin(plugin_type=PluginType.<TYPE>, name="...")`,
+a Pydantic `config_cls`, and a typed `create()` classmethod. Do not introduce a
+second registry or copy the former per-category decorator/factory API.
 
-**✅ Template: Decorator-Based Registration**
+Use the existing category loaders instead of directly constructing plugins:
 
-```python
-# In src/homesec/plugins/notifiers/__init__.py
-from dataclasses import dataclass
-from pydantic import BaseModel
+| Plugin type | Loader | Registry type |
+| --- | --- | --- |
+| Filters | `load_filter(config)` | `PluginType.FILTER` |
+| Analyzers | `load_analyzer(config)` | `PluginType.ANALYZER` |
+| Sources | `load_source_plugin(backend, config, camera_name, **runtime_context)` | `PluginType.SOURCE` |
+| Alert policies | `load_alert_policy(config, trigger_classes)` | `PluginType.ALERT_POLICY` |
+| Notifiers | `load_notifier_plugin(backend, config)` | `PluginType.NOTIFIER` |
+| Storage | `load_storage_plugin(config)` | `PluginType.STORAGE` |
 
-@dataclass(frozen=True)
-class NotifierPlugin:
-    name: str
-    config_model: type[BaseModel]
-    factory: Callable[[BaseModel], Notifier]
+The registry merges supplied runtime context into configuration before Pydantic
+validation and calls the class factory with the validated model. Factory
+signatures and required abstract methods must match the canonical interfaces;
+there are no separate `FilterContext`/`SourceContext` factory arguments in this
+registry.
 
-NOTIFIER_REGISTRY: dict[str, NotifierPlugin] = {}
-
-def register_notifier(plugin: NotifierPlugin) -> None:
-    """Register with collision detection."""
-    if plugin.name in NOTIFIER_REGISTRY:
-        raise ValueError(f"Plugin '{plugin.name}' already registered")
-    NOTIFIER_REGISTRY[plugin.name] = plugin
-
-def notifier_plugin(name: str) -> Callable[[T], T]:
-    """Decorator to register a notifier plugin."""
-    def decorator(factory_fn: T) -> T:
-        plugin = factory_fn()
-        register_notifier(plugin)
-        return factory_fn
-    return decorator
-
-def load_notifier_plugin(backend: str, config: dict | BaseModel) -> Notifier:
-    """Load and instantiate a notifier plugin with config validation."""
-    plugin = NOTIFIER_REGISTRY[backend.lower()]
-    validated = plugin.config_model.model_validate(config) if isinstance(config, dict) else config
-    return plugin.factory(validated)
-```
-
-**✅ Template: Plugin Implementation with Type Safety**
-
-```python
-# In src/homesec/plugins/notifiers/mqtt.py
-from pydantic import BaseModel
-from homesec.plugins.notifiers import NotifierPlugin, notifier_plugin
-
-class MQTTNotifierConfig(BaseModel):
-    broker_url: str
-    topic_prefix: str = "homesec"
-
-@notifier_plugin(name="mqtt")
-def mqtt_notifier_plugin() -> NotifierPlugin:
-    def factory(cfg: BaseModel) -> Notifier:
-        # Type-safe: validate config type at runtime
-        if not isinstance(cfg, MQTTNotifierConfig):
-            raise TypeError(f"Expected MQTTNotifierConfig, got {type(cfg).__name__}")
-        return MQTTNotifier(cfg)
-
-    return NotifierPlugin(
-        name="mqtt",
-        config_model=MQTTNotifierConfig,
-        factory=factory,
-    )
-```
-
-**Plugin Types and Context Objects:**
-
-| Plugin Type | Decorator | Context | Factory Signature |
-|-------------|-----------|---------|-------------------|
-| Filters | `@filter_plugin` | `FilterContext` | `(BaseModel, FilterContext) -> ObjectFilter` |
-| Analyzers | `@vlm_plugin` | `VLMContext` | `(BaseModel, VLMContext) -> VLMAnalyzer` |
-| Sources | `@source_plugin` | `SourceContext` | `(BaseModel, SourceContext) -> ClipSource` |
-| Alert Policies | `@alert_policy_plugin` | `AlertPolicyContext` | `(BaseModel, AlertPolicyContext) -> AlertPolicy` |
-| Notifiers | `@notifier_plugin` | None | `(BaseModel) -> Notifier` |
-| Storage | `@storage_plugin` | None | `(BaseModel) -> StorageBackend` |
-
-**Why some plugins have Context and others don't:**
-- **With Context** (Filters, Analyzers, Sources, AlertPolicies): These plugins need runtime information beyond their config—camera names, executor pools, file paths, or pipeline state. Context objects provide this without polluting config models.
-- **Without Context** (Notifiers, Storage): These are stateless services that only need their own config. They don't depend on which camera or pipeline invokes them.
-
-**Note:** Always use `isinstance()` checks in factories instead of `cast()` to ensure type safety at runtime.
-
-**Reference:** See `PLUGIN_DEVELOPMENT.md` for complete guide. Example implementations: `src/homesec/plugins/filters/yolo.py`, `src/homesec/plugins/notifiers/mqtt.py`.
+Built-ins are discovered through module imports; external packages use the
+`homesec.plugins` entry-point group. See [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)
+and the existing filter/notifier implementations for complete examples.
 
 ---
 
@@ -406,35 +351,12 @@ def mqtt_notifier_plugin() -> NotifierPlugin:
 - **Use real implementations where cheap** - Filesystem via `tmp_path`, pure functions
 - **Track API calls, not state flags** - Use `api_calls: list[str]` not `was_called: bool`
 
-**✅ Template: Test with Given/When/Then**
-
-```python
-async def test_filter_stage_success():
-    # Given: A clip and a filter configured to detect person
-    clip = Clip(clip_id="test-001", camera_name="front_door", ...)
-    mock_filter = MockFilter(result=FilterResult(detected_classes=["person"], confidence=0.9))
-    pipeline = ClipPipeline(filter_plugin=mock_filter, ...)
-
-    # When: Processing clip through filter stage
-    result = await pipeline._filter_stage(clip)
-
-    # Then: Should return FilterResult with detected person
-    assert isinstance(result, FilterResult)
-    assert "person" in result.detected_classes
-    assert result.confidence == 0.9
-
-async def test_filter_stage_failure():
-    # Given: A filter that simulates failure
-    mock_filter = MockFilter(simulate_failure=True)
-    pipeline = ClipPipeline(filter_plugin=mock_filter, ...)
-
-    # When: Processing clip through filter stage
-    result = await pipeline._filter_stage(clip)
-
-    # Then: Should return FilterError (error-as-value pattern)
-    assert isinstance(result, FilterError)
-    assert result.clip_id == clip.clip_id
-```
+Use the current [testing examples](TESTING.md) and
+[pipeline tests](tests/homesec/test_pipeline.py) for complete payloads, fixture
+construction, and behavioral boundaries. Stage helpers above illustrate error
+handling; they do not replace tests through the appropriate observable entry
+point. Avoid copying abbreviated constructors or inventing mock arguments that
+the current test helpers do not support.
 
 **Available Mocks:** `MockFilter`, `MockVLM`, `MockStorage`, `MockNotifier`, `MockStateStore`, `MockEventStore`
 
@@ -447,7 +369,7 @@ async def test_filter_stage_failure():
 ### Key Directories
 
 **Source code:**
-- `src/homesec/interfaces.py` - Protocol definitions for all plugin types
+- `src/homesec/interfaces.py` - Abstract interfaces and protocols for pipeline components
 - `src/homesec/pipeline/core.py` - ClipPipeline orchestrator (main business logic)
 - `src/homesec/app.py` - Application class (component wiring and lifecycle)
 - `src/homesec/models/` - Pydantic models (Config, ClipStateData, events, etc.)
@@ -470,8 +392,8 @@ async def test_filter_stage_failure():
 uv sync                 # Install dependencies
 make typecheck          # Run mypy --strict (mandatory before commit)
 make test               # Run pytest
-make check              # Run both typecheck + test
-make db-up              # Start Postgres for development
+make check              # Run lock, Rust, Python, and UI checks
+make db                 # Start Postgres for development
 make db-migrate         # Run Alembic migrations
 ```
 
@@ -510,11 +432,11 @@ make db-migrate         # Run Alembic migrations
 
 ### Security
 
-```python
+```yaml
 # ✅ GOOD: Reference env var name in config
 storage:
   backend: dropbox
-  dropbox:
+  config:
     token_env: "DROPBOX_TOKEN"  # Config stores env var NAME
 
 # ❌ BAD: Never commit secrets
