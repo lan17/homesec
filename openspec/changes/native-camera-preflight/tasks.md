@@ -54,7 +54,7 @@ Implementation tracking: mark a task complete only after its specified behavior 
 - [x] 7.2 Run a local IPyCam integration on this Mac with isolated ports and temporary clip storage, exercising startup, motion/recording, preview coexistence, recovery, and shutdown; verify clips are finalized/nonempty and inspect process/session cleanup. Record actual codecs and limits; do not treat this as complete audio/hardware parity or use Lenovo for this test.
 - [ ] 7.3 Complete the design's codec/audio/platform compatibility matrix with protocol/library tests and actual device checks for applicable hardware targets; verify each supported combination has evidence or an explicit unresolved blocker, with no silent support removal and no claim that untested rows passed.
 - [x] 7.4 Run `openspec validate native-camera-preflight --strict`, required `make typecheck` before commit, and `make check` before push/PR updates under `AGENTS.md`; verify results, use only an explicitly approved disposable database for writing tests, and disclose any user-approved validation exception or environment failure accurately.
-- [ ] 7.5 Review the integrated implementation against every changed scenario and the no-CLI inspection inventory; verify ticket 194's evidence and PR links are current, ticket 192 can consume the semantic operations, and tickets 195/196 still track remaining execution and packaging work without prematurely marking the epic complete.
+- [x] 7.5 Review the integrated implementation against every changed scenario and the no-CLI inspection inventory; verify ticket 194's evidence and PR links are current, ticket 192 can consume the semantic operations, and tickets 195/196 still track remaining execution and packaging work without prematurely marking the epic complete.
 
 ### Acceptance status on 2026-10-18
 
@@ -67,7 +67,6 @@ and [compatibility matrix](../../../docs/shared-rust-media.md#inspection-compati
 - **3.1:** The full audio allowlist has linked-library fixtures. Actual RTSP helper AAC/AC3/MP2/MP3/EAC3 copy passed; ALAC still lacks an actual RTSP/RPC fixture.
 - **3.3:** Actual packet-clock-reset trials establish baseline/improved wallclock evidence. Failed/no-improvement outcomes have typed-peer policy coverage; their real packet-fixture cases remain pending.
 - **7.3:** Physical Linux VAAPI/CUDA/NVENC/QSV, x86_64 and remaining codec/device qualification are pending; no untested row is passed.
-- **7.5:** Final ticket/PR publication reconciliation remains pending; tickets 192, 195 and 196 retain their separate scope.
 
 The final stable `make check` passed: 186 Rust tests, 1,705 Python tests and 325 UI
 tests, plus typing, lint/format, Clippy, generated API consistency, locked
@@ -76,6 +75,14 @@ writes were confined to the explicitly approved disposable Postgres 16 tmpfs
 container on loopback port 15439, which was stopped and removed after validation.
 The final Linux arm64 helper suite passed 16 tests and its hardware suite passed
 four tests; static linkage and absent/incompatible-CLI capability checks passed.
+
+The existing [draft PR](https://github.com/lan17/homesec/pull/124) and
+[ticket 194](https://app.notion.com/p/3fdd8336c59f813eac7effebd396fb79)
+now describe this implementation, passing validation and the three remaining
+acceptance tasks. The original planning commit is retained. Tickets 192, 195
+and 196 were rechecked and retain admission, remaining media execution and final
+packaging scope respectively; the epic is not marked complete. No merge or
+production rollout was performed.
 
 ## Workflow follow-up
 
