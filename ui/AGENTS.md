@@ -1,6 +1,6 @@
 # UI Agent Guide
 
-Scope: applies to everything under `/Users/levneiman/code/homesec3/ui`.
+Scope: applies to this repository's `ui/` directory, including any worktree checkout.
 
 ## Goals
 

@@ -2,7 +2,10 @@
 
 These notes cover HLS preview, selected with `preview.backend: hls`. WebRTC is
 the default backend; see [WebRTC preview](webrtc-preview.md) for its deployment
-requirements.
+requirements. The maintained
+[preview and talk contract](../openspec/specs/preview-talk/spec.md) and
+[reference limitations](reference.md#preview-talk) describe behavior shared by
+both transports.
 
 `preview.config.storage_dir` is a scratch directory intended for HLS preview output
 (short-lived playlists and segments). It is not durable clip storage. Keep it
@@ -10,14 +13,17 @@ separate from `recordings/` and any long-term storage backend.
 
 Current implementation status: RTSP sources can serve on-demand HLS preview when
 `preview.enabled` is true and the runtime can attach or start preview for the
-camera. Artifacts are only written while preview is active and are cleaned up on
-stop or runtime shutdown. If preview is disabled (or the source backend does not
-support preview), this directory remains unused.
+camera. Artifacts are written while preview is active. Stop and runtime shutdown
+attempt to remove the camera scratch directory; cleanup failures or abrupt termination
+can leave stale files. Playback also checks current preview state, so stale files
+are not served as an active preview. If preview is disabled (or the source backend
+does not support preview), no publisher writes new preview output.
 
 By default, preview yields to active recording with:
 
 ```yaml
 preview:
+  enabled: true
   backend: hls
   recording_policy: stop_on_recording
 ```
@@ -30,8 +36,14 @@ preview:
   recording_policy: allow_during_recording
 ```
 
-That mode can open an extra direct RTSP session to the camera. Use it only if
-your camera tolerates concurrent motion, recording, and preview consumers.
+HLS uses its own FFmpeg input rather than the shared Rust media input. Concurrent
+preview can consume an extra direct RTSP session to the camera. Camera preflight
+can refuse it when the session budget is insufficient. Use it only if your camera
+tolerates concurrent motion, recording, and preview consumers.
+
+After editing the configuration file, request a runtime reload through
+`POST /api/v1/runtime/reload` or restart HomeSec. Writing the file alone does not activate the new preview settings;
+runtime reload closes existing live sessions.
 
 ## Recommended Storage
 
@@ -75,16 +87,19 @@ encoded_bitrate_bytes_per_second
   * live_window_segments
 ```
 
-Plan extra headroom for muxing overhead, playlist files, and delete lag.
+This is an estimate, not a storage bound. Copy-mode segments follow camera
+keyframes and can exceed the requested duration. Plan extra headroom for muxing
+overhead, playlist files, and delete lag.
 
 The exact bitrate depends on source content and codec handling:
 
-- `video_codec: copy` preserves the upstream video bitrate
-- `video_codec: h264` or `audio_codec: aac` can reduce or increase output size
-  depending on the source
-- upstream H.264 sources are the cheapest path for browser playback; H.265/HEVC
-  sources will transcode to H.264 for preview and therefore increase CPU or
-  hardware-encoder load
+- `video_codec: auto` (the HLS default) and `video_codec: h264` copy sources
+  identified as H.264; other or unidentified video is transcoded to H.264
+- explicit `video_codec: copy` preserves the upstream bitrate and skips video
+  transcoding even for non-H.264 input; browser compatibility still depends on
+  the camera codec
+- video transcoding and `audio_codec: aac` can change output size and increase
+  CPU or hardware-encoder load
 
 At the default `1000 ms` segments and `4` retained segments, a conservative
 starting point is `64 MiB` of tmpfs per actively previewed camera. Increase that

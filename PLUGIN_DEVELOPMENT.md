@@ -1,6 +1,9 @@
 # HomeSec Plugin Development Guide
 
 This guide explains how to develop plugins for HomeSec, a pluggable async video pipeline for home security cameras.
+Exact interfaces live in [interfaces.py](src/homesec/interfaces.py); registration
+and construction live in [registry.py](src/homesec/plugins/registry.py). The class
+sketches below show extension points and require the indicated backend logic.
 
 ## Table of Contents
 
@@ -25,16 +28,23 @@ HomeSec uses a unified **Class-Based Plugin Architecture**. All plugins follow a
 
 1.  **Interface**: Inherit from a specific interface (e.g., `ObjectFilter`, `Notifier`).
 2.  **Configuration**: Define a Pydantic model for configuration.
-3.  **Registration**: Use the `@plugin` decorator to register the class.
+3.  **Registration**: Use `@plugin(plugin_type=PluginType.FILTER, name="custom")`
+    (with the appropriate plugin type) to register the class.
 4.  **Creation**: Implement a `create(cls, config)` class method.
 
 ### Key Principles
 
--   **Context-Free Creation**: The `create` method receives *only* a fully resolved configuration object. Runtime dependencies (like `camera_name` for sources or default alert-policy `trigger_classes`) are injected into the config model before validation when needed.
+-   **Context-Free Creation**: The `create` method receives a validated
+    configuration object. Runtime fields (like source `camera_name` or the
+    default policy's `trigger_classes`) are supplied by the calling loader.
+    Secret references may still need resolution by the backend.
 -   **Strict Typing**: All configs are Pydantic models.
 -   **Backend/Config Boundary**: Core config uses `backend` + opaque `config` payloads; plugin-specific fields live in the plugin’s `config_cls`.
--   **Async Interface**: All I/O operations must be async.
--   **Lifecycle Management**: Implement `shutdown()` and `ping()` (where applicable).
+-   **Async Interface**: Async interface methods must avoid blocking the event
+    loop; offload blocking SDK/file calls and CPU work where needed. Factories
+    and alert-policy decisions are synchronous.
+-   **Lifecycle Management**: Implement every abstract method on the chosen
+    interface. The six plugin types have different lifecycle requirements.
 
 ---
 
@@ -44,8 +54,8 @@ HomeSec uses a unified **Class-Based Plugin Architecture**. All plugins follow a
 | :--- | :--- | :--- | :--- |
 | Filter | `ObjectFilter` | `PluginType.FILTER` | Object detection in video |
 | VLM Analyzer | `VLMAnalyzer` | `PluginType.ANALYZER` | Vision-language analysis |
-| Storage | `StorageBackend` | `PluginType.STORAGE` | File storage (Dropbox, local) |
-| Notifier | `Notifier` | `PluginType.NOTIFIER` | Alert delivery (MQTT, email) |
+| Storage | `StorageBackend` | `PluginType.STORAGE` | File storage (bundled: Dropbox, local) |
+| Notifier | `Notifier` | `PluginType.NOTIFIER` | Alert delivery (bundled: MQTT, SendGrid email) |
 | Alert Policy | `AlertPolicy` | `PluginType.ALERT_POLICY` | Notification decision logic |
 | Clip Source | `ClipSource` | `PluginType.SOURCE` | Video clip production |
 
@@ -60,7 +70,7 @@ All plugins, regardless of their type, share a common structure that ensures typ
 Every plugin class must be decorated with `@plugin`. This handles registration automatically.
 
 ```python
-@plugin(type=PluginType.FILTER, name="my_plugin")
+@plugin(plugin_type=PluginType.FILTER, name="my_plugin")
 class MyPlugin(ObjectFilter):
     ...
 ```
@@ -70,14 +80,18 @@ class MyPlugin(ObjectFilter):
 Every plugin must define a Pydantic model for its configuration. This model serves as the contract for the plugin.
 
 - **Strict Validation**: Utilize Pydantic's validation features (types, `Field` constraints) to ensure invalid configs are caught early.
-- **Injected Fields**: If your plugin type needs runtime context (sources, alert policy), declare those fields in your config model. The registry will inject them automatically.
+- **Injected Fields**: Declare runtime fields supplied by the calling loader.
+  `load_source_plugin()` supplies `camera_name` and any explicitly passed runtime
+  context; the alert-policy loader supplies trigger classes only for the bundled
+  default policy. The generic registry merges caller-provided context before
+  validation; it does not discover dependencies from your field declarations.
 
 Tip: Define the plugin-specific config model in the same module as the plugin implementation (no re-exports).
 
 ```python
 class MyConfig(BaseModel):
     model_path: str
-    camera_name: str | None = None  # Injected field
+    camera_name: str  # Required when the source loader supplies camera context
 ```
 
 ### 3. The `create()` Factory
@@ -97,8 +111,14 @@ HomeSec is an async-first pipeline.
 
 ### 5. Lifecycle Methods
 
-- **shutdown()**: Mandatory. Release all resources (thread pools, GPU memory, network sessions). This is called during application shutdown.
-- **ping()**: Optional (if supported by interface). Return `True` if the plugin is healthy.
+- **shutdown(timeout=None)**: Required for sources, filters, analyzers, storage,
+  and notifiers. Release owned resources and stop background work. Runtime
+  teardown also calls it during reload or partial-startup cleanup.
+- **ping()**: Required by those same five interfaces. Return `True` when the
+  component's defined health check succeeds; a ping need not exercise delivery,
+  upload, or inference.
+- **Alert policies**: Implement synchronous `should_notify()`. `AlertPolicy`
+  provides `make_decision()` and requires no shutdown or ping method.
 
 ---
 
@@ -111,10 +131,11 @@ Filter plugins detect objects in video clips.
 ```python
 # my_filter/custom_filter.py
 from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 from homesec.interfaces import ObjectFilter
-from homesec.models.filter import FilterResult, FilterOverrides
+from homesec.models.filter import FilterOverrides, FilterResult
 from homesec.plugins.registry import PluginType, plugin
 
 # 1. Define Configuration
@@ -123,10 +144,10 @@ class CustomFilterSettings(BaseModel):
     model_config = {"extra": "forbid"}
 
     model_path: str
-    confidence: float = 0.5
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 # 2. Implement and Register
-@plugin(type=PluginType.FILTER, name="custom")
+@plugin(plugin_type=PluginType.FILTER, name="custom")
 class CustomFilter(ObjectFilter):
     """Custom object detection filter."""
 
@@ -138,17 +159,22 @@ class CustomFilter(ObjectFilter):
 
     def __init__(self, config: CustomFilterSettings) -> None:
         self._config = config
-        self._model = self._load_model(config.model_path)
+        # Load your backend here; keep expensive work out of the event loop.
 
     async def detect(
         self,
         video_path: Path,
         overrides: FilterOverrides | None = None,
     ) -> FilterResult:
-        # Implementation...
-        return FilterResult(...)
+        # Run your backend and return all required FilterResult fields.
+        raise NotImplementedError("Implement backend detection")
+
+    async def ping(self) -> bool:
+        # Check that your backend is ready to accept work.
+        raise NotImplementedError("Implement backend health check")
 
     async def shutdown(self, timeout: float | None = None) -> None:
+        # Release any model/executor resources allocated by your backend.
         pass
 ```
 
@@ -172,17 +198,21 @@ VLM analyzers provide vision-language analysis.
 
 ```python
 # my_vlm/custom_vlm.py
+from pathlib import Path
+
+from pydantic import BaseModel
+
 from homesec.interfaces import VLMAnalyzer
+from homesec.models.filter import FilterResult
 from homesec.models.vlm import AnalysisResult, VLMConfig
 from homesec.plugins.registry import PluginType, plugin
-from pydantic import BaseModel
 
 class CustomVLMSettings(BaseModel):
     model_name: str
     api_key_env: str | None = None
     base_url: str | None = None
 
-@plugin(type=PluginType.ANALYZER, name="custom")
+@plugin(plugin_type=PluginType.ANALYZER, name="custom")
 class CustomVLM(VLMAnalyzer):
     config_cls = CustomVLMSettings
 
@@ -199,7 +229,14 @@ class CustomVLM(VLMAnalyzer):
         filter_result: FilterResult,
         config: VLMConfig,
     ) -> AnalysisResult:
-        # ... logic ...
+        # Return a validated AnalysisResult from your provider/backend.
+        raise NotImplementedError("Implement backend analysis")
+
+    async def ping(self) -> bool:
+        raise NotImplementedError("Implement backend health check")
+
+    async def shutdown(self, timeout: float | None = None) -> None:
+        # Close provider sessions and owned workers.
         pass
 ```
 
@@ -212,14 +249,14 @@ Note: `vlm.trigger_classes` and `vlm.run_mode` live in the core VLM config, not 
 Storage plugins handle file persistence.
 
 ```python
-@plugin(type=PluginType.STORAGE, name="s3")
+@plugin(plugin_type=PluginType.STORAGE, name="s3")
 class S3Storage(StorageBackend):
     config_cls = S3Config
 
     @classmethod
     def create(cls, config: S3Config) -> StorageBackend:
         return cls(config)
-    # ... implementation of put_file, get_file, etc.
+    # Implement every StorageBackend abstract method, including get() (not get_file()).
 ```
 
 ---
@@ -229,7 +266,7 @@ class S3Storage(StorageBackend):
 Notifiers send alerts.
 
 ```python
-@plugin(type=PluginType.NOTIFIER, name="slack")
+@plugin(plugin_type=PluginType.NOTIFIER, name="slack")
 class SlackNotifier(Notifier):
     config_cls = SlackConfig
 
@@ -240,36 +277,72 @@ class SlackNotifier(Notifier):
     async def send(self, alert: Alert) -> None:
         # ...
         pass
+
+    # Implement ping() and shutdown(timeout=None) as well.
 ```
+
+These S3/Slack sketches illustrate extension points; those backends are not
+bundled. Import their interface/payload types and define their Pydantic settings
+in the implementation module. Storage `delete()` must tolerate a missing object.
+
+---
+
+## Creating an Alert Policy Plugin
+
+Implement the synchronous `AlertPolicy.should_notify(camera_name, filter_result,
+analysis) -> tuple[bool, str]` interface and register the class using
+`PluginType.ALERT_POLICY`. Accept absent filter/analysis results where the
+interface permits them. Keep backend-specific thresholds and camera overrides in
+your settings model. The bundled
+[default policy](src/homesec/plugins/alert_policies/default.py) is a complete
+example; its missing-analysis fallback can notify when filter trigger classes
+match, including when analysis was skipped. No lifecycle methods are required.
+
+---
+
+## Configuration Models
+
+`config_cls` defines backend-specific fields. Core models retain `backend` and an
+opaque `config` payload so third-party settings survive parsing. The registry
+validates with `config_cls.model_validate()` before calling `create()`; use
+`validate_plugin()` when validation alone is needed. Validation does not prove
+provider reachability, construct the plugin, or perform inference/upload.
 
 ---
 
 ## Creating a Clip Source Plugin
 
-Sources like cameras. Note: `camera_name` is injected into the config.
+Sources produce finalized local clips and emit them through a registered
+callback; the pipeline owns storage upload. `camera_name` is injected by
+`load_source_plugin()`. Implement the complete `ClipSource` interface, including
+async start/shutdown/ping and synchronous callback/health/heartbeat methods.
 
 ```python
 class MySourceConfig(BaseModel):
     host: str
-    camera_name: str | None = None  # Injected at runtime
+    camera_name: str  # Supplied by load_source_plugin()
 
-@plugin(type=PluginType.SOURCE, name="mysource")
+@plugin(plugin_type=PluginType.SOURCE, name="mysource")
 class MySource(ClipSource):
     config_cls = MySourceConfig
 
     @classmethod
     def create(cls, config: MySourceConfig) -> ClipSource:
-        if not config.camera_name:
-             raise ValueError("Camera name missing")
         return cls(config.host, config.camera_name)
+
+    # Supply __init__ and every abstract ClipSource method.
 ```
 
 ---
 
 ## Lifecycle Management
 
--   `ping()`: For health checks (Notifier, Storage). Returns `bool`.
--   `shutdown(timeout)`: Cleanup resources.
+The runtime assembler owns source/filter/analyzer/notifier teardown. The host
+that constructs a storage/persistence stack closes it: the application owns its
+control-plane stack, while a subprocess runtime worker builds and closes its own
+stack. The pipeline waits for tracked clip work; it does not close plugins itself. Follow existing bounded
+cleanup patterns in [runtime assembly](src/homesec/runtime/assembly.py).
+Never assume a source `stop()` or a storage/notifier `close()` interface exists.
 
 ---
 
@@ -281,32 +354,50 @@ class MySource(ClipSource):
     my_plugin = "my_plugin_package"
     ```
 2.  **Package**: Ensure `my_plugin_package/__init__.py` imports the plugin modules so decorators run.
+3.  **Discovery**: Application startup calls `discover_all_plugins()`, which imports
+    built-in modules and each `homesec.plugins` entry point's module. It imports
+    the module rather than calling an entry-point factory. Direct loader use in
+    tests must first import the decorated module or invoke discovery explicitly.
 
 ---
 
 ## Testing Plugins
 
-Use `homesec.plugins.registry.load_plugin` for integration tests.
+Test observable plugin behavior through the public interface. Use type-specific
+loaders where available; a generic `load_plugin()` call returns `Any`. This
+filesystem-only smoke test exercises the existing storage loader without
+provider credentials or a database:
 
 ```python
-from homesec.plugins.registry import PluginType, load_plugin
+from pathlib import Path
 
-def test_my_plugin():
-    plugin = load_plugin(
-        PluginType.FILTER,
-        "custom",
-        {"model_path": "foo"},
+from homesec.models.config import StorageConfig
+from homesec.plugins.storage import load_storage_plugin
+from homesec.plugins.storage import local  # noqa: F401 - runs decorator registration
+
+async def test_local_storage_roundtrip(tmp_path: Path) -> None:
+    # Given: A real local backend and input bytes.
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"test-clip")
+    storage = load_storage_plugin(
+        StorageConfig(backend="local", config={"root": str(tmp_path / "stored")})
     )
-    assert plugin is not None
+    try:
+        # When: Uploading through the storage interface and reading it back.
+        uploaded = await storage.put_file(source, "clips/test.mp4")
+        downloaded = tmp_path / "downloaded.mp4"
+        await storage.get(uploaded.storage_uri, downloaded)
+
+        # Then: The public operations preserve bytes.
+        assert downloaded.read_bytes() == b"test-clip"
+    finally:
+        await storage.shutdown()
 ```
-3. **Log appropriately**: Use structured logging with `logging.getLogger(__name__)`
-4. **Validate early**: Fail fast on invalid configuration
-5. **Import hygiene**: Keep module imports light; for optional/heavy deps, either import lazily or guard module-level imports with clear runtime errors
-6. **Document thoroughly**: Include docstrings and type hints
-7. **Test comprehensively**: Unit tests, integration tests, and edge cases
-8. **Manage resources**: Always implement proper `shutdown()`
+For custom plugins, test invalid settings, meaningful return payloads, failure
+propagation, and owned-resource cleanup at their boundaries. See
+[TESTING.md](TESTING.md). Keep imports light and logs structured; avoid logging
+secret values or raw media.
 
 ---
 
-*Document version: 1.2*
-*Last updated: 2026-02-01*
+*Last reviewed: 2026-10-18*
