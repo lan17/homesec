@@ -5,13 +5,166 @@ on:
     branches: [main, master]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # api_codegen.mjs invokes uv itself; keep that nested command locked too.
+  UV_LOCKED: "1"
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  ci:
-    runs-on: ubuntu-latest
+  rust-format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust formatting
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt
+          cargo fmt --manifest-path native/webrtc/Cargo.toml --all -- --check
+
+  python-static:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [lint, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python
+      - name: Python static checks
+        env:
+          CHECK: ${{ matrix.check }}
+        run: make "$CHECK"
+      - name: Check CI support code
+        if: matrix.check == 'lint'
+        run: |
+          uv run --locked ruff check .github/scripts
+          uv run --locked ruff format --check .github/scripts
+          uv run --locked python .github/scripts/test_ci.py
+      - name: Type check CI support code
+        if: matrix.check == 'typecheck'
+        run: uv run --locked mypy .github/scripts/test_ci.py --strict
+
+  ui:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        check: ['api:check', lint, test, build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install UI dependencies
+        run: pnpm --dir ui install --frozen-lockfile
+      # Only the contract exporter needs Python; no running app or Postgres.
+      - uses: ./.github/actions/setup-python
+        if: matrix.check == 'api:check'
+      - name: Install contract import prerequisites
+        if: matrix.check == 'api:check'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1
+      - name: UI check
+        env:
+          CHECK: ${{ matrix.check }}
+        run: pnpm --dir ui "$CHECK"
+
+  native-deps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-native
+        id: native
+      - name: Prepare native libraries
+        id: prepare
+        # The existing wrapper validates/builds every native dependency before
+        # executing this cheap Cargo command. Do not skip it on a cache hit.
+        run: python3 native/webrtc/build_native.py -- cargo --version
+      - name: Save completed native libraries
+        if: steps.prepare.outcome == 'success' && steps.native.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.native.outputs.cache-path }}
+          key: ${{ steps.native.outputs.cache-key }}
+
+  rust-tests:
+    needs: native-deps
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-native
+        id: native
+      - name: Cache Rust check outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/webrtc/target
+          key: cargo-check-${{ steps.native.outputs.cache-key }}-${{ hashFiles('native/webrtc/src/**', 'native/webrtc/tests/**', 'native/webrtc/build.rs', 'native/webrtc/vendor/**') }}
+          restore-keys: |
+            cargo-check-${{ steps.native.outputs.cache-key }}-
+      - name: Clippy
+        run: python3 native/webrtc/build_native.py -- cargo clippy --manifest-path native/webrtc/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: python3 native/webrtc/build_native.py -- cargo test --manifest-path native/webrtc/Cargo.toml --locked
+
+  native-build:
+    needs: native-deps
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-native
+        id: native
+      - name: Cache Rust release outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/webrtc/target
+          key: cargo-release-${{ steps.native.outputs.cache-key }}-${{ hashFiles('native/webrtc/src/**', 'native/webrtc/tests/**', 'native/webrtc/build.rs', 'native/webrtc/vendor/**') }}
+          restore-keys: |
+            cargo-release-${{ steps.native.outputs.cache-key }}-
+      - name: Build WebRTC helper
+        run: |
+          make rust-build
+          dependencies="$(ldd native/webrtc/target/release/homesec-webrtc)"
+          if printf '%s\n' "$dependencies" | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample|x264|opus)\.so'; then
+            echo "The native helper must use bundled static FFmpeg, OpenCV, x264 and Opus libraries." >&2
+            exit 1
+          fi
+      - name: Publish helper for this workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: homesec-webrtc-${{ github.sha }}
+          path: native/webrtc/target/release/homesec-webrtc
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  python-tests:
+    # Keep the complete suite's existing helper environment. Splitting tests
+    # by helper dependency needs a separate inventory/coverage change.
+    needs: native-build
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -21,111 +174,55 @@ jobs:
           POSTGRES_PASSWORD: homesec
         ports:
           - "5432:5432"
-        # No health check - Postgres boots while lint/typecheck run
-
     env:
       DB_DSN: postgresql+asyncpg://homesec:homesec@localhost:5432/homesec
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        run: |
-          rustup show active-toolchain
-          rustup component add rustfmt clippy
-
-      - name: Cache Rust build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            native/webrtc/target
-            /tmp/homesec-native-*
-          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'native/webrtc/Cargo.toml', 'native/webrtc/Cargo.lock', 'native/webrtc/build_native.py') }}
-
-      - name: Rust check
-        # The shared recipe builds static FFmpeg/OpenCV/x264/Opus; media tests also use the CLI.
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-python
+      - name: Install test prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential python3 cmake ffmpeg clang libclang-dev pkg-config nasm
-          make rust-check
-
-      - name: Build WebRTC helper
+          sudo apt-get install -y --no-install-recommends ffmpeg libgl1 postgresql-client
+      - name: Download this run's helper
+        uses: actions/download-artifact@v4
+        with:
+          name: homesec-webrtc-${{ github.sha }}
+          path: native/webrtc/target/release
+      - name: Make helper executable and available
         run: |
-          make rust-build
-          dependencies="$(ldd native/webrtc/target/release/homesec-webrtc)"
-          if printf '%s\n' "$dependencies" | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample|x264|opus)\.so'; then
-            echo "The native helper must use bundled static FFmpeg, OpenCV, x264 and Opus libraries." >&2
-            exit 1
-          fi
+          chmod +x native/webrtc/target/release/homesec-webrtc
           echo "$GITHUB_WORKSPACE/native/webrtc/target/release" >> "$GITHUB_PATH"
-
-      - name: Setup uv and Python
-        uses: astral-sh/setup-uv@v3
-        with:
-          python-version: "3.14"
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Cache venv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock') }}
-
-      - name: Check uv lockfile
-        run: uv lock --check
-
-      - name: Sync dependencies
-        run: uv sync --group dev --locked
-
-      # Lint and typecheck run while Postgres boots
-      - name: Lint
-        run: make lint
-
-      - name: Type check
-        run: make typecheck
-
-      # Wait for Postgres before migrations
       - name: Wait for Postgres
         run: |
           for i in {1..30}; do
-            pg_isready -h localhost -p 5432 -U homesec && break
+            if pg_isready -h localhost -p 5432 -U homesec; then
+              exit 0
+            fi
             echo "Waiting for Postgres..."
             sleep 1
           done
-
+          echo "Postgres did not become ready" >&2
+          exit 1
       - name: Run migrations
         run: uv run --locked alembic -c alembic.ini upgrade head
-
       - name: Test with coverage
         run: make coverage
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-          run_install: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.12.0"
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
-
-      - name: Install UI dependencies
-        run: pnpm --dir ui install --frozen-lockfile
-
-      - name: UI check
-        run: pnpm --dir ui check
-
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
           fail_ci_if_error: false
+
+  ci:
+    # Retain the original required check name; skipped prerequisites must fail.
+    if: always()
+    needs: [rust-format, python-static, ui, native-deps, rust-tests, native-build, python-tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every CI job to succeed
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s\n' "$JOB_RESULTS"
+          jq -e 'length > 0 and all(.[]; .result == "success")' <<< "$JOB_RESULTS"
