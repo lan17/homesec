@@ -321,16 +321,7 @@ impl Mp4Recorder {
     }
 
     fn flush(&mut self) -> Result<()> {
-        // SAFETY: output owns a live custom AVIOContext for its whole lifetime.
-        // Explicit flushing exposes errors otherwise lost by destructor cleanup.
-        unsafe {
-            let io = (*self.output.as_mut_ptr()).pb;
-            ffmpeg::ffi::avio_flush(io);
-            if (*io).error < 0 {
-                return Err("recording_write_failed");
-            }
-        }
-        Ok(())
+        flush_output(&mut self.output)
     }
 
     /// Consume the writer to make finalization explicit and impossible twice.
@@ -358,6 +349,22 @@ impl Mp4Recorder {
         }
         Ok(())
     }
+}
+
+/// Explicit flushing exposes errors otherwise lost by AVIO destructor cleanup.
+pub(crate) fn flush_output(output: &mut format::context::Output) -> Result<()> {
+    // SAFETY: the output owns a live custom AVIOContext for this entire borrow.
+    unsafe {
+        let io = (*output.as_mut_ptr()).pb;
+        if io.is_null() {
+            return Err("recording_write_failed");
+        }
+        ffmpeg::ffi::avio_flush(io);
+        if (*io).error < 0 {
+            return Err("recording_write_failed");
+        }
+    }
+    Ok(())
 }
 
 fn validate_tracks(video: &StreamConfig, audio: Option<&StreamConfig>) -> Result<i32> {

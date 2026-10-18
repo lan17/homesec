@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from homesec.sources.rtsp.preflight import (
     RTSPStartupPreflight,
 )
 from homesec.sources.rtsp.recording_profile import RecordingProfile
+from tests.homesec.inspection_helpers import inspection_helper, inspection_requests
 
 
 class _FakeDiscovery:
@@ -742,541 +744,252 @@ def test_preflight_enables_wallclock_timestamps_when_baseline_is_unstable(
     assert "mp4:v=copy:a=copy:ts=wallclock" in outcome.diagnostics.negotiation_attempts
 
 
-def test_validate_recording_profile_collects_stability_warnings(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Recording validation should capture timestamp instability warning signals."""
-
-    class _FakeResult:
-        def __init__(self, returncode: int, stderr: str) -> None:
-            self.returncode = returncode
-            self.stderr = stderr
-            self.stdout = ""
-
+def test_native_trials_and_overlap_preserve_independent_roles(tmp_path: Path) -> None:
+    # Given: an executable native protocol peer and equal URLs for checked roles
+    helper = inspection_helper(tmp_path)
     preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
     )
-    profile = RecordingProfile(
-        input_url="rtsp://cam/high",
-        audio_mode="aac",
-        ffmpeg_output_args=["-c:v", "copy", "-c:a", "aac", "-f", "mp4"],
-    )
-
-    def _fake_run(
-        cmd: list[str],
-        *,
-        capture_output: bool,
-        text: bool,
-        timeout: float,
-        check: bool,
-    ) -> _FakeResult:
-        # Given: a validation ffmpeg command that logs warnings and succeeds
-        _ = capture_output
-        _ = text
-        _ = timeout
-        _ = check
-        idx = cmd.index("-loglevel")
-        assert cmd[idx + 1] == "warning"
-        output_path = Path(cmd[-1])
-        output_path.write_bytes(b"ok")
-        return _FakeResult(
-            returncode=0,
-            stderr=(
-                "Non-monotonic DTS\\n"
-                "Non-monotonic DTS\\n"
-                "Queue input is backward in time\\n"
-                "DTS discontinuity\\n"
-                "SEI type 764 size\\n"
-            ),
-        )
-
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.run", _fake_run)
-
-    # When: validating a recording profile
-    result = preflight._validate_recording_profile(profile)
-
-    # Then: warning counts are captured and returned with a successful validation
-    assert result.ok
-    assert result.signals.non_monotonic_dts == 2
-    assert result.signals.queue_input_backward == 1
-    assert result.signals.dts_discontinuity == 1
-    assert result.signals.sei_truncated == 1
-
-
-def test_validate_recording_profile_requires_output_clip(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Validation should fail if ffmpeg reports success but no output clip exists."""
-
-    class _FakeResult:
-        def __init__(self, returncode: int, stderr: str = "") -> None:
-            self.returncode = returncode
-            self.stderr = stderr
-            self.stdout = ""
-
-    preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-    )
-    profile = RecordingProfile(
-        input_url="rtsp://cam/high",
-        audio_mode="aac",
-        ffmpeg_output_args=["-c:v", "copy", "-c:a", "aac", "-f", "mp4"],
-    )
-
-    def _fake_run(
-        _cmd: list[str],
-        *,
-        capture_output: bool,
-        text: bool,
-        timeout: float,
-        check: bool,
-    ) -> _FakeResult:
-        _ = capture_output
-        _ = text
-        _ = timeout
-        _ = check
-        return _FakeResult(returncode=0)
-
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.run", _fake_run)
-
-    # When: validating a profile with no output produced
-    result = preflight._validate_recording_profile(profile)
-
-    # Then: validation fails closed
-    assert not result.ok
-    assert result.error is not None
-    assert "empty" in result.error
-
-
-def test_session_limit_validation_retries_without_timeout_flags(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Session-limit validation should retry when ffmpeg rejects timeout options."""
-
-    class _FakeProc:
-        def __init__(self, *, returncode: int | None, stderr_text: str) -> None:
-            self._returncode = returncode
-            self._stderr_text = stderr_text
-
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = 0
-            return ("", self._stderr_text)
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        if "-rw_timeout" in cmd or "-stimeout" in cmd:
-            return _FakeProc(returncode=1, stderr_text="Option rw_timeout not found")
-        return _FakeProc(returncode=None, stderr_text="")
-
-    preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-    )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
-
-    # Given: ffmpeg fails with timeout-option errors and then succeeds without them
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
-
-    # When: validating concurrent session limits
-    ok = preflight._validate_session_limits(motion_url, recording_url)
-
-    # Then: validation succeeds after retry without timeout options
-    assert ok
-    assert len(calls) == 4
-    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
-    assert "-rw_timeout" not in calls[-1]
-    assert "-stimeout" not in calls[-1]
-
-
-def test_session_limit_validation_non_timeout_failure_does_not_retry_without_timeouts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Session-limit validation should fail fast on non-timeout launch failures."""
-
-    class _FakeProc:
-        def __init__(self, *, returncode: int | None, stderr_text: str) -> None:
-            self._returncode = returncode
-            self._stderr_text = stderr_text
-
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = 0
-            return ("", self._stderr_text)
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        return _FakeProc(returncode=1, stderr_text="Connection refused")
-
-    preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-    )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
-
-    # Given: concurrent stream opens fail for non-timeout reasons
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
-
-    # When: validating concurrent session limits
-    ok = preflight._validate_session_limits(motion_url, recording_url)
-
-    # Then: validation fails without a no-timeouts retry
-    assert not ok
-    assert len(calls) == 2
-    assert "-rw_timeout" in calls[0] or "-stimeout" in calls[0]
-
-
-def test_concurrent_preview_session_validation_classifies_session_limit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Concurrent preview validation should distinguish session-budget failures."""
-
-    class _FakeProc:
-        def __init__(self, *, returncode: int | None, stderr_text: str) -> None:
-            self._returncode = returncode
-            self._stderr_text = stderr_text
-
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = 0
-            return ("", self._stderr_text)
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        return _FakeProc(returncode=1, stderr_text="Too many clients already connected")
-
-    preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-    )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
-
-    # Given: the three-stream preview topology hits a camera session-budget limit
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
-    preview_url = "rtsp://cam/preview"
-
-    # When: validating concurrent preview session limits
-    result = preflight._validate_concurrent_preview_session_limits(
-        motion_url,
-        recording_url,
-        preview_url,
-    )
-
-    # Then: validation reports a session-limit classification for startup downgrade
-    assert result is ConcurrentStreamOpenResult.SESSION_LIMIT
-    assert len(calls) == 3
-
-
-def test_concurrent_preview_session_validation_returns_failed_for_generic_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Concurrent preview validation should keep generic failures unclassified."""
-
-    class _FakeProc:
-        def __init__(self, *, returncode: int | None, stderr_text: str) -> None:
-            self._returncode = returncode
-            self._stderr_text = stderr_text
-
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = 0
-            return ("", self._stderr_text)
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        return _FakeProc(returncode=1, stderr_text="Connection refused")
-
-    preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-    )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
-
-    # Given: the three-stream preview topology fails for a generic RTSP reason
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
-    preview_url = "rtsp://cam/preview"
-
-    # When: validating concurrent preview session limits
-    result = preflight._validate_concurrent_preview_session_limits(
-        motion_url,
-        recording_url,
-        preview_url,
-    )
-
-    # Then: validation reports a generic failure instead of forcing a startup downgrade
-    assert result is ConcurrentStreamOpenResult.FAILED
-    assert len(calls) == 3
-
-
-def test_concurrent_preview_session_validation_models_audio_enabled_preview(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Concurrent preview validation should open the same audio track as HLS preview."""
-
-    class _FakeProc:
-        def __init__(self) -> None:
-            self._returncode: int | None = None
-
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = 0
-            return ("", "")
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        return _FakeProc()
-
-    preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-    )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
-
-    # Given: HLS preview is configured to include optional source audio
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
-    preview_url = "rtsp://cam/preview"
-
-    # When: validating concurrent preview session limits
-    result = preflight._validate_concurrent_preview_session_limits(
-        motion_url,
-        recording_url,
-        preview_url,
+    # When: recording and preview negotiation succeeds
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+        preview_rtsp_url="rtsp://camera/live",
+        preview_probe_rtsp_url="rtsp://camera/live",
         preview_audio_enabled=True,
     )
+    # Then: no URL equality collapses conservative independent checks and trials are removed
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.recording_profile.audio_mode == "copy"
+    requests = inspection_requests(tmp_path)
+    overlap = [request for request in requests if request["command"] == "inspect_overlap"]
+    assert [len(request["roles"]) for request in overlap] == [2, 3, 3]
+    assert overlap[1]["roles"][2]["kind"] == "metadata"
+    assert overlap[2]["roles"][2]["audio_mode"] == "copy"
+    for request in requests:
+        if request["command"] == "inspect_recording":
+            assert not Path(request["output_path"]).exists()
 
-    # Then: only the preview validation leg maps the optional audio stream
-    assert result is ConcurrentStreamOpenResult.SUPPORTED
-    assert len(calls) == 3
-    assert "-an" in calls[0]
-    assert "-an" in calls[1]
-    preview_cmd = calls[2]
-    assert "-an" not in preview_cmd
-    assert preview_cmd.count("-map") == 2
-    assert "0:v:0" in preview_cmd
-    assert "0:a:0?" in preview_cmd
+
+def test_native_missing_aac_capability_cannot_silently_remove_audio(tmp_path: Path) -> None:
+    # Given: conversion support is missing in the linked build
+    helper = inspection_helper(
+        tmp_path,
+        behavior="if command == 'inspect_recording': error = 'local_capability_unavailable'",
+    )
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
+    )
+    # When: preflight attempts audio negotiation
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+    )
+    # Then: this is an explicit local delivery failure, with no silent candidate attempted
+    assert isinstance(outcome, PreflightError)
+    assert "local_capability_unavailable" in outcome.message
+    trials = [
+        request
+        for request in inspection_requests(tmp_path)
+        if request["command"] == "inspect_recording"
+    ]
+    assert len(trials) == 1
+    assert trials[0]["audio_mode"] == "copy"
 
 
-def test_concurrent_preview_probe_validation_keeps_ffprobe_open_for_overlap(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Preview probe validation should keep ffprobe connected during overlap."""
+def test_native_header_only_trial_cannot_pass(tmp_path: Path) -> None:
+    # Given: a helper reports a finalized nonempty container with no video packets
+    helper = inspection_helper(
+        tmp_path,
+        behavior="if command == 'inspect_recording':\n    pathlib.Path(request['output_path']).write_bytes(b'header')\n    inspection = dict(kind='recording',finalized=True,video_packets=0,audio_packets=1,output_bytes=6,signals={})",
+    )
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
+    )
+    # When: negotiating recording profiles
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+    )
+    # Then: empty-media output is rejected despite a successful helper reply
+    assert isinstance(outcome, PreflightError)
+    assert outcome.stage == "negotiation"
 
-    class _FakeProc:
-        def __init__(self) -> None:
-            self._returncode: int | None = None
 
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = 0
-            return ("", "")
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        return _FakeProc()
-
+def test_startup_budget_allows_multiple_operations_beyond_one_command_cap(tmp_path: Path) -> None:
+    # Given: several healthy operations each finish within the one-second operation cap
+    helper = inspection_helper(tmp_path, behavior="time.sleep(.3)")
     preflight = RTSPStartupPreflight(
         output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
-        session_overlap_s=1.0,
+        rtsp_connect_timeout_s=1,
+        rtsp_io_timeout_s=1,
+        command_timeout_s=1,
+        helper_path=str(helper),
     )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
-
-    # Given: the preview startup probe must open beside motion and recording consumers
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
-    preview_probe_url = "rtsp://cam/preview"
-
-    # When: validating the current startup-probe topology
-    result = preflight._validate_concurrent_preview_probe_session_limits(
-        motion_url,
-        recording_url,
-        preview_probe_url,
+    # When: the finite discovery/trial/overlap plan exceeds a single operation's duration
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/stream1",
+        detect_rtsp_url="rtsp://camera/stream2",
+        preview_rtsp_url="rtsp://camera/stream1",
     )
-
-    # Then: ffprobe reads packets for the overlap window instead of exiting after metadata
-    assert result is ConcurrentStreamOpenResult.SUPPORTED
-    assert [cmd[0] for cmd in calls] == ["ffmpeg", "ffmpeg", "ffprobe"]
-    ffprobe_cmd = calls[2]
-    assert "-read_intervals" in ffprobe_cmd
-    assert "%+2.0" in ffprobe_cmd
-    assert "-count_packets" in ffprobe_cmd
-    assert "-select_streams" not in ffprobe_cmd
-    assert "stream=codec_type,codec_name,width,height,avg_frame_rate,nb_read_packets" in ffprobe_cmd
-    assert ffprobe_cmd[-1] == preview_probe_url
+    # Then: startup completes under the derived plan budget, preserving per-operation caps
+    assert not isinstance(outcome, PreflightError)
+    requests = inspection_requests(tmp_path)
+    metadata = [request for request in requests if request["command"] == "inspect_metadata"]
+    assert len(metadata) >= 2
+    assert all(request["operation_timeout_s"] <= 1 for request in metadata)
+    assert sum(request["command"] != "stop" for request in requests) * 0.3 > 1
 
 
-def test_session_limit_validation_requires_clean_exit_after_overlap(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Session-limit validation should fail when opens die after overlap window."""
-
-    class _FakeProc:
-        def __init__(self, *, final_exit: int, stderr_text: str) -> None:
-            self._returncode: int | None = None
-            self._final_exit = final_exit
-            self._stderr_text = stderr_text
-
-        def poll(self) -> int | None:
-            return self._returncode
-
-        def terminate(self) -> None:
-            if self._returncode is None:
-                self._returncode = 0
-
-        def communicate(self, timeout: float) -> tuple[str, str]:
-            _ = timeout
-            if self._returncode is None:
-                self._returncode = self._final_exit
-            return ("", self._stderr_text)
-
-        def kill(self) -> None:
-            self._returncode = -9
-
-    calls: list[list[str]] = []
-
-    def _fake_popen(cmd: list[str], **_kwargs: object) -> _FakeProc:
-        assert _kwargs.get("start_new_session") is True
-        calls.append(list(cmd))
-        return _FakeProc(final_exit=1, stderr_text="Session ended")
-
+def test_native_failed_audio_trial_retains_conversion_and_silent_order(tmp_path: Path) -> None:
+    # Given: genuine camera/media profile failures rather than missing build capabilities
+    helper = inspection_helper(
+        tmp_path,
+        behavior="if command == 'inspect_recording' and request['audio_mode'] != 'none': error = 'profile_validation_failed'",
+    )
     preflight = RTSPStartupPreflight(
-        output_dir=tmp_path,
-        rtsp_connect_timeout_s=2.0,
-        rtsp_io_timeout_s=2.0,
-        discovery=_FakeDiscovery([]),
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
     )
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("homesec.sources.rtsp.preflight.time.sleep", lambda _seconds: None)
+    # When: profiles are negotiated
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+    )
+    # Then: copy, conversion, and silent candidates retain their established ordering
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.recording_profile.audio_mode == "none"
+    assert [
+        request["audio_mode"]
+        for request in inspection_requests(tmp_path)
+        if request["command"] == "inspect_recording"
+    ] == ["copy", "aac", "none"]
 
-    # Given: both ffmpeg session checks appear alive during overlap but exit non-zero
-    motion_url = "rtsp://cam/motion"
-    recording_url = "rtsp://cam/recording"
 
-    # When: validating concurrent session limits
-    ok = preflight._validate_session_limits(motion_url, recording_url)
+@pytest.mark.parametrize("retry", ["better", "same", "failed"])
+def test_native_timestamp_retry_retains_only_the_more_stable_success(
+    tmp_path: Path, retry: str
+) -> None:
+    # Given: native packet timing signals cross the existing baseline retry threshold
+    helper = inspection_helper(
+        tmp_path,
+        behavior=(
+            "if command == 'inspect_recording':\n"
+            "    pathlib.Path(request['output_path']).write_bytes(b'media')\n"
+            "    wallclock = request['timestamp_mode'] == 'wallclock'\n"
+            f"    if wallclock and {retry!r} == 'failed': error = 'profile_validation_failed'\n"
+            "    else:\n"
+            f"        score = 0 if wallclock and {retry!r} == 'better' else 8\n"
+            "        inspection = dict(kind='recording',finalized=True,video_packets=5,audio_packets=3,output_bytes=5,signals=dict(non_monotonic_dts=score))"
+        ),
+    )
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
+    )
+    # When: Python compares the bounded native timing evidence
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+    )
+    # Then: only a successful strictly better retry changes timestamp mode
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.recording_profile.uses_wallclock_timestamps() == (retry == "better")
+    assert [
+        request["timestamp_mode"]
+        for request in inspection_requests(tmp_path)
+        if request["command"] == "inspect_recording"
+    ] == ["stream", "wallclock"]
 
-    # Then: validation fails closed instead of treating overlap-only liveness as success
-    assert not ok
-    assert len(calls) == 2
+
+@pytest.mark.parametrize(
+    "failure,denied",
+    [
+        ("session_limit", True),
+        ("authentication_failed", False),
+        ("connection_failed", False),
+        ("timeout", False),
+    ],
+)
+@pytest.mark.parametrize("metadata_role", [True, False])
+def test_native_overlap_only_explicit_capacity_rejection_downgrades_preview(
+    tmp_path: Path, failure: str, denied: bool, metadata_role: bool
+) -> None:
+    # Given: the optional metadata or preview role fails during conservative overlap
+    selected_role = "preview_probe" if metadata_role else "preview"
+    helper = inspection_helper(
+        tmp_path,
+        behavior=f"if command == 'inspect_overlap' and any(role['role'] == {selected_role!r} for role in request['roles']):\n    inspection = dict(kind='overlap',status={'session_limit' if denied else 'failed'!r},roles=[dict(role=role['role'],ok=False,error_code={failure!r},frames_decoded=0,video_packets=0,audio_packets=0) for role in request['roles']])",
+    )
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
+    )
+    # When: startup classifies preview coexistence with recording
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+        preview_rtsp_url="rtsp://camera/live",
+        preview_probe_rtsp_url="rtsp://camera/live" if metadata_role else None,
+    )
+    # Then: only explicit session denial selects recording-first behavior
+    assert not isinstance(outcome, PreflightError)
+    assert outcome.concurrent_preview_supported is (
+        False if denied else (True if metadata_role else None)
+    )
+    assert (outcome.concurrent_preview_downgrade_reason is not None) == denied
+
+
+def test_preflight_credentials_tokens_and_private_paths_stay_outside_logs_and_argv(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: camera secrets are supplied through the private control pipe
+    helper = inspection_helper(tmp_path)
+    real_popen = subprocess.Popen
+    args_seen: list[str] = []
+
+    def capture(args: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+        args_seen.extend(args)
+        return real_popen(args, **kwargs)
+
+    monkeypatch.setattr("homesec.sources.rtsp.helper_client.subprocess.Popen", capture)
+    url = "rtsp://secret-user:secret-password@camera/secret-path?token=secret-token"
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
+    )
+    # When: successful native startup selects a recording profile
+    with caplog.at_level("DEBUG"):
+        outcome = preflight.run(camera_name="test", primary_rtsp_url=url, detect_rtsp_url=url)
+    # Then: process arguments and diagnostics logs contain no camera URL fragments
+    assert not isinstance(outcome, PreflightError)
+    for secret in ("secret-user", "secret-password", "secret-path", "secret-token"):
+        assert secret not in caplog.text
+        assert secret not in " ".join(args_seen)
+    assert args_seen == [str(helper), "--inspect"]
+
+
+def test_native_overlap_local_capability_failure_cannot_become_session_defaults(
+    tmp_path: Path,
+) -> None:
+    # Given: metadata/trial work, but a required overlap decoder is missing locally
+    helper = inspection_helper(
+        tmp_path,
+        behavior="if command == 'inspect_overlap': inspection = dict(kind='overlap',status='failed',roles=[dict(role=role['role'],ok=False,error_code='local_capability_unavailable',frames_decoded=0,video_packets=0,audio_packets=0) for role in request['roles']])",
+    )
+    preflight = RTSPStartupPreflight(
+        output_dir=tmp_path, rtsp_connect_timeout_s=2, rtsp_io_timeout_s=2, helper_path=str(helper)
+    )
+    # When: native overlap validation cannot perform a required operation
+    outcome = preflight.run(
+        camera_name="test",
+        primary_rtsp_url="rtsp://camera/live",
+        detect_rtsp_url="rtsp://camera/live",
+    )
+    # Then: the incomplete local build is reported without a camera-capacity fallback
+    assert isinstance(outcome, PreflightError)
+    assert outcome.stage == "inspection"
+    assert "local_capability_unavailable" in outcome.message

@@ -891,3 +891,114 @@ Implementation leads: [src/homesec/maintenance/cleanup_clips.py](../src/homesec/
 | setup-configuration | 9 | 34 |
 | storage-retention | 10 | 33 |
 | **Total** | **79** | **254** |
+
+## Native camera inspection
+
+Implementation evidence for `codex/native-camera-preflight` in
+[PR 124](https://github.com/lan17/homesec/pull/124), checked on 2026-10-18.
+These rows concern the [capture](../openspec/changes/native-camera-preflight/specs/capture-recording/spec.md)
+and [setup](../openspec/changes/native-camera-preflight/specs/setup-configuration/spec.md)
+deltas; they do not promote or archive those deltas. B identifies executed
+repository tests of the stated boundary. A protocol peer exercises real Python
+policy/transport/cleanup, not Rust codecs. Native library fixtures and real
+helper/fake-RTSP tests are distinguished explicitly. Linux device success and
+physical-camera/browser QA remain pending.
+
+Default inspection callers are wired, but this remains a draft implementation
+with incomplete acceptance tasks. The final stable `make check` passed: 186 Rust,
+1,705 Python and 325 UI tests, plus typing, Clippy, lint/format, generated API,
+locked dependencies and UI production build. The explicitly approved disposable
+Postgres 16 tmpfs container was removed afterward. The final Linux arm64 helper
+suite passed 16 tests and its hardware suite passed four tests, alongside static
+linkage and absent/incompatible-CLI capability checks.
+
+One earlier parallel helper run exceeded the existing two-second cancellation
+assertion; its elapsed value was not retained. The isolated test passed in
+0.63 s and the unchanged 16-test suite passed again. The assertion was not
+loosened and the cause of that earlier timing failure was not established. Both
+final macOS and Linux arm64 suites passed with the original bound.
+
+| Scenario | Evidence | Boundary / qualification |
+| --- | --- | --- |
+| Discover streams without CLI tools | B | `test_rtsp_discovery.py`; actual helper metadata in `native/webrtc/tests/inspection.rs`; absent/old-tool process traps |
+| Preserve candidate order and partial results | B | `test_probe_preserves_order_partial_results_and_codec_metadata`: real Python selection, executable protocol peer |
+| Reachable media exceeds a recorder's capability | B | Actual HEVC and H.264 without IDR in native helper tests; shared recorder gates unchanged |
+| Invalid video metadata does not become usable input | B | Native missing-video/dimension/stall cases; dimension/FPS native unit cases; bounded timeout is a valid failure for undetermined metadata |
+| Recovery and preview planning share native inspection | B / local | `test_recovery_metadata_uses_selected_native_helper`, HLS tests; actual local recovery/HLS planning below |
+| Select motion and recording streams | B | `test_rtsp_preflight.py`: real low/high selection and deterministic candidate policy |
+| Preserve audio negotiation order | B, ALAC RPC pending | Copy → AAC → silent policy tests; actual RTSP helper AAC/AC3/MP2/MP3/EAC3 copy and G.711/Opus → AAC trials; ALAC has linked-library fixture coverage |
+| Missing implementation support does not remove audio | B | `test_native_missing_aac_capability_cannot_silently_remove_audio`; missing per-role capability checks |
+| Timestamp retry keeps the more stable successful profile | B, partial matrix | Actual fake-RTSP clock-reset MP4 trials establish successful baseline and improved wallclock evidence. Failed/no-improvement selection uses typed protocol-peer signals in `test_native_timestamp_retry_retains_only_the_more_stable_success`; those outcomes lack real packet-fixture coverage |
+| Failed or empty trial cannot pass | B | Native real writer failures/cancellation and Python `test_native_header_only_trial_cannot_pass`; see trial evidence limits in the shared-media matrix |
+| Inspect the linked build rather than a host CLI | B / local | Actual Mac and isolated Linux arm64 capability exchanges with absent/incompatible tools; build identity and compiled components |
+| Hardware must produce decode evidence | B / local | Requested-backend/frame-count tests; actual Mac VideoToolbox five-frame trial; Linux unavailable-device tests, no Linux GPU success claim |
+| Native hardware validation succeeds but compatible execution fails | B | `test_frame_pipeline.py`: real compatible child rejection/stall, one software retry and remembered failure; a controllably unreapable process stub proves replacement stays blocked until cleanup succeeds, and a real child burst verifies readiness preserves frame order |
+| Preserve compatible execution during staged migration | B | Existing source/shared-media compatibility tests; remaining CLI execution explicitly retained |
+| Connect or media input stalls | B | Actual helper stalled input and `test_inspection.py` stubborn-child kill/reap tests; outer owner bounds resolver/native stalls |
+| Cancel a probe or shut down its runtime | B | `test_source_shutdown_cancels_actual_native_startup_work`, HLS cancellation, actual native active-trial stop |
+| Native inspection crashes or returns invalid output | B | Real pipe-peer malformed/oversized/wrong-variant replies; wrong typed evidence is rejected and reaped before writer cleanup |
+| Secrets stay outside diagnostics | B | Actual native secret-bearing URL/quiet-stderr test; `test_preflight_credentials_tokens_and_private_paths_stay_outside_logs_and_argv`; oversized-request chained-log regression |
+| Equal URLs still represent independent checked roles | B | Actual helper three-session fake camera and Python role contract |
+| A process being alive is insufficient evidence | B | Actual helper late overlap failure and `empty_overlap_input_never_becomes_supported_and_is_closed`: a real RTSP input reaches PLAY without media, returns failed with role timeout, and disconnects |
+| Capacity rejection preserves recording priority | B | Actual RTSP 453 and explicit session-limit reason phrases versus generic 503 and 401; source preview downgrade/recording-priority tests; inspection never stops a recorder |
+| Generic failures do not prove a session limit | B | `test_native_overlap_only_explicit_capacity_rejection_downgrades_preview`; actual protocol refusal distinction |
+| Failed startup preserves background retry behavior | B | Source/runtime retry, finite exhaustion and cancellation tests in `rtsp/test_runtime.py` and `test_runtime_webrtc_preview.py` |
+| A preflight check times out | B | Setup aggregation and mounted setup-route tests; public check keys unchanged |
+| A proposed connection is tested | B | Registered probe service and mounted-route tests; no save/activation calls |
+| Generic connection test only establishes its ping result | B | Existing plugin ping/shutdown service cases; fake provider boundary only |
+| Native inspection is ready without CLI tools | B | `test_rtsp_setup_inspection.py`: real helper transport to protocol peer; actual Mac/Linux camera-free capability exchanges |
+| An executable file alone does not establish readiness | B | Missing/incompatible/insufficient helper cases and invalid override without default fallback |
+| Inspection readiness does not certify compatibility execution | B / docs | Readiness response scope and [execution qualification](shared-rust-media.md#native-inspection-and-preflight); no claim that native evidence tests a separate executor |
+| Test a supported RTSP configuration without CLI tools | B / local | Protocol-peer service tests plus actual IPyCam single-candidate Test Connection, 8.95 s, successful details |
+| Preserve failure detail and distinguish local capability failures | B | Existing preflight error fields, missing component and terminal transport deadline tests |
+| Timeout or cancellation stops camera work | B | `test_setup_timeout_and_cancel_reap_trial_writer_before_returning`, first-stop-failure worker-join regression, actual native active writer stop |
+
+The complete audio copy allowlist and G.711/Opus conversion have linked-library
+fixture coverage. The final 16-test actual-helper suite passed in 10.69 s on
+macOS. Actual RTSP copy trials cover AAC, AC3 using RFC 4184 RTP, MP2/MP3 using
+MPA static payload 14, and EAC3 inside standard MP2T static payload 33. G.711
+A-law/mu-law static payloads 8/0 and Opus at 48 kHz pass actual helper AAC
+conversion. MP4 can label copied MP2 as generic MPEG/MP3 audio; the test verifies
+layer-II packet headers and byte identity with source audio units. ALAC still
+lacks an actual RTSP/RPC fixture and remains a task 3.1 acceptance gap. Video-only
+HEVC helper trials also passed. Linux arm64 build,
+camera-free capability and missing-device results do not establish VAAPI,
+CUDA/NVENC or QSV decode on a real GPU, nor an x86_64 build/device result.
+
+Local IPyCam used the live Mac webcam with CPU H.264, 1280×720 at 15 fps,
+video only; the substream was 640×360 at 15 fps. It ran on isolated RTSP 18554
+and HTTP/ONVIF 18090, with temporary recording/storage directories. Native startup
+succeeded with both candidates (12.29 s in the initial standalone trial). The
+single-candidate setup test passed in 8.95 s; a dual-candidate test exhausted the
+unchanged ten-second budget and cleaned up. A working camera can therefore still
+exceed the setup total; startup retains its larger derived budget.
+
+An earlier actual source-factory checkpoint exercised motion, overlapping recording rotation,
+preview publisher readiness during recording, fresh recovery metadata and HLS
+codec planning, then shutdown. Four finalized files independently decoded through
+an external oracle: three 61-frame clips (4.067 s each) and a one-frame shutdown
+clip. The first two local stored copies matched their originals byte-for-byte.
+All five owned helper processes were reaped, no partial file remained, and
+inspection's incompatible-tool traps were untouched. Oracle FFmpeg/ffprobe ran
+after the inspected scope. Publisher readiness with zero viewers is not browser
+playback or encrypted viewer delivery evidence. This test did not access Lenovo.
+
+The final rerun after the source freeze retained native recording and preview,
+and succeeded at recovery/HLS planning and local stored-clip handoff. Native
+`start_motion` succeeded, but its first observation did not arrive within the
+existing three-second startup deadline (3.023 s observed). The acknowledged stop
+then selected the existing compatible motion input. That run launched two
+compatible executor processes, including the existing unsupported-`stimeout`
+option retry; all seven owned child processes were reaped. Inspection still
+launched no media CLI. This is evidence for the staged execution fallback, not a
+claim that the complete eligible runtime flow required no CLI. The cause of the
+missed native observation deadline was not established.
+
+Both final integration runs produced eight finalized MP4 files: six 61-frame
+clips and two one-frame shutdown clips. All passed external ffprobe and strict
+FFmpeg decoding, and all four stored copies matched byte-for-byte. These oracle
+processes ran outside inspection's audited scope. Final native readiness passed
+and VideoToolbox decoded five actual hardware frames. A final single-candidate
+setup attempt returned a typed inspection timeout in 9.283 s and cleaned up;
+the earlier successful setup result does not guarantee completion within the
+unchanged ten-second total on every attempt.

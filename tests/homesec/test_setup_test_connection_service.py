@@ -17,6 +17,7 @@ import homesec.plugins.storage.local_setup_probe as local_storage_setup_probe
 import homesec.sources.ftp_setup_probe as ftp_setup_probe
 import homesec.sources.local_folder_setup_probe as local_folder_setup_probe
 import homesec.sources.rtsp.setup_probe as rtsp_setup_probe
+from homesec.models.config import PreviewConfig
 from homesec.models.setup import TestConnectionRequest as SetupTestConnectionRequest
 from homesec.onvif.service import OnvifProbeError, OnvifProbeOptions, OnvifProbeTimeoutError
 from homesec.plugins.storage.local import LocalStorageConfig
@@ -32,6 +33,8 @@ class _StubApp:
     """Minimal app stub for setup service API."""
 
     _setup_test_connection_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    bootstrap_mode: bool = False
+    config: object = field(default_factory=lambda: SimpleNamespace(preview=PreviewConfig()))
 
     @property
     def setup_test_connection_lock(self) -> asyncio.Lock:
@@ -296,7 +299,9 @@ async def test_test_connection_camera_uses_registered_setup_probe(
     monkeypatch.setattr(
         setup_service,
         "get_setup_probe",
-        lambda target, backend: _fake_probe if target == "camera" and backend == "custom" else None,
+        lambda target, backend, **_kwargs: _fake_probe
+        if target == "camera" and backend == "custom"
+        else None,
     )
     monkeypatch.setattr(
         setup_service,
@@ -332,7 +337,7 @@ async def test_test_connection_camera_registered_probe_failure_returns_failed_re
     monkeypatch.setattr(
         setup_service,
         "get_setup_probe",
-        lambda target, backend: _failing_probe
+        lambda target, backend, **_kwargs: _failing_probe
         if target == "camera" and backend == "custom"
         else None,
     )
@@ -375,6 +380,7 @@ async def test_test_connection_camera_rtsp_success(
             rtsp_connect_timeout_s: float,
             rtsp_io_timeout_s: float,
             command_timeout_s: float,
+            inspection: object,
         ) -> None:
             _ = (output_dir, rtsp_connect_timeout_s, rtsp_io_timeout_s, command_timeout_s)
 
@@ -503,6 +509,7 @@ async def test_test_connection_camera_rtsp_timeout_returns_failure(
             rtsp_connect_timeout_s: float,
             rtsp_io_timeout_s: float,
             command_timeout_s: float,
+            inspection: object,
         ) -> None:
             _ = (output_dir, rtsp_connect_timeout_s, rtsp_io_timeout_s, command_timeout_s)
 
@@ -565,6 +572,7 @@ async def test_test_connection_camera_rtsp_preflight_error_details(
             rtsp_connect_timeout_s: float,
             rtsp_io_timeout_s: float,
             command_timeout_s: float,
+            inspection: object,
         ) -> None:
             _ = (output_dir, rtsp_connect_timeout_s, rtsp_io_timeout_s, command_timeout_s)
 

@@ -12,8 +12,9 @@ import yaml
 from homesec.config.loader import ConfigError
 from homesec.config.manager import ConfigManager
 from homesec.models.config import FastAPIServerConfig, PreviewConfig
-from homesec.models.setup import FinalizeRequest
+from homesec.models.setup import FinalizeRequest, PreflightCheckResponse
 from homesec.services import setup as setup_service
+from homesec.services.setup_probes import SetupProbeContext
 
 
 class _StubRepository:
@@ -49,6 +50,7 @@ class _StubApp:
             cameras = []
         self._config = SimpleNamespace(
             cameras=cameras,
+            preview=PreviewConfig(),
             server=server_config,
             storage=SimpleNamespace(paths=SimpleNamespace(clips_dir=clips_dir)),
             state_store=SimpleNamespace(dsn_env="DB_DSN", dsn=None),
@@ -225,7 +227,7 @@ async def test_run_preflight_returns_all_passed_when_checks_succeed(
         repository=_StubRepository(ok=True),
         server_config=_server_config(auth_enabled=False),
     )
-    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(setup_service, "get_setup_readiness", lambda *_: _inspection_ready)
     monkeypatch.setattr(
         setup_service,
         "shutil_disk_usage",
@@ -260,7 +262,7 @@ async def test_run_preflight_probes_postgres_via_dsn_in_bootstrap_mode(
         repository=None,
         server_config=_server_config(auth_enabled=False),
     )
-    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(setup_service, "get_setup_readiness", lambda *_: _inspection_ready)
     monkeypatch.setattr(
         setup_service,
         "shutil_disk_usage",
@@ -300,7 +302,7 @@ async def test_run_preflight_checks_pg_dump_from_existing_config_in_bootstrap_mo
         server_config=_server_config(auth_enabled=False),
         config_manager=manager,
     )
-    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(setup_service, "get_setup_readiness", lambda *_: _inspection_ready)
     monkeypatch.setattr(
         setup_service,
         "shutil_disk_usage",
@@ -347,7 +349,7 @@ async def test_run_preflight_marks_check_failed_when_timeout_expires(
 
     monkeypatch.setattr(setup_service, "_PREFLIGHT_CHECK_TIMEOUT_S", 0.005)
     monkeypatch.setattr(setup_service, "_postgres_check", _slow_postgres)
-    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(setup_service, "get_setup_readiness", lambda *_: _inspection_ready)
     monkeypatch.setattr(
         setup_service,
         "shutil_disk_usage",
@@ -379,7 +381,7 @@ async def test_run_preflight_reports_missing_state_store_env(
         repository=None,
         server_config=_server_config(auth_enabled=False),
     )
-    monkeypatch.setattr(setup_service, "shutil_which_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(setup_service, "get_setup_readiness", lambda *_: _inspection_ready)
     monkeypatch.setattr(
         setup_service,
         "shutil_disk_usage",
@@ -718,3 +720,9 @@ async def test_finalize_setup_rejects_missing_state_store_env_when_defaults_appl
     assert app.restart_requested is False
     assert any("DB_DSN" in error for error in errors)
     assert config_path.exists() is False
+
+
+async def _inspection_ready(
+    *, context: SetupProbeContext, timeout_s: float
+) -> PreflightCheckResponse:
+    return PreflightCheckResponse(name="ffmpeg", passed=True, message="Native inspection ready")

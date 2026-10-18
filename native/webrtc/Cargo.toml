@@ -20,6 +20,22 @@ sha256 = "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9"
 version = "1.6.1"
 sha256 = "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
 
+[package.metadata.native-dependencies.nv-codec-headers]
+version = "n8.1.24.15"
+sha256 = "1e1600606cde2c04f5b1a71cb3b2e966b3ffe4e252a6ddec5781151d982e259f"
+
+[package.metadata.native-dependencies.libdrm]
+version = "2.4.124"
+sha256 = "ac36293f61ca4aafaf4b16a2a7afff312aa4f5c37c9fbd797de9e3c0863ca379"
+
+[package.metadata.native-dependencies.libva]
+version = "2.22.0"
+sha256 = "467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735"
+
+[package.metadata.native-dependencies.libvpl]
+version = "2.15.0"
+sha256 = "7218c3b8206b123204c3827ce0cf7c008d5c693c1f58ab461958d05fe6f847b3"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling", "static"] }

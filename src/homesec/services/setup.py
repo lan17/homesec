@@ -43,10 +43,13 @@ from homesec.services.setup_probe_support import (
     format_validation_error,
 )
 from homesec.services.setup_probes import (
+    SetupProbeContext,
     SetupProbeTarget,
     get_setup_probe,
     get_setup_probe_backends,
     get_setup_probe_timeout,
+    get_setup_readiness,
+    setup_probe_uses_context,
 )
 from homesec.state.postgres import PostgresStateStore
 
@@ -119,7 +122,7 @@ async def run_preflight(app: Application) -> PreflightResponse:
     """Run setup preflight checks in parallel."""
     checks = await asyncio.gather(
         _run_preflight_check(name="postgres", check=_postgres_check(app)),
-        _run_preflight_check(name="ffmpeg", check=_ffmpeg_check()),
+        _run_preflight_check(name="ffmpeg", check=_ffmpeg_check(app)),
         _run_preflight_check(name="disk_space", check=_disk_space_check(app)),
         _run_preflight_check(name="network", check=_network_check()),
         _run_preflight_check(name="config_env", check=_config_env_check(app)),
@@ -142,7 +145,13 @@ async def test_connection(
 
         match connection_type:
             case "camera":
-                return await _test_camera_connection(backend=backend, config=request.config)
+                return await _test_camera_connection(
+                    backend=backend,
+                    config=request.config,
+                    context=await _setup_probe_context(app)
+                    if setup_probe_uses_context("camera", backend)
+                    else None,
+                )
             case "storage":
                 return await _test_storage_connection(backend=backend, config=request.config)
             case "notifier":
@@ -155,8 +164,9 @@ async def _test_camera_connection(
     *,
     backend: str,
     config: dict[str, object],
+    context: SetupProbeContext | None,
 ) -> TestConnectionResponse:
-    probe_result = await _run_registered_setup_probe("camera", backend, config)
+    probe_result = await _run_registered_setup_probe("camera", backend, config, context=context)
     if probe_result is not None:
         return probe_result
 
@@ -354,9 +364,11 @@ async def _run_registered_setup_probe(
     target: SetupProbeTarget,
     backend: str,
     config: dict[str, object],
+    *,
+    context: SetupProbeContext | None = None,
 ) -> TestConnectionResponse | None:
     start = time.perf_counter()
-    probe = get_setup_probe(target, backend)
+    probe = get_setup_probe(target, backend, context=context)
     if probe is None:
         return None
     timeout_s = get_setup_probe_timeout(target, backend)
@@ -727,29 +739,26 @@ def _repository_or_none(app: Application) -> ClipRepository | None:
         return None
 
 
-async def _ffmpeg_check() -> PreflightCheckResponse:
+async def _setup_probe_context(app: Application) -> SetupProbeContext:
+    config = _active_config(app)
+    if config is None:
+        config = await _existing_config_or_none(app)
+    return SetupProbeContext(preview=config.preview if config is not None else PreviewConfig())
+
+
+async def _ffmpeg_check(app: Application) -> PreflightCheckResponse:
     start = time.perf_counter()
-    ffmpeg_path = await asyncio.to_thread(shutil_which_ffmpeg)
-    latency_ms = (time.perf_counter() - start) * 1000.0
-    if ffmpeg_path is None:
+    readiness = get_setup_readiness("camera", "rtsp")
+    if readiness is None:
         return PreflightCheckResponse(
             name="ffmpeg",
             passed=False,
-            message="ffmpeg not found in PATH",
-            latency_ms=latency_ms,
+            message="Native inspection readiness is not registered",
+            latency_ms=(time.perf_counter() - start) * 1000.0,
         )
-    return PreflightCheckResponse(
-        name="ffmpeg",
-        passed=True,
-        message=f"ffmpeg found at {ffmpeg_path}",
-        latency_ms=latency_ms,
+    return await readiness(
+        context=await _setup_probe_context(app), timeout_s=_PREFLIGHT_CHECK_TIMEOUT_S
     )
-
-
-def shutil_which_ffmpeg() -> str | None:
-    from shutil import which
-
-    return which("ffmpeg")
 
 
 async def _pg_dump_check(app: Application) -> PreflightCheckResponse:

@@ -22,6 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3 \
     cmake \
+    meson \
+    ninja-build \
     clang \
     libclang-dev \
     pkg-config \
@@ -46,6 +48,17 @@ RUN make rust-build \
         /app/opencv-license/LICENSE \
     && install -D -m 0644 /tmp/homesec-native-0/opencv-*/ZLIB-LICENSE \
         /app/opencv-license/ZLIB-LICENSE \
+    && install -D -m 0644 /tmp/homesec-native-0/libva-*/COPYING \
+        /app/hardware-license/libva/COPYING \
+    && install -D -m 0644 /tmp/homesec-native-0/libvpl-*/LICENSE \
+        /app/hardware-license/libvpl/LICENSE \
+    && install -D -m 0644 /tmp/homesec-native-0/libvpl-*/share/vpl/licensing/third-party-programs.txt \
+        /app/hardware-license/libvpl/third-party-programs.txt \
+    && install -D -m 0644 /tmp/homesec-native-0/libdrm-*/include/xf86drm.h \
+        /app/hardware-license/libdrm/xf86drm.h \
+    && mkdir -p /app/hardware-license/nv-codec-headers \
+    && cp /tmp/homesec-native-0/nv-codec-headers-*/include/ffnvcodec/*.h \
+        /app/hardware-license/nv-codec-headers/ \
     && install -D -m 0644 /tmp/homesec-native-0/ffmpeg-8.1.3.tar.xz \
         /app/native-source/ffmpeg-8.1.3.tar.xz \
     && install -D -m 0644 /tmp/homesec-native-0/x264-*.tar.gz \
@@ -54,6 +67,9 @@ RUN make rust-build \
         /app/native-source/opus.tar.gz \
     && install -D -m 0644 /tmp/homesec-native-0/opencv-*.tar.gz \
         /app/native-source/opencv.tar.gz \
+    && cp /tmp/homesec-native-0/libdrm-*.tar.xz \
+        /tmp/homesec-native-0/libva-*.tar.gz /tmp/homesec-native-0/libvpl-*.tar.gz \
+        /tmp/homesec-native-0/nv-codec-headers-*.tar.gz /app/native-source/ \
     && mkdir -p .cargo \
     && cargo vendor --manifest-path native/webrtc/Cargo.toml --locked --versioned-dirs \
         native/webrtc/vendor/registry > .cargo/config.toml \
@@ -161,11 +177,13 @@ COPY --from=webrtc-builder /app/native-source/ /usr/share/homesec-native/source/
 COPY --from=webrtc-builder /app/opencv-license/ /usr/share/licenses/homesec-opencv/
 COPY native/webrtc/OPENCV-NOTICE.md /usr/share/licenses/homesec-opencv/NOTICE.md
 COPY native/webrtc/OPENCV-BINDINGS-LICENSE /usr/share/licenses/homesec-opencv/OPENCV-BINDINGS-LICENSE
+COPY --from=webrtc-builder /app/hardware-license/ /usr/share/licenses/homesec-hardware/
+COPY native/webrtc/HARDWARE-NOTICE.md /usr/share/licenses/homesec-hardware/NOTICE.md
 # Check loading and reject shared OpenCV or libav dependencies.
 RUN homesec-webrtc --help > /dev/null \
     && dependencies="$(ldd /usr/local/bin/homesec-webrtc)" \
     && ! printf '%s\n' "$dependencies" \
-        | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample|x264|opus)\.so'
+        | grep -E 'lib(opencv_[^[:space:]]*|avcodec|avformat|avfilter|avutil|avdevice|swscale|swresample|x264|opus|drm|va|va-drm|vpl)\.so'
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

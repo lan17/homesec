@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Thread, current_thread
 from typing import Literal, Protocol, cast
 from unittest.mock import patch
 
+import pytest
+from tests.homesec.inspection_helpers import inspection_helper, inspection_requests
+
 from homesec.sources.rtsp.discovery import CameraProbeResult, ProbeStreamInfo
-from homesec.sources.rtsp.hardware import HardwareAccelConfig
+from homesec.sources.rtsp.hardware import H264HardwareEncoder, HardwareAccelConfig
 from homesec.sources.rtsp.live_publisher import (
     CONCURRENT_PREVIEW_RUNTIME_DOWNGRADE_REASON,
     HLSLivePublisher,
@@ -433,8 +438,8 @@ def test_transcode_prefers_matching_hardware_encoder_when_available(tmp_path: Pa
     # When: Activating preview
     with (
         patch(
-            "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
-            return_value=True,
+            "homesec.sources.rtsp.hardware.HardwareAccelDetector.select_h264_encoder",
+            return_value=H264HardwareEncoder(ffmpeg_encoder="h264_videotoolbox"),
         ),
         patch(
             "homesec.sources.rtsp.live_publisher.subprocess.Popen",
@@ -502,8 +507,8 @@ def test_hardware_transcode_falls_back_to_software_when_encoder_startup_fails(
     # When: Activating preview
     with (
         patch(
-            "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
-            return_value=True,
+            "homesec.sources.rtsp.hardware.HardwareAccelDetector.select_h264_encoder",
+            return_value=H264HardwareEncoder(ffmpeg_encoder="h264_nvenc"),
         ),
         patch(
             "homesec.sources.rtsp.live_publisher.subprocess.Popen",
@@ -542,8 +547,8 @@ def test_hardware_transcode_does_not_retry_software_on_session_budget_exhaustion
     # When: Activating preview
     with (
         patch(
-            "homesec.sources.rtsp.hardware.HardwareAccelDetector._test_encoder",
-            return_value=True,
+            "homesec.sources.rtsp.hardware.HardwareAccelDetector.select_h264_encoder",
+            return_value=H264HardwareEncoder(ffmpeg_encoder="h264_nvenc"),
         ),
         patch(
             "homesec.sources.rtsp.live_publisher.subprocess.Popen",
@@ -2582,3 +2587,55 @@ def test_recording_priority_cancels_waiting_activation_after_recording_window(
     assert second_result.reason == LivePublisherRefusalReason.RECORDING_PRIORITY
     assert calls == []
     assert publisher.status() == LivePublisherStatus(state=LivePublisherState.IDLE, viewer_count=0)
+
+
+@pytest.mark.parametrize("action", ["stop", "shutdown", "recording_priority"])
+def test_native_hls_metadata_cancellation_closes_actual_camera_work(
+    tmp_path: Path, action: str
+) -> None:
+    # Given: native HLS planning owns a stalled metadata input
+    marker = tmp_path / "metadata.pid"
+    helper = inspection_helper(
+        tmp_path,
+        behavior=f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))\nwhile True: time.sleep(.01)",
+    )
+    publisher = HLSLivePublisher(
+        camera_name="camera",
+        rtsp_url="rtsp://camera/live",
+        storage_dir=tmp_path,
+        segment_duration_ms=1000,
+        live_window_segments=4,
+        idle_timeout_s=5,
+        recording_policy="stop_on_recording",
+        audio_enabled=True,
+        audio_codec="auto",
+        video_codec="auto",
+        rtsp_connect_timeout_s=1,
+        rtsp_io_timeout_s=1,
+        inspection_helper_path=str(helper),
+        background_maintenance=False,
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(publisher.ensure_active)
+        deadline = time.monotonic() + 2
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists()
+        # When: preview is cancelled or recording priority takes over
+        if action == "stop":
+            publisher.request_stop()
+        elif action == "shutdown":
+            publisher.shutdown()
+        else:
+            publisher.sync_recording_active(True)
+        result = future.result(timeout=2)
+    # Then: optional native work is dead before completion and no preview executor starts
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)
+    assert len(inspection_requests(tmp_path)) == 1
+    if action == "recording_priority":
+        assert isinstance(result, LivePublisherStartRefusal)
+        assert result.reason is LivePublisherRefusalReason.RECORDING_PRIORITY
+    else:
+        assert isinstance(result, LivePublisherStatus)
+        assert result.state is LivePublisherState.IDLE

@@ -1,28 +1,27 @@
 from __future__ import annotations
 
 import logging
-import re
-import signal
-import subprocess
-import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from threading import Event, Lock
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from homesec.sources.rtsp.capabilities import (
-    RTSPTimeoutCapabilities,
-    get_global_rtsp_timeout_capabilities,
-)
 from homesec.sources.rtsp.discovery import (
     CameraProbeResult,
-    FfprobeStreamDiscovery,
+    NativeStreamDiscovery,
     ProbeError,
     ProbeStreamInfo,
     build_camera_key,
+)
+from homesec.sources.rtsp.inspection import (
+    InspectionFailure,
+    InspectionGroup,
+    InspectionRole,
+    OverlapEvidence,
+    RecordingEvidence,
 )
 from homesec.sources.rtsp.recording_profile import (
     MotionProfile,
@@ -30,14 +29,6 @@ from homesec.sources.rtsp.recording_profile import (
     build_recording_profile_candidates,
 )
 from homesec.sources.rtsp.url_derivation import derive_probe_candidate_urls
-from homesec.sources.rtsp.utils import (
-    _build_timeout_attempts,
-    _format_cmd,
-    _is_rtsp_session_limit_error,
-    _is_timeout_option_error,
-    _redact_rtsp_url,
-    _signal_process_group,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +90,7 @@ class PreflightError(Exception):
 
 
 class CameraPreflightDiagnostics(BaseModel):
-    """Secret-safe summary of startup preflight decisions and attempts."""
+    """Internal startup decisions; private URLs must not be logged or persisted."""
 
     model_config = {"extra": "forbid"}
 
@@ -131,7 +122,7 @@ class CameraPreflightOutcome(BaseModel):
 
 
 class RecordingValidationSignals(BaseModel):
-    """Stability signals extracted from ffmpeg/ffprobe stderr text."""
+    """Bounded timing evidence from native recording validation."""
 
     model_config = {"extra": "forbid"}
 
@@ -170,7 +161,7 @@ class RecordingValidationResult(BaseModel):
 class _SessionOpenSpec:
     role: str
     input_url: str
-    tool: Literal["ffmpeg", "ffprobe"] = "ffmpeg"
+    kind: Literal["decode", "metadata"] = "decode"
     include_audio: bool = False
 
 
@@ -186,22 +177,87 @@ class RTSPStartupPreflight:
         discovery: StreamDiscovery | None = None,
         session_overlap_s: float = 1.0,
         command_timeout_s: float = 8.0,
-        timeout_capabilities: RTSPTimeoutCapabilities | None = None,
+        inspection: InspectionGroup | None = None,
+        helper_path: str = "homesec-webrtc",
+        total_timeout_s: float | None = None,
+        stop_event: Event | None = None,
     ) -> None:
         self._output_dir = output_dir
         self._rtsp_connect_timeout_s = rtsp_connect_timeout_s
         self._rtsp_io_timeout_s = rtsp_io_timeout_s
         self._session_overlap_s = max(0.1, session_overlap_s)
         self._command_timeout_s = max(1.0, command_timeout_s)
-        self._timeout_capabilities = timeout_capabilities or get_global_rtsp_timeout_capabilities()
-        self._discovery = discovery or FfprobeStreamDiscovery(
-            rtsp_connect_timeout_s=rtsp_connect_timeout_s,
-            rtsp_io_timeout_s=rtsp_io_timeout_s,
-            command_timeout_s=command_timeout_s,
-            timeout_capabilities=self._timeout_capabilities,
-        )
+        self._inspection = inspection
+        self._helper_path = helper_path
+        self._total_timeout_s = total_timeout_s
+        self._discovery = discovery
+        self._cancelled = stop_event if stop_event is not None else Event()
+        self._owner_lock = Lock()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+        with self._owner_lock:
+            inspection = self._inspection
+        if inspection is not None:
+            inspection.cancel()
 
     def run(
+        self,
+        *,
+        camera_name: str,
+        primary_rtsp_url: str,
+        detect_rtsp_url: str,
+        preview_rtsp_url: str | None = None,
+        preview_probe_rtsp_url: str | None = None,
+        preview_audio_enabled: bool = False,
+    ) -> CameraPreflightOutcome | PreflightError:
+        # One cap applies to each operation; the finite plan determines group lifetime.
+        candidate_count = len(_candidate_urls(primary_rtsp_url, detect_rtsp_url))
+        overlap_count = (
+            2 + int(preview_rtsp_url is not None) + int(preview_probe_rtsp_url is not None)
+        )
+        overlap_cap = self._command_timeout_s + (3 * max(2.0, self._session_overlap_s + 0.5))
+        total = self._total_timeout_s or (
+            (candidate_count + 6) * self._command_timeout_s + overlap_count * overlap_cap + 3.0
+        )
+        with self._owner_lock:
+            if self._cancelled.is_set():
+                return PreflightError(
+                    camera_key=build_camera_key(camera_name, primary_rtsp_url),
+                    stage="inspection",
+                    message="Native inspection: cancelled",
+                )
+            own_inspection = self._inspection is None
+            if own_inspection:
+                self._inspection = InspectionGroup(
+                    helper_path=self._helper_path,
+                    total_timeout_s=total,
+                    connect_timeout_s=self._rtsp_connect_timeout_s,
+                    io_timeout_s=self._rtsp_io_timeout_s,
+                )
+        try:
+            return self._run(
+                camera_name=camera_name,
+                primary_rtsp_url=primary_rtsp_url,
+                detect_rtsp_url=detect_rtsp_url,
+                preview_rtsp_url=preview_rtsp_url,
+                preview_probe_rtsp_url=preview_probe_rtsp_url,
+                preview_audio_enabled=preview_audio_enabled,
+            )
+        except InspectionFailure as exc:
+            return PreflightError(
+                camera_key=build_camera_key(camera_name, primary_rtsp_url),
+                stage="inspection",
+                message=str(exc),
+                cause=exc,
+            )
+        finally:
+            if own_inspection and self._inspection is not None:
+                self._inspection.close()
+                with self._owner_lock:
+                    self._inspection = None
+
+    def _run(
         self,
         *,
         camera_name: str,
@@ -216,14 +272,23 @@ class RTSPStartupPreflight:
         camera_key = build_camera_key(camera_name, primary_rtsp_url)
         candidate_urls = _candidate_urls(primary_rtsp_url, detect_rtsp_url)
 
-        logger.info("RTSP preflight started: camera=%s key=%s", camera_name, camera_key)
+        logger.info("RTSP preflight started: camera=%s", camera_name)
 
-        probe_result = self._discovery.probe(camera_key=camera_key, candidate_urls=candidate_urls)
+        discovery = self._discovery or NativeStreamDiscovery(
+            rtsp_connect_timeout_s=self._rtsp_connect_timeout_s,
+            rtsp_io_timeout_s=self._rtsp_io_timeout_s,
+            command_timeout_s=self._command_timeout_s,
+            inspection=self._inspection,
+            helper_path=self._helper_path,
+        )
+        probe_result = discovery.probe(camera_key=camera_key, candidate_urls=candidate_urls)
         match probe_result:
             case ProbeError() as probe_error:
                 return PreflightError(
                     camera_key=camera_key,
-                    stage="probe",
+                    stage="inspection"
+                    if isinstance(probe_error.cause, InspectionFailure)
+                    else "probe",
                     message=probe_error.message,
                     cause=probe_error,
                 )
@@ -241,6 +306,27 @@ class RTSPStartupPreflight:
             probes=probe_data.streams,
         )
 
+        local_failure = next(
+            (
+                stream.error
+                for stream in probe_data.streams
+                if stream.error
+                in {
+                    "Native inspection: local_capability_unavailable",
+                    "Native inspection: helper_failure",
+                    "Native inspection: cleanup_failed",
+                    "Native inspection: cancelled",
+                }
+            ),
+            None,
+        )
+        if local_failure is not None:
+            return PreflightError(
+                camera_key=camera_key,
+                stage="inspection",
+                message=local_failure,
+                diagnostics=diagnostics,
+            )
         viable_streams = [stream for stream in probe_data.streams if stream.probe_ok]
         if not viable_streams:
             return PreflightError(
@@ -441,8 +527,7 @@ class RTSPStartupPreflight:
                 )
                 diagnostics.selected_recording_profile = selected_profile.profile_id()
                 logger.info(
-                    "Recording profile selected: camera=%s profile=%s",
-                    camera_key,
+                    "Recording profile selected: profile=%s",
                     selected_profile.profile_id(),
                 )
                 return selected_profile
@@ -491,119 +576,48 @@ class RTSPStartupPreflight:
         return candidate
 
     def _validate_recording_profile(self, profile: RecordingProfile) -> RecordingValidationResult:
-        """Run short ffmpeg check to validate locked recording profile."""
-
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-
-        with NamedTemporaryFile(
-            mode="wb",
-            prefix="preflight_",
-            suffix=f".{profile.output_extension}",
-            dir=self._output_dir,
-            delete=False,
-        ) as tmp_file:
-            temp_path = Path(tmp_file.name)
-
-        timeout_args = self._timeout_args()
-
-        attempts = _build_timeout_attempts(timeout_args)
-
+        inspection = self._inspection
+        if inspection is None:
+            raise InspectionFailure("helper_failure")
+        target = inspection.trial_path()
         try:
-            for label, extra_timeout_args in attempts:
-                cmd = self._build_recording_check_cmd(
-                    input_url=profile.input_url,
-                    input_args=profile.ffmpeg_input_args,
-                    output_path=temp_path,
-                    output_args=profile.ffmpeg_output_args,
-                    timeout_args=extra_timeout_args,
-                )
-
-                redacted_cmd = _format_recording_cmd(cmd)
-                logger.debug("Recording preflight command (%s): %s", label, redacted_cmd)
-
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=self._command_timeout_s,
-                        check=False,
-                    )
-                except Exception as exc:
-                    return RecordingValidationResult(
-                        ok=False, error=f"ffmpeg execution failed: {type(exc).__name__}"
-                    )
-
-                stderr_text = _sanitize_stderr(result.stderr, profile.input_url)
-                signals = _collect_recording_stability_signals(stderr_text)
-                if result.returncode == 0:
-                    if label == "timeouts":
-                        self._timeout_capabilities.note_ffmpeg_timeout_success()
-                    try:
-                        exists = temp_path.exists()
-                    except Exception as exc:
-                        logger.warning(
-                            "Recording preflight failed to verify output existence: %s",
-                            exc,
-                            exc_info=True,
-                        )
-                        return RecordingValidationResult(
-                            ok=False,
-                            error=f"failed to verify output file existence: {type(exc).__name__}",
-                            signals=signals,
-                        )
-                    if not exists:
-                        return RecordingValidationResult(
-                            ok=False,
-                            error="ffmpeg returned success but output clip was not created",
-                            signals=signals,
-                        )
-                    try:
-                        size = temp_path.stat().st_size
-                    except Exception as exc:
-                        logger.warning(
-                            "Recording preflight failed to stat output clip: %s",
-                            exc,
-                            exc_info=True,
-                        )
-                        return RecordingValidationResult(
-                            ok=False,
-                            error=f"failed to stat output clip: {type(exc).__name__}",
-                            signals=signals,
-                        )
-                    if size > 0:
-                        return RecordingValidationResult(ok=True, signals=signals)
-                    return RecordingValidationResult(
-                        ok=False,
-                        error="ffmpeg returned success but output clip is empty",
-                        signals=signals,
-                    )
-
-                if label == "timeouts" and _is_timeout_option_error(stderr_text):
-                    changed = self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
-                    if changed:
-                        logger.warning(
-                            "ffmpeg timeout options unsupported; disabling RTSP timeout options for this process"
-                        )
-                    logger.debug("Recording preflight retrying without timeout options")
-                    continue
-
-                return RecordingValidationResult(
-                    ok=False,
-                    error=stderr_text[:280] or f"ffmpeg failed ({result.returncode})",
-                    signals=signals,
-                )
-
-            return RecordingValidationResult(
-                ok=False,
-                error="ffmpeg failed after timeout-option fallback",
+            evidence = inspection.request(
+                "inspect_recording",
+                timeout_s=self._command_timeout_s,
+                rtsp_url=profile.input_url,
+                audio_mode=profile.audio_mode,
+                timestamp_mode="wallclock" if profile.uses_wallclock_timestamps() else "stream",
+                output_path=str(target),
+                duration_s=2.0,
             )
+            if not isinstance(evidence, RecordingEvidence):
+                raise InspectionFailure("helper_failure")
+            signals = RecordingValidationSignals.model_validate(evidence.signals.model_dump())
+            valid = (
+                evidence.finalized
+                and evidence.video_packets > 0
+                and evidence.output_bytes > 0
+                and target.is_file()
+                and target.stat().st_size > 0
+                and (profile.audio_mode == "none" or evidence.audio_packets > 0)
+            )
+            return RecordingValidationResult(
+                ok=valid,
+                signals=signals,
+                error=None if valid else "Native inspection: profile_validation_failed",
+            )
+        except InspectionFailure as exc:
+            # Missing local components must not silently negotiate audio away.
+            if exc.terminal or exc.code in {
+                "local_capability_unavailable",
+                "helper_failure",
+                "cancelled",
+            }:
+                raise
+            return RecordingValidationResult(ok=False, error=str(exc))
         finally:
-            try:
-                if temp_path.exists():
-                    temp_path.unlink()
-            except Exception:
-                logger.debug("Failed to remove preflight temp file: %s", temp_path)
+            # request failures terminate the owner before this writer target is removed.
+            target.unlink(missing_ok=True)
 
     def _validate_session_limits(self, motion_url: str, recording_url: str) -> bool:
         """Validate that motion and recording pipelines can open concurrently."""
@@ -652,7 +666,7 @@ class RTSPStartupPreflight:
                 _SessionOpenSpec(
                     role="preview_probe",
                     input_url=preview_probe_url,
-                    tool="ffprobe",
+                    kind="metadata",
                 ),
             ]
         )
@@ -660,300 +674,55 @@ class RTSPStartupPreflight:
     def _validate_concurrent_stream_opens(
         self, specs: list[_SessionOpenSpec]
     ) -> ConcurrentStreamOpenResult:
-        """Validate that the requested RTSP consumers can open concurrently."""
-        attempts = self._stream_open_attempts(specs)
-        session_check_duration_s = max(2.0, self._session_overlap_s + 0.5)
-        completion_timeout_s = session_check_duration_s + 1.5
-
-        for label, use_timeout_args in attempts:
-            procs: dict[str, subprocess.Popen[str] | None] = {spec.role: None for spec in specs}
-            specs_by_role = {spec.role: spec for spec in specs}
-
-            try:
-                for spec in specs:
-                    timeout_args = (
-                        self._timeout_args_for_tool(spec.tool) if use_timeout_args else []
-                    )
-                    cmd = self._build_session_open_cmd(
-                        spec=spec,
-                        timeout_args=timeout_args,
-                        duration_s=session_check_duration_s,
-                    )
-                    procs[spec.role] = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        start_new_session=True,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Session-limit validation failed to launch ffmpeg (%s): %s",
-                    label,
-                    exc,
-                    exc_info=True,
-                )
-                for proc in procs.values():
-                    self._terminate_process(proc)
-                continue
-
-            time.sleep(self._session_overlap_s)
-
-            initial_exits = {
-                role: proc.poll() if proc is not None else None for role, proc in procs.items()
-            }
-            if all(exit_code is None for exit_code in initial_exits.values()):
-                exits_and_errors = {
-                    role: self._wait_for_process_exit(
-                        proc,
-                        timeout_s=completion_timeout_s,
-                    )
-                    for role, proc in procs.items()
-                }
-            else:
-                exits_and_errors = {
-                    role: self._terminate_process(proc) for role, proc in procs.items()
-                }
-
-            if all(exit_code == 0 for exit_code, _err in exits_and_errors.values()):
-                if label == "timeouts":
-                    self._note_timeout_success(specs)
-                return ConcurrentStreamOpenResult.SUPPORTED
-
-            timeout_option_error = label == "timeouts" and any(
-                _is_timeout_option_error(err) for _exit_code, err in exits_and_errors.values()
+        inspection = self._inspection
+        if inspection is None:
+            raise InspectionFailure("helper_failure")
+        roles = [
+            InspectionRole(
+                role=spec.role,
+                rtsp_url=spec.input_url,
+                kind=spec.kind,
+                audio_mode="copy" if spec.include_audio else "none",
             )
-            if any(_is_session_limit_error(err) for _exit_code, err in exits_and_errors.values()):
+            for spec in specs
+        ]
+        try:
+            evidence = inspection.request(
+                "inspect_overlap",
+                timeout_s=self._command_timeout_s
+                + len(roles) * max(2.0, self._session_overlap_s + 0.5),
+                roles=roles,
+                overlap_s=self._session_overlap_s,
+                duration_s=max(2.0, self._session_overlap_s + 0.5),
+            )
+            if not isinstance(evidence, OverlapEvidence):
+                raise InspectionFailure("helper_failure")
+            if any(role.error_code == "local_capability_unavailable" for role in evidence.roles):
+                raise InspectionFailure("local_capability_unavailable")
+            if evidence.status == "session_limit":
                 return ConcurrentStreamOpenResult.SESSION_LIMIT
-
-            if timeout_option_error:
-                self._mark_timeout_unsupported(specs_by_role, exits_and_errors)
-                logger.debug(
-                    "Session-limit validation retrying without timeout options; errors=%s",
-                    {role: err for role, (_exit_code, err) in exits_and_errors.items() if err},
+            # A status string alone cannot prove that every independent role completed.
+            if (
+                evidence.status == "supported"
+                and {role.role for role in evidence.roles} == {role.role for role in roles}
+                and len(evidence.roles) == len(roles)
+                and all(
+                    role.ok and (role.frames_decoded > 0 or role.video_packets > 0)
+                    for role in evidence.roles
                 )
-                continue
-
-            exits = {role: exit_code for role, (exit_code, _err) in exits_and_errors.items()}
-            errors = {role: err for role, (_exit_code, err) in exits_and_errors.items() if err}
-            logger.warning(
-                "Session-limit validation failed (%s): exits=%s errors=%s",
-                label,
-                exits,
-                errors,
-            )
-            if label == "timeouts":
-                return ConcurrentStreamOpenResult.FAILED
-
-        return ConcurrentStreamOpenResult.FAILED
-
-    def _build_recording_check_cmd(
-        self,
-        *,
-        input_url: str,
-        input_args: list[str],
-        output_path: Path,
-        output_args: list[str],
-        timeout_args: list[str],
-    ) -> list[str]:
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "warning",
-            "-rtsp_transport",
-            "tcp",
-        ]
-        cmd.extend(timeout_args)
-        cmd.extend(input_args)
-        cmd.extend(
-            [
-                "-i",
-                input_url,
-                "-t",
-                "2",
-            ]
-        )
-        cmd.extend(output_args)
-        cmd.extend(["-y", str(output_path)])
-        return cmd
-
-    def _stream_open_attempts(
-        self,
-        specs: list[_SessionOpenSpec],
-    ) -> tuple[tuple[Literal["timeouts", "no_timeouts"], bool], ...]:
-        has_timeout_args = any(self._timeout_args_for_tool(spec.tool) for spec in specs)
-        if has_timeout_args:
-            return (("timeouts", True), ("no_timeouts", False))
-        return (("no_timeouts", False),)
-
-    def _build_session_open_cmd(
-        self,
-        *,
-        spec: _SessionOpenSpec,
-        timeout_args: list[str],
-        duration_s: float,
-    ) -> list[str]:
-        match spec.tool:
-            case "ffmpeg":
-                return self._build_stream_open_cmd(
-                    input_url=spec.input_url,
-                    timeout_args=timeout_args,
-                    duration_s=duration_s,
-                    include_audio=spec.include_audio,
-                )
-            case "ffprobe":
-                return self._build_probe_open_cmd(
-                    input_url=spec.input_url,
-                    timeout_args=timeout_args,
-                    duration_s=duration_s,
-                )
-
-    def _build_stream_open_cmd(
-        self,
-        *,
-        input_url: str,
-        timeout_args: list[str],
-        duration_s: float,
-        include_audio: bool = False,
-    ) -> list[str]:
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-rtsp_transport",
-            "tcp",
-        ]
-        cmd.extend(timeout_args)
-        cmd.extend(["-i", input_url, "-t", f"{max(0.5, duration_s):.1f}"])
-        if include_audio:
-            cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
-        else:
-            cmd.append("-an")
-        cmd.extend(["-f", "null", "-"])
-        return cmd
-
-    def _build_probe_open_cmd(
-        self,
-        *,
-        input_url: str,
-        timeout_args: list[str],
-        duration_s: float,
-    ) -> list[str]:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-read_intervals",
-            f"%+{max(0.5, duration_s):.1f}",
-            "-count_packets",
-            "-show_entries",
-            "stream=codec_type,codec_name,width,height,avg_frame_rate,nb_read_packets",
-            "-of",
-            "json",
-            "-rtsp_transport",
-            "tcp",
-        ]
-        cmd.extend(timeout_args)
-        cmd.append(input_url)
-        return cmd
-
-    def _timeout_args(self) -> list[str]:
-        return self._timeout_capabilities.build_ffmpeg_timeout_args(
-            connect_timeout_s=self._rtsp_connect_timeout_s,
-            io_timeout_s=self._rtsp_io_timeout_s,
-        )
-
-    def _ffprobe_timeout_args(self) -> list[str]:
-        return self._timeout_capabilities.build_ffprobe_timeout_args(
-            connect_timeout_s=self._rtsp_connect_timeout_s,
-            io_timeout_s=self._rtsp_io_timeout_s,
-        )
-
-    def _timeout_args_for_tool(self, tool: Literal["ffmpeg", "ffprobe"]) -> list[str]:
-        match tool:
-            case "ffmpeg":
-                return self._timeout_args()
-            case "ffprobe":
-                return self._ffprobe_timeout_args()
-
-    def _note_timeout_success(self, specs: list[_SessionOpenSpec]) -> None:
-        if any(spec.tool == "ffmpeg" and self._timeout_args() for spec in specs):
-            self._timeout_capabilities.note_ffmpeg_timeout_success()
-        if any(spec.tool == "ffprobe" and self._ffprobe_timeout_args() for spec in specs):
-            self._timeout_capabilities.note_ffprobe_timeout_success()
-
-    def _mark_timeout_unsupported(
-        self,
-        specs_by_role: dict[str, _SessionOpenSpec],
-        exits_and_errors: dict[str, tuple[int | None, str]],
-    ) -> None:
-        ffmpeg_changed = False
-        ffprobe_changed = False
-        for role, (_exit_code, err) in exits_and_errors.items():
-            if not _is_timeout_option_error(err):
-                continue
-            spec = specs_by_role[role]
-            match spec.tool:
-                case "ffmpeg":
-                    ffmpeg_changed = (
-                        self._timeout_capabilities.mark_ffmpeg_timeout_unsupported()
-                        or ffmpeg_changed
-                    )
-                case "ffprobe":
-                    ffprobe_changed = (
-                        self._timeout_capabilities.mark_ffprobe_timeout_unsupported()
-                        or ffprobe_changed
-                    )
-        if ffmpeg_changed:
-            logger.warning(
-                "ffmpeg timeout options unsupported; disabling RTSP timeout options for this process"
-            )
-        if ffprobe_changed:
-            logger.warning(
-                "ffprobe timeout options unsupported; disabling RTSP timeout options for this process"
-            )
-
-    def _wait_for_process_exit(
-        self,
-        proc: subprocess.Popen[str] | None,
-        *,
-        timeout_s: float,
-    ) -> tuple[int | None, str]:
-        if proc is None:
-            return None, ""
-
-        try:
-            _, stderr_text = proc.communicate(timeout=max(0.1, timeout_s))
-            stderr_tail = stderr_text[-240:] if stderr_text else ""
-            return proc.poll(), stderr_tail.strip()
-        except Exception:
-            return self._terminate_process(proc)
-
-    def _terminate_process(self, proc: subprocess.Popen[str] | None) -> tuple[int | None, str]:
-        if proc is None:
-            return None, ""
-
-        stderr_tail = ""
-        try:
-            if proc.poll() is None:
-                if not _signal_process_group(proc.pid, signal.SIGTERM):
-                    proc.terminate()
-            _, stderr_text = proc.communicate(timeout=2)
-            stderr_tail = stderr_text[-240:] if stderr_text else ""
-        except Exception:
-            try:
-                if not _signal_process_group(proc.pid, signal.SIGKILL):
-                    proc.kill()
-                _, stderr_text = proc.communicate(timeout=2)
-                stderr_tail = stderr_text[-240:] if stderr_text else ""
-            except Exception:
-                return proc.poll(), ""
-
-        return proc.poll(), stderr_tail.strip()
+            ):
+                return ConcurrentStreamOpenResult.SUPPORTED
+            return ConcurrentStreamOpenResult.FAILED
+        except InspectionFailure as exc:
+            if exc.code == "session_limit":
+                return ConcurrentStreamOpenResult.SESSION_LIMIT
+            if exc.terminal or exc.code in {
+                "local_capability_unavailable",
+                "helper_failure",
+                "cancelled",
+            }:
+                raise
+            return ConcurrentStreamOpenResult.FAILED
 
 
 def select_motion_stream(*, camera_key: str, streams: list[ProbeStreamInfo]) -> ProbeStreamInfo:
@@ -994,38 +763,3 @@ def _candidate_urls(primary_rtsp_url: str, detect_rtsp_url: str) -> list[str]:
             candidates.append(derived_url)
 
     return candidates
-
-
-def _format_recording_cmd(cmd: list[str]) -> str:
-    safe_cmd = list(cmd)
-    try:
-        idx = safe_cmd.index("-i")
-        safe_cmd[idx + 1] = _redact_rtsp_url(str(safe_cmd[idx + 1]))
-    except Exception:
-        pass
-    return _format_cmd(safe_cmd)
-
-
-def _sanitize_stderr(stderr_text: str, input_url: str) -> str:
-    if not stderr_text:
-        return ""
-    return stderr_text.replace(input_url, _redact_rtsp_url(input_url)).strip()
-
-
-def _is_session_limit_error(stderr: str) -> bool:
-    return _is_rtsp_session_limit_error(stderr)
-
-
-def _collect_recording_stability_signals(stderr_text: str) -> RecordingValidationSignals:
-    if not stderr_text:
-        return RecordingValidationSignals()
-
-    def _count(pattern: str) -> int:
-        return len(re.findall(pattern, stderr_text, flags=re.IGNORECASE))
-
-    return RecordingValidationSignals(
-        non_monotonic_dts=_count(r"Non-monotonic DTS"),
-        queue_input_backward=_count(r"Queue input is backward in time"),
-        dts_discontinuity=_count(r"DTS discontinuity"),
-        sei_truncated=_count(r"SEI type 764 size"),
-    )

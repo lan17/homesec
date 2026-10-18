@@ -257,8 +257,15 @@ libraries into the helper. Rust, native headers, CMake, and libclang are confine
 to the build stage. The image checks that the runtime can load the helper and
 that it has no shared OpenCV, libav, x264, or libopus dependency. Standard C/C++ runtime libraries
 remain OS dependencies.
-The system FFmpeg command-line tools remain in the image for preflight,
-compatibility recording, motion, and preview.
+Linux builds additionally use pinned static libdrm, libva, and oneVPL adapters,
+plus pinned nv-codec headers. Their drivers remain host prerequisites; a
+GPU-free host can build and use the software decoder. macOS enables the system
+VideoToolbox framework. Compiled adapters and successful device initialization
+do not establish camera decode support; native validation requires frames from
+the requested backend. The [hardware notice](../native/webrtc/HARDWARE-NOTICE.md)
+documents corresponding source and licenses.
+The system FFmpeg command-line tools remain in the image for compatibility
+recording, motion, and preview.
 
 The bundled FFmpeg license and source/build notice are installed in
 `/usr/share/licenses/homesec-ffmpeg/`. The
@@ -300,10 +307,11 @@ For a source checkout on Linux or macOS, install these developer tools first:
   On macOS, use Xcode Command Line Tools (`xcode-select --install`).
 - [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+
   or 22.12+, and pnpm 10.15.1 (the version in `ui/package.json`).
-- FFmpeg, including `ffprobe`, on `PATH` for preflight, compatibility
+- FFmpeg, including `ffprobe`, on `PATH` for compatibility
   recording, motion, and preview.
 - `pkg-config` so the Rust build can find the privately built libraries.
 - CMake to compile the private OpenCV libraries.
+- Meson and Ninja on Linux to compile the private libdrm/libva adapters.
 - Optional NASM on x86 hosts for FFmpeg assembly optimizations. The build disables
   x86 assembly when NASM is unavailable.
 
@@ -312,7 +320,7 @@ the existing OpenCV dependency with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential python3 cmake clang libclang-dev pkg-config ffmpeg nasm \
+sudo apt-get install build-essential python3 cmake meson ninja-build clang libclang-dev pkg-config ffmpeg nasm \
   libgl1 libglib2.0-0
 ```
 
@@ -330,6 +338,16 @@ brew install python cmake ffmpeg pkg-config
 [x264 API 165](https://code.videolan.org/videolan/x264/-/tree/b35605ace3ddf7c1a5d67a2eb553f034aef41d55), and
 [Opus 1.6.1](https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz) source archives,
 verify their pinned SHA-256 checksums, and build the required libraries privately.
+Linux also verifies and builds the pinned hardware dependencies listed in
+`native/webrtc/Cargo.toml`; no system libav installation or host CLI contributes
+to inspection capabilities. Built-in decoders and parsers are enabled so native
+inspection does not impose a new arbitrary camera codec allowlist. This costs
+build time and binary size; external codec libraries are still disabled unless
+explicitly pinned/enabled, and the encoder list remains restricted. It does not
+establish validation for every camera codec. Software HEVC and AAC/audio validation remain
+available without a GPU. VAAPI requires a readable render device and its driver;
+CUDA/NVENC requires a compatible NVIDIA driver; QSV requires an Intel media
+runtime and device access. Mounting a device alone does not validate decode.
 OpenCV builds only `core` and `imgproc`, with bundled static zlib. Cargo pins the
 Rust bindings to `opencv = "=0.101.0"`; the native version and archive checksum
 are recorded in `native/webrtc/Cargo.toml` metadata and enforced by the build.

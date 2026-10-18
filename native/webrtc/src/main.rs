@@ -5,6 +5,8 @@ mod burst_rtp;
 mod camera_input;
 mod decode;
 mod engine;
+mod inspection;
+mod inspection_hardware;
 mod motion;
 mod motion_worker;
 mod preview;
@@ -23,12 +25,14 @@ use std::net::IpAddr;
 
 #[derive(Parser)]
 struct Options {
-    #[arg(long, required_unless_present_any = ["motion", "shared"])]
+    #[arg(long, required_unless_present_any = ["motion", "shared", "inspect"])]
     advertised_ip: Option<IpAddr>,
     #[arg(long)]
     motion: bool,
     #[arg(long, conflicts_with = "motion")]
     shared: bool,
+    #[arg(long, conflicts_with_all = ["motion", "shared"])]
+    inspect: bool,
     #[arg(long, default_value_t = 8189)]
     udp_port_start: u16,
     #[arg(long, default_value_t = 8199)]
@@ -45,7 +49,9 @@ fn main() {
     // Do not install tracing: SDP, candidates and camera command lines are private.
     str0m::crypto::from_feature_flags().install_process_default();
     let options = Options::parse();
-    let result = if options.motion {
+    let result = if options.inspect {
+        inspection::run()
+    } else if options.motion {
         motion_worker::run()
     } else {
         engine::run(options)
