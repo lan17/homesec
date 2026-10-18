@@ -96,7 +96,7 @@ The CLI SHALL support running HomeSec from a selected configuration path and val
 
 ### Requirement: Operational system statistics
 
-`/api/v1/stats` SHALL report today's persisted clip creations and distinct clips with affirmative alert decisions since midnight UTC, plus configured/healthy-source camera counts and uptime. It SHALL require normal mode, API-key authentication when enabled, and a successful database availability check. The built-in store counts clips by database record creation time, but counts alerts by affirmative alert-decision event timestamps, distinct by clip ID. An older clip can therefore contribute to today's alert count, independently of current snapshot fields or notifier delivery. Count-query failures after that check MAY return zero without a separate count-error field, so these counters SHALL not guarantee complete activity or successful notification delivery.
+`/api/v1/stats` SHALL report today's persisted clip creations and distinct affirmative alert-decision clips since midnight UTC, configured/healthy-source camera counts, and uptime, subject to normal mode, API-key authentication when enabled, and a DB availability check. Clips use record-creation time; alerts use decision-event time. Counts SHALL NOT certify delivery or complete activity. Later count-query failures MAY return zero without a count-error field.
 
 #### Scenario: Read current system statistics
 
@@ -104,6 +104,7 @@ The CLI SHALL support running HomeSec from a selected configuration path and val
 - **WHEN** an authorized client requests system statistics
 - **THEN** the response contains clip and clip-level alert-decision counts for the UTC day, camera totals/healthy-source count, and uptime
 - **AND** alert counts do not count individual notifier deliveries
+- **AND** an older clip can contribute through today's affirmative decision event independently of its current snapshot fields or delivery outcome
 
 #### Scenario: Database availability check fails
 
@@ -149,7 +150,7 @@ HomeSec SHALL respond to SIGINT and SIGTERM by initiating shutdown. Normal shutd
 
 ### Requirement: Cleanup selection and dry run
 
-When its implemented YOLO-shaped recheck configuration can be constructed, CLI cleanup SHALL re-analyze candidate clips whose prior filter result has no detected classes, with optional age and camera filters and configured batch/concurrency settings. Normal pipeline support for an external filter does not imply cleanup compatibility. Empty returned detection, including zero sampled frames, follows the empty-result path; a raised detection exception follows the error path. The recheck-builder and zero-frame safety limits are specified in [storage retention](../storage-retention/spec.md#requirement-cleanup-rechecks-before-deleting-empty-clips). Dry run SHALL be enabled by default and SHALL report proposed outcomes without deleting original local/stored media or changing clip workflow state/events. Cleanup MAY retrieve media and create temporary re-analysis files while evaluating candidates.
+CLI cleanup SHALL re-analyze prior empty detections with optional age/camera filters and configured batches/concurrency, subject to its [YOLO-shaped recheck and zero-frame limits](../storage-retention/spec.md#requirement-cleanup-rechecks-before-deleting-empty-clips). Dry run SHALL default on, report proposed outcomes, and preserve original local/stored media and workflow state/events. Cleanup MAY retrieve media and create temporary re-analysis files.
 
 #### Scenario: Preview deletion of an empty clip
 
@@ -238,7 +239,7 @@ A dump that exceeds its configured timeout or is cancelled SHALL have its proces
 
 ### Requirement: Backup manifest recovery and upload outcomes
 
-HomeSec SHALL persist backup records and pending storage work in a manifest beside local dumps. Startup SHALL reconcile interrupted records and recover recognized local dump artifacts when the manifest is absent or invalid. Local dump completion and optional upload completion SHALL be recorded separately on the normal bookkeeping path. A later housekeeping exception can still change the current new record from `success` to `failed` even after its final local dump exists. Upload retries require a retained, upload-enabled, not-yet-uploaded record with status `success`; a record reclassified as `failed` is skipped by that retry pass. A final file and a successful record are therefore distinct observations. Failed or interrupted upload attempts SHALL update their in-memory record with retry information while the local artifact is retained. Public backup status exposes manifest summary fields, not every pending record's error. Preserving changed retry information across restart requires a subsequent successful manifest save. Cancellation of startup storage-retry work can bypass that save, leaving older retry information on disk; see the [startup upload-retry cancellation limitation](../../../docs/reference.md#operations-maintenance).
+HomeSec SHALL persist backup records and pending storage work in a manifest beside local dumps, reconcile interrupted records on startup, and recover recognized artifacts when the manifest is absent/invalid. Local dump and optional upload outcomes SHALL be recorded separately on the normal bookkeeping path. Failed/interrupted uploads SHALL update in-memory retry data while the artifact is retained; persistence and classification have [limits](../../../docs/reference.md#operations-maintenance).
 
 #### Scenario: Recover local backups after manifest corruption
 
@@ -253,6 +254,9 @@ HomeSec SHALL persist backup records and pending storage work in a manifest besi
 - **WHEN** a dump completes and its upload fails
 - **THEN** local dump success is recorded separately from the upload failure
 - **AND** retained local output remains eligible for an upload retry
+- **AND** that retry requires a retained, upload-enabled, not-yet-uploaded record with status `success`
+- **AND** public backup status exposes manifest summary fields, not every pending record's error
+- **AND** changed retry information survives restart only after a successful manifest save; startup storage-retry cancellation can bypass that save
 
 #### Scenario: Housekeeping failure reclassifies a completed dump
 
@@ -263,7 +267,7 @@ HomeSec SHALL persist backup records and pending storage work in a manifest besi
 
 ### Requirement: Backup retention and remote-delete recovery
 
-Backup retention SHALL attempt pruning of the oldest eligible completed backups beyond `keep_count`, deleting local files and known uploaded objects when those deletion operations succeed. Local unlink or bookkeeping errors can interrupt the pass and affect the current run's classification as described above. A failed new upload SHALL preserve prior uploaded backups; ordinary pending local uploads SHALL have their own `keep_count` limit. Pending-upload pruning SHALL preserve retained local artifacts marked `pending_upload_unknown`. That protection survives restart only when the unknown-outcome marker is available in the recovered manifest; cancellation does not guarantee it was saved. Failed or interrupted remote deletion SHALL persist pending work for a later retry.
+Backup retention SHALL attempt pruning oldest eligible completed backups beyond `keep_count`. Failed new uploads SHALL preserve prior uploaded backups; ordinary pending local uploads SHALL have a separate `keep_count` cap. Pending-upload pruning SHALL preserve retained `pending_upload_unknown` artifacts; restart protection needs a saved marker. Remote-delete failure/interruption SHALL persist retry work; see [limits](../../../docs/reference.md#operations-maintenance).
 
 #### Scenario: Retention after successful upload
 

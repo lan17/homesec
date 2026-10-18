@@ -38,7 +38,7 @@ HomeSec SHALL expose camera preview availability, state, and refusal reasons. En
 
 ### Requirement: Preview access is scoped and expires
 
-With authentication enabled, HomeSec SHALL authorize preview playback and signaling with the API key or a valid camera-scoped preview token. A valid bearer API key takes precedence over an accompanying query token; disabled authentication skips token validation. Token scope/expiry rejection applies when token authorization is actually used and credential comparison completes. WebRTC viewer leases SHALL not outlive the authorization used to negotiate or renew them. HLS playback SHALL refuse stale media when the corresponding preview is disabled or inactive.
+With authentication enabled, preview playback/signaling SHALL accept a valid bearer API key or valid camera-scoped token; the key takes precedence. Disabled authentication SHALL skip token checks. When token authorization is used and credential comparison completes, scope/expiry rejection SHALL apply. WebRTC leases SHALL be bounded by the authorization used to negotiate or renew them. HLS SHALL refuse playback while preview is disabled or inactive.
 
 #### Scenario: Attempt access to another camera
 
@@ -154,13 +154,14 @@ HomeSec SHALL expose talk policy, capability, selected backend, and stable refus
 
 ### Requirement: Talk preparation defines the authorized audio stream
 
-HomeSec SHALL prepare a talk session before streaming, returning a session identity, WebSocket endpoint, and PCM input contract. The default input SHALL be mono signed 16-bit little-endian PCM at 16000 Hz in 20 ms frames. With authentication enabled, preparation SHALL require the API key and streaming SHALL require valid stream authorization. The WebSocket authorizer accepts a valid bearer API key before inspecting a stream query token; otherwise it validates that token against camera, session, and expiry. Disabled authentication skips those token checks. The socket is accepted before this authorization step, so token rejection closes it rather than preventing the WebSocket handshake.
+HomeSec SHALL prepare talk before streaming, returning a session ID, WebSocket endpoint, and PCM contract. With authentication enabled, preparation SHALL require the API key and streaming SHALL require valid authorization. The WebSocket SHALL be accepted before authorization; bearer-key precedence, token scope/expiry, and disabled-auth behavior follow the [shared API contract](../integration-contracts/spec.md#shared-api-preconditions).
 
 #### Scenario: Prepare a supported talk session
 
 - **GIVEN** an enabled, supported camera with no reserved talk session
 - **WHEN** an authorized client prepares talk without overriding the configured input
 - **THEN** the response supplies the configured input contract, session identity, and WebSocket endpoint
+- **AND** when input configuration is left at its default, the contract is mono signed 16-bit little-endian PCM at 16000 Hz in 20 ms frames
 
 #### Scenario: Send an invalid audio frame
 
@@ -182,7 +183,7 @@ HomeSec SHALL prepare a talk session before streaming, returning a session ident
 
 ### Requirement: Talk sessions are exclusive and bounded per camera
 
-HomeSec SHALL allow at most one reserved or active talk session per camera. Reservation and active phases SHALL each have a separate `max_session_s` limit, restarted at activation. Active sessions SHALL also have an `idle_timeout_s` audio-idle limit. After WebSocket acceptance and authorization, the start-message wait SHALL use `idle_timeout_s`. Explicit stop, failed or cancelled camera-session opening, disconnect during streaming, and runtime shutdown SHALL initiate cleanup of the affected session and resources. A disconnect returned by the first-message receive or expiry of that wait SHALL request best-effort reservation cleanup. Cancellation while the authorized WebSocket is still waiting for its first start message is outside that handler cleanup path and can leave the reservation until its existing duration timer or another successful cleanup action releases it; see the [pre-start cancellation limitation](../../../docs/reference.md#preview-talk).
+Talk SHALL permit at most one reserved or active session per camera. Preparation and activation SHALL each start a `max_session_s` limit; active sessions SHALL also use an `idle_timeout_s` audio-idle limit. Stop, failed/cancelled opening, streaming disconnect, and runtime shutdown SHALL initiate cleanup. The authorized first-message wait SHALL use `idle_timeout_s`, with [pre-start cancellation limits](../../../docs/reference.md#preview-talk).
 
 #### Scenario: Reserve talk while another session exists
 

@@ -35,7 +35,7 @@ See the [scenario evidence register](../../../docs/behavior-evidence.md) for the
 
 ### Requirement: API key authentication
 
-API routes protected by API-key authentication SHALL accept the configured ASCII key in an `Authorization: Bearer <key>` header when authentication is enabled. Missing bearer credentials or an incorrect ASCII-comparable key SHALL return HTTP 401 with `UNAUTHORIZED`. Non-ASCII strings passed to the current constant-time string comparison can raise instead of returning a mismatch, producing a generic pre-response HTTP 500; see the [malformed-credential limitation](../../../docs/reference.md#integration-contracts). A missing configured key SHALL return HTTP 500 with `API_KEY_NOT_CONFIGURED`. Disabling authentication SHALL remove the API-key requirement. Public health summaries SHALL remain accessible without credentials.
+When enabled, API-key authentication SHALL admit the configured ASCII bearer key, reject missing or incorrect ASCII credentials with 401 `UNAUTHORIZED`, and report a missing configured key as 500 `API_KEY_NOT_CONFIGURED`. Disabled authentication SHALL skip the key requirement; public health SHALL remain unauthenticated. Non-ASCII comparisons follow the [credential limitation](../../../docs/reference.md#integration-contracts).
 
 #### Scenario: Protected request lacks valid credentials
 
@@ -116,7 +116,7 @@ The browser UI SHALL redirect `/` and `/home` to Live, `/dashboard` to System, `
 
 ### Requirement: Canonical API exception responses
 
-Handled API exceptions and request-validation failures with JSON-serializable error data SHALL return a JSON envelope containing textual `detail` and `error_code`, with applicable additional fields preserved. Request-schema failures SHALL return HTTP 422 with `REQUEST_VALIDATION_FAILED` and validation details when that error payload can be serialized. The validation handler inserts `exc.errors()` without converting exception objects in `ctx.error`; such payloads can fail serialization and become a generic HTTP 500 instead. Before a response has started, unexpected exceptions reaching the generic handler SHALL return HTTP 500 with generic detail and `INTERNAL_SERVER_ERROR` rather than expose the exception text. This is not a promise to replace an already-started streaming response or a WebSocket close with a new HTTP envelope.
+Before a response starts, handled HTTP exceptions with JSON-safe error data SHALL return textual `detail`, `error_code`, and applicable extras. JSON-safe request-validation errors SHALL return 422 `REQUEST_VALIDATION_FAILED`; unexpected exceptions SHALL return generic 500 `INTERNAL_SERVER_ERROR`. JSON-unsafe validation data follows the [serialization limitation](../../../docs/reference.md#integration-contracts).
 
 #### Scenario: Route reports a conflict with additional context
 
@@ -145,7 +145,7 @@ Handled API exceptions and request-validation failures with JSON-serializable er
 
 ### Requirement: Generated API contract
 
-HomeSec SHALL expose an OpenAPI description derived from its registered API routes and request/response models, and SHALL support exporting that description without starting cameras or the application runtime. Exact request and response shapes SHALL be obtained from the existing generated OpenAPI contract instead of a separate hand-maintained field inventory.
+HomeSec SHALL export OpenAPI from registered routes and declared request/response models without starting the runtime. Generated schemas SHALL describe those declared models; custom error handlers can return different shapes, including the validation-error envelope. The canonical error contract above applies where schemas differ; see [schema limits](../../../docs/reference.md#integration-contracts).
 
 #### Scenario: Generate the contract without application startup
 
@@ -154,9 +154,16 @@ HomeSec SHALL expose an OpenAPI description derived from its registered API rout
 - **THEN** the file contains valid JSON describing versioned API routes and their model schemas
 - **AND** contract generation does not start the camera pipeline
 
+#### Scenario: Generated validation-error schema differs from the HTTP response
+
+- **GIVEN** the exported schema for setup connection testing and an admitted invalid request whose validation errors are JSON-safe
+- **WHEN** a client compares the declared 422 response with the actual HTTP response
+- **THEN** OpenAPI references `HTTPValidationError` with array-valued `detail`, but the handler returns string-valued `detail`, `error_code`, and a `validation_errors` list
+- **AND** the generated error schema alone does not describe that actual envelope; this is a current schema/handler mismatch
+
 ### Requirement: Notification payload meaning
 
-Notifications SHALL use the existing alert payload schema, identifying the clip and camera, decision reason, timestamp, and a deduplication key equal to the clip identifier. Storage/view links and analysis fields SHALL be nullable when unavailable. The payload SHALL indicate upload and analysis failures independently so recipients can distinguish missing enrichment from available clip identity. The key SHALL NOT imply exactly-once delivery or camera-scoped uniqueness. Reusing a clip ID reuses the deduplication key, including across cameras; see the [clip identity limitations](../../../docs/reference.md#capture-recording). The pipeline SHALL construct `ts` with `datetime.now()` when it builds the alert, as a naive process-local notification time, not the clip capture time or the database record's creation time. That same alert object is supplied to per-entry retries.
+Notifications SHALL follow the alert schema: clip/camera identity, decision reason, nullable links/analysis, failure flags, and `dedupe_key` equal to the global clip ID. This key SHALL NOT imply camera-scoped uniqueness or exactly-once delivery. Payload time SHALL be naive process-local alert construction time; the same alert object SHALL be reused for per-entry retries. See [identity limits](../../../docs/reference.md#capture-recording).
 
 #### Scenario: Notification includes available analysis and media references
 
@@ -174,8 +181,9 @@ Notifications SHALL use the existing alert payload schema, identifying the clip 
 #### Scenario: Delayed processing does not preserve capture time as notification time
 
 - **GIVEN** a clip is processed substantially after its estimated source times
-- **WHEN** the pipeline builds its notification payload
-- **THEN** `ts` reflects alert construction time, while clip identity continues to identify the recorded event
+- **WHEN** the pipeline builds its notification payload with `datetime.now()`
+- **THEN** `ts` reflects naive process-local alert construction time, while clip identity continues to identify the recorded event
+- **AND** per-entry retries receive the same alert object rather than rebuilding its timestamp
 
 ### Requirement: MQTT alert publication
 
@@ -224,7 +232,7 @@ The SendGrid email integration SHALL render configured subject and text/HTML tem
 
 ### Requirement: Notification fan-out isolation
 
-HomeSec SHALL send a selected alert to each enabled configured notifier. Disabled notifiers SHALL not receive alerts. A delivery failure from one notifier SHALL not prevent delivery attempts to the others, and the failed delivery SHALL remain observable as a failure. When no notifier is enabled, notification delivery SHALL have no transport side effects. Fan-out uses concurrent per-entry attempts and waits for all results; one indefinitely pending notifier can delay aggregate completion even when another succeeds. Failure isolation does not impose a shared deadline.
+HomeSec SHALL attempt selected alerts concurrently through enabled notifiers and observe per-entry failures independently; one failed delivery SHALL not prevent other attempts. Disabled notifiers SHALL receive no send. With none enabled, delivery SHALL have no transport side effects. Aggregate completion waits for all entries; failure isolation imposes no shared deadline, so one pending notifier can delay completion.
 
 #### Scenario: One notifier fails while another succeeds
 

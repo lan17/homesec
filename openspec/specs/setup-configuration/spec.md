@@ -38,19 +38,21 @@ HomeSec SHALL report setup readiness as fresh, partial, or complete, together wi
 
 ### Requirement: Setup checks report readiness without saving configuration
 
-HomeSec SHALL expose preflight checks and connection tests independently of configuration persistence. Check responses SHALL identify success or failure; preflight responses SHALL include individual results and an aggregate result that passes only when all reported checks pass. Preflight covers the selected Postgres, ffmpeg, disk-space, network, configuration/environment, and pg_dump checks. Connection testing uses a registered backend-specific probe when available, otherwise the implemented fallback for that category; generic storage/notifier/analyzer checks construct and ping a plugin and attempt shutdown. Success describes those checks, not an end-to-end recording/upload/inference/delivery run or a guarantee of future connectivity.
+HomeSec SHALL expose preflight and connection checks without saving configuration. Responses SHALL identify check success or failure; aggregate preflight SHALL pass only when all reported checks pass. Connection tests SHALL use registered probes or the implemented category fallback. A successful check does not certify end-to-end processing or future connectivity.
 
 #### Scenario: A preflight check times out
 
 - **GIVEN** a preflight dependency does not respond within its check timeout
 - **WHEN** the preflight result is returned
 - **THEN** the affected check reports failure and the aggregate result is not passed
+- **AND** the response reports the selected Postgres, ffmpeg, disk-space, network, configuration/environment, and pg_dump checks
 
 #### Scenario: A proposed connection is tested
 
 - **GIVEN** a supported camera, storage, notifier, or analyzer connection-test request
 - **WHEN** the request is processed
 - **THEN** HomeSec reports the connection-test result without saving that request as the application configuration
+- **AND** testing uses the registered backend-specific probe when available or the implemented fallback for that category otherwise
 
 #### Scenario: Generic connection test only establishes its ping result
 
@@ -61,19 +63,27 @@ HomeSec SHALL expose preflight checks and connection tests independently of conf
 
 ### Requirement: Setup finalization validates before persistence and activation
 
-HomeSec SHALL restrict setup finalization to bootstrap mode, validate the assembled configuration, and support validation-only requests. Successful applied finalization SHALL save the configuration and activate the runtime without requesting an application restart.
+HomeSec SHALL restrict finalization to bootstrap mode. Validation-only SHALL check assembled core models and camera/DSN prerequisites without saving or activating; it does not run full backend/plugin/reference validation of that candidate. Applied finalization SHALL validate the full configuration before saving, then activate the runtime without requesting an application restart.
 
 #### Scenario: Validate a valid setup without applying it
 
 - **GIVEN** bootstrap mode and a valid setup request with validation-only enabled
 - **WHEN** setup finalization is requested
 - **THEN** the response reports success without writing the configuration or activating the runtime
+- **AND** that success establishes core-model and camera/DSN prerequisite checks, not full backend/plugin/reference validation
 
 #### Scenario: Reject an invalid setup
 
-- **GIVEN** bootstrap mode and a setup request that fails semantic configuration validation
+- **GIVEN** bootstrap mode, applied finalization (`validate_only: false`), and a setup request that fails semantic configuration validation
 - **WHEN** setup finalization is requested
 - **THEN** HomeSec returns a validation error and does not save that invalid configuration
+
+#### Scenario: Validation-only accepts an unregistered source backend
+
+- **GIVEN** bootstrap mode, `validate_only: true`, a camera with backend `unknown_source`, and otherwise acceptable core models and camera/DSN prerequisites
+- **WHEN** setup finalization performs its validation-only branch
+- **THEN** it can return success with no errors without saving or activating the configuration
+- **AND** that branch does not reach the full configuration validation that rejects the unregistered backend on apply
 
 #### Scenario: Apply a valid setup
 
@@ -123,11 +133,7 @@ HomeSec SHALL expose ONVIF discovery results and credentialed probes for device 
 
 ### Requirement: Camera configuration mutations validate and preserve omitted fields
 
-HomeSec SHALL support creating, updating, and removing named cameras. A source patch that omits `source_backend` or exactly matches the saved normalized backend identifier SHALL preserve omitted settings within objects that are not explicitly cleared or replaced. Backend comparison occurs before normalization; a case-only change can discard omitted settings as described in the [configuration limitations](../../../docs/reference.md#setup-configuration). Invalid mutations SHALL fail without saving invalid configuration; duplicate creation and mutation of a missing camera SHALL return conflict and not-found responses respectively.
-
-Within a source patch, an omitted key is unchanged and a supplied `null` removes that key from the merged input. Existing-object/patch-object pairs are merged recursively; an empty patch object preserves an existing object's keys. Other supplied values, including lists and objects replacing non-objects, replace the prior value. Normal schema defaults and validation apply after merging, so removing a key need not leave the saved effective value absent. A top-level `source_config: null` is treated as no source-config patch, not as clearing every source setting.
-
-Camera removal validates the entire resulting configuration; it does not cascade removal of default-alert-policy overrides. A remaining override for the removed camera can reject the mutation before persistence or reload.
+HomeSec SHALL create, update, and remove cameras, validating before save. Patches SHALL preserve omitted source settings only with an omitted or exactly matching saved backend identifier and containing objects not cleared or replaced. Merge/null/list/default behavior and non-cascading policy references SHALL follow the scenarios below. Duplicate names SHALL conflict; missing cameras SHALL return not-found. See [patch limits](../../../docs/reference.md#setup-configuration).
 
 #### Scenario: Update one source setting
 
@@ -171,6 +177,18 @@ Camera removal validates the entire resulting configuration; it does not cascade
 - **WHEN** a schema-valid patch supplies a new list at that key
 - **THEN** the new list replaces the old list rather than merging or appending its elements
 
+#### Scenario: Leave source settings unchanged for a null top-level patch
+
+- **GIVEN** an existing camera with source settings and no backend change
+- **WHEN** a valid patch supplies `source_config: null`
+- **THEN** the manager treats it as no source-config patch and preserves those settings
+
+#### Scenario: Replace a non-object source value with an object
+
+- **GIVEN** a source schema permits a setting to hold either its existing non-object value or a supplied object, with no backend change
+- **WHEN** a valid source patch supplies that object at the setting key
+- **THEN** the object replaces the prior value rather than recursively merging into that non-object
+
 #### Scenario: Camera removal leaves an invalid policy reference
 
 - **GIVEN** the default alert policy has an override for an existing camera
@@ -179,7 +197,7 @@ Camera removal validates the entire resulting configuration; it does not cascade
 
 ### Requirement: Component disabling does not bypass all configuration validation
 
-HomeSec SHALL validate configured source and notifier entries regardless of their enabled flags, and validate analyzer configuration independently of analysis run mode. Alert-policy plugin-configuration validation SHALL be skipped when that policy is disabled; other whole-configuration checks, including camera-reference checks, still apply. Configuration-only validation does not imply component construction or external connectivity.
+During full configuration validation, HomeSec SHALL validate source and notifier entries regardless of enabled flags, and analyzer settings independently of analysis run mode. Alert-policy plugin-configuration validation SHALL be skipped when that policy is disabled; other whole-configuration checks, including camera-reference checks, still apply. Configuration-only validation does not imply component construction or external connectivity.
 
 #### Scenario: Disabled source or notifier has invalid plugin configuration
 
@@ -195,7 +213,7 @@ HomeSec SHALL validate configured source and notifier entries regardless of thei
 
 ### Requirement: Configuration reads protect sensitive values
 
-HomeSec SHALL redact string values whose field names match the shared sensitive-key rules and redact URL userinfo (the username/password before `@`) in string values under URL-named fields. Environment-variable names in `_env` fields SHALL remain visible. Camera source patches SHALL reject redacted placeholders as replacement values. This field-name and userinfo protection does not guarantee removal of arbitrary embedded secrets, including URL query, path, or fragment credentials; see the [redaction scope and limitations](../../../docs/reference.md#setup-configuration).
+HomeSec SHALL mask recognized sensitive-key string values and URL userinfo in URL-named string fields, while retaining `_env` names. Camera source patches SHALL reject redacted replacement placeholders. Other embedded credentials are outside this protection; see [redaction limits](../../../docs/reference.md#setup-configuration).
 
 #### Scenario: Read a configuration containing credentials
 

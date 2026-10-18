@@ -14,7 +14,7 @@ See the [scenario evidence register](../../../docs/behavior-evidence.md) for the
 
 ### Requirement: Clip processing stage ordering
 
-HomeSec SHALL start upload and filtering independently for an accepted clip. Eligible analysis SHALL begin after successful filtering without waiting for upload to finish. Alert evaluation and any notification SHALL use the eventual upload outcome. A filter failure SHALL end analysis and notification processing after the upload outcome is collected. These returned-outcome rules assume upload destination preparation succeeds and the joined tasks return their handled outcomes; they do not contain every exception before the retry boundary. A destination-construction exception escapes the upload task and can abort its later join before alert evaluation and completion. Filtering and eligible analysis may already have run. See the [preparation failure limitation](../../../docs/reference.md#analysis-alerts).
+HomeSec SHALL start upload and filtering independently for accepted clips. After successful filtering, eligible analysis SHALL start without waiting for upload. Alert handling SHALL await the eventual upload outcome; filter failure SHALL collect that outcome and stop analysis and notification. These rules assume joined stages return handled outcomes; destination-preparation exceptions can escape before the retry boundary and abort the later join.
 
 #### Scenario: Analysis overlaps a slow upload
 
@@ -41,7 +41,7 @@ HomeSec SHALL start upload and filtering independently for an accepted clip. Eli
 
 ### Requirement: Supported object-filter results
 
-The built-in object filter SHALL apply its configured supported target classes, confidence threshold, and minimum box-height ratio to sampled frames. Its result SHALL expose detected classes, confidence, model identity, and sampled-frame count. It SHALL report no detected classes and zero confidence when no accepted boxes are found. This result does not establish complete or even positive-frame inspection: a reported zero frame count skips sampling, a failed frame read ends sampling, and the worker can return an ordinary result from zero or partial decoded frames without an incomplete-decoding flag. A returned empty result is distinct from a raised detector exception. These are current decoding limitations, not an intended policy to classify unreadable footage as safe to delete.
+The built-in object filter SHALL apply supported target classes, confidence threshold, and minimum box-height ratio to sampled frames. Results SHALL expose detected classes, confidence, model, and sampled-frame count, with no classes and zero confidence when no boxes are accepted. Empty or partial returned results SHALL NOT certify complete inspection or safety for deletion; see the [decoding limits](../../../docs/reference.md#analysis-alerts).
 
 #### Scenario: Accepted target detection is returned
 
@@ -60,6 +60,7 @@ The built-in object filter SHALL apply its configured supported target classes, 
 - **GIVEN** the detector dependencies and model are available and capture reports zero frames or its first read returns failure rather than raising
 - **WHEN** the built-in detector finishes its sampling loop
 - **THEN** it returns empty detected classes, zero confidence, and `sampled_frames` equal to zero rather than a decoding exception
+- **AND** this returned result is a current decoding limitation, not evidence of safe-to-delete footage
 
 #### Scenario: A later failed read returns accumulated detection
 
@@ -99,7 +100,7 @@ HomeSec SHALL run analysis after successful filtering in `always` mode, skip it 
 
 ### Requirement: OpenAI-compatible analysis validation
 
-The OpenAI-compatible analyzer SHALL analyze timestamped sampled images within configured preprocessing limits and accept only responses that satisfy its structured sequence-analysis contract. Valid responses SHALL provide risk, activity, summary, and detailed analysis to downstream processing. Provider errors, malformed responses, and clips yielding no readable frames SHALL be treated as analysis failures. Validation enforces the structured model, not factual correctness about the footage: timestamp fields are strings, `frame_count` is not checked against submitted samples or constrained to be nonnegative, and entity chronology is not checked against the video. A schema-valid response is not proof of visual or temporal accuracy.
+The OpenAI-compatible analyzer SHALL submit timestamped sampled images within configured preprocessing limits and accept only its structured sequence-analysis contract. Successful output SHALL provide risk, activity, summary, and detailed analysis. Provider errors, malformed output, and no readable frames SHALL fail analysis. Schema validation SHALL NOT certify factual or temporal accuracy.
 
 #### Scenario: Valid structured response supplies analysis
 
@@ -130,6 +131,7 @@ The OpenAI-compatible analyzer SHALL analyze timestamped sampled images within c
 - **GIVEN** provider content satisfies the structured model but contains a negative frame count or string timestamps inconsistent with submitted frames
 - **WHEN** the analyzer parses that content
 - **THEN** those inconsistencies alone do not reject the structured result or certify its factual correctness
+- **AND** timestamp fields remain strings, `frame_count` is neither constrained to be nonnegative nor compared with submitted samples, and entity chronology is not checked against the video
 
 ### Requirement: Default alert policy decision precedence
 
@@ -194,7 +196,7 @@ An exhausted analysis failure SHALL NOT itself abort alert evaluation. After suc
 
 ### Requirement: Bounded processing-stage retries
 
-Failures raised by filtering, analysis, and individual notification operations inside the retry runner SHALL use the configured maximum attempt count and exponential backoff. The shared runner SHALL use at least one attempt and delays of `max(0, backoff_s) * 2**(attempt - 1)` between failed attempts; this is an attempt budget, not a total elapsed-time limit. It adds no generic timeout around an operation; backend-specific deadlines and shutdown/cancellation are separate. A successful retry SHALL supply that stage's successful outcome. Exhaustion SHALL follow the stage's failure behavior rather than claiming success or retrying indefinitely within that processing run.
+Filtering, analysis, and individual notifier operations within the retry runner SHALL retry raised failures up to `max(1, max_attempts)` attempts, with delays of `max(0, backoff_s) * 2**(attempt - 1)`. Success SHALL supply the successful outcome; exhaustion SHALL follow the stage's failure rules. This bounds attempts, not elapsed time, and adds no generic operation timeout; backend deadlines, shutdown, and cancellation are separate.
 
 #### Scenario: Transient stage failure recovers
 
@@ -243,9 +245,7 @@ HomeSec SHALL attempt notification only when the alert decision permits it and e
 
 ### Requirement: Best-effort workflow persistence during processing
 
-Failures while saving workflow state or appending lifecycle history SHALL be reported and contained so the accepted clip's in-process upload, filtering, analysis, and permitted notification can proceed. HomeSec SHALL NOT equate successful in-process work or successful individual writes with a complete, concurrency-safe state snapshot, complete event history, or automatic replay after a process restart.
-
-Concurrent stages currently read independent snapshots and replace the whole stored state. A later stale write can overwrite another stage's metadata or status even when every database operation succeeds. The stage-ordering and completion rules above describe in-process actions; they do not guarantee preservation of their combined persisted results or make deletion a concurrency-safe terminal state. See the [concurrent-write limitations](../../../docs/reference.md#analysis-alerts).
+Workflow-state and lifecycle-history write failures SHALL be reported and contained so in-process upload, filtering, analysis, and permitted notification can proceed. Successful work or writes SHALL NOT imply complete state/history, concurrency-safe snapshots, terminal deletion, or automatic restart replay; see the [concurrent-write limitations](../../../docs/reference.md#analysis-alerts).
 
 #### Scenario: Workflow-state write failure does not stop delivery
 

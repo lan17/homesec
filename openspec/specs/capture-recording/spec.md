@@ -18,7 +18,7 @@ See the [scenario evidence register](../../../docs/behavior-evidence.md) for the
 
 ### Requirement: Local folder ready-file ingestion
 
-The local-folder source SHALL accept top-level files matching its `*.mp4` glob after their last modification is at least the configured stability threshold old, identify clips by filename stem, and associate them with the configured camera. Glob matching SHALL follow the host platform's case rules; on Linux/POSIX with case-sensitive matching, uppercase `.MP4` files SHALL remain outside local ingestion. Readiness uses modification age, not repeated size measurements or successful media decoding. Local-folder clip times SHALL be estimated from file mtime using a naive process-local datetime, a fixed 10-second duration, and a start time 10 seconds before mtime; they are not measured capture timestamps.
+The local-folder source SHALL accept top-level `*.mp4` matches once mtime age reaches the stability threshold, using the filename stem and configured camera. Matching SHALL follow host case rules. Readiness SHALL use modification age, not size or decode checks. Clip times SHALL use naive process-local mtime as end, a fixed 10-second duration, and a start 10 seconds earlier.
 
 #### Scenario: Recently modified file waits
 
@@ -51,6 +51,7 @@ The local-folder source SHALL accept top-level files matching its `*.mp4` glob a
 - **WHEN** its clip metadata is constructed
 - **THEN** `end_ts` is the process-local naive datetime derived from mtime, `duration_s` is 10, and `start_ts` is 10 seconds earlier
 - **AND** no media-duration measurement is required to construct those timestamps
+- **AND** those estimates are not measured capture timestamps
 
 ### Requirement: Local folder repeat suppression
 

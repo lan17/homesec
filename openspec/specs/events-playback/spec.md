@@ -16,13 +16,15 @@ See the [scenario evidence register](../../../docs/behavior-evidence.md) for the
 
 ### Requirement: Event queries support filtering and cursor pagination
 
-HomeSec SHALL support clip queries filtered by camera, processing status, alert outcome, detection outcome, risk, activity, and creation-time bounds. When the database query and hydration of its returned rows succeed, queries without an explicit status filter SHALL exclude deleted clips; an explicit deleted-status filter SHALL include matching deleted records. Under those conditions, results SHALL use newest-first cursor pagination, with clip identity breaking equal-time ties, and expose whether another page exists. The built-in Postgres query uses the record's database `created_at` for creation-time filtering and ordering, not the source's estimated clip start/end or notification time. Reusing an existing ID preserves that database creation time. HTTP 200 alone does not establish successful querying or complete hydration; see the [list-query limitations](../../../docs/reference.md#events-playback).
+HomeSec SHALL support camera, processing, alert, detection, risk, activity, and creation-time filters. When querying and row hydration succeed, queries without a status filter SHALL exclude deleted clips, explicit deleted-status queries SHALL include matching deleted records, and results SHALL use newest-first cursor pagination with clip identity breaking ties. Creation time SHALL use database `created_at`; [list-query limitations](../../../docs/reference.md#events-playback) apply.
 
 #### Scenario: Continue to the next result page
 
 - **GIVEN** a valid query with more matching events than its page limit, successful database querying, and successful row hydration
 - **WHEN** the client requests a page and then supplies its returned cursor
 - **THEN** HomeSec returns the continuation page and a next cursor only when further results exist
+- **AND** the response exposes whether another page exists
+- **AND** ordering and creation-time filtering use the record's database `created_at`, not source clip times or notification time; ID reuse preserves that creation time
 
 #### Scenario: Reject invalid time bounds or a malformed cursor
 
@@ -110,7 +112,7 @@ When the clip-state lookup succeeds, HomeSec SHALL return available processing, 
 
 ### Requirement: Media URLs respect authentication and clip availability
 
-After normal-mode and database-availability checks pass and a successful clip lookup finds a storage URI, HomeSec SHALL return a direct media URL when authentication is disabled or a clip-scoped, expiring URL when authentication is enabled and a valid API key is supplied. Bootstrap mode returns HTTP 503 `SETUP_REQUIRED`, and a failed database availability guard returns HTTP 503 `DB_UNAVAILABLE`; passing that guard does not guarantee clip lookup. Token issuance SHALL require normal API authentication when enabled. With authentication enabled and no valid bearer API key, media playback SHALL require a valid, unexpired, clip-scoped token. A valid API key authorizes independently of the query token; disabling authentication skips token checks. Admission still depends on the earlier mode/database gates and the credential-comparison limitations in the shared API contract.
+After [shared admission gates](../integration-contracts/spec.md#shared-api-preconditions) pass and a successful clip lookup finds a storage URI, HomeSec SHALL return a direct URL with authentication disabled or a clip-scoped, expiring URL with authentication enabled. Token issuance SHALL require the API key when enabled. Playback SHALL accept a valid API key or valid, unexpired, clip-scoped token; disabled authentication SHALL skip token checks.
 
 #### Scenario: Request media without authentication enabled
 
@@ -150,7 +152,7 @@ After normal-mode and database-availability checks pass and a successful clip lo
 
 ### Requirement: Media delivery exposes availability and retrieval failures
 
-In normal mode, with a successful database availability guard and authorized media access, HomeSec SHALL serve retrievable clip media with an inline content disposition when local staging and response construction succeed. Successful storage retrieval alone does not guarantee a response can be constructed: the manual filename header can fail encoding for non-Latin clip identities, producing a pre-response generic 500 rather than a storage-fetch 502. Bootstrap and failed availability guards return the HTTP 503 outcomes described above. When the clip-state lookup succeeds, unknown clips SHALL return HTTP 404 and clips without a storage URI SHALL return HTTP 409. Storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason.
+For an admitted media request with successful clip lookup, HomeSec SHALL serve retrievable media inline when staging and response construction succeed. Unknown clips SHALL return HTTP 404; clips without a storage URI SHALL return HTTP 409; storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason. Successful retrieval does not guarantee response construction; the [filename-header limitation](../../../docs/reference.md#events-playback) applies.
 
 #### Scenario: Play stored media
 
@@ -179,7 +181,7 @@ In normal mode, with a successful database availability guard and authorized med
 
 ### Requirement: Playback stages media before HTTP delivery
 
-For a media request that reaches retrieval, HomeSec SHALL create a per-request temporary directory and await `storage.get()` into a local file before constructing its file response. This route has no cache/reuse path and does not stream directly from the storage backend. Range handling by the file response does not bypass that preceding retrieval. A caught storage exception SHALL request temporary-directory cleanup; a normally completed file response SHALL run its attached background cleanup. Cancellation during retrieval and failure before response cleanup is attached can leave staging behind. Playback staging is not automatically registered with source-recording retention. These cleanup gaps are current limitations, not guarantees that temporary files remain indefinitely on every deployment.
+Media requests reaching retrieval SHALL await `storage.get()` in a per-request temporary directory before constructing a file response. This route SHALL use no cache/reuse or direct backend streaming, including for range requests. Caught storage exceptions SHALL request cleanup; normally completed file responses SHALL run attached background cleanup. [Cleanup limitations](../../../docs/reference.md#events-playback) apply; staging SHALL not be automatically registered with recording retention.
 
 #### Scenario: Media retrieval completes before response construction
 

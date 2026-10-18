@@ -11,6 +11,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 
 - [ ] 2.5 Verify source-patch object/null/list semantics and default reapplication through persisted configuration; camera removal with policy references; disabled source/notifier and never-mode analyzer validation; and registered versus generic setup probes. Use real manager/loader boundaries with fake external dependencies and update scenario-specific evidence. Do not claim every successful probe exercised actual processing.
 
+- [ ] 2.6 Add repository-level characterization of validation-only versus applied setup finalization through the actual service and mounted route with fake application boundaries and a temporary config path. Cover unknown backend acceptance by validation-only, full apply rejection before persistence/activation, camera/DSN prerequisite rejection, and a valid control. Record the exact boundary and result; full-validation-on-dry-run behavior changes require separate review.
+
 ## 3. Review capture and recording
 
 - [ ] 3.2 Assess manifest-restart and unfinished-file coverage and add a focused source-boundary test only where the existing suite leaves a critical gap; verify the selected check and update README/DESIGN recording guidance to avoid durable replay or universal playable-file promises and obsolete startup-flag examples.
@@ -62,6 +64,8 @@ The eleven original unfinished tasks were transferred from the [archived bootstr
 - [ ] 8.2 Assess production per-entry mixed-success notifier fan-out, installed-entry-point discovery, and validate-before-factory/no-construction coverage; add only justified plugin-boundary tests and verify the selected checks. Reconcile `PLUGIN_DEVELOPMENT.md` and obsolete AGENTS examples with the existing unified registry and correct decorator arguments.
 
 - [ ] 8.3 Characterize API gate order and media/preview/talk authorization alternatives through mounted HTTP/WebSocket routes. Include valid-key plus invalid-token, disabled-auth tokens, token-only wrong-scope/expiry, non-ASCII bearer comparison, JSON-unsafe model-validator errors, and ordinary 401/422 controls. Inspect talk acceptance followed by authorization close separately from HTTP envelopes. Update scenario-specific evidence; malformed-input runtime fixes remain separately reviewed.
+
+- [ ] 8.4 Compare freshly generated OpenAPI error schemas with actual mounted-route JSON-safe validation errors, including the default array-valued `detail` versus the canonical textual envelope. Add a committed regression characterization with fake external boundaries and update scenario evidence; changing generated error schemas or handler behavior requires a separately reviewed implementation change.
 
 ## 9. Review operations and maintenance
 

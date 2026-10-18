@@ -16,7 +16,7 @@ See the [scenario evidence register](../../../docs/behavior-evidence.md) for the
 
 ### Requirement: Clip destination and upload outcome
 
-HomeSec SHALL build clip destinations under the configured clip-storage directory using sanitized camera-name and local-filename segments. Each segment is trimmed, path separators are replaced with underscores, whitespace-separated words are joined with underscores, and an empty result becomes `unknown`. The path is then normalized with `PurePosixPath`; dot segments can disappear, while absolute results or retained parent-traversal segments are rejected. For example, camera `.` with filename `motion.mp4` produces `clips/motion.mp4`, while camera `..` fails destination construction. The mapping is not unique: distinct names may produce the same destination, and this builder does not reject collisions. Destination preparation happens before the upload retry/error handler; its exceptions can escape the upload task rather than return an upload-failure value. Successful uploads SHALL supply the backend's storage URI and optional view URL to downstream processing. The upload operation SHALL NOT itself delete its local input.
+HomeSec SHALL build paths under the configured clip directory from camera/filename segments: trim, replace separators with underscores, join whitespace-separated words with underscores, and use `unknown` when empty. `PurePosixPath` may remove dot segments; absolute paths and retained parent traversal SHALL be rejected. Collisions are not rejected. Preparation errors can escape before retries. Successful uploads SHALL supply URI/optional view URL without deleting local input.
 
 #### Scenario: Stored clip retains its camera grouping
 
@@ -103,7 +103,7 @@ After successful destination preparation, HomeSec SHALL retry failures from prot
 
 ### Requirement: Local retention deletion eligibility
 
-Local retention SHALL select candidates from discovered files whose selection-time state snapshot has a matching recorded local path, a storage URI, status `DONE`, and a readable scanned size. Files lacking those prerequisites at selection SHALL be excluded. The deletion worker uses the selected pathname and captured size without revalidating current state or file identity; a replacement at that pathname can be removed. Retention SHALL NOT request storage-backend deletion or mutate clip state/events. Preserving a physically separate stored copy is not a guarantee for files that alias the selected local path. See the [selection-time and aliasing limitations](../../../docs/reference.md#storage-retention).
+Local retention SHALL select only discovered files whose selection-time snapshot has a matching recorded local path, storage URI, status `DONE`, and readable scanned size. It SHALL NOT delete through storage backends or mutate state/events. Unlink uses the selected pathname and captured size without revalidation; replacements or aliased stored copies can be removed. See the [selection limits](../../../docs/reference.md#storage-retention).
 
 #### Scenario: Uploaded completed clip is eligible
 
@@ -127,7 +127,7 @@ Local retention SHALL select candidates from discovered files whose selection-ti
 
 ### Requirement: Oldest eligible clip pruning
 
-When a retention pass selects clips to reduce an eligible-byte total exceeding the configured limit, it SHALL attempt selected candidates oldest first by recorded creation time, breaking ties by clip ID. It SHALL stop when its captured-size accounting total is within the limit or no candidates remain; unlink errors can leave that total above the limit. The summary uses scanned sizes rather than an atomic post-deletion filesystem measurement. Its summary SHALL distinguish incomplete measurement and remaining over-limit local usage from successful reclamation.
+When eligible bytes exceed the cap, retention SHALL attempt deletion oldest first by recorded creation time, then clip ID, until captured-size accounting is within the cap or candidates run out. Unlink errors can leave usage above the cap. Summaries SHALL distinguish incomplete measurement and remaining over-limit local usage from reclamation; scanned-size accounting is not an atomic post-deletion filesystem measurement.
 
 #### Scenario: Oldest eligible clip is removed first
 
@@ -190,7 +190,7 @@ The local and Dropbox storage backends SHALL treat deletion of an already-missin
 
 ### Requirement: API clip deletion reports partial failures
 
-The clip-deletion API SHALL mark a known clip deleted before deleting its storage object when a URI is available, then return the clip response on success. Missing clips established by a readable state lookup SHALL return HTTP 404. Marking or storage-deletion failures SHALL return HTTP 500 with distinct reasons; the API SHALL NOT issue a rollback of the earlier deletion mark when storage deletion fails. This ordering is not a concurrency-safe terminal-state guarantee: competing snapshot writes or re-ingestion of the same clip ID can overwrite `DELETED`. The response describes the deletion operation's snapshot, not a guarantee that subsequent reads retain it; see the [deletion limitations](../../../docs/reference.md#storage-retention).
+The API SHALL mark a known clip deleted before deleting its available storage object and return the clip response on success. Readable lookups establishing absence SHALL return 404; unexpected marking or storage-deletion failures SHALL return distinct 500 errors, without rolling back an earlier mark. Competing writes or ID reuse can overwrite `DELETED`; see the [deletion limits](../../../docs/reference.md#storage-retention).
 
 #### Scenario: Delete a known uploaded clip
 
@@ -227,7 +227,7 @@ The clip-deletion API SHALL mark a known clip deleted before deleting its storag
 
 ### Requirement: Cleanup rechecks before deleting empty clips
 
-Cleanup SHALL recheck candidate clips with an existing empty detection result before deleting them, provided its implemented recheck-configuration path can be constructed. That builder accepts a `YoloFilterConfig` or a dictionary valid as one, applies its YOLO-specific model/settings overrides (default recheck model `yolo11x.pt`), and retains the configured filter backend name. Other configuration-model types are rejected; supporting a plugin in normal processing does not imply cleanup compatibility. If rechecking finds detections, it SHALL retain the clip. If the detector returns an empty class list, including a zero-frame result, non-dry-run cleanup SHALL attempt local and stored-copy deletion and attempt to record deletion only after those deletion attempts succeed. Dry-run cleanup SHALL NOT delete clip copies or update their workflow state. Workflow writes remain best-effort and subject to the same concurrent-snapshot and reused-ID limitations as processing and API deletion.
+Cleanup SHALL recheck prior empty detections when its YOLO-shaped configuration can be built. Detections SHALL preserve media. For empty results, including zero frames, applied cleanup SHALL attempt local/stored deletion and then best-effort deletion recording only after deletion attempts succeed. Dry run SHALL preserve original media and workflow state. See the [configuration and safety limits](../../../docs/reference.md#storage-retention).
 
 #### Scenario: Recheck rescues a previous empty detection
 

@@ -2,7 +2,7 @@
 
 Maintained public behavior lives in [capability specs](specs/). The
 [behavior reference](../docs/reference.md) connects those contracts to operator
-guides, exact API shapes, and known limitations. Proposed changes and review
+guides, declared API models, and known limitations. Proposed changes and review
 evidence live under `changes/`; merging a Git PR does not itself sync delta specs.
 
 Developer tooling: OpenSpec **1.14.1**, Node.js **20.19+**. Use the existing
@@ -51,8 +51,9 @@ After review and verification, use `openspec-sync-specs` to update maintained
 specs, or `openspec-archive-change` to sync and archive completed work. Preserve
 known limitations in the reference page and keep links independent of an active
 change directory. Specs own behavioral semantics; the existing OpenAPI exporter
-owns exact API shapes, and operator guides own procedures. No additional document
-generator or copied schema inventory is required.
+describes declared API models, and operator guides own procedures. Custom error
+envelopes follow the maintained error contract where generated schemas differ.
+No additional document generator or copied schema inventory is required.
 
 Archive completed work promptly. Transfer unfinished documentation or verification
 follow-ups to a separate change instead of keeping promoted ADDED deltas active.

@@ -50,6 +50,12 @@ The initial 77 requirements and 222 scenarios remain historical promotion counts
 
 New tasks 2.5, 3.4, 4.5, 4.6, 5.6, 5.7, 6.5, 8.3, 9.5, and 10.1 require verification at the stated real boundaries. Prior and rerun isolated harnesses use excerpts, fake external dependencies, and temporary files; they do not complete these repository-level tasks or prove full application/native/device conformance. Runtime fixes remain separate.
 
+## Approved correction review on 2026-10-18
+
+The maintained setup contract now distinguishes limited validation-only checks from full candidate validation on apply. The generated-contract claim is scoped to declared models because custom validation-error envelopes can differ from default OpenAPI schemas. Actual-service and mounted-contract-route characterizations reproduced both limits with fake application boundaries and no runtime/database operations; they are not committed regression tests. New tasks 2.6 and 8.4 retain that verification work. The original 31 unchecked task lines remain unchanged.
+
+Long requirement summaries were shortened for strict OpenSpec validation, retaining their guards in the relevant scenarios or explicitly linked current reference notes. Requirement and existing scenario names remain stable; concrete scenarios make the two newly verified limitations and previously described patch branches explicit. Native viewer-cap evidence now cites the existing admission/timeout integration test without claiming a new local native test run. The archived bootstrap and application behavior remain unchanged.
+
 ## Risks / Trade-offs
 
 - **Older evidence can become stale.** Compare the relevant maintained contract, source, and tests before implementing each task; retain explicit limits where execution is incomplete.

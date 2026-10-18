@@ -23,6 +23,10 @@ The six X groups total **40 isolated cases**, not 40 production conformance test
 The following labels retain those limits until a follow-up supplies a test path/name, tested commit, command/result, and exact boundary. Corrected limitation scenarios describe current defects, not a policy requiring future implementations to retain them.
 
 
+## Local correction review on 2026-10-18
+
+Two additional actual-code characterizations checked validation-only setup through the real service with a fake application and temporary missing config, and compared a fresh OpenAPI export with JSON-safe validation failure through the actual mounted contract route. They reproduced the unknown-backend validation gap and declared/actual 422 mismatch. These standalone scripts are not committed repository regression tests and do not complete the follow-up tasks. Their rows remain S with the boundary noted explicitly. The native admission-cap test named below was inspected, not executed during this correction.
+
 ## analysis-alerts
 
 [Maintained spec](../openspec/specs/analysis-alerts/spec.md). S rows retain the source/test-attribution limit in the legend.
@@ -369,6 +373,7 @@ Implementation leads: [src/homesec/api/openapi_export.py](../src/homesec/api/ope
 | Scenario | Evidence | Boundary / remaining verification |
 | --- | --- | --- |
 | Generate the contract without application startup | S | — |
+| Generated validation-error schema differs from the HTTP response | S | Fresh schema and actual mounted contract-route characterization with fake app; no committed regression test |
 
 ### Notification payload meaning
 
@@ -592,7 +597,7 @@ Implementation leads: [src/homesec/sources/rtsp/live_publisher.py](../src/homese
 
 ### Preview resources have bounded lifetimes
 
-Implementation leads: [native/webrtc/src/engine.rs](../native/webrtc/src/engine.rs).
+Implementation leads: [native/webrtc/src/engine.rs](../native/webrtc/src/engine.rs). Existing admission-cap/negotiation-timeout coverage: `malformed_offers_and_negotiation_timeout_release_admission_capacity` in [native media delivery tests](../native/webrtc/tests/media_delivery.rs), inspected but not executed during this correction.
 
 | Scenario | Evidence | Boundary / remaining verification |
 | --- | --- | --- |
@@ -691,10 +696,11 @@ Implementation leads: [src/homesec/services/setup.py](../src/homesec/services/se
 
 | Scenario | Evidence | Boundary / remaining verification |
 | --- | --- | --- |
-| Validate a valid setup without applying it | S | — |
-| Reject an invalid setup | S | — |
+| Validate a valid setup without applying it | S | Core-model/prerequisite checks only; full candidate validation is skipped |
+| Reject an invalid setup | S | Applied finalization; validation-only has a narrower path |
 | Apply a valid setup | S | — |
 | Reject finalization outside bootstrap | S | — |
+| Validation-only accepts an unregistered source backend | S | Actual setup-service characterization with fake app/temporary path; committed mounted-route regression remains pending |
 
 ### ONVIF setup discovers cameras and reports probe outcomes
 
@@ -722,6 +728,8 @@ Implementation leads: [src/homesec/config/manager.py](../src/homesec/config/mana
 | Clear a source setting through null | S | Removal helper covered by X-C; default resolution source-traced |
 | Replace a list rather than append to it | X-C | Merge helper only; persisted route coverage pending |
 | Camera removal leaves an invalid policy reference | S | — |
+| Leave source settings unchanged for a null top-level patch | S | Real manager source path; persisted-route attribution remains pending |
+| Replace a non-object source value with an object | S | Merge helper source path; schema-valid replacement and persisted-route attribution remain pending |
 
 ### Component disabling does not bypass all configuration validation
 
