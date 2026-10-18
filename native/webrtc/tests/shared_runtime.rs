@@ -218,9 +218,11 @@ impl Viewer {
     }
 
     fn progress(&mut self) {
+        self.drain_output();
         self.rtc
             .handle_input(Input::Timeout(Instant::now()))
             .unwrap();
+        self.drain_output();
         let mut packet = [0; 65_536];
         loop {
             match self.socket.recv_from(&mut packet) {
@@ -235,11 +237,17 @@ impl Viewer {
                     self.rtc
                         .handle_input(Input::Receive(Instant::now(), input))
                         .unwrap();
+                    self.drain_output();
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) => panic!("viewer UDP failed: {error}"),
             }
         }
+    }
+
+    // str0m installs SRTP keys while polling: drain each input before feeding
+    // another datagram, including media queued behind the final DTLS flight.
+    fn drain_output(&mut self) {
         loop {
             match self.rtc.poll_output().unwrap() {
                 Output::Transmit(packet) => {
