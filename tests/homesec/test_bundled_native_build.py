@@ -9,7 +9,6 @@ import sys
 import tarfile
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
 
 import pytest
 from native.webrtc import build_native
@@ -46,7 +45,63 @@ OPUS_FIXTURE = build_native.NativeDependency(
     sha256="6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
     required=("lib/libopus.a", "lib/pkgconfig/opus.pc", "include/opus/opus.h", "COPYING"),
 )
-NATIVE_FIXTURES = (build_native.FFMPEG, OPENCV_FIXTURE, X264_FIXTURE, OPUS_FIXTURE)
+HARDWARE_FIXTURES = tuple(
+    build_native.NativeDependency(
+        name, version, f"{name}-{version}.tar.{archive_type}", url, checksum, required
+    )
+    for name, version, archive_type, url, checksum, required in (
+        (
+            "nv-codec-headers",
+            "n8.1.24.15",
+            "gz",
+            "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/n8.1.24.15",
+            "1e1600606cde2c04f5b1a71cb3b2e966b3ffe4e252a6ddec5781151d982e259f",
+            (
+                "lib/pkgconfig/ffnvcodec.pc",
+                "include/ffnvcodec/dynlink_loader.h",
+                "include/ffnvcodec/nvEncodeAPI.h",
+            ),
+        ),
+        (
+            "libdrm",
+            "2.4.124",
+            "xz",
+            "https://dri.freedesktop.org/libdrm/libdrm-2.4.124.tar.xz",
+            "ac36293f61ca4aafaf4b16a2a7afff312aa4f5c37c9fbd797de9e3c0863ca379",
+            ("lib/libdrm.a", "lib/pkgconfig/libdrm.pc", "include/xf86drm.h"),
+        ),
+        (
+            "libva",
+            "2.22.0",
+            "gz",
+            "https://codeload.github.com/intel/libva/tar.gz/refs/tags/2.22.0",
+            "467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735",
+            (
+                "lib/libva.a",
+                "lib/libva-drm.a",
+                "lib/pkgconfig/libva.pc",
+                "lib/pkgconfig/libva-drm.pc",
+                "include/va/va.h",
+                "COPYING",
+            ),
+        ),
+        (
+            "libvpl",
+            "2.15.0",
+            "gz",
+            "https://codeload.github.com/intel/libvpl/tar.gz/refs/tags/v2.15.0",
+            "7218c3b8206b123204c3827ce0cf7c008d5c693c1f58ab461958d05fe6f847b3",
+            ("lib/libvpl.a", "lib/pkgconfig/vpl.pc", "include/vpl/mfxvideo.h", "LICENSE"),
+        ),
+    )
+)
+NATIVE_FIXTURES = (
+    build_native.FFMPEG,
+    OPENCV_FIXTURE,
+    X264_FIXTURE,
+    OPUS_FIXTURE,
+    *HARDWARE_FIXTURES,
+)
 
 
 @pytest.mark.parametrize("dependency", NATIVE_FIXTURES)
@@ -98,6 +153,29 @@ def test_extraction_rejects_links(tmp_path: Path, link_type: bytes) -> None:
 
     # Then: The source tree has not been created.
     assert not (tmp_path / "source").exists()
+
+
+def test_libdrm_omits_disabled_test_trees_without_extracting_links(tmp_path: Path) -> None:
+    # Given: The pinned libdrm release's disabled test trees contain symlinks.
+    dependency = next(item for item in HARDWARE_FIXTURES if item.name == "libdrm")
+    archive = tmp_path / "source.tar.xz"
+    with tarfile.open(archive, "w:xz") as out:
+        for name in ("tests/amdgpu/.editorconfig", "intel/tests/gen4-3d.batch.sh"):
+            member = tarfile.TarInfo(f"{dependency.source_directory}/{name}")
+            member.type = tarfile.SYMTYPE
+            member.linkname = "/outside"
+            out.addfile(member)
+        member = tarfile.TarInfo(f"{dependency.source_directory}/xf86drm.c")
+        member.size = len(b"source")
+        out.addfile(member, io.BytesIO(b"source"))
+
+    # When: Extracting source for a build that explicitly disables all tests.
+    source = build_native.extract_archive(archive, tmp_path / "source", dependency)
+
+    # Then: Only actual build inputs are extracted; no link or test tree is created.
+    assert (source / "xf86drm.c").read_bytes() == b"source"
+    assert not (source / "tests").exists()
+    assert not (source / "intel").exists()
 
 
 @pytest.mark.parametrize("system,runtime", [("Darwin", "c++"), ("Linux", "stdc++,m,dl,pthread,rt")])
@@ -166,7 +244,10 @@ def _executable(path: Path, body: str) -> Path:
     return path
 
 
-def test_parallel_builds_share_cache_and_repair_incomplete_install(tmp_path: Path) -> None:
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_parallel_builds_share_cache_and_repair_incomplete_install(
+    tmp_path: Path, system: str
+) -> None:
     # Given: Verified source fixtures and a fake toolchain recording real bootstrap commands.
     cache = tmp_path / f"homesec-native-{os.getuid()}"
     cache.mkdir(mode=0o700)
@@ -181,6 +262,9 @@ def test_parallel_builds_share_cache_and_repair_incomplete_install(tmp_path: Pat
             (source / "libavformat/rtsp.c").write_text(
                 "\n".join(original for original, _ in build_native.FFMPEG_RTSP_PATCH)
             )
+            (source / "libavformat/rtspcodes.h").write_text(
+                build_native.FFMPEG_RTSP_STATUS_PATCH[0]
+            )
             (source / "libavcodec").mkdir()
             (source / "libavcodec/h264_parser.c").write_text(
                 "        if (ff_combine_frame(pc, next, &buf, &buf_size) < 0) {"
@@ -191,6 +275,10 @@ def test_parallel_builds_share_cache_and_repair_incomplete_install(tmp_path: Pat
             (source / "3rdparty/zlib/LICENSE").write_text("fixture zlib license")
         else:
             (source / "COPYING").write_text(f"fixture {dependency.name} license")
+            (source / "LICENSE").write_text(f"fixture {dependency.name} license")
+            if dependency.name == "libva":
+                (source / "va").mkdir()
+                (source / "va/meson.build").write_text("shared_library(\n" * 6)
         if dependency.name in ("FFmpeg", "x264"):
             _executable(
                 source / "configure",
@@ -202,15 +290,18 @@ pathlib.Path(prefix, 'configuration.json').write_text(json.dumps({{'arguments': 
 """,
             )
         archive = cache / dependency.archive
-        with tarfile.open(archive, "w:xz" if dependency.name == "FFmpeg" else "w:gz") as out:
+        with tarfile.open(archive, "w:xz" if dependency.archive.endswith(".xz") else "w:gz") as out:
             out.add(source, arcname=source.name)
         dependencies.append(
             replace(dependency, sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
         )
-    ffmpeg, opencv, x264, opus = dependencies
+    ffmpeg, opencv, x264, opus = dependencies[:4]
     script = tmp_path / "build_native.py"
     script.write_text(
-        Path(build_native.__file__).read_text().replace(build_native.FFMPEG.sha256, ffmpeg.sha256)
+        Path(build_native.__file__)
+        .read_text()
+        .replace(build_native.FFMPEG.sha256, ffmpeg.sha256)
+        .replace("sys.exit(main())", f"platform.system = lambda: {system!r}\n    sys.exit(main())")
     )
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -220,7 +311,7 @@ pathlib.Path(prefix, 'configuration.json').write_text(json.dumps({{'arguments': 
     _executable(
         tools / "cargo",
         f"""import json, sys
-print(json.dumps({{'packages': [{{'manifest_path': sys.argv[-1], 'metadata': {{'native-dependencies': { {dependency.name.lower(): {"version": dependency.version, "sha256": dependency.sha256} for dependency in (opencv, x264, opus)}!r} }}}}]}}))
+print(json.dumps({{'packages': [{{'manifest_path': sys.argv[-1], 'metadata': {{'native-dependencies': { {dependency.name.lower(): {"version": dependency.version, "sha256": dependency.sha256} for dependency in dependencies if dependency.name != "FFmpeg"}!r} }}}}]}}))
 """,
     )
     required = {dependency.name.lower(): dependency.required for dependency in dependencies}
@@ -230,9 +321,13 @@ print(json.dumps({{'packages': [{{'manifest_path': sys.argv[-1], 'metadata': {{'
 with open(os.environ['BUILD_CALLS'], 'a') as out:
     out.write(json.dumps(['make', *sys.argv[1:]]) + '\\n')
 time.sleep(0.05)
-if sys.argv[1] in ['install', 'install-lib-static']:
-    prefix = pathlib.Path('.prefix').read_text()
-    kind = pathlib.Path('.name').read_text()
+if sys.argv[-1] == 'install' or sys.argv[1] == 'install-lib-static':
+    if any(arg.startswith('PREFIX=') for arg in sys.argv):
+        prefix = next(arg.removeprefix('PREFIX=') for arg in sys.argv if arg.startswith('PREFIX='))
+        kind = 'nv-codec-headers'
+    else:
+        prefix = pathlib.Path('.prefix').read_text()
+        kind = pathlib.Path('.name').read_text()
     for name in {required!r}[kind]:
         path = pathlib.Path(prefix) / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +348,7 @@ if args[0] == '-S':
     workspace = pathlib.Path(args[args.index('-B') + 1])
     workspace.mkdir()
     workspace.joinpath('.prefix').write_text(next(arg.removeprefix('-DCMAKE_INSTALL_PREFIX=') for arg in args if arg.startswith('-DCMAKE_INSTALL_PREFIX=')))
-    workspace.joinpath('.name').write_text('opencv' if '-DBUILD_LIST=core,imgproc' in args else 'opus')
+    workspace.joinpath('.name').write_text('opencv' if '-DBUILD_LIST=core,imgproc' in args else 'libvpl' if '-DINSTALL_EXAMPLES=OFF' in args else 'opus')
 if args[0] == '--install':
     prefix = pathlib.Path(args[1]).joinpath('.prefix').read_text()
     kind = pathlib.Path(args[1]).joinpath('.name').read_text()
@@ -261,8 +356,34 @@ if args[0] == '--install':
         path = pathlib.Path(prefix) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    if kind == 'libvpl':
+        pathlib.Path(prefix, 'lib/pkgconfig/vpl.pc').write_text('Libs.private: ')
 """,
     )
+    _executable(
+        tools / "meson",
+        f"""import json, os, pathlib, sys
+args = sys.argv[1:]
+if args == ['--version']:
+    print('fixture-meson')
+    sys.exit(0)
+with open(os.environ['BUILD_CALLS'], 'a') as out:
+    out.write(json.dumps(['meson', *args]) + '\\n')
+if args[0] == 'setup':
+    workspace = pathlib.Path(args[1]); workspace.mkdir()
+    workspace.joinpath('.prefix').write_text(next(arg.removeprefix('--prefix=') for arg in args if arg.startswith('--prefix=')))
+    workspace.joinpath('.name').write_text('libva' if pathlib.Path(args[2]).name.startswith('libva-') else 'libdrm')
+    workspace.joinpath('configuration.json').write_text(json.dumps({{'arguments': args, 'PKG_CONFIG_PATH': os.environ['PKG_CONFIG_PATH']}}))
+if args[0] == 'install':
+    workspace = pathlib.Path(args[args.index('-C') + 1])
+    prefix = pathlib.Path(workspace.joinpath('.prefix').read_text())
+    kind = workspace.joinpath('.name').read_text()
+    for name in {required!r}[kind]:
+        path = prefix / name; path.parent.mkdir(parents=True, exist_ok=True); path.touch()
+    prefix.joinpath('configuration.json').write_text(workspace.joinpath('configuration.json').read_text())
+""",
+    )
+    _executable(tools / "ninja", "print('fixture-ninja')\n")
     environment = {
         **os.environ,
         "TMPDIR": str(tmp_path),
@@ -283,19 +404,31 @@ if args[0] == '--install':
     assert all(process.returncode == 0 for process in processes)
     commands = [json.loads(line) for line in calls.read_text().splitlines()]
     assert commands[0:2] == [["make", "-j3"], ["make", "install-lib-static"]]
-    assert len(commands) == 10
+    build_call_count = 20 if system == "Linux" else 10
+    assert len(commands) == build_call_count
     assert "-DBUILD_SHARED_LIBS=OFF" in commands[2]
     assert "-DOPUS_BUILD_SHARED_LIBRARY=OFF" in commands[2]
     assert commands[3][0:2] == ["cmake", "--build"]
     assert commands[3][-2:] == ["--parallel", "3"]
-    assert commands[5:7] == [["make", "-j3"], ["make", "install"]]
-    assert "-DBUILD_LIST=core,imgproc" in commands[7]
-    assert "-DBUILD_ZLIB=ON" in commands[7]
-    assert commands[8][-2:] == ["--parallel", "3"]
+    assert commands[-5:-3] == [["make", "-j3"], ["make", "install"]]
+    assert "-DBUILD_LIST=core,imgproc" in commands[-3]
+    assert "-DBUILD_ZLIB=ON" in commands[-3]
+    assert commands[-2][-2:] == ["--parallel", "3"]
+    if system == "Linux":
+        meson_setups = [command for command in commands if command[:2] == ["meson", "setup"]]
+        assert len(meson_setups) == 2
+        assert all("--default-library=static" in command for command in meson_setups)
+        assert all("--wrap-mode=nodownload" in command for command in meson_setups)
+        assert any(
+            command[-2:] == ["-j", "3"]
+            for command in commands
+            if command[:2] == ["meson", "compile"]
+        )
+        assert any("PREFIX=" in arg for command in commands for arg in command)
     assert any(b"Using cached" in output for output in outputs)
     assert not list(cache.glob("build-*"))
     prefixes = [path for path in cache.iterdir() if path.is_dir()]
-    assert len(prefixes) == 4
+    assert len(prefixes) == (8 if system == "Linux" else 4)
     ffmpeg_prefix = next(path for path in prefixes if path.name.startswith("ffmpeg-"))
     opencv_prefix = next(path for path in prefixes if path.name.startswith("opencv-"))
     x264_prefix = next(path for path in prefixes if path.name.startswith("x264-"))
@@ -311,8 +444,31 @@ if args[0] == '--install':
     assert "--enable-gpl" in configuration["arguments"]
     assert "--enable-version3" in configuration["arguments"]
     assert "--pkg-config-flags=--static" in configuration["arguments"]
+    assert "--enable-decoders" in configuration["arguments"]
+    assert "--enable-parsers" in configuration["arguments"]
+    assert "--disable-autodetect" in configuration["arguments"]
+    assert any(
+        argument.startswith("--enable-encoder=") and "aac" in argument.split("=", 1)[1].split(",")
+        for argument in configuration["arguments"]
+    )
+    expected_hardware = (
+        build_native.FFMPEG_LINUX_CONFIGURE
+        if system == "Linux"
+        else build_native.FFMPEG_DARWIN_CONFIGURE
+    )
+    assert all(option in configuration["arguments"] for option in expected_hardware)
     assert configuration["PKG_CONFIG_PATH"].split(os.pathsep) == [
-        str(prefix / "lib/pkgconfig") for prefix in (ffmpeg_prefix, x264_prefix, opus_prefix)
+        str(prefix / "lib/pkgconfig")
+        for prefix in (
+            ffmpeg_prefix,
+            x264_prefix,
+            opus_prefix,
+            *(
+                next(path for path in prefixes if path.name.startswith(name + "-"))
+                for name in ("libdrm", "libva", "libvpl", "nv-codec-headers")
+                if system == "Linux"
+            ),
+        )
     ]
     assert configuration["PKG_CONFIG_LIBDIR"] == configuration["PKG_CONFIG_PATH"]
 
@@ -326,7 +482,7 @@ if args[0] == '--install':
     subprocess.run(command, env=environment, check=True, capture_output=True, timeout=20)
 
     # Then: All installations are repaired using their already verified downloads.
-    assert len(calls.read_text().splitlines()) == 20
+    assert len(calls.read_text().splitlines()) == build_call_count + 10
     assert (ffmpeg_prefix / "lib/libavcodec.a").is_file()
     assert (opencv_prefix / "lib/libopencv_core.a").is_file()
     assert (x264_prefix / "lib/libx264.a").is_file()
@@ -340,7 +496,7 @@ if args[0] == '--install':
     subprocess.run(command, env=environment, check=True, capture_output=True, timeout=20)
 
     # Then: The installation is rebuilt and only static media libraries remain.
-    assert len(calls.read_text().splitlines()) == 26
+    assert len(calls.read_text().splitlines()) == build_call_count + 16
     assert not (opencv_prefix / "lib/libopencv_core.so.4.12").exists()
     assert not (opus_prefix / "lib/libopus.dylib").exists()
 
@@ -357,7 +513,7 @@ if args[0] == '--install':
     subprocess.run(command, env=environment, check=True, capture_output=True, timeout=20)
 
     # Then: FFmpeg is rebuilt for the new encoder while unrelated native caches are reused.
-    assert len(calls.read_text().splitlines()) == 30
+    assert len(calls.read_text().splitlines()) == build_call_count + 20
     updated_x264 = next(
         path for path in cache.glob("x264-*") if path.is_dir() and path != x264_prefix
     )
@@ -403,7 +559,9 @@ def test_invalid_parallelism_is_refused_before_build(jobs: str) -> None:
     assert b"--jobs must be positive" in result.stderr
 
 
-@pytest.mark.parametrize("dependency", [OPENCV_FIXTURE, X264_FIXTURE, OPUS_FIXTURE])
+@pytest.mark.parametrize(
+    "dependency", [OPENCV_FIXTURE, X264_FIXTURE, OPUS_FIXTURE, *HARDWARE_FIXTURES]
+)
 def test_native_pin_is_read_from_cargo_metadata(
     monkeypatch: pytest.MonkeyPatch, dependency: build_native.NativeDependency
 ) -> None:
@@ -434,14 +592,22 @@ def test_native_pin_is_read_from_cargo_metadata(
     monkeypatch.setattr(build_native.subprocess, "check_output", metadata)
 
     # When: Preparing the native release via an explicitly selected Cargo executable.
-    name: Literal["OpenCV", "x264", "Opus"]
+    name: build_native.DependencyName
     match dependency.name:
         case "OpenCV":
             name = "OpenCV"
         case "x264":
             name = "x264"
-        case _:
+        case "Opus":
             name = "Opus"
+        case "nv-codec-headers":
+            name = "nv-codec-headers"
+        case "libdrm":
+            name = "libdrm"
+        case "libva":
+            name = "libva"
+        case _:
+            name = "libvpl"
     actual = build_native.native_dependency(name, "/toolchain/cargo")
 
     # Then: The source tag/checksum come from Cargo, without changing the lockfile.
@@ -468,11 +634,13 @@ def test_native_pin_is_read_from_cargo_metadata(
         {"version": "../source", "sha256": OPENCV_FIXTURE.sha256},
     ],
 )
-@pytest.mark.parametrize("name", ["OpenCV", "x264", "Opus"])
+@pytest.mark.parametrize(
+    "name", ["OpenCV", "x264", "Opus", "nv-codec-headers", "libdrm", "libva", "libvpl"]
+)
 def test_missing_or_invalid_native_pin_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     pin: dict[str, str],
-    name: Literal["OpenCV", "x264", "Opus"],
+    name: build_native.DependencyName,
 ) -> None:
     # Given: Cargo metadata does not contain a valid, checksum-pinned native release.
     manifest = Path(build_native.__file__).with_name("Cargo.toml")

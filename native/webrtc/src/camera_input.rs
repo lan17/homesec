@@ -43,11 +43,19 @@ struct Interruption {
     cancel: AtomicBool,
     closing: AtomicBool,
     deadline: Mutex<Instant>,
+    overall_deadline: Option<Instant>,
+    external_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Interruption {
     fn interrupted(&self) -> bool {
         (self.cancel.load(Ordering::Acquire) && !self.closing.load(Ordering::Acquire))
+            || self.external_cancel.as_ref().is_some_and(|cancel| {
+                cancel.load(Ordering::Acquire) && !self.closing.load(Ordering::Acquire)
+            })
+            || self.overall_deadline.is_some_and(|deadline| {
+                Instant::now() >= deadline && !self.closing.load(Ordering::Acquire)
+            })
             || self
                 .deadline
                 .lock()
@@ -77,6 +85,7 @@ impl CameraInput {
     ) -> Result<Self> {
         let parsed = Url::parse(&url).map_err(|_| "invalid_rtsp_url")?;
         if url.len() > 16 * 1024
+            || url.chars().any(char::is_control)
             || parsed.scheme() != "rtsp"
             || parsed.host_str().is_none()
             || parsed.fragment().is_some()
@@ -103,6 +112,8 @@ impl CameraInput {
             cancel: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             deadline: Mutex::new(Instant::now() + connect_timeout),
+            overall_deadline: None,
+            external_cancel: None,
         });
         let failure = Arc::new(Mutex::new(None));
         let worker_interruption = Arc::clone(&interruption);
@@ -164,6 +175,18 @@ fn ingest(
     interruption: &Arc<Interruption>,
     publish: &mut impl FnMut(Event) -> Result<()>,
 ) -> Result<()> {
+    let mut input = open_input(url, io_timeout, interruption, false)?;
+    let result = consume_input(&mut input, audio_enabled, io_timeout, interruption, publish);
+    close_input(input, interruption);
+    result
+}
+
+fn open_input(
+    url: &str,
+    io_timeout: Duration,
+    interruption: &Arc<Interruption>,
+    wallclock_timestamps: bool,
+) -> Result<format::context::Input> {
     ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Quiet);
     ffmpeg::init().map_err(|_| "rtsp_source_failed")?;
     let mut options = ffmpeg::Dictionary::new();
@@ -174,21 +197,36 @@ fn ingest(
     options.set("reorder_queue_size", "0");
     options.set("rw_timeout", &io_timeout.as_micros().to_string());
     options.set("max_streams", "16");
+    if wallclock_timestamps {
+        options.set("use_wallclock_as_timestamps", "1");
+    }
     if url.starts_with("rtsp:") {
         options.set("format_whitelist", "rtsp");
         options.set("protocol_whitelist", "tcp,udp,rtp");
     }
     let interrupt = Arc::clone(interruption);
-    let mut input =
-        format::input_with_interrupt_and_dictionary(&url, move || interrupt.interrupted(), options)
-            .map_err(|_| {
-                if interruption.interrupted() {
-                    "rtsp_timeout"
-                } else {
-                    "rtsp_connection_failed"
-                }
-            })?;
-    let result = consume_input(&mut input, audio_enabled, io_timeout, interruption, publish);
+    format::input_with_interrupt_and_dictionary(&url, move || interrupt.interrupted(), options)
+        .map_err(|error| {
+            if interruption.interrupted() {
+                "rtsp_timeout"
+            } else if interruption.external_cancel.is_some()
+                && error == ffmpeg::Error::from(-0x35345348)
+            {
+                "session_limit"
+            } else if interruption.external_cancel.is_some()
+                && matches!(
+                    error,
+                    ffmpeg::Error::HttpUnauthorized | ffmpeg::Error::HttpForbidden
+                )
+            {
+                "authentication_failed"
+            } else {
+                "rtsp_connection_failed"
+            }
+        })
+}
+
+fn close_input(input: format::context::Input, interruption: &Arc<Interruption>) {
     // Cancellation must still allow a bounded TEARDOWN on the established
     // connection. The original cancel flag remains set for terminal reporting;
     // no new input is opened, and the interrupt deadline bounds close I/O.
@@ -196,7 +234,108 @@ fn ingest(
         interruption.closing.store(true, Ordering::Release);
     }
     drop(input);
-    result
+}
+
+/// Lower-level demuxer for short-lived inspection. Unlike CameraInput this
+/// never applies recorder codec eligibility or waits for the first IDR.
+#[cfg_attr(test, allow(dead_code))] // Also compiled by recorder-only boundary targets.
+pub(crate) struct InspectionInput {
+    pub input: Option<format::context::Input>,
+    interruption: Arc<Interruption>,
+    io_timeout: Duration,
+}
+
+#[cfg_attr(test, allow(dead_code))]
+impl InspectionInput {
+    pub fn open(
+        url: &str,
+        connect_timeout: Duration,
+        io_timeout: Duration,
+        deadline: Instant,
+        cancel: Arc<AtomicBool>,
+        wallclock_timestamps: bool,
+    ) -> Result<Self> {
+        let parsed = Url::parse(url).map_err(|_| "invalid_rtsp_url")?;
+        if url.len() > 16 * 1024
+            || url.chars().any(char::is_control)
+            || parsed.scheme() != "rtsp"
+            || parsed.host_str().is_none()
+            || parsed.fragment().is_some()
+        {
+            return Err("invalid_rtsp_url");
+        }
+        Self::open_inner(
+            url,
+            connect_timeout,
+            io_timeout,
+            deadline,
+            cancel,
+            wallclock_timestamps,
+        )
+    }
+
+    pub(crate) fn open_inner(
+        url: &str,
+        connect_timeout: Duration,
+        io_timeout: Duration,
+        deadline: Instant,
+        cancel: Arc<AtomicBool>,
+        wallclock_timestamps: bool,
+    ) -> Result<Self> {
+        let interruption = Arc::new(Interruption {
+            cancel: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
+            deadline: Mutex::new((Instant::now() + connect_timeout).min(deadline)),
+            overall_deadline: Some(deadline),
+            external_cancel: Some(cancel),
+        });
+        if interruption.interrupted() {
+            return Err("rtsp_timeout");
+        }
+        let input = open_input(url, io_timeout, &interruption, wallclock_timestamps)?;
+        // find_stream_info may return a partially described input when its
+        // interrupt callback fired. Never turn that deadline into invalid
+        // camera metadata or refresh it into another successful operation.
+        if interruption.interrupted() {
+            close_input(input, &interruption);
+            return Err("rtsp_timeout");
+        }
+        interruption.refresh(io_timeout)?;
+        Ok(Self {
+            input: Some(input),
+            interruption,
+            io_timeout,
+        })
+    }
+
+    pub fn read(&mut self) -> Result<Option<ffmpeg::Packet>> {
+        if self.interruption.interrupted() {
+            return Err("rtsp_timeout");
+        }
+        let mut packet = ffmpeg::Packet::empty();
+        match packet.read(self.input.as_mut().ok_or("rtsp_source_failed")?) {
+            Ok(()) => {
+                if packet.size() == 0 || packet.size() > MAX_PACKET_BYTES {
+                    return Err("rtsp_packet_invalid");
+                }
+                validate_packet_integrity(&packet)?;
+                self.interruption.refresh(self.io_timeout)?;
+                Ok(Some(packet))
+            }
+            Err(ffmpeg::Error::Eof) => Ok(None),
+            Err(_) if self.interruption.interrupted() => Err("rtsp_timeout"),
+            Err(error) if error == ffmpeg::Error::from(-0x35345348) => Err("session_limit"),
+            Err(_) => Err("rtsp_source_failed"),
+        }
+    }
+}
+
+impl Drop for InspectionInput {
+    fn drop(&mut self) {
+        if let Some(input) = self.input.take() {
+            close_input(input, &self.interruption);
+        }
+    }
 }
 
 fn consume_input(
@@ -317,6 +456,23 @@ mod tests {
         let outcome = validate_packet_integrity(&packet);
         // Then: Every consumer receives a stable source failure rather than corrupt media.
         assert_eq!(outcome, Err("rtsp_packet_corrupt"));
+    }
+
+    #[test]
+    fn camera_worker_keeps_its_existing_connection_refusal_code() {
+        // Given: A camera rejects authentication on the existing media worker path.
+        let camera = RtspCamera::start("AUTH_FAILURE");
+        // When: That worker uses the same extracted libav opening primitive.
+        let input = CameraInput::start(
+            camera.url.clone(),
+            false,
+            Duration::from_secs(2),
+            Duration::from_secs(1),
+            |_| Ok(()),
+        )
+        .unwrap();
+        // Then: Rich inspection classifications do not change runtime refusal codes.
+        assert_eq!(wait_for_failure(&input), "rtsp_connection_failed");
     }
 
     fn wait_for_failure(input: &CameraInput) -> &'static str {

@@ -76,14 +76,72 @@ FFMPEG_CONFIGURE = (
     "--enable-libx264",
     "--enable-libopus",
     "--pkg-config-flags=--static",
-    "--enable-decoder=h264,aac,aac_latm,pcm_alaw,pcm_mulaw,opus",
-    "--enable-parser=h264,aac,aac_latm,opus",
-    "--enable-demuxer=h264,mov,rtsp,rtp",
+    # RTSP compatibility never imposed a video-codec allowlist. Enable native
+    # decoders/parsers rather than inventing a narrower camera codec policy.
+    # Autodetection remains disabled: no optional system codec library is used.
+    "--enable-decoders",
+    "--enable-parsers",
+    "--enable-demuxer=h264,hevc,mov,rtsp,rtp",
     "--enable-protocol=file,pipe,tcp,udp,rtp",
     "--enable-bsf=extract_extradata",
     "--enable-filter=buffer,buffersink,fps,scale,format,abuffer,abuffersink,aresample,anull,aformat",
-    "--enable-encoder=rawvideo,libx264,libopus",
+    "--enable-encoder=rawvideo,libx264,libopus,aac",
     "--enable-muxer=rawvideo,mp4",
+)
+# These adapters load the host's GPU driver at runtime. Building them does not
+# require a GPU and never establishes that a device can decode camera media.
+FFMPEG_LINUX_CONFIGURE = (
+    "--enable-libdrm",
+    "--enable-vaapi",
+    "--enable-libvpl",
+    "--enable-ffnvcodec",
+    "--enable-cuda",
+    # Use libav's native parsers + NVDEC hwaccels, not the separate CUVID
+    # parser/decoder wrappers. The latter unconditionally need newer SDK fields
+    # despite configure accepting this compatible older NVIDIA API branch.
+    "--disable-cuvid",
+    "--enable-nvenc",
+    "--enable-hwaccel=h264_vaapi,hevc_vaapi,h264_cuda,hevc_cuda,h264_qsv,hevc_qsv",
+    "--enable-decoder=h264_qsv,hevc_qsv",
+    "--enable-encoder=h264_vaapi,h264_nvenc,h264_qsv",
+)
+FFMPEG_DARWIN_CONFIGURE = (
+    "--enable-videotoolbox",
+    "--enable-audiotoolbox",
+    "--enable-hwaccel=h264_videotoolbox,hevc_videotoolbox",
+    "--enable-encoder=h264_videotoolbox",
+)
+LIBDRM_CONFIGURE = (
+    "--buildtype=release",
+    "--default-library=static",
+    "--libdir=lib",
+    "--wrap-mode=nodownload",
+    "-Db_staticpic=true",
+    "-Dauto_features=disabled",
+    "-Dtests=false",
+)
+LIBVA_CONFIGURE = (
+    "--buildtype=release",
+    "--default-library=static",
+    "--libdir=lib",
+    "--wrap-mode=nodownload",
+    "-Db_staticpic=true",
+    "-Dwith_x11=no",
+    "-Dwith_glx=no",
+    "-Dwith_wayland=no",
+    "-Dwith_win32=no",
+    "-Denable_docs=false",
+    # Drivers are OS resources, not part of this private library installation.
+    "-Ddriverdir=/usr/lib/dri:/usr/lib64/dri:/usr/lib/x86_64-linux-gnu/dri:/usr/lib/aarch64-linux-gnu/dri",
+)
+LIBVPL_CONFIGURE = (
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_INSTALL_LIBDIR=lib",
+    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+    "-DBUILD_SHARED_LIBS=OFF",
+    "-DBUILD_TESTS=OFF",
+    "-DBUILD_EXAMPLES=OFF",
+    "-DINSTALL_EXAMPLES=OFF",
 )
 X264_CONFIGURE = (
     "--enable-static",
@@ -151,9 +209,10 @@ OPENCV_CONFIGURE = (
 )
 
 
-def native_dependency(
-    name: Literal["OpenCV", "x264", "Opus"], cargo: str = "cargo"
-) -> NativeDependency:
+DependencyName = Literal["OpenCV", "x264", "Opus", "nv-codec-headers", "libdrm", "libva", "libvpl"]
+
+
+def native_dependency(name: DependencyName, cargo: str = "cargo") -> NativeDependency:
     # Cargo pins native implementations alongside the Rust bindings. Consume
     # that metadata rather than duplicating versions/checksums in this recipe.
     manifest = Path(__file__).with_name("Cargo.toml")
@@ -183,7 +242,10 @@ def native_dependency(
         checksum = metadata["sha256"]
     except (KeyError, StopIteration, TypeError) as error:
         raise RuntimeError(f"Cargo.toml must pin the {name} release and SHA256") from error
-    version_pattern = r"[0-9a-f]{40}" if name == "x264" else r"\d+\.\d+\.\d+"
+    version_pattern = {
+        "x264": r"[0-9a-f]{40}",
+        "nv-codec-headers": r"n\d+\.\d+\.\d+\.\d+",
+    }.get(name, r"\d+\.\d+\.\d+")
     if (
         not isinstance(version, str)
         or not re.fullmatch(version_pattern, version)
@@ -209,6 +271,37 @@ def native_dependency(
             sha256=checksum,
             required=("lib/libopus.a", "lib/pkgconfig/opus.pc", "include/opus/opus.h", "COPYING"),
         )
+    if name in ("nv-codec-headers", "libdrm", "libva", "libvpl"):
+        required = {
+            "nv-codec-headers": (
+                "lib/pkgconfig/ffnvcodec.pc",
+                "include/ffnvcodec/dynlink_loader.h",
+                "include/ffnvcodec/nvEncodeAPI.h",
+            ),
+            "libdrm": ("lib/libdrm.a", "lib/pkgconfig/libdrm.pc", "include/xf86drm.h"),
+            "libva": (
+                "lib/libva.a",
+                "lib/libva-drm.a",
+                "lib/pkgconfig/libva.pc",
+                "lib/pkgconfig/libva-drm.pc",
+                "include/va/va.h",
+                "COPYING",
+            ),
+            "libvpl": (
+                "lib/libvpl.a",
+                "lib/pkgconfig/vpl.pc",
+                "include/vpl/mfxvideo.h",
+                "LICENSE",
+            ),
+        }[name]
+        archive = f"{name}-{version}.tar.{'xz' if name == 'libdrm' else 'gz'}"
+        url = {
+            "nv-codec-headers": f"https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/{version}",
+            "libdrm": f"https://dri.freedesktop.org/libdrm/{archive}",
+            "libva": f"https://codeload.github.com/intel/libva/tar.gz/refs/tags/{version}",
+            "libvpl": f"https://codeload.github.com/intel/libvpl/tar.gz/refs/tags/v{version}",
+        }[name]
+        return NativeDependency(name, version, archive, url, checksum, required)
     return NativeDependency(
         name="OpenCV",
         version=version,
@@ -263,8 +356,15 @@ def extract_archive(archive: Path, workspace: Path, dependency: NativeDependency
     # Only checksum-verified archives reach extraction. Reject links and
     # traversal as well, including on Python versions without tar filters.
     with tarfile.open(archive) as source:
+        members = []
         for member in source.getmembers():
             parts = PurePosixPath(member.name)
+            # libdrm's release contains symlinks only in disabled test trees.
+            # Omit those trees entirely; never relax link extraction safety.
+            if dependency.name == "libdrm" and (
+                parts.parts[1:2] == ("tests",) or parts.parts[1:3] == ("intel", "tests")
+            ):
+                continue
             if (
                 parts.is_absolute()
                 or ".." in parts.parts
@@ -273,7 +373,8 @@ def extract_archive(archive: Path, workspace: Path, dependency: NativeDependency
                 or parts.parts[0] != dependency.source_directory
             ):
                 raise RuntimeError(f"Unsafe {dependency.name} archive member")
-        source.extractall(workspace)  # noqa: S202 (verified checksum and validated members)
+            members.append(member)
+        source.extractall(workspace, members=members)  # noqa: S202 (verified checksum and validated members)
     return workspace / dependency.source_directory
 
 
@@ -297,6 +398,8 @@ def private_environment(
     # The parity oracle needs the same FFmpeg build; recording and other
     # fixtures retain the full system CLI through the unchanged PATH.
     environment["HOMESEC_FFMPEG_REFERENCE"] = str(ffmpeg / "bin/ffmpeg")
+    environment["HOMESEC_FFMPEG_PREFIX"] = str(ffmpeg)
+    environment["HOMESEC_NATIVE_BUILD_ID"] = ffmpeg.name
     if opencv is not None:
         environment["HOMESEC_OPENCV_PREFIX"] = str(opencv)
         if opencv_version is None:
@@ -360,6 +463,23 @@ def build_x264(
 
 FFMPEG_RTSP_PATCH: tuple[tuple[str, str], ...] = (
     (
+        "                av_strlcpy(reply->reason, p, sizeof(reply->reason));",
+        "                av_strlcpy(reply->reason, p, sizeof(reply->reason));\n"
+        "                /* HomeSec preserves bounded explicit camera capacity reasons. */\n"
+        "                if (reply->status_code >= 400 &&\n"
+        '                    (av_stristr(reply->reason, "too many clients") ||\n'
+        '                     av_stristr(reply->reason, "too many connections") ||\n'
+        '                     av_stristr(reply->reason, "too many sessions") ||\n'
+        '                     av_stristr(reply->reason, "max number of clients") ||\n'
+        '                     av_stristr(reply->reason, "maximum number of clients") ||\n'
+        '                     av_stristr(reply->reason, "max number of connections") ||\n'
+        '                     av_stristr(reply->reason, "maximum number of connections") ||\n'
+        '                     av_stristr(reply->reason, "session limit") ||\n'
+        '                     av_stristr(reply->reason, "max sessions") ||\n'
+        '                     av_stristr(reply->reason, "maximum sessions")))\n'
+        "                    reply->status_code = RTSP_STATUS_BANDWIDTH;",
+    ),
+    (
         "        reply->content_length = strtol(p, NULL, 10);",
         "        long content_length = strtol(p, NULL, 10);\n"
         "        reply->content_length = content_length < 0 || content_length > 262144\n"
@@ -397,6 +517,13 @@ FFMPEG_RTSP_PATCH: tuple[tuple[str, str], ...] = (
         "    if (content_length > 0) {",
     ),
 )
+FFMPEG_RTSP_STATUS_PATCH = (
+    "    return ff_http_averror(status_code, default_averror);",
+    "    /* HomeSec preserves explicit RTSP capacity evidence without log parsing. */\n"
+    "    if (status_code == RTSP_STATUS_BANDWIDTH)\n"
+    "        return -0x35345348; /* Private FFERRTAG('H', 'S', '4', '5'). */\n"
+    "    return ff_http_averror(status_code, default_averror);",
+)
 
 
 def patch_ffmpeg_rtsp(source: Path) -> None:
@@ -408,6 +535,12 @@ def patch_ffmpeg_rtsp(source: Path) -> None:
             raise RuntimeError("Pinned FFmpeg RTSP patch context differs from verified source")
         text = text.replace(original, replacement)
     path.write_text(text)
+    codes = source / "libavformat/rtspcodes.h"
+    text = codes.read_text()
+    original, replacement = FFMPEG_RTSP_STATUS_PATCH
+    if text.count(original) != 1:
+        raise RuntimeError("Pinned FFmpeg RTSP status patch context differs from verified source")
+    codes.write_text(text.replace(original, replacement))
     parser = source / "libavcodec/h264_parser.c"
     text = parser.read_text()
     original = "        if (ff_combine_frame(pc, next, &buf, &buf_size) < 0) {"
@@ -464,6 +597,85 @@ def build_opus(
     shutil.copyfile(source / "COPYING", prefix / "COPYING")
 
 
+def build_nvcodec(
+    source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO
+) -> None:
+    subprocess.run(
+        ["make", f"-j{jobs}", f"PREFIX={prefix}", "install"],
+        cwd=source,
+        env=private_environment(prefix),
+        stdout=log,
+        stderr=log,
+        check=True,
+    )
+
+
+def build_meson(
+    source: Path,
+    prefix: Path,
+    options: tuple[str, ...],
+    jobs: int,
+    log: TextIO,
+    *,
+    dependencies: tuple[Path, ...] = (),
+) -> None:
+    if source.name.startswith("libva-"):
+        # Upstream hard-codes shared_library(), ignoring default_library. Use
+        # Meson's normal selector so the pinned adapter honors our static build.
+        path = source / "va/meson.build"
+        text = path.read_text()
+        if text.count("shared_library(") != 6:
+            raise RuntimeError(
+                "Pinned libva static-build patch context differs from verified source"
+            )
+        path.write_text(text.replace("shared_library(", "library("))
+    workspace = source / "native-build"
+    for command in (
+        ["meson", "setup", str(workspace), str(source), f"--prefix={prefix}", *options],
+        ["meson", "compile", "-C", str(workspace), "-j", str(jobs)],
+        ["meson", "install", "-C", str(workspace)],
+    ):
+        subprocess.run(
+            command,
+            env=private_environment(prefix, encoders=dependencies),
+            stdout=log,
+            stderr=log,
+            check=True,
+        )
+    if (source / "COPYING").is_file():
+        shutil.copyfile(source / "COPYING", prefix / "COPYING")
+
+
+def build_vpl(source: Path, prefix: Path, options: tuple[str, ...], jobs: int, log: TextIO) -> None:
+    build_cmake(source, prefix, options, jobs, log)
+    shutil.copyfile(source / "LICENSE", prefix / "LICENSE")
+    # Upstream's static pkg-config file omits the dispatcher's C++ runtime.
+    # FFmpeg links its C feature checks with cc, so retain that transitive link.
+    path = prefix / "lib/pkgconfig/vpl.pc"
+    text = path.read_text()
+    if text.count("Libs.private:") != 1:
+        raise RuntimeError("Pinned oneVPL static pkg-config format differs from verified source")
+    path.write_text(text.replace("Libs.private:", "Libs.private: -lstdc++ -pthread"))
+
+
+def ensure_hardware(jobs: int, cargo: str) -> tuple[Path, ...]:
+    if platform.system() != "Linux":
+        return ()
+    drm = ensure_dependency(native_dependency("libdrm", cargo), jobs, LIBDRM_CONFIGURE, build_meson)
+    va = ensure_dependency(
+        native_dependency("libva", cargo),
+        jobs,
+        LIBVA_CONFIGURE,
+        partial(build_meson, dependencies=(drm,)),
+        dependencies=(drm,),
+    )
+    vpl = ensure_dependency(native_dependency("libvpl", cargo), jobs, LIBVPL_CONFIGURE, build_vpl)
+    nvcodec = ensure_dependency(
+        native_dependency("nv-codec-headers", cargo), jobs, (), build_nvcodec
+    )
+    return drm, va, vpl, nvcodec
+
+
 def complete(prefix: Path, dependency: NativeDependency) -> bool:
     if not (prefix / ".complete").is_file() or not all(
         (prefix / path).is_file() for path in dependency.required
@@ -491,14 +703,17 @@ def ensure_dependency(
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise RuntimeError(f"Native cache must be an owned private directory: {root}")
-    compiler_keys = ("CC", "CXX") if dependency.name == "OpenCV" else ("CC",)
+    compiler_keys = ("CC", "CXX") if dependency.name in ("OpenCV", "libvpl") else ("CC",)
     toolchain: dict[str, object] = {}
     for variable in compiler_keys:
         compiler = shlex.split(os.environ.get(variable, "c++" if variable == "CXX" else "cc"))
         identity = subprocess.check_output([*compiler, "--version"], text=True)
         toolchain[variable] = [compiler, identity]
-    if dependency.name in ("OpenCV", "Opus"):
+    if dependency.name in ("OpenCV", "Opus", "libvpl"):
         toolchain["cmake"] = subprocess.check_output(["cmake", "--version"], text=True)
+    if dependency.name in ("libdrm", "libva"):
+        toolchain["meson"] = subprocess.check_output(["meson", "--version"], text=True)
+        toolchain["ninja"] = subprocess.check_output(["ninja", "--version"], text=True)
     fingerprint = {
         "archive": dependency.sha256,
         "recipe": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -549,7 +764,9 @@ def ensure_dependency(
 
 
 def ensure_ffmpeg(jobs: int, encoders: tuple[Path, ...]) -> Path:
-    options: tuple[str, ...] = FFMPEG_CONFIGURE
+    options = FFMPEG_CONFIGURE + (
+        FFMPEG_LINUX_CONFIGURE if platform.system() == "Linux" else FFMPEG_DARWIN_CONFIGURE
+    )
     if platform.machine().lower() in ("x86_64", "amd64", "i386", "i686") and not shutil.which(
         "nasm"
     ):
@@ -589,10 +806,12 @@ def main() -> int:
             ensure_dependency(x264_pin, args.jobs, x264_options, build_x264),
             ensure_dependency(opus_pin, args.jobs, OPUS_CONFIGURE, build_opus),
         )
-        ffmpeg = ensure_ffmpeg(args.jobs, encoders)
+        dependencies = (*encoders, *ensure_hardware(args.jobs, cargo))
+        ffmpeg = ensure_ffmpeg(args.jobs, dependencies)
         opencv = ensure_dependency(opencv_pin, args.jobs, OPENCV_CONFIGURE, build_opencv)
         return subprocess.call(
-            command, env=private_environment(ffmpeg, opencv, opencv_pin.version, encoders=encoders)
+            command,
+            env=private_environment(ffmpeg, opencv, opencv_pin.version, encoders=dependencies),
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Bundled native build failed: {error}", file=sys.stderr)

@@ -18,6 +18,53 @@ fn require_environment(key: &str, expected: &str) {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=FFMPEG_DIR");
+    assert!(
+        env::var_os("FFMPEG_DIR").is_none(),
+        "FFMPEG_DIR bypasses private pkg-config discovery. {BUILD_HINT}"
+    );
+    let ffmpeg = PathBuf::from(required_environment("HOMESEC_FFMPEG_PREFIX"));
+    assert!(
+        ffmpeg.is_absolute(),
+        "FFmpeg prefix must be absolute. {BUILD_HINT}"
+    );
+    let identity = required_environment("HOMESEC_NATIVE_BUILD_ID");
+    let pkg_config = required_environment("PKG_CONFIG_LIBDIR");
+    assert_eq!(
+        env::split_paths(&pkg_config).next(),
+        Some(ffmpeg.join("lib/pkgconfig")),
+        "Private FFmpeg must be the first and only libav discovery source. {BUILD_HINT}"
+    );
+    require_environment("PKG_CONFIG_PATH", &pkg_config);
+    assert_eq!(
+        ffmpeg.file_name().and_then(|name| name.to_str()),
+        Some(identity.as_str()),
+        "FFmpeg build identity must match the private installation. {BUILD_HINT}"
+    );
+    for library in [
+        "avcodec",
+        "avformat",
+        "avfilter",
+        "avutil",
+        "swscale",
+        "swresample",
+    ] {
+        for path in [
+            ffmpeg.join(format!("lib/lib{library}.a")),
+            ffmpeg.join(format!("lib/pkgconfig/lib{library}.pc")),
+        ] {
+            println!("cargo:rerun-if-changed={}", path.display());
+            assert!(
+                path.is_file(),
+                "Missing private static FFmpeg library. {BUILD_HINT}"
+            );
+        }
+    }
+    assert!(
+        ffmpeg.join(".complete").is_file(),
+        "FFmpeg build is incomplete. {BUILD_HINT}"
+    );
+    println!("cargo:rustc-env=HOMESEC_NATIVE_BUILD_ID={identity}");
     let prefix = PathBuf::from(required_environment("HOMESEC_OPENCV_PREFIX"));
     assert!(
         prefix.is_absolute(),

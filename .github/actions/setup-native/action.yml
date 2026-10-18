@@ -20,7 +20,7 @@ runs:
         rustup component add rustfmt clippy
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          build-essential python3 cmake ffmpeg clang libclang-dev pkg-config nasm
+          build-essential python3 cmake meson ninja-build ffmpeg clang libclang-dev pkg-config nasm
     - name: Identify native build environment
       id: toolchain
       shell: bash
@@ -31,6 +31,8 @@ runs:
             cc --version
             c++ --version
             cmake --version
+            meson --version
+            ninja --version
             clang --version
             nasm -v
           } | sha256sum | cut -d ' ' -f 1
