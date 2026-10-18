@@ -11,3 +11,7 @@ ftp_incoming
 config/config.yaml
 .coverage
 native/webrtc/target/
+
+# Generated Graphify artifacts
+/graphify-out/
+/.graphify_*
