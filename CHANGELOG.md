@@ -2,6 +2,75 @@
 
 <!-- version list -->
 
+## v1.12.0 (2026-10-18)
+
+### Bug Fixes
+
+- Drain preview RTP independently of WebRTC viewers
+  ([#114](https://github.com/lan17/homesec/pull/114),
+  [`d739220`](https://github.com/lan17/homesec/commit/d739220c675b5b167dca2ccc95beacbed798d012))
+
+- Preserve startup H.264 parameters in WebRTC tests
+  ([#121](https://github.com/lan17/homesec/pull/121),
+  [`3196ec6`](https://github.com/lan17/homesec/commit/3196ec6bfcad4498af99d1844975218d39301f26))
+
+- Stabilize WebRTC media test sample selection ([#119](https://github.com/lan17/homesec/pull/119),
+  [`bdf98a8`](https://github.com/lan17/homesec/commit/bdf98a86cf76cdec1361320093ff1cd3afe6bd39))
+
+### Chores
+
+- Initialize OpenSpec workflow ([#117](https://github.com/lan17/homesec/pull/117),
+  [`2ed8c10`](https://github.com/lan17/homesec/commit/2ed8c10634dc72b6c8b03640cba9360813e0aa8a))
+
+- Remove unused Graphify artifacts ([#123](https://github.com/lan17/homesec/pull/123),
+  [`2962fae`](https://github.com/lan17/homesec/commit/2962fae62a52085bb777dc00cfb84e1a1e214c37))
+
+### Continuous Integration
+
+- Parallelize checks and decouple native dependency caching
+  ([#120](https://github.com/lan17/homesec/pull/120),
+  [`e6e195b`](https://github.com/lan17/homesec/commit/e6e195b4e14678f12fc103ccaa9115df261c9a3b))
+
+### Documentation
+
+- Establish existing-behavior OpenSpec baseline ([#118](https://github.com/lan17/homesec/pull/118),
+  [`789d60b`](https://github.com/lan17/homesec/commit/789d60ba197e7df6768e512cd4bcd21628ca9aab))
+
+- Reconcile operator and developer guides with current behavior
+  ([#122](https://github.com/lan17/homesec/pull/122),
+  [`92fc6c1`](https://github.com/lan17/homesec/commit/92fc6c1757aaa294819b7d0d2ea14005bf0044a6))
+
+### Features
+
+- Add Rust WebRTC live preview ([#109](https://github.com/lan17/homesec/pull/109),
+  [`fd4f0cc`](https://github.com/lan17/homesec/commit/fd4f0ccf7af3891509e646ba737d3eaac5218b78))
+
+- Auto-discover talk backend ([#106](https://github.com/lan17/homesec/pull/106),
+  [`8752877`](https://github.com/lan17/homesec/commit/87528770385b23a53b237426257075d4ebfa075d))
+
+- Ingest H.264 copy preview directly in Rust ([#110](https://github.com/lan17/homesec/pull/110),
+  [`44eab5f`](https://github.com/lan17/homesec/commit/44eab5f540bdd6f4a25cb06e1df598c27752c64f))
+
+- Preserve motion detection behavior in Rust ([#112](https://github.com/lan17/homesec/pull/112),
+  [`ce8f8d0`](https://github.com/lan17/homesec/commit/ce8f8d0cdb90a82fff2d6777412558f31d94f16d))
+
+- Run RTSP decode and motion detection in Rust ([#113](https://github.com/lan17/homesec/pull/113),
+  [`95d9cff`](https://github.com/lan17/homesec/commit/95d9cff4359287e9863c924f870cb59205f2728b))
+
+- Share native H.264 and Opus preview with recording
+  ([#116](https://github.com/lan17/homesec/pull/116),
+  [`e0886c2`](https://github.com/lan17/homesec/commit/e0886c29065d27714095c7026700b640a400827d))
+
+- Share Rust camera input with native MP4 recording
+  ([#115](https://github.com/lan17/homesec/pull/115),
+  [`e4bd667`](https://github.com/lan17/homesec/commit/e4bd66716023bf1f6fd2f0c5ef41ccd86f278f0d))
+
+### Testing
+
+- Capture motion behavior for the Rust backend ([#111](https://github.com/lan17/homesec/pull/111),
+  [`0fab675`](https://github.com/lan17/homesec/commit/0fab67502bc59083dde89eec100daa99dec97c71))
+
+
 ## v1.11.0 (2026-05-09)
 
 ### Features
