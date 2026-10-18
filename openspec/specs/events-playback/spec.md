@@ -1,0 +1,218 @@
+# events-playback Specification
+
+## Purpose
+
+Describe how users browse recorded events, retain their browsing context, inspect event details, and access recorded video through HomeSec.
+
+## Reference
+
+See [reference notes and known limitations](../../../docs/reference.md#events-playback) for this capability's operator guides and verification limits.
+
+HTTP scenarios use the [shared API preconditions and gate order](../integration-contracts/spec.md#shared-api-preconditions) unless the scenario explicitly tests a failed prerequisite. CLI and direct component scenarios are not HTTP requests.
+
+See the [scenario evidence register](../../../docs/behavior-evidence.md) for the verification level of each scenario.
+
+## Requirements
+
+### Requirement: Event queries support filtering and cursor pagination
+
+HomeSec SHALL support camera, processing, alert, detection, risk, activity, and creation-time filters. When querying and row hydration succeed, queries without a status filter SHALL exclude deleted clips, explicit deleted-status queries SHALL include matching deleted records, and results SHALL use newest-first cursor pagination with clip identity breaking ties. Creation time SHALL use database `created_at`; [list-query limitations](../../../docs/reference.md#events-playback) apply.
+
+#### Scenario: Continue to the next result page
+
+- **GIVEN** a valid query with more matching events than its page limit, successful database querying, and successful row hydration
+- **WHEN** the client requests a page and then supplies its returned cursor
+- **THEN** HomeSec returns the continuation page and a next cursor only when further results exist
+- **AND** the response exposes whether another page exists
+- **AND** ordering and creation-time filtering use the record's database `created_at`, not source clip times or notification time; ID reuse preserves that creation time
+
+#### Scenario: Reject invalid time bounds or a malformed cursor
+
+- **GIVEN** a request contains a timezone-naive time bound, an inverted time interval, or a malformed cursor
+- **WHEN** the client queries events
+- **THEN** HomeSec returns an error identifying the invalid query rather than silently accepting it
+
+#### Scenario: Exclude deleted events from the default list
+
+- **GIVEN** readable clip state contains both deleted and non-deleted events that otherwise match the query
+- **WHEN** a client lists events without an explicit status filter
+- **THEN** the results exclude the deleted events
+
+#### Scenario: Query deleted records explicitly
+
+- **GIVEN** readable clip state contains deleted events matching the remaining query filters
+- **WHEN** a client lists events with an explicit deleted-status filter
+- **THEN** the matching deleted records are returned
+
+### Requirement: Event browsing preserves filter context in the URL
+
+The event UI SHALL represent applied filters in the URL, preserve filters when navigating result pages, and discard stale cursor history when the filter selection changes. The default detection filter SHALL show detected events, with an explicit selection available for any detection outcome.
+
+#### Scenario: Reopen an event search
+
+- **GIVEN** an event-list URL containing supported filter parameters
+- **WHEN** the user opens or reloads that URL
+- **THEN** the UI restores the corresponding search rather than relying only on prior in-memory form state
+
+#### Scenario: Change filters after paging
+
+- **GIVEN** the user has navigated beyond the first page
+- **WHEN** the user applies a different filter selection
+- **THEN** the next query uses the new filters without the former search's cursor history
+
+#### Scenario: Include events without detections
+
+- **GIVEN** the default event search filters for detected events
+- **WHEN** the user selects any detection outcome
+- **THEN** the URL retains that explicit choice and the API query omits the detection restriction
+
+### Requirement: Event views present available summaries and inline playback
+
+The event UI SHALL present camera, time, available activity summary, risk, detected objects, and alert outcome. Event cards SHALL offer inline video controls when a media URL is available and expandable technical details. Empty search results SHALL have an explicit no-results presentation.
+
+#### Scenario: Browse an event with playable media
+
+- **GIVEN** an event list contains an event with a resolved media URL
+- **WHEN** its card is displayed
+- **THEN** the card provides inline video controls alongside event information
+
+#### Scenario: Expand event details
+
+- **GIVEN** a displayed event card
+- **WHEN** the user opens its details
+- **THEN** the card exposes additional event information, including its identity, without requiring navigation away from the list
+
+#### Scenario: No events match the search
+
+- **GIVEN** a successful database query establishes that no events match the search
+- **WHEN** the event list is displayed
+- **THEN** the UI explicitly reports that no results were found
+
+### Requirement: Event detail lookup distinguishes known and missing events
+
+When the clip-state lookup succeeds, HomeSec SHALL return available processing, analysis, and alert details for a known clip identity and return HTTP 404 for an unknown identity. The detail UI SHALL keep video and event summary accessible and limit previous/next navigation to an available client result window.
+
+#### Scenario: Retrieve a known event
+
+- **GIVEN** a stored clip with analysis and alert metadata
+- **WHEN** a client retrieves its detail
+- **THEN** the response includes the available analysis and alert fields associated with that clip
+
+#### Scenario: Open details without a result window
+
+- **GIVEN** the detail page has no loaded client result window
+- **WHEN** the page is displayed
+- **THEN** previous and next event controls are disabled
+
+#### Scenario: Retrieve an unknown event
+
+- **GIVEN** the clip-state lookup succeeds and the requested clip identity does not exist
+- **WHEN** a client requests its detail
+- **THEN** HomeSec returns HTTP 404 with the clip-not-found reason
+
+### Requirement: Media URLs respect authentication and clip availability
+
+After [shared admission gates](../integration-contracts/spec.md#shared-api-preconditions) pass and a successful clip lookup finds a storage URI, HomeSec SHALL return a direct URL with authentication disabled or a clip-scoped, expiring URL with authentication enabled. Token issuance SHALL require the API key when enabled. Playback SHALL accept a valid API key or valid, unexpired, clip-scoped token; disabled authentication SHALL skip token checks.
+
+#### Scenario: Request media without authentication enabled
+
+- **GIVEN** normal mode, a successful database availability check and clip lookup of an existing clip with a storage URI, and server authentication disabled
+- **WHEN** a client requests its media URL
+- **THEN** HomeSec returns a direct URL with no token expiry
+
+#### Scenario: Request authorized media access
+
+- **GIVEN** normal mode, a successful database availability check and clip lookup of an existing clip with a storage URI, and authentication enabled
+- **WHEN** a client uses a valid API key to request its media URL
+- **THEN** HomeSec returns a tokenized URL with an expiry for that clip
+
+#### Scenario: Attempt to reuse authorization for another clip
+
+- **GIVEN** authentication is enabled, earlier admission gates pass, no valid bearer API key is supplied, credential comparison can complete, and a valid token was issued for one clip
+- **WHEN** it is used to request another clip's media
+- **THEN** HomeSec rejects the request
+
+#### Scenario: Attempt to mint a token with a playback token
+
+- **GIVEN** authentication is enabled and the client supplies only a media playback token
+- **WHEN** it requests a new media token
+- **THEN** HomeSec rejects the token-issuance request
+
+#### Scenario: API key takes precedence over an invalid media query token
+
+- **GIVEN** earlier mode/database gates pass and authentication is enabled with a valid bearer API key
+- **WHEN** a media request also contains an invalid query token
+- **THEN** media authorization accepts the API key without validating that token, and later clip/media availability checks still apply
+
+#### Scenario: Disabled authentication ignores a media query token
+
+- **GIVEN** earlier mode/database gates pass and authentication is disabled
+- **WHEN** a media request contains an invalid query token
+- **THEN** media authorization skips token validation and proceeds to the remaining route checks
+
+### Requirement: Media delivery exposes availability and retrieval failures
+
+For an admitted media request with successful clip lookup, HomeSec SHALL serve retrievable media inline when staging and response construction succeed. Unknown clips SHALL return HTTP 404; clips without a storage URI SHALL return HTTP 409; storage retrieval failures SHALL return HTTP 502 with the media-fetch-failed reason. Successful retrieval does not guarantee response construction; the [filename-header limitation](../../../docs/reference.md#events-playback) applies.
+
+#### Scenario: Play stored media
+
+- **GIVEN** normal mode, a successful database availability check and clip lookup, a known clip whose stored object can be retrieved, and successful local staging and response construction
+- **WHEN** an authorized client requests clip media
+- **THEN** HomeSec returns the media for inline playback
+
+#### Scenario: Request media before storage is available
+
+- **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip without a storage URI
+- **WHEN** a client admitted by the applicable authentication gates requests its media or media URL
+- **THEN** HomeSec returns HTTP 409 with the media-unavailable reason
+
+#### Scenario: Storage retrieval fails
+
+- **GIVEN** normal mode, a successful database availability check and clip lookup, and a known clip with a storage URI whose retrieval fails
+- **WHEN** an authorized client requests its media
+- **THEN** HomeSec returns HTTP 502 with the media-fetch-failed reason
+
+#### Scenario: A retrieved clip filename fails response-header encoding
+
+- **GIVEN** all admission/lookup gates pass, clip ID `门口` has a storage URI, and storage retrieval succeeds
+- **WHEN** the current media route constructs its manual inline filename header and the response encoder cannot encode those characters
+- **THEN** the generic pre-response handler returns 500 instead of playable media or a storage-fetch 502
+- **AND** this response-construction branch has not attached successful-response staging cleanup
+
+### Requirement: Playback stages media before HTTP delivery
+
+Media requests reaching retrieval SHALL await `storage.get()` in a per-request temporary directory before constructing a file response. This route SHALL use no cache/reuse or direct backend streaming, including for range requests. Caught storage exceptions SHALL request cleanup; normally completed file responses SHALL run attached background cleanup. [Cleanup limitations](../../../docs/reference.md#events-playback) apply; staging SHALL not be automatically registered with recording retention.
+
+#### Scenario: Media retrieval completes before response construction
+
+- **GIVEN** an admitted request with a readable clip state and storage URI
+- **WHEN** the media route retrieves the object successfully and response construction succeeds
+- **THEN** it awaits a local staged file before constructing the HTTP file response and attaches cleanup to normal response completion
+
+#### Scenario: Cancellation bypasses retrieval cleanup
+
+- **GIVEN** storage retrieval has written partial staging and is still awaited
+- **WHEN** the media handler task is cancelled before the file response is constructed
+- **THEN** cancellation propagates outside the ordinary exception-cleanup path and that handler branch can leave staging behind
+
+### Requirement: Tokenized playback supports bounded source refresh
+
+The event UI SHALL schedule media-token refresh before expiry and allow one automatic token-source refresh after a playback error for an unchanged media source. Direct, non-token playback SHALL not trigger that token refresh path.
+
+#### Scenario: A media token approaches expiry
+
+- **GIVEN** a mounted event playback view with a tokenized URL and an expiry
+- **WHEN** the scheduled refresh point before expiry is reached
+- **THEN** the UI requests a refreshed media URL
+
+#### Scenario: Playback repeatedly fails on an unchanged tokenized URL
+
+- **GIVEN** a tokenized media source has already used its automatic error refresh
+- **WHEN** playback fails again without the source changing
+- **THEN** the UI does not repeatedly request automatic error-triggered refreshes for that unchanged source
+
+#### Scenario: Direct playback fails
+
+- **GIVEN** a direct media URL without a token expiry
+- **WHEN** playback fails
+- **THEN** the UI does not attempt the token-source error refresh path

@@ -5,6 +5,11 @@ context: |
   Read AGENTS.md, DESIGN.md, TESTING.md, and relevant source, configuration,
   and tests before proposing changes. For frontend work, also read ui/AGENTS.md.
   Follow the existing architecture, persistence, security, and testing boundaries.
+  Maintained public behavior lives in openspec/specs/; read affected capabilities
+  before proposing changes. Use docs/reference.md for guides and known limits.
+  Public behavior changes include spec deltas, meaningful boundary verification,
+  and affected reference updates together. Behavior-preserving refactors do not
+  require an invented delta. Preserve reference limits when syncing or archiving.
   Prefer the simplest solution that satisfies the requirements; reuse existing
   mechanisms before adding public APIs, abstractions, dependencies, or state.
   Confirm unresolved behavior and architecture decisions with Leonidas before
