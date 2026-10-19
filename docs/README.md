@@ -14,6 +14,7 @@ behavior and verification limits.
 | [Preview deployment](preview-deployment.md) | HTTP/WebRTC reachability, HLS scratch storage, and recording/preview resource policy |
 | [WebRTC and native media](webrtc-preview.md) | Native helper installation, build prerequisites, codecs, motion/recording paths, and troubleshooting |
 | [Push-to-talk](push-to-talk.md) | Browser microphone requirements, camera backends, configuration, and session troubleshooting |
+| [Home Assistant](home-assistant.md) | MQTT discovery entities, alert events, availability, and the push-notification blueprint |
 | [Postgres backups](postgres-backups.md) | Dump prerequisites, durable backup directories, retention/status interpretation, and restore procedures |
 
 ## Developer guides

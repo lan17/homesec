@@ -203,6 +203,12 @@ notifiers:
       topic_template: "homecam/alerts/{camera_name}"
       qos: 1
       retain: false
+      # Optional: expose each camera to Home Assistant via MQTT discovery.
+      # See docs/home-assistant.md. Omit this block to publish only the alert topic.
+      # home_assistant:
+      #   discovery_prefix: homeassistant
+      #   event_topic_template: "homecam/events/{camera_slug}"
+      #   availability_topic: homecam/status
 
   # SendGrid email
   # - backend: sendgrid_email

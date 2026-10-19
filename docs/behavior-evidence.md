@@ -394,6 +394,54 @@ Implementation leads: [src/homesec/plugins/notifiers/mqtt.py](../src/homesec/plu
 | Publish to a camera-specific topic | S | — |
 | Broker connection does not become available | S | — |
 
+### Home Assistant MQTT discovery
+
+Implementation leads: [src/homesec/plugins/notifiers/mqtt.py](../src/homesec/plugins/notifiers/mqtt.py);
+[src/homesec/plugins/notifiers/mqtt_home_assistant.py](../src/homesec/plugins/notifiers/mqtt_home_assistant.py).
+Proposed in the active change [home-assistant-mqtt-discovery](../openspec/changes/home-assistant-mqtt-discovery/);
+not yet synced into the maintained specs. B rows run the real notifier, config
+validation, and payload builders against a fake `paho` client in
+[test_mqtt_home_assistant.py](../tests/homesec/test_mqtt_home_assistant.py)
+(`uv run --locked pytest tests/homesec/test_mqtt_home_assistant.py`); no broker
+or Home Assistant instance is involved.
+
+| Scenario | Evidence | Boundary / remaining verification |
+| --- | --- | --- |
+| Disabled by default | B | Fake client; `test_disabled_by_default_publishes_only_the_alert` |
+| First alert for a camera announces the entity | B | Fake client; `test_first_alert_publishes_discovery_before_the_event`, `test_existing_alert_payload_is_unchanged` |
+| Later alerts do not repeat discovery | B | Fake client; `test_discovery_is_published_once_per_camera` |
+| Event type reflects analysis | B | `TestEventPayload`, `test_unanalyzed_alert_publishes_unanalyzed_event` |
+| Reconnect republishes discovery | B | Fake client reconnect callback; `test_reconnect_republishes_discovery_and_availability`. A real broker that drops retained data was not exercised |
+
+### Home Assistant availability
+
+| Scenario | Evidence | Boundary / remaining verification |
+| --- | --- | --- |
+| Connect announces availability | B | Fake client; `test_connect_sets_last_will_and_announces_online`. Last-will delivery on an unclean disconnect is broker behavior and was not exercised |
+| Clean shutdown announces offline | B | Fake client; `test_shutdown_announces_offline`, `test_shutdown_without_home_assistant_publishes_nothing`. The bounded wait was not exercised against a stalled broker |
+
+### Home Assistant topic and identity safety
+
+| Scenario | Evidence | Boundary / remaining verification |
+| --- | --- | --- |
+| Unpublishable topic setting | B | `TestHomeAssistantConfig` |
+| Names that normalize alike stay distinct | B | `TestCameraSlug` |
+| Unsafe camera name | B | `test_camera_name_with_wildcards_yields_safe_home_assistant_topics` |
+
+### Home Assistant push-notification blueprint
+
+Implementation lead: [integrations/home-assistant/homesec_alert_notification.yaml](../integrations/home-assistant/homesec_alert_notification.yaml).
+[test_home_assistant_blueprint.py](../tests/homesec/test_home_assistant_blueprint.py)
+checks structure only: declared inputs match references, risk options match
+`RiskLevel`, and the `mobile_app` action uses a per-clip tag. It does not render
+templates or run Home Assistant.
+
+| Scenario | Evidence | Boundary / remaining verification |
+| --- | --- | --- |
+| Risk below the minimum is ignored | S | A one-off Jinja render of the condition template covered threshold cases; no committed behavioral test and no live Home Assistant run |
+| Risk at or above the minimum notifies | S | Same as above; the `mobile_app` device-action `data` fields are unverified on a live instance |
+| Unanalyzed alerts follow the option | S | Same as above |
+
 ### Email alert delivery
 
 Implementation leads: [src/homesec/plugins/notifiers/sendgrid_email.py](../src/homesec/plugins/notifiers/sendgrid_email.py).
