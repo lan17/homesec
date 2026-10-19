@@ -1,0 +1,96 @@
+blueprint:
+  name: HomeSec alert push notification
+  description: >
+    Sends a Home Assistant companion app push notification when a HomeSec camera
+    raises an alert. Requires the HomeSec MQTT notifier with `home_assistant`
+    enabled so the camera's **Alerts** event entity exists.
+  domain: automation
+  author: HomeSec
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    alerts_entity:
+      name: Camera alerts entity
+      description: The camera's `event` entity that HomeSec created via MQTT discovery.
+      selector:
+        entity:
+          domain: event
+          integration: mqtt
+    notify_device:
+      name: Phone to notify
+      description: A device with the Home Assistant companion app installed.
+      selector:
+        device:
+          integration: mobile_app
+    minimum_risk:
+      name: Minimum risk level
+      description: Alerts below this level are ignored.
+      default: medium
+      selector:
+        select:
+          options:
+            - low
+            - medium
+            - high
+            - critical
+    notify_unanalyzed:
+      name: Notify when analysis did not run
+      description: >
+        Alerts without a risk assessment (analysis skipped or failed) are
+        type `unanalyzed`. Enable to be notified about them anyway.
+      default: true
+      selector:
+        boolean:
+
+mode: queued
+max: 10
+
+variables:
+  minimum_risk: !input minimum_risk
+  notify_unanalyzed: !input notify_unanalyzed
+  risk_order:
+    - low
+    - medium
+    - high
+    - critical
+
+triggers:
+  - trigger: state
+    entity_id: !input alerts_entity
+
+conditions:
+  # Skip availability transitions and states restored after a restart.
+  - condition: template
+    value_template: "{{ trigger.to_state.state not in ['unavailable', 'unknown'] }}"
+  - condition: template
+    value_template: >
+      {{ (now() - (trigger.to_state.state | as_datetime)).total_seconds() < 300 }}
+  - condition: template
+    value_template: >
+      {% set event_type = trigger.to_state.attributes.get('event_type') %}
+      {% if event_type == 'unanalyzed' %}
+        {{ notify_unanalyzed }}
+      {% else %}
+        {{ event_type in risk_order and risk_order.index(event_type) >= risk_order.index(minimum_risk) }}
+      {% endif %}
+
+actions:
+  - variables:
+      attributes: "{{ trigger.to_state.attributes }}"
+      event_type: "{{ trigger.to_state.attributes.get('event_type') }}"
+      camera: "{{ trigger.to_state.attributes.get('camera_name') or trigger.to_state.name }}"
+      urgent: "{{ event_type in ['high', 'critical'] }}"
+  - alias: Send push notification
+    domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: "{{ camera }}: {{ 'alert' if event_type == 'unanalyzed' else event_type ~ ' risk' }}"
+    message: >-
+      {{ attributes.get('summary') or attributes.get('notify_reason') or 'Camera alert' }}
+    data:
+      tag: "homesec-{{ attributes.get('clip_id') }}"
+      group: homesec
+      url: "{{ attributes.get('view_url') or '/' }}"
+      clickAction: "{{ attributes.get('view_url') or '/' }}"
+      push:
+        interruption-level: "{{ 'time-sensitive' if urgent else 'active' }}"

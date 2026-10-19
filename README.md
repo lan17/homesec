@@ -80,6 +80,7 @@ graph TD
 - OpenAI-compatible VLM analysis with structured output
 - Policy-driven alerts with per-camera overrides
 - Fan-out notifiers (MQTT for Home Assistant, SendGrid email)
+- Optional Home Assistant MQTT discovery with per-camera alert entities and a push-notification [blueprint](docs/home-assistant.md)
 - Postgres-backed state + events with graceful degradation
 - Health endpoint plus optional Postgres telemetry logging
 - Push-to-talk for RTSP cameras with ONVIF audio backchannel support and a local
