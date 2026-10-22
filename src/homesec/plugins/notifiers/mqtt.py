@@ -34,6 +34,8 @@ from homesec.plugins.registry import PluginType, plugin
 logger = logging.getLogger(__name__)
 
 _SHUTDOWN_PUBLISH_TIMEOUT_S = 2.0
+_HOME_ASSISTANT_PUBLISH_TIMEOUT_S = 10.0
+_DISCOVERY_CONNECTION_ATTEMPTS = 3
 
 
 class MQTTAuthConfig(BaseModel):
@@ -87,10 +89,9 @@ class MQTTNotifier(Notifier):
         self.retain = bool(config.retain)
         self.connection_timeout = float(config.connection_timeout)
         self._home_assistant = config.home_assistant
-        self._discovered_cameras: set[str] = set()
-        self._discovery_epoch = 0
+        self._discovered_cameras: dict[str, int] = {}
         self._connection_epoch = 0
-        self._discovery_lock = asyncio.Lock()
+        self._discovery_locks: dict[str, asyncio.Lock] = {}
 
         # Get credentials from env if provided
         self.username: str | None = None
@@ -200,29 +201,40 @@ class MQTTNotifier(Notifier):
         await self._ensure_discovery(alert.camera_name, home_assistant)
         topic = event_topic(alert.camera_name, home_assistant)
         payload = build_event_payload(alert).model_dump_json()
-        await asyncio.to_thread(self._publish, topic, payload, self.qos, False)
+        await asyncio.to_thread(
+            self._publish, topic, payload, self.qos, False, _HOME_ASSISTANT_PUBLISH_TIMEOUT_S
+        )
         logger.info(
-            "Published Home Assistant event: topic=%s, clip_id=%s",
-            topic,
-            alert.clip_id,
+            "Published Home Assistant event",
+            extra={"mqtt_topic": topic, "recording_id": alert.clip_id},
         )
 
     async def _ensure_discovery(
         self, camera_name: str, home_assistant: HomeAssistantConfig
     ) -> None:
-        # A broker without persistence loses retained configs; reconnecting republishes them.
-        if self._discovery_epoch != self._connection_epoch:
-            self._discovered_cameras.clear()
-            self._discovery_epoch = self._connection_epoch
-        if camera_name in self._discovered_cameras:
-            return
-        async with self._discovery_lock:
-            if camera_name in self._discovered_cameras:
-                return
-            topic, discovery = build_discovery(camera_name, home_assistant)
-            await asyncio.to_thread(self._publish, topic, discovery.model_dump_json(), 1, True)
-            await asyncio.sleep(home_assistant.discovery_settle_seconds)
-            self._discovered_cameras.add(camera_name)
+        lock = self._discovery_locks.setdefault(camera_name, asyncio.Lock())
+        async with lock:
+            # Do not cache an announcement made on a connection that disappeared
+            # during publication or settling. Other cameras can settle independently.
+            for _ in range(_DISCOVERY_CONNECTION_ATTEMPTS):
+                epoch = self._connection_epoch
+                if self._discovered_cameras.get(camera_name) == epoch:
+                    return
+                await self._ensure_connected()
+                topic, discovery = build_discovery(camera_name, home_assistant)
+                await asyncio.to_thread(
+                    self._publish,
+                    topic,
+                    discovery.model_dump_json(),
+                    1,
+                    True,
+                    _HOME_ASSISTANT_PUBLISH_TIMEOUT_S,
+                )
+                await asyncio.sleep(home_assistant.discovery_settle_seconds)
+                if epoch == self._connection_epoch:
+                    self._discovered_cameras[camera_name] = epoch
+                    return
+            raise RuntimeError("MQTT connection changed repeatedly during Home Assistant discovery")
 
     def _publish(
         self, topic: str, payload: str, qos: int, retain: bool, timeout: float | None = None
@@ -233,6 +245,8 @@ class MQTTNotifier(Notifier):
             result.wait_for_publish()
         else:
             result.wait_for_publish(timeout)
+            if not result.is_published():
+                raise TimeoutError("MQTT publish acknowledgement timed out")
 
     async def ping(self) -> bool:
         """Health check - verify MQTT connection."""
@@ -264,7 +278,7 @@ class MQTTNotifier(Notifier):
                     _SHUTDOWN_PUBLISH_TIMEOUT_S,
                 )
             except Exception as exc:
-                logger.warning("Failed to publish MQTT offline availability: %s", exc)
+                logger.warning("Failed to publish MQTT offline availability", exc_info=exc)
 
         # Stop loop if it was started (prevents thread leak even if never connected)
         if self._loop_started:

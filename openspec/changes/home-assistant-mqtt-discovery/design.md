@@ -39,14 +39,24 @@ payloads, and subscribes to a state topic only after it processes discovery.
   construction, so it announces a camera on its first alert, waits
   `discovery_settle_seconds`, then publishes the event. Entities therefore
   appear after the first alert. A reconnect increments a connection epoch,
-  which clears the announced set so the next alert republishes discovery; this
-  covers a broker that lost retained data.
+  tracked per announced camera so the next alert republishes discovery; this
+  covers a broker that lost retained data. Per-camera locks serialize a camera's
+  discovery while allowing different cameras to settle concurrently. Discovery
+  interrupted by reconnect retries for at most three connection generations.
 - **Availability through last will plus an explicit offline.** A clean
   disconnect does not trigger the last will, so shutdown publishes a retained
   `offline` with a bounded wait. `online` is published from the connect callback
   without waiting, because that callback runs on the client's network thread.
 - **Event messages are not retained.** Home Assistant discards retained event
   payloads, and retention would replay old alerts as new.
+- **Unambiguous HA timestamps.** Event payloads attach the process-local timezone
+  to naive pipeline timestamps without changing the legacy alert JSON. The
+  blueprint checks payload time, rejects malformed/ambiguous/future times and
+  suppresses attribute-only/restored-state/old-clip availability replays.
+- **Acknowledgements.** Added HA discovery/event publishes wait at most ten
+  seconds each and verify paho's acknowledgement flag. Clean offline waits at
+  most two seconds and logs an unacknowledged result before cleanup. The legacy
+  alert wait remains unchanged; a failed HA publish still fails the whole send.
 - **Blueprint for push.** A blueprint reuses Home Assistant's companion-app
   notification path, needs no HomeSec runtime change, and keeps notification
   policy (minimum risk, unanalyzed handling) in Home Assistant.
@@ -61,10 +71,13 @@ payloads, and subscribes to a state topic only after it processes discovery.
   avoiding a duplicate.
 - **Stale entities.** Retained discovery configs outlive removed cameras.
   Cleanup is manual and documented.
-- **Blueprint is not exercised against live Home Assistant by the suite.**
-  Repository tests check its structure and risk-level alignment, and a one-off
-  render of its risk-filter template covered threshold cases. The device-action
-  schema and the first-event timing need a manual check on a real instance.
+- **Verification boundaries.** Repository tests render the shipped blueprint
+  and cover notifier transport failures. The [manual record](../../../docs/home-assistant-validation.md)
+  verifies the original PR commit on real HA/Mosquitto/iPhone. Readiness fixes
+  still need a live rerun; first-event reliability is not established by one success.
+- **Availability ownership.** A prior random-client-ID process can publish a
+  delayed offline will after its replacement is online. Stable client identity
+  and multi-publisher ownership need a decision before claiming reliable recovery.
 - **Settings UI.** The MQTT form preserves unknown keys when editing other
   fields but has no controls for `home_assistant`.
 

@@ -124,7 +124,12 @@ Event views expose the currently stored snapshot. Even successful queries and ro
   [Home Assistant guide](home-assistant.md). The first event for a camera can be
   missed if Home Assistant has not processed discovery within the settle delay;
   a retry after a failed event publish republishes the original alert message;
-  and the blueprint's behavior has not been exercised on a live instance.
+  and overlapping process replacement can leave stale offline availability.
+  [Manual validation](home-assistant-validation.md) verified discovery, phone
+  summary/urgency, filtering, public-video links and clean shutdown on the
+  original PR commit. Later readiness regressions cover freshness/recovery
+  guards and reconnect/acknowledgement failures at template/transport boundaries;
+  they have not been revalidated against live HA. Dropbox access remains unverified.
 - **Production notifier fan-out needs focused mixed-success coverage.** The pipeline dispatches per enabled entry and records individual outcomes. `MultiplexNotifier` helper tests exercise a different path, so they do not establish that one production-entry failure leaves other delivery intact. See the [pipeline](../src/homesec/pipeline/core.py).
 - **Plugin examples can lag the current registry.** Current extension contracts use the unified class-based registry and external `homesec.plugins` entry points. Older AGENTS examples use per-type factory/context patterns, and some plugin-guide examples use `type` where the decorator accepts `plugin_type`. Use the [registry source](../src/homesec/plugins/registry.py), [discovery source](../src/homesec/plugins/__init__.py), and [interfaces](../src/homesec/interfaces.py) when reconciling those examples. The baseline does not promise automatic interface verification.
 - **Installed plugin discovery and construction boundaries have limited tests.** External entry-point discovery, validate-before-factory behavior, and configuration-only paths that do not construct components are source-supported; dedicated end-to-end/boundary coverage was not identified for all those paths.

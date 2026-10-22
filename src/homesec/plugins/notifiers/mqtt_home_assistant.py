@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime
+from string import Formatter
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -46,9 +47,14 @@ class HomeAssistantConfig(BaseModel):
     @field_validator("event_topic_template")
     @classmethod
     def _validate_event_topic_template(cls, value: str) -> str:
-        if "{camera_slug}" not in value:
-            raise ValueError("event_topic_template must contain {camera_slug}")
         try:
+            fields = [
+                (name, spec, conversion)
+                for _, name, spec, conversion in Formatter().parse(value)
+                if name is not None
+            ]
+            if not fields or any(field != ("camera_slug", "", None) for field in fields):
+                raise ValueError("only literal {camera_slug} placeholders are supported")
             expanded = value.format(camera_slug="camera")
         except (KeyError, IndexError, ValueError) as exc:
             raise ValueError(f"event_topic_template has an invalid placeholder: {exc}") from exc
@@ -144,7 +150,8 @@ def build_event_payload(alert: Alert) -> HomeAssistantEventPayload:
         summary=alert.summary,
         notify_reason=alert.notify_reason,
         view_url=alert.view_url,
-        ts=alert.ts,
+        # Pipeline alerts use naive process-local time; the HA boundary needs an offset.
+        ts=alert.ts.astimezone(),
         upload_failed=alert.upload_failed,
         vlm_failed=alert.vlm_failed,
     )

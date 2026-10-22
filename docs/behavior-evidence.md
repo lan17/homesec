@@ -412,13 +412,17 @@ or Home Assistant instance is involved.
 | Later alerts do not repeat discovery | B | Fake client; `test_discovery_is_published_once_per_camera` |
 | Event type reflects analysis | B | `TestEventPayload`, `test_unanalyzed_alert_publishes_unanalyzed_event` |
 | Reconnect republishes discovery | B | Fake client reconnect callback; `test_reconnect_republishes_discovery_and_availability`. A real broker that drops retained data was not exercised |
+| Reconnect during discovery | B | `test_reconnect_during_discovery_reannounces_before_the_event`; repeats discovery on the new connection before the event |
+| Repeated connection churn | B | `test_repeated_reconnects_fail_without_publishing_an_undiscovered_event`; finite attempt count |
+| Concurrent first alerts | B | `test_concurrent_first_alerts_discover_each_camera_once`; includes simultaneous sends for the same camera and a nonzero settle delay |
+| Missing publish acknowledgements | B | `test_event_acknowledgement_timeout_fails_after_original_alert_delivery`, `test_failed_discovery_is_retried_before_any_event`; real broker stalls not exercised |
 
 ### Home Assistant availability
 
 | Scenario | Evidence | Boundary / remaining verification |
 | --- | --- | --- |
 | Connect announces availability | B | Fake client; `test_connect_sets_last_will_and_announces_online`. Last-will delivery on an unclean disconnect is broker behavior and was not exercised |
-| Clean shutdown announces offline | B | Fake client; `test_shutdown_announces_offline`, `test_shutdown_without_home_assistant_publishes_nothing`. The bounded wait was not exercised against a stalled broker |
+| Clean shutdown announces offline | B | Fake client; `test_shutdown_announces_offline`, `test_shutdown_without_home_assistant_publishes_nothing`, `test_shutdown_logs_unacknowledged_offline_and_still_disconnects`. Real stalled-broker cleanup remains unverified |
 
 ### Home Assistant topic and identity safety
 
@@ -426,21 +430,28 @@ or Home Assistant instance is involved.
 | --- | --- | --- |
 | Unpublishable topic setting | B | `TestHomeAssistantConfig` |
 | Names that normalize alike stay distinct | B | `TestCameraSlug` |
-| Unsafe camera name | B | `test_camera_name_with_wildcards_yields_safe_home_assistant_topics` |
+| Unsafe camera name | B | `test_camera_name_with_wildcards_yields_safe_home_assistant_topics` uses a publishable fixed legacy topic; `test_invalid_legacy_topic_fails_before_home_assistant_publication` covers raw-name legacy rejection. HA slug safety does not repair the original alert topic |
+| Escaped event placeholder | B | `TestHomeAssistantConfig` rejects a literal placeholder that would send every camera to the same event topic |
+| Timezone semantics | B | `test_event_timestamp_has_an_offset_and_preserves_the_instant`; original alert timestamp remains unchanged |
 
 ### Home Assistant push-notification blueprint
 
 Implementation lead: [integrations/home-assistant/homesec_alert_notification.yaml](../integrations/home-assistant/homesec_alert_notification.yaml).
 [test_home_assistant_blueprint.py](../tests/homesec/test_home_assistant_blueprint.py)
-checks structure only: declared inputs match references, risk options match
-`RiskLevel`, and the `mobile_app` action uses a per-clip tag. It does not render
-templates or run Home Assistant.
+checks structure and renders the shipped conditions and action fields using
+Jinja2, fixed time, and small state/conversion fixtures. It does not run HA's
+full template sandbox or automation engine. The [manual validation record](home-assistant-validation.md)
+documents real HA/Mosquitto/iPhone observations on the original PR commit;
+readiness fixes still need a live rerun.
 
 | Scenario | Evidence | Boundary / remaining verification |
 | --- | --- | --- |
-| Risk below the minimum is ignored | S | A one-off Jinja render of the condition template covered threshold cases; no committed behavioral test and no live Home Assistant run |
-| Risk at or above the minimum notifies | S | Same as above; the `mobile_app` device-action `data` fields are unverified on a live instance |
-| Unanalyzed alerts follow the option | S | Same as above |
+| Risk below the minimum is ignored | B | `test_risk_threshold_is_inclusive` renders all 16 risk/threshold pairs |
+| Risk at or above the minimum notifies | B | Same test plus `test_rendered_push_contains_summary_clip_link_tag_and_urgency` |
+| Unanalyzed alerts follow the option | B | `test_unanalyzed_respects_the_option` covers enabled and disabled |
+| Stale or ambiguous event time | B | `test_freshness_uses_payload_time_and_fails_closed` covers exact five-minute boundary, future, missing, invalid, naive and offset timestamps |
+| Availability recovery/restored state | B | `test_state_transitions_require_a_new_event` distinguishes old-clip recovery, genuine new clips, first events from unknown, and attribute-only changes |
+| Missing summary or media URL | B | `test_push_has_readable_fallbacks_without_summary_or_link` |
 
 ### Email alert delivery
 

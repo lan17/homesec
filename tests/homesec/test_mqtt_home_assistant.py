@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -24,8 +26,15 @@ _TOPIC_SAFE = re.compile(r"^[a-z0-9_]+$")
 
 
 class _FakePublishResult:
+    def __init__(self, published: bool = True) -> None:
+        self.published = published
+        self.waits: list[float | None] = []
+
     def wait_for_publish(self, timeout: float | None = None) -> None:
-        _ = timeout
+        self.waits.append(timeout)
+
+    def is_published(self) -> bool:
+        return self.published
 
 
 class _FakeClient:
@@ -35,6 +44,9 @@ class _FakeClient:
         self.connected = False
         self.will: tuple[str, str, int, bool] | None = None
         self.published: list[tuple[str, str, int, bool]] = []
+        self.after_publish: Callable[[str], None] | None = None
+        self.results: dict[str, _FakePublishResult] = {}
+        self.calls: list[str] = []
 
     def username_pw_set(self, username: str, password: str) -> None:
         _ = (username, password)
@@ -59,13 +71,18 @@ class _FakeClient:
 
     def disconnect(self) -> None:
         self.connected = False
+        self.calls.append("disconnect")
 
     def is_connected(self) -> bool:
         return self.connected
 
     def publish(self, topic: str, payload: str, qos: int, retain: bool) -> _FakePublishResult:
+        if not topic or any(char in topic for char in ("+", "#", "\x00")):
+            raise ValueError("Invalid MQTT publish topic")
         self.published.append((topic, payload, qos, retain))
-        return _FakePublishResult()
+        if self.after_publish is not None:
+            self.after_publish(topic)
+        return self.results.get(topic, _FakePublishResult())
 
     def messages(self, topic: str) -> list[tuple[str, int, bool]]:
         return [(p, q, r) for t, p, q, r in self.published if t == topic]
@@ -122,6 +139,9 @@ class TestHomeAssistantConfig:
             {"event_topic_template": "homecam/events"},
             {"event_topic_template": "homecam/{camera_slug}/{unknown}"},
             {"event_topic_template": "homecam/#/{camera_slug}"},
+            {"event_topic_template": "homecam/events/{{camera_slug}}"},
+            {"event_topic_template": "homecam/{{camera_slug}}/{camera_slug[0]}"},
+            {"event_topic_template": "homecam/{camera_slug}/{camera_slug:.1}"},
         ],
     )
     def test_rejects_unpublishable_topics(self, overrides: dict[str, str]) -> None:
@@ -205,6 +225,21 @@ class TestDiscoveryPayload:
 
 
 class TestEventPayload:
+    @pytest.mark.parametrize("tz", [None, timezone.utc, timezone(timedelta(hours=9))])
+    def test_event_timestamp_has_an_offset_and_preserves_the_instant(
+        self, tz: timezone | None
+    ) -> None:
+        # Given: An alert using process-local naive time or an explicit timezone.
+        alert = _alert().model_copy(update={"ts": datetime(2026, 1, 2, 3, 4, 5, tzinfo=tz)})
+
+        # When: Converting it to the Home Assistant event payload.
+        payload = build_event_payload(alert)
+
+        # Then: HA receives an unambiguous instant without changing the original alert.
+        assert payload.ts.tzinfo is not None
+        assert payload.ts.timestamp() == alert.ts.timestamp()
+        assert alert.ts.tzinfo == tz
+
     @pytest.mark.parametrize("risk", ["low", "medium", "high", "critical"])
     def test_event_type_is_the_risk_level(self, risk: str) -> None:
         # Given: An analyzed alert
@@ -242,6 +277,32 @@ class TestEventPayload:
 
 
 class TestNotifierWithHomeAssistant:
+    @pytest.mark.asyncio
+    async def test_concurrent_first_alerts_discover_each_camera_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: Concurrent first alerts, including two for the same camera.
+        notifier, client = _notifier(
+            monkeypatch, HomeAssistantConfig(discovery_settle_seconds=0.01)
+        )
+
+        # When: All sends pass through the real notifier concurrently.
+        await asyncio.gather(
+            notifier.send(_alert("Front Door")),
+            notifier.send(_alert("Front Door")),
+            notifier.send(_alert("Garage")),
+        )
+
+        # Then: Each camera is announced once before its events, and every send delivers.
+        topics = [t for t, *_ in client.published]
+        for camera, count in [("Front Door", 2), ("Garage", 1)]:
+            slug = camera_slug(camera)
+            discovery = f"homeassistant/event/homesec_{slug}/config"
+            event = f"homecam/events/{slug}"
+            assert topics.count(discovery) == 1
+            assert topics.count(event) == count
+            assert topics.index(discovery) < topics.index(event)
+
     @pytest.mark.asyncio
     async def test_disabled_by_default_publishes_only_the_alert(
         self, monkeypatch: pytest.MonkeyPatch
@@ -387,6 +448,8 @@ class TestNotifierWithHomeAssistant:
     ) -> None:
         # Given: A camera name containing MQTT wildcard and separator characters
         notifier, client = _notifier(monkeypatch, _ha_config())
+        # The legacy topic must also be publishable; its contract uses the raw camera name.
+        notifier.topic_template = "homecam/alerts"
 
         # When: Sending an alert for it
         await notifier.send(_alert("Back/Yard #1 +"))
@@ -399,3 +462,117 @@ class TestNotifierWithHomeAssistant:
         ]
         assert len(ha_topics) == 2
         assert all("#" not in t and "+" not in t for t in ha_topics)
+
+    @pytest.mark.asyncio
+    async def test_invalid_legacy_topic_fails_before_home_assistant_publication(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: A wildcard camera name and the unchanged legacy topic template.
+        notifier, client = _notifier(monkeypatch, _ha_config())
+
+        # When: The transport rejects that legacy publish topic.
+        with pytest.raises(ValueError, match="Invalid MQTT publish topic"):
+            await notifier.send(_alert("Back/Yard #1 +"))
+
+        # Then: No HA discovery or event is falsely reported as delivered.
+        assert [t for t, *_ in client.published] == ["homecam/status"]
+
+    @pytest.mark.asyncio
+    async def test_reconnect_during_discovery_reannounces_before_the_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: A broker reconnects after acknowledging discovery on the old connection.
+        notifier, client = _notifier(monkeypatch, _ha_config())
+        discovery = f"homeassistant/event/homesec_{camera_slug('Front Door')}/config"
+
+        def reconnect_once(topic: str) -> None:
+            if topic == discovery and len(client.messages(discovery)) == 1:
+                client.reconnect()
+
+        client.after_publish = reconnect_once
+
+        # When: Sending the first alert across that reconnect.
+        await notifier.send(_alert())
+
+        # Then: New-connection discovery precedes the event and is cached for later alerts.
+        assert len(client.messages(discovery)) == 2
+        topics = [t for t, *_ in client.published]
+        assert topics[-2:] == [discovery, f"homecam/events/{camera_slug('Front Door')}"]
+        await notifier.send(_alert())
+        assert len(client.messages(discovery)) == 2
+
+    @pytest.mark.asyncio
+    async def test_repeated_reconnects_fail_without_publishing_an_undiscovered_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: Every discovery acknowledgement is followed by another reconnect.
+        notifier, client = _notifier(monkeypatch, _ha_config())
+
+        def reconnect_on_discovery(topic: str) -> None:
+            if topic.endswith("/config"):
+                client.reconnect()
+
+        client.after_publish = reconnect_on_discovery
+
+        # When: Sending cannot obtain discovery on a stable connection.
+        with pytest.raises(RuntimeError, match="connection changed repeatedly"):
+            await notifier.send(_alert())
+
+        # Then: The attempt is bounded and does not deliver an event without discovery.
+        assert len([t for t, *_ in client.published if t.endswith("/config")]) == 3
+        assert not any(t.startswith("homecam/events/") for t, *_ in client.published)
+
+    @pytest.mark.asyncio
+    async def test_event_acknowledgement_timeout_fails_after_original_alert_delivery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: The broker acknowledges discovery and the original alert, but not the event.
+        notifier, client = _notifier(monkeypatch, _ha_config())
+        result = _FakePublishResult(published=False)
+        client.results[f"homecam/events/{camera_slug('Front Door')}"] = result
+
+        # When: Waiting for the HA event acknowledgement times out without paho raising.
+        with pytest.raises(TimeoutError, match="acknowledgement timed out"):
+            await notifier.send(_alert())
+
+        # Then: The send reports failure, preserving the existing fail-whole-send policy.
+        assert len(client.messages("homecam/alerts/Front Door")) == 1
+        assert result.waits == [10.0]
+
+    @pytest.mark.asyncio
+    async def test_failed_discovery_is_retried_before_any_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: Discovery is published but never acknowledged on the first attempt.
+        notifier, client = _notifier(monkeypatch, _ha_config())
+        discovery = f"homeassistant/event/homesec_{camera_slug('Front Door')}/config"
+        client.results[discovery] = _FakePublishResult(published=False)
+
+        # When: The caller retries after the first discovery times out.
+        with pytest.raises(TimeoutError):
+            await notifier.send(_alert())
+        assert not any(t.startswith("homecam/events/") for t, *_ in client.published)
+        client.results[discovery] = _FakePublishResult()
+        await notifier.send(_alert())
+
+        # Then: Failed discovery was not cached; retry also repeats the legacy alert.
+        assert len(client.messages(discovery)) == 2
+        assert len(client.messages("homecam/alerts/Front Door")) == 2
+        assert len(client.messages(f"homecam/events/{camera_slug('Front Door')}")) == 1
+
+    @pytest.mark.asyncio
+    async def test_shutdown_logs_unacknowledged_offline_and_still_disconnects(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Given: The offline publication will remain unacknowledged.
+        notifier, client = _notifier(monkeypatch, _ha_config())
+        result = _FakePublishResult(published=False)
+        client.results["homecam/status"] = result
+
+        # When: Shutting down the notifier.
+        await notifier.shutdown()
+
+        # Then: A bounded wait reports the failure and transport cleanup still completes.
+        assert result.waits == [2.0]
+        assert "Failed to publish MQTT offline availability" in caplog.text
+        assert client.calls == ["disconnect"]

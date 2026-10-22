@@ -18,12 +18,19 @@ With `home_assistant` set, the MQTT notifier adds:
 `<camera>` is a lowercase slug of the camera name plus a short hash, so camera
 names that differ only in case or punctuation stay distinct and wildcard or `/`
 characters never reach a topic.
+This safety applies to the added Home Assistant topics. The original alert topic
+still expands the raw camera name: use a publishable `topic_template` without
+`{camera_name}` if names contain MQTT wildcards (`+` or `#`). The original publish
+must succeed before discovery and events are attempted.
 
 `event_type` is the alert's risk level (`low`, `medium`, `high`, `critical`), or
 `unanalyzed` when analysis was skipped or failed. HomeSec does not invent a risk
 level in that case. Other fields (`clip_id`, `camera_name`, `summary`,
 `activity_type`, `view_url`, `notify_reason`, `ts`, `upload_failed`,
 `vlm_failed`) become entity attributes.
+The event payload's `ts` includes a timezone offset. A naive pipeline timestamp
+is interpreted in HomeSec's process-local timezone; the legacy alert JSON is
+unchanged. Configure the host timezone correctly.
 
 ## Configure
 
@@ -70,6 +77,14 @@ use the iOS `time-sensitive` interruption level. Notifications use a per-clip
 `tag`, so repeats replace instead of stacking. Create one automation per
 camera.
 
+The link is the destination opened by tapping the notification, not a separate
+video attachment. Without `view_url`, tapping opens the Home Assistant root.
+The phone must have access to the link, including any Dropbox sharing/login
+requirements. To inspect details without opening the destination, expand the
+phone notification or use the automation's **Traces** view in Home Assistant:
+select the variables step, then **Changed variables**. The camera's **Alerts**
+entity also exposes the latest event's attributes; it is not a clip archive.
+
 ## Limits
 
 - **First-alert timing.** Home Assistant subscribes to the event topic only
@@ -77,20 +92,39 @@ camera.
   after publishing discovery; a slow Home Assistant can still miss the very
   first event for a camera. Event messages are never retained because Home
   Assistant discards retained event payloads.
+  Because the entity must exist before selecting it in a blueprint automation,
+  seed discovery with a controlled test alert and create the automation before
+  relying on that camera for notifications. The first alert does not provide
+  an automatic first-use phone notification.
 - **Delivery is best-effort.** A failed publish fails that notifier's send, like
   any other MQTT alert. If the event publish fails after the alert publish
   succeeded, the pipeline's retry publishes both again, so consumers of the
-  original topic should deduplicate on `dedupe_key`. Alerts older than five
-  minutes are ignored by the blueprint, which prevents stale replays after a
-  Home Assistant restart.
+  original topic should deduplicate on `dedupe_key`. Discovery/event
+  acknowledgement waits are bounded to ten seconds per publish; discovery
+  retries at most three connection generations if reconnects interrupt it.
+  These limits do not bound the unchanged legacy alert publish wait.
+- **Freshness and recovered state.** The blueprint checks the payload's `ts`,
+  not HA receipt time. It accepts ages from zero up to (but not including) five
+  minutes; missing, invalid, timezone-less or future timestamps are ignored.
+  Keep HomeSec and HA clocks synchronized. Attribute-only changes and restored
+  state without a prior state do not notify. Availability recovery with the
+  same clip ID does not notify, while an actual new clip can still notify after
+  an outage. This is not durable exactly-once delivery or general retry deduplication.
+- **Availability ownership.** Use a dedicated availability topic per HomeSec
+  publisher. Random MQTT client IDs currently permit an old process's delayed
+  last will to mark a replacement process offline. Clean shutdown was tested;
+  overlapping process replacement and unclean-disconnect recovery still need
+  validation and a decision about stable client identity.
 - **Renamed or removed cameras.** Discovery configs are retained at the broker
   and are not cleaned up automatically. Remove stale entities in Home Assistant
   or clear the retained discovery topic.
 - **Push delivery.** Notifications go through the Home Assistant companion app
   and its cloud relay or your own remote access, not through HomeSec.
-- **Blueprint verification.** Repository tests check the blueprint's structure
-  and its alignment with HomeSec's risk levels. It has not been exercised
-  against a live Home Assistant instance by the automated suite.
+- **Verification scope.** Repository tests render the shipped blueprint's
+  conditions and notification fields and exercise the notifier against a fake
+  paho boundary. Manual HA/Mosquitto/iPhone testing verified the original PR
+  implementation; see the [validation record](home-assistant-validation.md).
+  These tests do not run HA's full automation engine or certify Dropbox access.
 
 ## Test from the command line
 

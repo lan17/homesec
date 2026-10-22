@@ -1,5 +1,23 @@
 # Tasks
 
+## WIP checkpoint — October 21, 2026
+
+Local branch: `codex/pr126-readiness`, based on PR #126 head `dcd36ea`.
+This is a work-in-progress checkpoint, not a release-ready validation claim.
+The original `feat/home-assistant-mqtt-discovery` checkout is unchanged.
+
+Read [the validation record and pickup checklist](../../../docs/home-assistant-validation.md)
+before resuming. Priority fixes, regressions and documentation are saved here;
+the five unchecked tasks below remain open. Dropbox clip access can wait: a
+public video already verified tap-to-play, but Dropbox-specific permissions
+and playback are still unverified.
+
+Available checks passed: 116 focused MQTT/blueprint tests, strict typing,
+repository Python lint/format, lock consistency and strict OpenSpec validation.
+`make check` stops at the missing Cargo executable, before database tests.
+The user requested this local WIP commit with the remaining gates recorded;
+it does not authorize database writes, publication or a claim that full checks pass.
+
 ## 1. Specification and decisions
 
 - [x] 1.1 Draft proposal, design, and `integration-contracts` spec delta from the
@@ -35,13 +53,16 @@ or [test_home_assistant_blueprint.py](../../../tests/homesec/test_home_assistant
   distinctness, wildcard-bearing camera name.
 - [x] 3.5 Blueprint structure: declared inputs match references, risk options
   match `RiskLevel`, `unanalyzed` handled, mobile_app target with per-clip tag.
-- [ ] 3.6 Blueprint behavior: the minimum-risk and `unanalyzed` conditions were
-  checked only by a one-off render of the template across eight cases. Add a
-  committed behavioral test, or exercise the blueprint on a live Home Assistant
-  instance, before claiming these scenarios as verified.
+- [x] 3.6 Blueprint behavior: committed template-rendering tests exercise every
+  risk/threshold combination, both unanalyzed settings, freshness boundaries,
+  invalid timestamps, availability/restart/attribute-only transitions, and
+  rendered summary, links, tag, urgency and missing-analysis fallbacks.
 - [ ] 3.7 Verify against a real Home Assistant and Mosquitto: entity creation
   after the first alert, event attributes, availability transitions, and the
   mobile_app device-action `data` fields. Record the Home Assistant version.
+  Original-commit manual results are now recorded in
+  [home-assistant-validation.md](../../../docs/home-assistant-validation.md);
+  the readiness fixes still need to be reimported and rerun on live HA.
 - [ ] 3.8 Measure whether `discovery_settle_seconds` default of 1.0 avoids losing
   the first event on a real instance.
 

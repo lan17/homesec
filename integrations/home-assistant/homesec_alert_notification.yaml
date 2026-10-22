@@ -59,12 +59,20 @@ triggers:
     entity_id: !input alerts_entity
 
 conditions:
-  # Skip availability transitions and states restored after a restart.
-  - condition: template
-    value_template: "{{ trigger.to_state.state not in ['unavailable', 'unknown'] }}"
+  # Require a real event change, preserving the first event from unknown.
   - condition: template
     value_template: >
-      {{ (now() - (trigger.to_state.state | as_datetime)).total_seconds() < 300 }}
+      {{ trigger.from_state is not none
+         and trigger.to_state is not none
+         and trigger.to_state.state not in ['unavailable', 'unknown']
+         and trigger.from_state.state != trigger.to_state.state
+         and (trigger.from_state.state != 'unavailable'
+              or trigger.from_state.attributes.get('clip_id') != trigger.to_state.attributes.get('clip_id')) }}
+  - condition: template
+    value_template: >
+      {% set event_time = as_datetime(trigger.to_state.attributes.get('ts'), none) %}
+      {{ event_time is not none and event_time.tzinfo is not none
+         and 0 <= (now() - event_time).total_seconds() < 300 }}
   - condition: template
     value_template: >
       {% set event_type = trigger.to_state.attributes.get('event_type') %}
